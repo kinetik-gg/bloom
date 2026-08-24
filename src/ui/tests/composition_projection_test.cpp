@@ -5,16 +5,18 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/node_editor.hpp>
-#include <bloom/ui/snapshot_compile_preparation.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -71,10 +73,60 @@ parameterForRole(const bloom::document::Composition& composition,
     return nullptr;
 }
 
-[[nodiscard]] bool runProjectionTest() {
+[[nodiscard]] bool runSolidPaletteTest() {
     using namespace bloom;
     auto newProject =
-        document::makeNewProject("Projection Test", "Main", core::RationalTime::fromInteger(10));
+        document::makeNewProject("Palette Test", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    ui::TimelineEditor timeline(session);
+    auto* addSolidAction = timeline.findChild<QAction*>("addSolidLayerAction");
+    if (!require(addSolidAction != nullptr &&
+                     addSolidAction->toolTip().contains(QStringLiteral("reference-linear-sRGB")),
+                 "Solid action exposes the proof-palette encoding")) {
+        return false;
+    }
+
+    addSolidAction->trigger();
+    const auto firstLayer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto firstSource =
+        firstLayer == nullptr ? std::nullopt : session.directSourceNodeForLayer(*firstLayer);
+    const auto* firstParameter = firstSource.has_value()
+                                     ? parameterForRole(*session.composition(), *firstSource,
+                                                        document::kSolidColorParameterRole)
+                                     : nullptr;
+    const auto firstColor =
+        firstParameter == nullptr ? std::nullopt : session.constantColorValue(firstParameter->id);
+
+    addSolidAction->trigger();
+    const auto secondLayer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto secondSource =
+        secondLayer == nullptr ? std::nullopt : session.directSourceNodeForLayer(*secondLayer);
+    const auto* secondParameter = secondSource.has_value()
+                                      ? parameterForRole(*session.composition(), *secondSource,
+                                                         document::kSolidColorParameterRole)
+                                      : nullptr;
+    const auto secondColor =
+        secondParameter == nullptr ? std::nullopt : session.constantColorValue(secondParameter->id);
+
+    return require(firstColor == core::Color4d{0.62, 0.08, 0.04, 1.0},
+                   "first built-in solid uses the warm proof color") &&
+           require(secondColor == core::Color4d{0.04, 0.20, 0.72, 1.0},
+                   "second built-in solid uses a clearly distinct cool proof color") &&
+           require(firstColor != secondColor,
+                   "consecutive built-in solids make layer ordering visually distinguishable");
+}
+
+[[nodiscard]] bool runProjectionTest() {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(64, 36);
+    if (!require(format.has_value(), "small projection format is valid")) {
+        return false;
+    }
+    auto newProject = document::makeNewProject("Projection Test", "Main",
+                                               core::RationalTime::fromInteger(10), *format);
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
@@ -86,10 +138,12 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     nodeDefinitions.freeze();
     runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
     ui::CompositionPreviewController previewController(
-        session, scheduler, taskUiBridge, ui::makeSnapshotCompilePreparation(snapshotCompiler));
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator));
     ui::EditorRegistry registry;
     if (!require(ui::registerFoundationEditors(registry, session, previewController),
                  "foundation editor registration succeeds") ||
@@ -104,11 +158,13 @@ parameterForRole(const bloom::document::Composition& composition,
     ui::ViewerEditor viewer(session, previewController);
 
     if (!require(waitUntil([&] {
-                     return previewController.state().status == ui::CompositionPreviewStatus::Ready;
+                     return previewController.state().activity == ui::PreviewActivity::Ready;
                  }),
-                 "built-in registry and compiler prepare the initial composition") ||
-        !require(previewController.state().sourceRevision == session.snapshot().revision(),
-                 "prepared plan identifies the exact active revision")) {
+                 "built-in pipeline renders the initial composition") ||
+        !require(previewController.state().desiredIdentity.has_value() &&
+                     previewController.state().desiredIdentity->sourceRevision ==
+                         session.snapshot().revision(),
+                 "prepared frame identifies the exact active revision")) {
         return false;
     }
 
@@ -127,21 +183,22 @@ parameterForRole(const bloom::document::Composition& composition,
                  "timeline exposes one accessible Add menu") ||
         !require(addSolidAction != nullptr && addSolidAction->text() == QStringLiteral("Solid") &&
                      addTextAction != nullptr && addTextAction->text() == QStringLiteral("Text"),
-                 "Add menu exposes Solid and Text actions")) {
+                 "Add menu exposes Solid and Text actions") ||
+        !require(addSolidAction->toolTip().contains(QStringLiteral("reference-linear-sRGB")),
+                 "Solid action names the built-in proof palette encoding")) {
         return false;
     }
     addTextAction->trigger();
 
     if (!require(waitUntil([&] {
-                     return previewController.state().status ==
-                            ui::CompositionPreviewStatus::Unsupported;
+                     return previewController.state().activity == ui::PreviewActivity::Unsupported;
                  }),
                  "reachable text produces an explicit unsupported preview state") ||
-        !require(previewController.state().compileResult != nullptr &&
-                     !previewController.state().compileResult->diagnostics.empty() &&
-                     previewController.state().compileResult->diagnostics.front().code ==
-                         runtime::CompileDiagnosticCode::UnsupportedNode,
-                 "unsupported preview retains the compiler's structured diagnostic")) {
+        !require(!previewController.state().diagnostics.empty() &&
+                     previewController.state().diagnostics.front().code ==
+                         runtime::compileDiagnosticCodeId(
+                             runtime::CompileDiagnosticCode::UnsupportedNode),
+                 "unsupported preview retains the structured compiler diagnostic")) {
         return false;
     }
 
@@ -272,11 +329,11 @@ parameterForRole(const bloom::document::Composition& composition,
                  "direct source is the durable solid-source node") ||
         !require(solidColorParameter != nullptr &&
                      session.constantColorValue(solidColorParameter->id) ==
-                         core::Color4d{0.18, 0.18, 0.18, 1.0},
-                 "default solid stores straight reference-linear-sRGB middle gray") ||
+                         core::Color4d{0.62, 0.08, 0.04, 1.0},
+                 "first default solid stores the warm proof-palette color") ||
         !require(solidColorPanel != nullptr && !solidColorPanel->isHidden() &&
                      solidColorValue != nullptr &&
-                     solidColorValue->text() == QStringLiteral("R 0.18  G 0.18  B 0.18  A 1"),
+                     solidColorValue->text() == QStringLiteral("R 0.62  G 0.08  B 0.04  A 1"),
                  "Properties exposes the exact default RGBA as read-only text") ||
         !require(solidAlphaAssociation != nullptr &&
                      solidAlphaAssociation->text() == QStringLiteral("Straight (unassociated)") &&
@@ -332,9 +389,13 @@ parameterForRole(const bloom::document::Composition& composition,
         !require(restoredColor != nullptr &&
                      session.constantColorValue(restoredColor->id) == hdrColor,
                  "redo restores exact unclipped solid color truth") ||
-        !require(viewer.accessibleDescription().contains(QStringLiteral("no composition pixels"),
-                                                         Qt::CaseInsensitive),
-                 "Viewer explicitly reports that no rendered pixels are available")) {
+        !require(waitUntil([&] {
+                     return previewController.state().activity == ui::PreviewActivity::Unsupported;
+                 }),
+                 "unsupported Text remains explicit after later edits") ||
+        !require(viewer.accessibleDescription().contains(
+                     QStringLiteral("Previous composition pixels"), Qt::CaseInsensitive),
+                 "Viewer accessibility reports retained pixels as previous")) {
         return false;
     }
 
@@ -349,5 +410,5 @@ parameterForRole(const bloom::document::Composition& composition,
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    return runProjectionTest() ? 0 : 1;
+    return runSolidPaletteTest() && runProjectionTest() ? 0 : 1;
 }

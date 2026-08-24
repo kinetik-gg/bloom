@@ -1,46 +1,65 @@
 #pragma once
 
 #include <bloom/document/document.hpp>
-#include <bloom/document/ids.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <QObject>
 #include <QString>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
 
-namespace bloom::runtime {
-struct SnapshotCompileResult;
-}
-
 namespace bloom::ui {
 
 class CompositionSession;
 class TaskUiBridge;
 
-using SnapshotCompileResultHandle = std::shared_ptr<const runtime::SnapshotCompileResult>;
-using PreviewPreparationFunction = std::function<runtime::TaskResult<SnapshotCompileResultHandle>(
-    const document::Snapshot&, document::CompositionId, runtime::TaskContext&)>;
+inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit = 512U * 1024U * 1024U;
 
-enum class CompositionPreviewStatus {
-    Preparing,
+struct CompositionPreviewSettings final {
+    core::RationalTime time = core::RationalTime::fromInteger(0);
+    runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
+    runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
+    runtime::EvaluationColorIntent colorIntent =
+        runtime::EvaluationColorIntent::ReferenceLinearSrgb;
+    std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
+
+    friend bool operator==(const CompositionPreviewSettings&,
+                           const CompositionPreviewSettings&) = default;
+};
+
+using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPreviewFrame>;
+using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
+using PreviewPreparationFunction =
+    std::function<runtime::TaskResult<PreviewPreparationResultHandle>(
+        const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+        runtime::TaskContext&)>;
+
+enum class PreviewActivity : std::uint8_t {
+    Rendering,
     Ready,
     Unsupported,
     Cancelled,
     Failed,
 };
 
-struct CompositionPreviewState {
-    CompositionPreviewStatus status = CompositionPreviewStatus::Preparing;
-    document::CompositionId compositionId;
-    document::Revision sourceRevision;
-    std::uint64_t requestGeneration = 0;
+enum class FrameFreshness : std::uint8_t {
+    None,
+    Current,
+    Stale,
+};
+
+struct CompositionPreviewState final {
+    PreviewActivity activity = PreviewActivity::Rendering;
+    FrameFreshness freshness = FrameFreshness::None;
+    std::optional<runtime::PreviewRequestIdentity> desiredIdentity;
     std::optional<runtime::TaskId> taskId;
-    SnapshotCompileResultHandle compileResult;
+    PreparedPreviewFrameHandle frame;
     std::vector<runtime::TaskDiagnostic> diagnostics;
     QString message;
 };
@@ -51,6 +70,7 @@ class CompositionPreviewController final : public QObject {
   public:
     CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
+                                 CompositionPreviewSettings settings = {},
                                  QObject* parent = nullptr);
     ~CompositionPreviewController() override;
 
@@ -65,23 +85,25 @@ class CompositionPreviewController final : public QObject {
     void stateChanged();
 
   private:
-    struct ActiveRequest {
-        runtime::TaskHandle<SnapshotCompileResultHandle> handle;
-        document::CompositionId compositionId;
-        document::Revision sourceRevision;
-        std::uint64_t generation = 0;
+    struct ActiveRequest final {
+        runtime::TaskHandle<PreviewPreparationResultHandle> handle;
+        runtime::PreviewRequestIdentity desiredIdentity;
     };
 
-    void requestPreview();
+    void requestPreview(bool clearLastGoodFrame);
+    void handleCompositionChanged();
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
     [[nodiscard]] bool isCurrent(const ActiveRequest& request) const noexcept;
+    [[nodiscard]] bool
+    liveSessionMatches(const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept;
 
     CompositionSession& session_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
+    CompositionPreviewSettings settings_;
     CompositionPreviewState state_;
     std::optional<ActiveRequest> active_;
     std::uint64_t generation_ = 0;

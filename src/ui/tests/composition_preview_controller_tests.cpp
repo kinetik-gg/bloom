@@ -2,29 +2,36 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
-#include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
-#include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QTimer>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <source_location>
 #include <string>
 #include <thread>
@@ -34,7 +41,7 @@
 namespace {
 
 using namespace std::chrono_literals;
-using bloom::ui::SnapshotCompileResultHandle;
+using PipelineResult = bloom::runtime::TaskResult<bloom::ui::PreviewPreparationResultHandle>;
 
 class Expectations final {
   public:
@@ -83,7 +90,7 @@ class WorkerGate final {
 template <typename Predicate> bool waitUntil(Predicate predicate) {
     QElapsedTimer timer;
     timer.start();
-    while (timer.elapsed() < 2'000) {
+    while (timer.elapsed() < 4'000) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         if (std::invoke(predicate)) {
             return true;
@@ -104,41 +111,65 @@ bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
             .groupRegistryCapacity = 8};
 }
 
-SnapshotCompileResultHandle compiledResult(const bloom::document::Snapshot& snapshot,
-                                           const bloom::document::CompositionId compositionId) {
-    const auto* composition = snapshot.project().findComposition(compositionId);
-    if (composition == nullptr) {
-        return {};
+bloom::document::CompositionFormat smallFormat() {
+    const auto format = bloom::document::CompositionFormat::create(4, 3);
+    if (!format.has_value()) {
+        std::abort();
     }
-    auto plan = std::make_shared<bloom::runtime::CompiledCompositionPlan>(
-        bloom::runtime::CompiledCompositionPlan{.sourceRevision = snapshot.revision(),
-                                                .projectId = snapshot.project().id(),
-                                                .compositionId = compositionId,
-                                                .format = composition->format(),
-                                                .operations = {},
-                                                .output =
-                                                    bloom::runtime::OperationIndex::fromRaw(0)});
-    auto result = std::make_shared<bloom::runtime::SnapshotCompileResult>();
-    result->status = bloom::runtime::SnapshotCompileStatus::Compiled;
-    result->plan = std::move(plan);
-    return result;
+    return *format;
 }
 
-SnapshotCompileResultHandle unsupportedResult(const bloom::document::CompositionId compositionId) {
-    auto result = std::make_shared<bloom::runtime::SnapshotCompileResult>();
-    result->status = bloom::runtime::SnapshotCompileStatus::Unsupported;
-    result->diagnostics.push_back({.code = bloom::runtime::CompileDiagnosticCode::UnsupportedNode,
-                                   .severity = bloom::runtime::DiagnosticSeverity::Error,
-                                   .subject = {.compositionId = compositionId,
-                                               .nodeId = std::nullopt,
-                                               .edgeId = std::nullopt,
-                                               .parameterId = std::nullopt,
-                                               .layerId = std::nullopt,
-                                               .layerSlotId = std::nullopt,
-                                               .field = {}},
-                                   .summary = "The proof fixture is deliberately unsupported",
-                                   .detail = {}});
-    return result;
+bloom::document::NewProject makeTestProject(std::string projectName) {
+    return bloom::document::makeNewProject(
+        std::move(projectName), "Main", bloom::core::RationalTime::fromInteger(10), smallFormat());
+}
+
+bloom::document::Composition makeSecondComposition() {
+    using namespace bloom::document;
+    const auto compositionId = CompositionId::fromRaw(2);
+    const auto stackId = NodeId::fromRaw(100);
+    const auto outputId = NodeId::fromRaw(101);
+    const auto edgeId = EdgeId::fromRaw(100);
+    CanonicalGraph graph(stackId);
+    const bool built =
+        graph.addNode(
+            {stackId, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion}) &&
+        graph.addNode({outputId,
+                       std::string(kCompositionOutputNodeType),
+                       {},
+                       kCompositionOutputNodeSchemaVersion}) &&
+        graph.addEdge({edgeId,
+                       {stackId, std::string(kLayerStackOutputPort)},
+                       NodeInputRef{outputId, std::string(kCompositionOutputInputPort)}});
+    graph.setCompositionOutput({outputId, std::string(kCompositionOutputOutputPort)});
+    if (!built) {
+        std::abort();
+    }
+    return Composition(compositionId, "Second", bloom::core::RationalTime::fromInteger(10),
+                       std::move(graph), smallFormat());
+}
+
+struct PipelineFixture final {
+    bloom::runtime::NodeDefinitionRegistry definitions;
+    bloom::runtime::SnapshotCompiler compiler;
+    bloom::runtime::CpuCompositionEvaluator evaluator;
+    bloom::ui::PreviewPreparationFunction pipeline;
+
+    PipelineFixture() : compiler(definitions) {
+        if (!bloom::runtime::registerBuiltInNodeDefinitions(definitions)) {
+            std::abort();
+        }
+        definitions.freeze();
+        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator);
+    }
+};
+
+std::uint64_t generation(const bloom::ui::CompositionPreviewState& state) {
+    return state.desiredIdentity.has_value() ? state.desiredIdentity->requestGeneration : 0;
+}
+
+bool isReady(const bloom::ui::CompositionPreviewController& controller) {
+    return controller.state().activity == bloom::ui::PreviewActivity::Ready;
 }
 
 void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
@@ -155,196 +186,276 @@ void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
 
 void testRevisionAndPanelSuppression(Expectations& expectations) {
     using namespace bloom;
-    auto newProject =
-        document::makeNewProject("Preview Test", "Main", core::RationalTime::fromInteger(10));
+    auto newProject = makeTestProject("Preview Test");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
     runtime::TaskScheduler scheduler(testSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
     WorkerGate firstRequest;
     std::atomic<int> invocationCount = 0;
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
-        [&firstRequest, &invocationCount](const document::Snapshot& snapshot,
-                                          const document::CompositionId requestedComposition,
-                                          runtime::TaskContext&) {
+        [&firstRequest, &invocationCount, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();
             }
-            return runtime::TaskResult<SnapshotCompileResultHandle>::succeeded(
-                compiledResult(snapshot, requestedComposition));
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
         });
     auto* viewer = new ui::ViewerEditor(session, controller);
 
     expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
-                        "first revision preparation starts on the worker");
-    const auto oldGeneration = controller.state().requestGeneration;
+                        "first revision starts on the worker");
+    const auto oldGeneration = generation(controller.state());
     std::vector<std::uint64_t> publishedReadyGenerations;
-    QObject::connect(
-        &controller, &ui::CompositionPreviewController::stateChanged, &controller, [&] {
-            if (controller.state().status == ui::CompositionPreviewStatus::Ready) {
-                publishedReadyGenerations.push_back(controller.state().requestGeneration);
-            }
-        });
+    QObject::connect(&controller, &ui::CompositionPreviewController::stateChanged, &controller,
+                     [&] {
+                         if (isReady(controller)) {
+                             publishedReadyGenerations.push_back(generation(controller.state()));
+                         }
+                     });
 
     expectations.expect(
         session.addSolidLayer(QStringLiteral("Revision Solid"), core::Color4d{0.2, 0.4, 0.8, 1.0}),
         "document command creates a newer preview revision");
-    const auto currentGeneration = controller.state().requestGeneration;
+    const auto currentGeneration = generation(controller.state());
     expectations.expect(currentGeneration > oldGeneration &&
-                            controller.state().status == ui::CompositionPreviewStatus::Preparing,
-                        "new revision immediately supersedes the old preparation generation");
+                            controller.state().activity == ui::PreviewActivity::Rendering &&
+                            controller.state().freshness == ui::FrameFreshness::None,
+                        "new revision immediately supersedes the old request without stale pixels");
 
     delete viewer;
     firstRequest.release();
-    expectations.expect(
-        waitUntil([&] { return controller.state().status == ui::CompositionPreviewStatus::Ready; }),
-        "current revision becomes ready after the replaced Viewer is destroyed");
-    expectations.expect(controller.state().sourceRevision == session.snapshot().revision(),
-                        "published plan identifies the active document revision");
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "current revision becomes ready after the replaced Viewer is destroyed");
+    expectations.expect(controller.state().desiredIdentity->sourceRevision ==
+                            session.snapshot().revision(),
+                        "published frame identifies the active document revision");
     expectations.expect(!publishedReadyGenerations.empty() &&
                             std::ranges::all_of(publishedReadyGenerations,
-                                                [currentGeneration](const auto generation) {
-                                                    return generation == currentGeneration;
+                                                [currentGeneration](const auto value) {
+                                                    return value == currentGeneration;
                                                 }),
-                        "the completed obsolete revision never publishes Ready");
+                        "the obsolete revision never publishes Ready");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
-void testSameRevisionGenerationSuppression(Expectations& expectations) {
+void testSameRevisionGenerationAndSelection(Expectations& expectations) {
     using namespace bloom;
-    auto newProject =
-        document::makeNewProject("Generation Test", "Main", core::RationalTime::fromInteger(10));
+    auto newProject = makeTestProject("Generation Test");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
     runtime::TaskScheduler scheduler(testSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
-    WorkerGate firstRequest;
+    PipelineFixture fixture;
     std::atomic<int> invocationCount = 0;
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
-        [&firstRequest, &invocationCount](const document::Snapshot& snapshot,
-                                          const document::CompositionId requestedComposition,
-                                          runtime::TaskContext&) {
-            if (invocationCount.fetch_add(1) == 0) {
-                firstRequest.enterAndWait();
-            }
-            return runtime::TaskResult<SnapshotCompileResultHandle>::succeeded(
-                compiledResult(snapshot, requestedComposition));
+        [&invocationCount, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            ++invocationCount;
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
         });
 
-    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
-                        "first same-revision preparation starts");
-    const auto revision = controller.state().sourceRevision;
-    const auto firstGeneration = controller.state().requestGeneration;
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "initial same-revision frame becomes ready");
+    const auto firstFrame = controller.state().frame;
+    const auto revision = controller.state().desiredIdentity->sourceRevision;
+    const auto firstGeneration = generation(controller.state());
     controller.requestRefresh();
-    const auto secondGeneration = controller.state().requestGeneration;
-    expectations.expect(controller.state().sourceRevision == revision &&
-                            secondGeneration > firstGeneration,
-                        "explicit refresh advances generation without inventing a revision");
-    firstRequest.release();
-    expectations.expect(
-        waitUntil([&] { return controller.state().status == ui::CompositionPreviewStatus::Ready; }),
-        "replacement generation completes");
-    expectations.expect(controller.state().requestGeneration == secondGeneration,
-                        "only the desired same-revision generation publishes");
+    const auto secondGeneration = generation(controller.state());
+    expectations.expect(controller.state().desiredIdentity->sourceRevision == revision &&
+                            secondGeneration > firstGeneration &&
+                            controller.state().activity == ui::PreviewActivity::Rendering &&
+                            controller.state().freshness == ui::FrameFreshness::Stale &&
+                            controller.state().frame == firstFrame,
+                        "same-revision refresh marks the retained frame stale");
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "replacement same-revision generation completes");
+    expectations.expect(generation(controller.state()) == secondGeneration &&
+                            controller.state().freshness == ui::FrameFreshness::Current,
+                        "only the desired generation becomes current");
 
     const auto callsBeforeSelection = invocationCount.load();
-    const auto generationBeforeSelection = controller.state().requestGeneration;
+    const auto generationBeforeSelection = generation(controller.state());
     session.clearSelection();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     expectations.expect(invocationCount.load() == callsBeforeSelection &&
-                            controller.state().requestGeneration == generationBeforeSelection,
-                        "selection-only changes never prepare a composition plan");
+                            generation(controller.state()) == generationBeforeSelection,
+                        "selection-only changes never request a frame");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
-void testOutcomeMapping(Expectations& expectations) {
+void testLastGoodAndOutcomeMapping(Expectations& expectations) {
     using namespace bloom;
-    enum class Outcome { Compiled, Unsupported, Cancelled, Failed };
+    enum class Outcome { Prepared, SlowFailed, Unsupported, Cancelled, Failed, Mismatch };
 
-    auto newProject =
-        document::makeNewProject("Outcome Test", "Main", core::RationalTime::fromInteger(10));
+    auto newProject = makeTestProject("Outcome Test");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
     runtime::TaskScheduler scheduler(testSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
-    std::atomic outcome = Outcome::Compiled;
+    PipelineFixture fixture;
+    WorkerGate slowFailure;
+    std::atomic outcome = Outcome::Prepared;
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
-        [&outcome](const document::Snapshot& snapshot,
-                   const document::CompositionId requestedComposition, runtime::TaskContext&) {
+        [&outcome, &slowFailure, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
             switch (outcome.load()) {
-            case Outcome::Compiled:
-                return runtime::TaskResult<SnapshotCompileResultHandle>::succeeded(
-                    compiledResult(snapshot, requestedComposition));
-            case Outcome::Unsupported:
-                return runtime::TaskResult<SnapshotCompileResultHandle>::succeeded(
-                    unsupportedResult(requestedComposition));
-            case Outcome::Cancelled:
-                return runtime::TaskResult<SnapshotCompileResultHandle>::cancelled();
-            case Outcome::Failed:
-                return runtime::TaskResult<SnapshotCompileResultHandle>::failed(
-                    std::vector<runtime::TaskDiagnostic>{
-                        {.code = "bloom.preview.test-failure",
-                         .severity = runtime::DiagnosticSeverity::Error,
-                         .summary = "The proof preparation failed",
-                         .detail = {},
-                         .suggestedAction = {}},
-                        {.code = "bloom.preview.secondary-test-failure",
-                         .severity = runtime::DiagnosticSeverity::Warning,
-                         .summary = "Secondary diagnostic",
-                         .detail = {},
-                         .suggestedAction = {}}});
+            case Outcome::Prepared:
+                return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            case Outcome::SlowFailed:
+                slowFailure.enterAndWait();
+                return PipelineResult::failed({.code = "bloom.preview.test-slow-failure",
+                                               .severity = runtime::DiagnosticSeverity::Error,
+                                               .summary = "The slow proof render failed",
+                                               .detail = {},
+                                               .suggestedAction = {}});
+            case Outcome::Unsupported: {
+                auto unsupported = runtime::PreviewPreparationResult::unsupported();
+                return PipelineResult::succeeded(
+                    std::make_shared<const runtime::PreviewPreparationResult>(
+                        std::move(unsupported)),
+                    {{.code = "bloom.preview.test-unsupported",
+                      .severity = runtime::DiagnosticSeverity::Error,
+                      .summary = "The proof graph is unsupported",
+                      .detail = {},
+                      .suggestedAction = {}}});
             }
-            return runtime::TaskResult<SnapshotCompileResultHandle>::failed(
-                {.code = "bloom.preview.invalid-test-outcome",
-                 .severity = runtime::DiagnosticSeverity::Error,
-                 .summary = "Invalid proof outcome",
-                 .detail = {},
-                 .suggestedAction = {}});
+            case Outcome::Cancelled:
+                return PipelineResult::cancelled();
+            case Outcome::Failed:
+                return PipelineResult::failed({.code = "bloom.preview.test-failure",
+                                               .severity = runtime::DiagnosticSeverity::Error,
+                                               .summary = "The proof render failed",
+                                               .detail = {},
+                                               .suggestedAction = {}});
+            case Outcome::Mismatch: {
+                auto mismatched = desiredIdentity;
+                ++mismatched.requestGeneration;
+                return pipeline(snapshot, mismatched, pixelStorageByteLimit, context);
+            }
+            }
+            return PipelineResult::failed({.code = "bloom.preview.invalid-test-outcome",
+                                           .severity = runtime::DiagnosticSeverity::Error,
+                                           .summary = "Invalid proof outcome",
+                                           .detail = {},
+                                           .suggestedAction = {}});
         });
 
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "initial prepared frame becomes current");
+    const auto lastGood = controller.state().frame;
+    expectations.expect(lastGood != nullptr &&
+                            controller.state().freshness == ui::FrameFreshness::Current,
+                        "Ready owns one current immutable frame");
+
+    outcome.store(Outcome::SlowFailed);
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return slowFailure.entered(); }),
+                        "slow replacement enters worker code");
+    expectations.expect(controller.state().activity == ui::PreviewActivity::Rendering &&
+                            controller.state().freshness == ui::FrameFreshness::Stale &&
+                            controller.state().frame == lastGood,
+                        "Rendering retains and visibly marks the previous frame stale");
+    bool heartbeat = false;
+    QTimer::singleShot(0, &controller, [&heartbeat] { heartbeat = true; });
+    expectations.expect(waitUntil([&] { return heartbeat; }),
+                        "Qt event loop remains responsive while evaluation is blocked");
+    slowFailure.release();
     expectations.expect(
-        waitUntil([&] { return controller.state().status == ui::CompositionPreviewStatus::Ready; }),
-        "compiled preparation maps to Ready");
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        "slow failure reaches a terminal state");
+    expectations.expect(controller.state().frame == lastGood &&
+                            controller.state().freshness == ui::FrameFreshness::Stale &&
+                            controller.state().message.contains(QStringLiteral("slow proof")),
+                        "Failed retains last-good pixels and diagnostic summary");
+
     outcome.store(Outcome::Unsupported);
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] {
-                            return controller.state().status ==
-                                   ui::CompositionPreviewStatus::Unsupported;
-                        }),
-                        "semantic compiler rejection maps to Unsupported");
-    expectations.expect(controller.state().message.contains(QStringLiteral("deliberately")),
-                        "Unsupported preserves the compiler's useful summary");
-    outcome.store(Outcome::Failed);
-    controller.requestRefresh();
-    expectations.expect(waitUntil([&] {
-                            return controller.state().status ==
-                                   ui::CompositionPreviewStatus::Failed;
-                        }),
-                        "failed task maps to Failed");
     expectations.expect(
-        controller.state().message == QStringLiteral("The proof preparation failed") &&
-            controller.state().diagnostics.size() == 2 &&
-            controller.state().diagnostics[0].code == "bloom.preview.test-failure" &&
-            controller.state().diagnostics[1].code == "bloom.preview.secondary-test-failure",
-        "Failed preserves every task diagnostic in source order");
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Unsupported; }),
+        "semantic rejection maps to Unsupported");
+    expectations.expect(controller.state().frame == lastGood &&
+                            controller.state().freshness == ui::FrameFreshness::Stale,
+                        "Unsupported retains last-good pixels");
+
     outcome.store(Outcome::Cancelled);
     controller.requestRefresh();
-    expectations.expect(waitUntil([&] {
-                            return controller.state().status ==
-                                   ui::CompositionPreviewStatus::Cancelled;
-                        }),
-                        "cancelled task maps to Cancelled");
+    expectations.expect(
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Cancelled; }),
+        "task cancellation maps to Cancelled");
+    expectations.expect(controller.state().frame == lastGood &&
+                            controller.state().freshness == ui::FrameFreshness::Stale,
+                        "Cancelled retains last-good pixels");
+
+    outcome.store(Outcome::Mismatch);
+    controller.requestRefresh();
+    expectations.expect(
+        waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+        "mismatched successful frame is rejected");
+    expectations.expect(
+        controller.state().frame == lastGood &&
+            controller.state().message.contains(QStringLiteral("different request")),
+        "identity mismatch never replaces last-good pixels");
+
+    outcome.store(Outcome::Prepared);
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "a later valid request recovers Ready");
+    expectations.expect(controller.state().frame != lastGood &&
+                            controller.state().freshness == ui::FrameFreshness::Current,
+                        "recovery atomically replaces the retained frame");
+
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
+void testCompositionSwitchClearsPixels(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Composition Switch Test");
+    const auto firstCompositionId = newProject.initialCompositionId;
+    const auto secondCompositionId = document::CompositionId::fromRaw(2);
+    expectations.expect(newProject.project.addComposition(makeSecondComposition()),
+                        "test project adds a second valid composition");
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, firstCompositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline);
+
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "first composition frame becomes ready");
+    const auto firstFrame = controller.state().frame;
+    expectations.expect(session.setComposition(secondCompositionId),
+                        "session switches to the second composition");
+    expectations.expect(controller.state().activity == ui::PreviewActivity::Rendering &&
+                            controller.state().freshness == ui::FrameFreshness::None &&
+                            controller.state().frame == nullptr,
+                        "composition switch clears pixels synchronously before replacement work");
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "second composition frame becomes ready");
+    expectations.expect(controller.state().frame != firstFrame &&
+                            controller.state().frame->desiredIdentity().compositionId ==
+                                secondCompositionId,
+                        "only pixels for the active composition are published");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
@@ -356,7 +467,8 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testRevisionAndPanelSuppression(expectations);
-    testSameRevisionGenerationSuppression(expectations);
-    testOutcomeMapping(expectations);
+    testSameRevisionGenerationAndSelection(expectations);
+    testLastGoodAndOutcomeMapping(expectations);
+    testCompositionSwitchClearsPixels(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

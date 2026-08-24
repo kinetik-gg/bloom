@@ -1,6 +1,5 @@
 #include <bloom/ui/composition_editors.hpp>
 
-#include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 #include <bloom/core/color.hpp>
@@ -17,8 +16,6 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
-#include <QPaintEvent>
-#include <QPainter>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -42,7 +39,12 @@ namespace {
 constexpr int kTimelineLayerIdRole = Qt::UserRole + 1;
 constexpr int kTimelineSlotIdRole = Qt::UserRole + 2;
 constexpr int kCompositionIdRole = Qt::UserRole + 1;
-constexpr core::Color4d kDefaultSolidColor{0.18, 0.18, 0.18, 1.0};
+constexpr std::array kDefaultSolidPalette{
+    core::Color4d{0.62, 0.08, 0.04, 1.0},
+    core::Color4d{0.04, 0.20, 0.72, 1.0},
+    core::Color4d{0.06, 0.52, 0.16, 1.0},
+    core::Color4d{0.46, 0.07, 0.58, 1.0},
+};
 
 const document::LayerOutputBoundary* layerBoundary(const document::Composition& composition,
                                                    const document::LayerId layerId) {
@@ -81,22 +83,6 @@ QString layerName(const document::Composition& composition, const document::Laye
         return QStringLiteral("Layer %1").arg(layerId.value());
     }
     return QString::fromStdString(boundary->name);
-}
-
-QString previewStatusText(const CompositionPreviewState& state) {
-    switch (state.status) {
-    case CompositionPreviewStatus::Preparing:
-        return ViewerEditor::tr("Preparing composition plan\nNo pixels are displayed");
-    case CompositionPreviewStatus::Ready:
-        return ViewerEditor::tr("Composition plan ready\nPixel evaluation is not connected yet");
-    case CompositionPreviewStatus::Unsupported:
-        return ViewerEditor::tr("Preview unsupported\nNo pixels are displayed");
-    case CompositionPreviewStatus::Cancelled:
-        return ViewerEditor::tr("Preview preparation cancelled\nNo pixels are displayed");
-    case CompositionPreviewStatus::Failed:
-        return ViewerEditor::tr("Preview preparation failed\nNo pixels are displayed");
-    }
-    return ViewerEditor::tr("No composition pixels are displayed");
 }
 
 const document::NodeRecord* directSourceNode(const CompositionSession& session,
@@ -223,7 +209,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
     addMenu->setAccessibleName(tr("Add layer menu"));
     auto* addSolidAction = addMenu->addAction(tr("Solid"));
     addSolidAction->setObjectName("addSolidLayerAction");
-    addSolidAction->setToolTip(tr("Add a middle-gray solid layer"));
+    addSolidAction->setToolTip(
+        tr("Add a solid using the next built-in reference-linear-sRGB proof color"));
     auto* addTextAction = addMenu->addAction(tr("Text"));
     addTextAction->setObjectName("addTextLayerAction");
     addTextAction->setToolTip(tr("Add a text layer"));
@@ -255,7 +242,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
     connect(addSolidAction, &QAction::triggered, this, [this] {
         const auto layerNumber = nextLayerNumber(session_, document::kSolidSourceNodeType,
                                                  document::kSolidSourceNodeSchemaVersion);
-        (void)session_.addSolidLayer(tr("Solid %1").arg(layerNumber), kDefaultSolidColor);
+        const auto paletteIndex =
+            static_cast<std::size_t>(layerNumber - 1) % kDefaultSolidPalette.size();
+        (void)session_.addSolidLayer(tr("Solid %1").arg(layerNumber),
+                                     kDefaultSolidPalette[paletteIndex]);
     });
     connect(addTextAction, &QAction::triggered, this, [this] {
         const auto layerNumber = nextLayerNumber(session_, document::kTextSourceNodeType,
@@ -520,73 +510,6 @@ void PropertiesEditor::configureSolidColor() {
     solidColorEncoding_->setText(
         QString::fromUtf8(document::kSolidColorEncoding.data(),
                           static_cast<qsizetype>(document::kSolidColorEncoding.size())));
-}
-
-ViewerEditor::ViewerEditor(CompositionSession& session,
-                           CompositionPreviewController& previewController, QWidget* parent)
-    : QWidget(parent), session_(session), previewController_(previewController) {
-    setObjectName("viewerEditor");
-    setAccessibleName(tr("Composition viewer"));
-    setMinimumSize(220, 150);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    connect(&session_, &CompositionSession::snapshotChanged, this,
-            qOverload<>(&ViewerEditor::update));
-    connect(&session_, &CompositionSession::compositionChanged, this,
-            qOverload<>(&ViewerEditor::update));
-    connect(&session_, &CompositionSession::selectionChanged, this,
-            qOverload<>(&ViewerEditor::update));
-    connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
-        updatePreviewAccessibility();
-        update();
-    });
-    updatePreviewAccessibility();
-}
-
-void ViewerEditor::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    QPainter painter(this);
-    painter.fillRect(rect(), QColor(15, 16, 18));
-
-    const QRect frame = rect().adjusted(28, 28, -28, -28);
-    painter.fillRect(frame, QColor(39, 41, 45));
-    painter.setPen(QPen(QColor(77, 80, 87), 1.0));
-    painter.drawRect(frame.adjusted(0, 0, -1, -1));
-
-    constexpr int gridStep = 32;
-    painter.setPen(QPen(QColor(46, 48, 53), 1.0));
-    for (int x = frame.left() + gridStep; x < frame.right(); x += gridStep) {
-        painter.drawLine(x, frame.top(), x, frame.bottom());
-    }
-    for (int y = frame.top() + gridStep; y < frame.bottom(); y += gridStep) {
-        painter.drawLine(frame.left(), y, frame.right(), y);
-    }
-
-    const auto* composition = session_.composition();
-    painter.setPen(QColor(201, 204, 210));
-    painter.drawText(frame.adjusted(14, 10, -14, -10), Qt::AlignLeft | Qt::AlignTop,
-                     composition == nullptr ? tr("No composition")
-                                            : QString::fromStdString(composition->name()));
-
-    painter.setPen(QColor(139, 144, 153));
-    painter.drawText(frame, Qt::AlignCenter, previewStatusText(previewController_.state()));
-
-    if (session_.selection().contextualLayer.has_value() && composition != nullptr) {
-        const QString name = layerName(*composition, *session_.selection().contextualLayer);
-        const QRect selectionStatus(frame.left() + 12, frame.bottom() - 38, frame.width() - 24, 26);
-        painter.setPen(QPen(QColor(44, 158, 232), 1.0));
-        painter.setBrush(QColor(27, 46, 61));
-        painter.drawRoundedRect(selectionStatus, 4.0, 4.0);
-        painter.setPen(QColor(208, 231, 247));
-        const QString status = tr("Selected: %1 · evaluated bounds unavailable").arg(name);
-        painter.drawText(
-            selectionStatus.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
-            painter.fontMetrics().elidedText(status, Qt::ElideRight, selectionStatus.width() - 16));
-    }
-}
-
-void ViewerEditor::updatePreviewAccessibility() {
-    const auto& preview = previewController_.state();
-    setAccessibleDescription(tr("%1. No composition pixels are displayed.").arg(preview.message));
 }
 
 MediaEditor::MediaEditor(CompositionSession& session, QWidget* parent)

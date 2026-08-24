@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <algorithm>
 #include <utility>

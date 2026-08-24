@@ -2,8 +2,6 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
-#include <bloom/runtime/compiled_plan.hpp>
-#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -23,6 +21,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -116,9 +115,10 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     WorkerGate gate;
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
-        [&gate](const document::Snapshot&, document::CompositionId, runtime::TaskContext&) {
+        [&gate](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+                runtime::TaskContext&) {
             gate.enterAndWait();
-            return runtime::TaskResult<ui::SnapshotCompileResultHandle>::cancelled();
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });
     ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
     auto* application = QCoreApplication::instance();
@@ -167,7 +167,7 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
         "staged shutdown captures window and workspace state once without an explicit sync");
     expectations.expect(heartbeatCount > 0 && !shutdownQuiescent,
                         "Qt events continue while cooperative work remains in flight");
-    expectations.expect(controller.state().status == ui::CompositionPreviewStatus::Cancelled,
+    expectations.expect(controller.state().activity == ui::PreviewActivity::Cancelled,
                         "preview publication is cancelled before runtime shutdown");
 
     gate.release();

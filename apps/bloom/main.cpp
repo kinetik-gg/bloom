@@ -2,16 +2,17 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/main_window.hpp>
-#include <bloom/ui/snapshot_compile_preparation.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -42,11 +43,12 @@ int main(int argc, char* argv[]) {
     }
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
     bloom::runtime::TaskScheduler taskScheduler;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge,
-        bloom::ui::makeSnapshotCompilePreparation(snapshotCompiler));
+        bloom::ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator));
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     application.installEventFilter(&shutdownCoordinator);
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);

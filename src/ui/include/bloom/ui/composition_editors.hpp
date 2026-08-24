@@ -11,7 +11,6 @@ class QTreeWidget;
 namespace bloom::ui {
 
 class CompositionSession;
-class CompositionPreviewController;
 
 class TimelineEditor final : public QWidget {
     Q_OBJECT
@@ -53,23 +52,6 @@ class PropertiesEditor final : public QWidget {
     QLabel* solidAlphaAssociation_ = nullptr;
     QLabel* solidColorEncoding_ = nullptr;
     bool rebuilding_ = false;
-};
-
-class ViewerEditor final : public QWidget {
-    Q_OBJECT
-
-  public:
-    ViewerEditor(CompositionSession& session, CompositionPreviewController& previewController,
-                 QWidget* parent = nullptr);
-
-  protected:
-    void paintEvent(QPaintEvent* event) override;
-
-  private:
-    void updatePreviewAccessibility();
-
-    CompositionSession& session_;
-    CompositionPreviewController& previewController_;
 };
 
 class MediaEditor final : public QWidget {
