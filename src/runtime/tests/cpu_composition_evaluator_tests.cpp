@@ -169,7 +169,7 @@ requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budge
             .output = plan.output,
             .resolution = std::move(resolution),
             .quality = runtime::EvaluationQuality::Reference,
-            .colorIntent = runtime::EvaluationColorIntent::ReferenceLinearSrgb,
+            .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .pixelStorageByteLimit = budget};
 }
 

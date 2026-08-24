@@ -167,10 +167,10 @@ void testGeometryAndTypedErrors(ExpectationContext& expectations) {
                         "descriptor carries checked packed RGBA32F layout");
     expectations.expect(imageDescriptor.alphaAssociation() == AlphaAssociation::Premultiplied &&
                             imageDescriptor.pixelPacking() == PixelPacking::PackedRgba32f &&
-                            imageDescriptor.colorEncoding() == ColorEncoding::ReferenceLinearSrgb &&
+                            imageDescriptor.colorEncoding() == ColorEncoding::LinearRec709Scene &&
                             bloom::render::colorEncodingId(imageDescriptor.colorEncoding()) ==
-                                bloom::render::kReferenceLinearSrgbEncodingId,
-                        "descriptor fixes alpha, packing, and unambiguous reference encoding");
+                                bloom::render::kLinearRec709SceneEncodingId,
+                        "descriptor fixes alpha, packing, and unambiguous process encoding");
 
     constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
     const auto overflowingDescriptor = Rgba32fImageDescriptor::create(
@@ -322,7 +322,7 @@ void testPreparedReferenceDisplayBuffer(ExpectationContext& expectations) {
                             displayDescriptor.pixelPacking() == PixelPacking::PackedRgba8 &&
                             displayDescriptor.alphaAssociation() == AlphaAssociation::Straight &&
                             displayDescriptor.referenceDisplayPipelineId() ==
-                                "bloom.reference.linear-srgb-to-srgb" &&
+                                "bloom.reference.lin_rec709_scene-to-srgb.v1" &&
                             !displayDescriptor.isOcioQualified(),
                         "display handoff is packed RGBA8 and explicitly reference-only, not OCIO");
 

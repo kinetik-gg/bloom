@@ -30,7 +30,7 @@ class Rgba32fImageDescriptor final {
         return PixelPacking::PackedRgba32f;
     }
     [[nodiscard]] static constexpr ColorEncoding colorEncoding() noexcept {
-        return ColorEncoding::ReferenceLinearSrgb;
+        return ColorEncoding::LinearRec709Scene;
     }
 
     friend constexpr bool operator==(const Rgba32fImageDescriptor&,

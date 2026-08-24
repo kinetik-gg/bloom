@@ -24,8 +24,7 @@ inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit = 512U * 1024U
 struct CompositionPreviewSettings final {
     runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
-    runtime::EvaluationColorIntent colorIntent =
-        runtime::EvaluationColorIntent::ReferenceLinearSrgb;
+    runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
 
     friend bool operator==(const CompositionPreviewSettings&,

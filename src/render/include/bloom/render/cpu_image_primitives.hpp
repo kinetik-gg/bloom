@@ -9,7 +9,7 @@
 
 namespace bloom::render {
 
-inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 1;
+inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 2;
 
 // Checked authored layer parameters. Translation remains Float64 pixel-center displacement;
 // opacity is deliberately rounded once to the Float32 process precision.
@@ -35,10 +35,11 @@ class TranslationOpacity final {
     float opacity_ = 1.0F;
 };
 
-// Converts one straight reference-linear-sRGB authoring color into the canonical premultiplied
-// Float32 process pixel. Premultiplication occurs in Float64 before checked Float32 rounding.
+// Converts one straight v1 solid authoring color into the canonical premultiplied
+// lin_rec709_scene Float32 process pixel. The v1 authoring primaries are numerically identical to
+// the process primaries; premultiplication occurs in Float64 before checked Float32 rounding.
 [[nodiscard]] ImageResult<Rgba32f>
-solidPixelFromStraightReferenceLinearSrgb(core::Color4d color) noexcept;
+solidPixelFromStraightLinearRec709Scene(core::Color4d color) noexcept;
 
 // Row primitives never allocate or schedule. Their caller owns cancellation checks at row
 // boundaries and discards partially constructed outputs after any error.
@@ -51,18 +52,18 @@ void fillSolidRow(std::span<Rgba32f> output, Rgba32f pixel) noexcept;
 translateOpacityBilinearRow(Rgba32fImageView source, ImageWindow outputWindow, std::int64_t outputY,
                             TranslationOpacity parameters, std::span<Rgba32f> output) noexcept;
 
-// Composites source over destination in the reference-linear working space. Destination is the
+// Composites source over destination in lin_rec709_scene process space. Destination is the
 // in-place output. Source storage must not overlap destination storage. Both spans contain
 // premultiplied pixels; process RGB is never clamped.
-[[nodiscard]] ImageStatus sourceOverReferenceLinearSrgbRow(std::span<const Rgba32f> source,
-                                                           std::span<Rgba32f> destination) noexcept;
+[[nodiscard]] ImageStatus sourceOverLinearRec709SceneRow(std::span<const Rgba32f> source,
+                                                         std::span<Rgba32f> destination) noexcept;
 
-// Maps premultiplied reference-linear process pixels to straight packed sRGB display pixels.
+// Maps premultiplied lin_rec709_scene process pixels to straight packed sRGB display pixels.
 // Pixels outside the process data window are transparent; display clipping happens only here.
-[[nodiscard]] ImageStatus mapReferenceLinearSrgbToSrgbRow(Rgba32fImageView source,
-                                                          ImageWindow displayWindow,
-                                                          std::int64_t outputY,
-                                                          std::span<Rgba8> output) noexcept;
+[[nodiscard]] ImageStatus mapLinearRec709SceneToSrgbRow(Rgba32fImageView source,
+                                                        ImageWindow displayWindow,
+                                                        std::int64_t outputY,
+                                                        std::span<Rgba8> output) noexcept;
 
 } // namespace bloom::render
 

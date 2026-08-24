@@ -19,15 +19,15 @@
 
 namespace bloom::runtime {
 
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 1;
-inline constexpr std::uint32_t kReferenceDisplayMapperSemanticsVersion = 1;
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 2;
+inline constexpr std::uint32_t kReferenceDisplayMapperSemanticsVersion = 2;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,
 };
 
 enum class EvaluationColorIntent : std::uint8_t {
-    ReferenceLinearSrgb,
+    LinearRec709Scene,
 };
 
 enum class EvaluationProvider : std::uint8_t {
@@ -35,7 +35,7 @@ enum class EvaluationProvider : std::uint8_t {
 };
 
 enum class EvaluationDisplayIntent : std::uint8_t {
-    ReferenceLinearSrgbToSrgb,
+    LinearRec709SceneToSrgb,
 };
 
 struct CompositionFormatResolution final {
@@ -57,7 +57,7 @@ struct EvaluationRequest final {
     OperationIndex output;
     EvaluationResolution resolution;
     EvaluationQuality quality = EvaluationQuality::Reference;
-    EvaluationColorIntent colorIntent = EvaluationColorIntent::ReferenceLinearSrgb;
+    EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = 0;
 };
 
@@ -70,9 +70,9 @@ struct EvaluationCacheIdentity final {
     OperationIndex output;
     EvaluationResolution resolution;
     EvaluationQuality quality = EvaluationQuality::Reference;
-    EvaluationColorIntent colorIntent = EvaluationColorIntent::ReferenceLinearSrgb;
+    EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
     EvaluationProvider provider = EvaluationProvider::CpuReference;
-    EvaluationDisplayIntent displayIntent = EvaluationDisplayIntent::ReferenceLinearSrgbToSrgb;
+    EvaluationDisplayIntent displayIntent = EvaluationDisplayIntent::LinearRec709SceneToSrgb;
     std::uint32_t evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
     std::uint32_t imagePrimitiveSemanticsVersion = 0;

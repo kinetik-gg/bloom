@@ -617,7 +617,7 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                                 .output = result.plan->output,
                                 .resolution = runtime::CompositionFormatResolution{},
                                 .quality = runtime::EvaluationQuality::Reference,
-                                .colorIntent = runtime::EvaluationColorIntent::ReferenceLinearSrgb,
+                                .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
                                 .pixelStorageByteLimit = 1U << 20U},
                                runtime::CancellationToken{});
         expectations.expect(evaluated.status() == runtime::EvaluationStatus::Evaluated &&

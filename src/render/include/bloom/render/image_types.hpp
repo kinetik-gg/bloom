@@ -165,15 +165,15 @@ enum class PixelPacking : std::uint8_t {
 };
 
 enum class ColorEncoding : std::uint8_t {
-    ReferenceLinearSrgb,
+    LinearRec709Scene,
 };
 
-inline constexpr std::string_view kReferenceLinearSrgbEncodingId = "bloom.reference.linear-srgb";
+inline constexpr std::string_view kLinearRec709SceneEncodingId = "lin_rec709_scene";
 
 [[nodiscard]] constexpr std::string_view colorEncodingId(const ColorEncoding encoding) noexcept {
     switch (encoding) {
-    case ColorEncoding::ReferenceLinearSrgb:
-        return kReferenceLinearSrgbEncodingId;
+    case ColorEncoding::LinearRec709Scene:
+        return kLinearRec709SceneEncodingId;
     }
     return {};
 }

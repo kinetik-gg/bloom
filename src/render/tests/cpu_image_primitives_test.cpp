@@ -34,7 +34,7 @@ using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
 using bloom::render::ImageStatus;
 using bloom::render::ImageWindow;
-using bloom::render::mapReferenceLinearSrgbToSrgbRow;
+using bloom::render::mapLinearRec709SceneToSrgbRow;
 using bloom::render::PreparedReferenceDisplayBuffer;
 using bloom::render::ReferenceDisplayBufferBuilder;
 using bloom::render::ReferenceDisplayBufferDescriptor;
@@ -44,8 +44,8 @@ using bloom::render::Rgba32fImageBuilder;
 using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::Rgba32fImageView;
 using bloom::render::Rgba8;
-using bloom::render::solidPixelFromStraightReferenceLinearSrgb;
-using bloom::render::sourceOverReferenceLinearSrgbRow;
+using bloom::render::solidPixelFromStraightLinearRec709Scene;
+using bloom::render::sourceOverLinearRec709SceneRow;
 using bloom::render::translateOpacityBilinearRow;
 using bloom::render::TranslationOpacity;
 
@@ -218,30 +218,30 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 1,
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 2,
                         "CPU image primitive semantics are explicitly versioned");
 
-    const auto solid = solidPixelFromStraightReferenceLinearSrgb(Color4d{0.5, -2.0, 4.0, 0.25});
+    const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});
     expectations.expect(solid && *solid.value() == pixel(0.125F, -0.5F, 1.0F, 0.25F),
-                        "solid conversion premultiplies straight reference-linear color");
+                        "solid conversion premultiplies straight v1 authoring color");
     const auto wideStraight = static_cast<double>(std::numeric_limits<float>::max()) * 2.0;
     const auto wideSolid =
-        solidPixelFromStraightReferenceLinearSrgb(Color4d{wideStraight, 0.0, 0.0, 0.25});
+        solidPixelFromStraightLinearRec709Scene(Color4d{wideStraight, 0.0, 0.0, 0.25});
     expectations.expect(
         wideSolid && wideSolid.value()->red() == static_cast<float>(wideStraight * 0.25),
         "solid conversion premultiplies in Float64 before checked Float32 rounding");
-    const auto tinyAlphaSolid = solidPixelFromStraightReferenceLinearSrgb(Color4d{
+    const auto tinyAlphaSolid = solidPixelFromStraightLinearRec709Scene(Color4d{
         std::numeric_limits<double>::max(), 1.0, -1.0, std::numeric_limits<double>::denorm_min()});
     expectations.expect(tinyAlphaSolid && *tinyAlphaSolid.value() == Rgba32f::transparent(),
                         "alpha rounded to Float32 zero canonicalizes every channel");
-    const auto zeroAlphaSolid = solidPixelFromStraightReferenceLinearSrgb(
+    const auto zeroAlphaSolid = solidPixelFromStraightLinearRec709Scene(
         Color4d{std::numeric_limits<double>::max(), -2.0, 3.0, 0.0});
     expectations.expect(zeroAlphaSolid && *zeroAlphaSolid.value() == Rgba32f::transparent(),
                         "authored alpha zero has an exact transparent representation");
 
     const auto unrepresentable =
-        solidPixelFromStraightReferenceLinearSrgb(Color4d{wideStraight, 0.0, 0.0, 1.0});
-    const auto invalidColor = solidPixelFromStraightReferenceLinearSrgb(
+        solidPixelFromStraightLinearRec709Scene(Color4d{wideStraight, 0.0, 0.0, 1.0});
+    const auto invalidColor = solidPixelFromStraightLinearRec709Scene(
         Color4d{std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0, 1.0});
     expectations.expect(hasError(unrepresentable, ImageErrorCode::NonFiniteResult) &&
                             hasError(invalidColor, ImageErrorCode::InvalidParameter),
@@ -359,7 +359,7 @@ void testSourceOver(Expectations& expectations) {
         pixel(4.0F, -2.0F, 1.0F, 0.5F),
     };
     const auto originalTransparentDestination = destination[1];
-    const auto status = sourceOverReferenceLinearSrgbRow(source, destination);
+    const auto status = sourceOverLinearRec709SceneRow(source, destination);
     expectations.expect(
         !status.has_value() && destination[0] == pixel(0.5F, 0.0F, 0.25F, 0.75F) &&
             destination[1] == originalTransparentDestination && destination[2] == source[2] &&
@@ -367,12 +367,12 @@ void testSourceOver(Expectations& expectations) {
         "ordered source-over preserves alpha endpoints and negative/HDR scene-linear RGB");
 
     std::array<Rgba32f, 1> wrongSize{Rgba32f::transparent()};
-    expectations.expect(hasError(sourceOverReferenceLinearSrgbRow(source, wrongSize),
+    expectations.expect(hasError(sourceOverLinearRec709SceneRow(source, wrongSize),
                                  ImageErrorCode::InvalidStorageSize),
                         "source-over rejects unequal row sizes");
     auto aliased = source;
     expectations.expect(
-        hasError(sourceOverReferenceLinearSrgbRow(std::span<const Rgba32f>(aliased), aliased),
+        hasError(sourceOverLinearRec709SceneRow(std::span<const Rgba32f>(aliased), aliased),
                  ImageErrorCode::InvalidParameter),
         "source-over rejects source storage that aliases its in-place destination");
 
@@ -380,7 +380,7 @@ void testSourceOver(Expectations& expectations) {
     const std::array overflowingSource{pixel(maximum, 0.0F, 0.0F, 0.5F)};
     std::array overflowingDestination{pixel(maximum, 0.0F, 0.0F, 0.5F)};
     expectations.expect(
-        hasError(sourceOverReferenceLinearSrgbRow(overflowingSource, overflowingDestination),
+        hasError(sourceOverLinearRec709SceneRow(overflowingSource, overflowingDestination),
                  ImageErrorCode::NonFiniteResult),
         "source-over reports finite-input RGB overflow without clamping");
 }
@@ -402,7 +402,7 @@ void testReferenceDisplayMapping(Expectations& expectations) {
     }
 
     std::array<Rgba8, 5> mapped{};
-    const auto status = mapReferenceLinearSrgbToSrgbRow(*view.value(), displayWindow, 4, mapped);
+    const auto status = mapLinearRec709SceneToSrgbRow(*view.value(), displayWindow, 4, mapped);
     const std::array expected{
         Rgba8{0, 0, 0, 0},       Rgba8{0, 0, 0, 0}, Rgba8{128, 10, 188, 128},
         Rgba8{0, 255, 188, 128}, Rgba8{0, 0, 0, 0},
@@ -413,16 +413,16 @@ void testReferenceDisplayMapping(Expectations& expectations) {
 
     std::array<Rgba8, 5> repeated{};
     expectations.expect(
-        !mapReferenceLinearSrgbToSrgbRow(*view.value(), displayWindow, 4, repeated).has_value() &&
+        !mapLinearRec709SceneToSrgbRow(*view.value(), displayWindow, 4, repeated).has_value() &&
             repeated == mapped,
         "reference display byte mapping is exactly repeatable");
     expectations.expect(
-        hasError(mapReferenceLinearSrgbToSrgbRow(*view.value(), window(-2, 4, 4, 1), 4, mapped),
+        hasError(mapLinearRec709SceneToSrgbRow(*view.value(), window(-2, 4, 4, 1), 4, mapped),
                  ImageErrorCode::IncompatibleImageDescriptor) &&
-            hasError(mapReferenceLinearSrgbToSrgbRow(*view.value(), displayWindow, 5, mapped),
+            hasError(mapLinearRec709SceneToSrgbRow(*view.value(), displayWindow, 5, mapped),
                      ImageErrorCode::CoordinateOutOfBounds) &&
-            hasError(mapReferenceLinearSrgbToSrgbRow(*view.value(), displayWindow, 4,
-                                                     std::span<Rgba8>(mapped).first(4)),
+            hasError(mapLinearRec709SceneToSrgbRow(*view.value(), displayWindow, 4,
+                                                   std::span<Rgba8>(mapped).first(4)),
                      ImageErrorCode::InvalidStorageSize),
         "display mapper reports descriptor, coordinate, and storage contract violations");
 }
@@ -448,15 +448,15 @@ void testFloatingPointEnvironment(Expectations& expectations) {
                 hasError(
                     TranslationOpacity::create(std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0),
                     ImageErrorCode::InvalidParameter) &&
-                hasError(solidPixelFromStraightReferenceLinearSrgb(Color4d{1.0, 0.0, 0.0, 1.0}),
+                hasError(solidPixelFromStraightLinearRec709Scene(Color4d{1.0, 0.0, 0.0, 1.0}),
                          ImageErrorCode::UnsupportedFloatingPointEnvironment) &&
                 hasError(translateOpacityBilinearRow(*view.value(), imageWindow, 0,
                                                      *parameters.value(), processOutput),
                          ImageErrorCode::UnsupportedFloatingPointEnvironment) &&
-                hasError(sourceOverReferenceLinearSrgbRow(image.pixels(), processOutput),
+                hasError(sourceOverLinearRec709SceneRow(image.pixels(), processOutput),
                          ImageErrorCode::UnsupportedFloatingPointEnvironment) &&
                 hasError(
-                    mapReferenceLinearSrgbToSrgbRow(*view.value(), imageWindow, 0, displayOutput),
+                    mapLinearRec709SceneToSrgbRow(*view.value(), imageWindow, 0, displayOutput),
                     ImageErrorCode::UnsupportedFloatingPointEnvironment),
             "every authored arithmetic boundary rejects non-default rounding after input "
             "validation");
@@ -470,12 +470,12 @@ void testFloatingPointEnvironment(Expectations& expectations) {
     MxcsrGuard guard;
     const auto baseline = guard.original() & ~(kDenormalsAreZero | kFlushToZero);
     _mm_setcsr(baseline | kFlushToZero);
-    expectations.expect(hasError(sourceOverReferenceLinearSrgbRow(image.pixels(), processOutput),
+    expectations.expect(hasError(sourceOverLinearRec709SceneRow(image.pixels(), processOutput),
                                  ImageErrorCode::UnsupportedFloatingPointEnvironment),
                         "source-over rejects flush-to-zero mode");
     _mm_setcsr(baseline | kDenormalsAreZero);
     expectations.expect(
-        hasError(mapReferenceLinearSrgbToSrgbRow(*view.value(), imageWindow, 0, displayOutput),
+        hasError(mapLinearRec709SceneToSrgbRow(*view.value(), imageWindow, 0, displayOutput),
                  ImageErrorCode::UnsupportedFloatingPointEnvironment),
         "display mapping rejects denormals-are-zero mode");
     _mm_setcsr(baseline);

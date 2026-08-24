@@ -332,7 +332,7 @@ template <typename Value>
             "Recompile the document snapshot with the current runtime semantics."));
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent != EvaluationColorIntent::ReferenceLinearSrgb) {
+        request.colorIntent != EvaluationColorIntent::LinearRec709Scene) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                        "Evaluation request uses an unsupported intent"));
@@ -761,7 +761,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 Overloaded{
                     [&](const CompiledSolid& solid) {
                         const auto pixel =
-                            render::solidPixelFromStraightReferenceLinearSrgb(solid.color);
+                            render::solidPixelFromStraightLinearRec709Scene(solid.color);
                         if (!pixel) {
                             operationFailure = imageDiagnostic(*pixel.error(), operationSubject,
                                                                "Solid color is not evaluable");
@@ -928,7 +928,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         operationSubject, "Layer Stack row could not be addressed");
                                     return;
                                 }
-                                if (const auto rowStatus = render::sourceOverReferenceLinearSrgbRow(
+                                if (const auto rowStatus = render::sourceOverLinearRec709SceneRow(
                                         *sourceRow.value(), *destinationRow.value())) {
                                     operationFailure = imageDiagnostic(
                                         *rowStatus, operationSubject,
@@ -1019,7 +1019,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 return EvaluationResult::failed(imageDiagnostic(
                     *outputRow.error(), {}, "Display output row could not be addressed"));
             }
-            if (const auto rowStatus = render::mapReferenceLinearSrgbToSrgbRow(
+            if (const auto rowStatus = render::mapLinearRec709SceneToSrgbRow(
                     *processView.value(), window, y, *outputRow.value())) {
                 return EvaluationResult::failed(imageDiagnostic(
                     *rowStatus, {}, "Reference display mapping could not be evaluated"));
@@ -1047,7 +1047,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .quality = request.quality,
             .colorIntent = request.colorIntent,
             .provider = EvaluationProvider::CpuReference,
-            .displayIntent = EvaluationDisplayIntent::ReferenceLinearSrgbToSrgb,
+            .displayIntent = EvaluationDisplayIntent::LinearRec709SceneToSrgb,
             .evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,

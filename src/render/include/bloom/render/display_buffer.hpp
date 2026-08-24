@@ -31,7 +31,7 @@ class ReferenceDisplayBufferDescriptor final {
         return AlphaAssociation::Straight;
     }
     [[nodiscard]] static constexpr std::string_view referenceDisplayPipelineId() noexcept {
-        return "bloom.reference.linear-srgb-to-srgb";
+        return "bloom.reference.lin_rec709_scene-to-srgb.v1";
     }
     [[nodiscard]] static constexpr bool isOcioQualified() noexcept { return false; }
 

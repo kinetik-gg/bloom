@@ -216,7 +216,7 @@ ImageResult<TranslationOpacity> TranslationOpacity::create(const double translat
         TranslationOpacity(translationX, translationY, static_cast<float>(opacity)));
 }
 
-ImageResult<Rgba32f> solidPixelFromStraightReferenceLinearSrgb(const core::Color4d color) noexcept {
+ImageResult<Rgba32f> solidPixelFromStraightLinearRec709Scene(const core::Color4d color) noexcept {
     if (!std::isfinite(color.red) || !std::isfinite(color.green) || !std::isfinite(color.blue) ||
         !std::isfinite(color.alpha)) {
         return ImageResult<Rgba32f>::failure(codeError(ImageErrorCode::InvalidParameter));
@@ -322,8 +322,8 @@ ImageStatus translateOpacityBilinearRow(const Rgba32fImageView source,
     return std::nullopt;
 }
 
-ImageStatus sourceOverReferenceLinearSrgbRow(const std::span<const Rgba32f> source,
-                                             const std::span<Rgba32f> destination) noexcept {
+ImageStatus sourceOverLinearRec709SceneRow(const std::span<const Rgba32f> source,
+                                           const std::span<Rgba32f> destination) noexcept {
     if (source.size() != destination.size()) {
         return ImageError::storageSizeMismatch(source.size_bytes(), destination.size_bytes());
     }
@@ -360,10 +360,10 @@ ImageStatus sourceOverReferenceLinearSrgbRow(const std::span<const Rgba32f> sour
     return std::nullopt;
 }
 
-ImageStatus mapReferenceLinearSrgbToSrgbRow(const Rgba32fImageView source,
-                                            const ImageWindow displayWindow,
-                                            const std::int64_t outputY,
-                                            const std::span<Rgba8> output) noexcept {
+ImageStatus mapLinearRec709SceneToSrgbRow(const Rgba32fImageView source,
+                                          const ImageWindow displayWindow,
+                                          const std::int64_t outputY,
+                                          const std::span<Rgba8> output) noexcept {
     const auto sourceDescriptorValue = source.descriptor();
     if (!sourceDescriptorValue.has_value() ||
         source.pixels().size() != sourceDescriptorValue->layout().pixelCount) {

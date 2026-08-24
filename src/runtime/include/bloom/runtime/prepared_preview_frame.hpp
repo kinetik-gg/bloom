@@ -21,7 +21,7 @@ struct PreviewRequestIdentity final {
     PreviewOutput output = PreviewOutput::Composition;
     EvaluationResolution resolution;
     EvaluationQuality quality = EvaluationQuality::Reference;
-    EvaluationColorIntent colorIntent = EvaluationColorIntent::ReferenceLinearSrgb;
+    EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
