@@ -1,9 +1,32 @@
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+namespace {
+
+template <typename Id>
+void validateProjectUniqueDeclaration(const Id id, const std::size_t compositionOrdinal,
+                                      std::string path, const std::string_view typeName,
+                                      std::unordered_map<Id, std::size_t>& declarationOwners,
+                                      bloom::document::ValidationResult& result) {
+    if (!id.isValid()) {
+        return;
+    }
+
+    const auto [existing, inserted] = declarationOwners.try_emplace(id, compositionOrdinal);
+    if (!inserted && existing->second != compositionOrdinal) {
+        result.add(bloom::document::ValidationCode::DuplicateId, std::move(path),
+                   std::string(typeName) + " ID is declared by more than one composition");
+    }
+}
+
+} // namespace
 
 namespace bloom::document {
 
@@ -66,15 +89,55 @@ ValidationResult Project::validate() const {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }
 
-    std::unordered_set<CompositionId> ids;
-    for (const auto& composition : compositions_) {
+    std::unordered_set<CompositionId> compositionIds;
+    std::unordered_map<NodeId, std::size_t> nodeDeclarations;
+    std::unordered_map<EdgeId, std::size_t> edgeDeclarations;
+    std::unordered_map<ParameterId, std::size_t> parameterDeclarations;
+    std::unordered_map<LayerId, std::size_t> layerDeclarations;
+    std::unordered_map<LayerSlotId, std::size_t> layerSlotDeclarations;
+
+    for (std::size_t compositionOrdinal = 0; compositionOrdinal < compositions_.size();
+         ++compositionOrdinal) {
+        const auto& composition = compositions_[compositionOrdinal];
         const auto path = "compositions[" + std::to_string(composition.id().value()) + "]";
         if (!composition.id().isValid()) {
             result.add(ValidationCode::InvalidId, path + ".id", "Composition ID must not be zero");
-        } else if (!ids.insert(composition.id()).second) {
+        } else if (!compositionIds.insert(composition.id()).second) {
             result.add(ValidationCode::DuplicateId, path + ".id", "Composition ID is duplicated");
         }
         result.append(path, composition.validate());
+
+        for (const auto& node : composition.graph().nodes()) {
+            validateProjectUniqueDeclaration(node.id, compositionOrdinal,
+                                             path + ".graph.nodes[" +
+                                                 std::to_string(node.id.value()) + "].id",
+                                             "Node", nodeDeclarations, result);
+        }
+        for (const auto& edge : composition.graph().edges()) {
+            validateProjectUniqueDeclaration(edge.id, compositionOrdinal,
+                                             path + ".graph.edges[" +
+                                                 std::to_string(edge.id.value()) + "].id",
+                                             "Edge", edgeDeclarations, result);
+        }
+        for (const auto& parameter : composition.parameters().records()) {
+            validateProjectUniqueDeclaration(parameter.id, compositionOrdinal,
+                                             path + ".parameters[" +
+                                                 std::to_string(parameter.id.value()) + "].id",
+                                             "Parameter", parameterDeclarations, result);
+        }
+        for (const auto& boundary : composition.graph().layerOutputs()) {
+            validateProjectUniqueDeclaration(boundary.layerId, compositionOrdinal,
+                                             path + ".graph.layerOutputs[" +
+                                                 std::to_string(boundary.layerId.value()) +
+                                                 "].layerId",
+                                             "Layer", layerDeclarations, result);
+        }
+        for (const auto& entry : composition.graph().layerStack().entries()) {
+            validateProjectUniqueDeclaration(entry.slotId, compositionOrdinal,
+                                             path + ".graph.layerStack.entries[" +
+                                                 std::to_string(entry.slotId.value()) + "].slotId",
+                                             "Layer Stack slot", layerSlotDeclarations, result);
+        }
     }
     return result;
 }

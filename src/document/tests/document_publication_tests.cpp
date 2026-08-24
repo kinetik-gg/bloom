@@ -6,11 +6,15 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,6 +25,7 @@ using bloom::core::RationalTime;
 using bloom::document::AnimationCurveId;
 using bloom::document::AnimationCurveSource;
 using bloom::document::CanonicalGraph;
+using bloom::document::CommitStatus;
 using bloom::document::Composition;
 using bloom::document::CompositionId;
 using bloom::document::ConstantValueSource;
@@ -35,6 +40,10 @@ using bloom::document::NodeId;
 using bloom::document::NodeInputRef;
 using bloom::document::NodeRecord;
 using bloom::document::ParameterId;
+using bloom::document::Project;
+using bloom::document::ProjectId;
+using bloom::document::ValidationCode;
+using bloom::document::ValidationResult;
 using bloom::document::Vec2d;
 
 class ExpectationContext final {
@@ -60,10 +69,227 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
     return Id::fromRaw(value);
 }
 
+[[nodiscard]] bool hasOnlyIssueAt(const ValidationResult& validation, const ValidationCode code,
+                                  const std::string_view path) {
+    return validation.issues().size() == 1 && validation.issues().front().code == code &&
+           validation.issues().front().path == path;
+}
+
+struct SingleLayerCompositionIds final {
+    CompositionId composition;
+    NodeId sourceNode;
+    NodeId layerOutputNode;
+    NodeId stackNode;
+    NodeId outputNode;
+    NodeId parameterReferenceNode;
+    EdgeId sourceEdge;
+    EdgeId stackEdge;
+    EdgeId outputEdge;
+    ParameterId positionParameter;
+    ParameterId opacityParameter;
+    LayerId layer;
+    LayerSlotId slot;
+};
+
+[[nodiscard]] constexpr SingleLayerCompositionIds
+compositionIds(const std::uint64_t composition, const std::uint64_t base) noexcept {
+    return {
+        id<CompositionId>(composition),
+        id<NodeId>(base),
+        id<NodeId>(base + 1),
+        id<NodeId>(base + 2),
+        id<NodeId>(base + 3),
+        id<NodeId>(base + 4),
+        id<EdgeId>(base),
+        id<EdgeId>(base + 1),
+        id<EdgeId>(base + 2),
+        id<ParameterId>(base),
+        id<ParameterId>(base + 1),
+        id<LayerId>(base),
+        id<LayerSlotId>(base),
+    };
+}
+
+[[nodiscard]] Composition makeSingleLayerComposition(const SingleLayerCompositionIds& ids) {
+    CanonicalGraph graph(ids.stackNode);
+    NodeRecord sourceNode{ids.sourceNode, "com.example.source", {}, 1};
+    NodeRecord layerOutputNode{
+        ids.layerOutputNode,
+        std::string(bloom::document::kLayerOutputNodeType),
+        {
+            {std::string(bloom::document::kPositionParameterRole), ids.positionParameter},
+            {std::string(bloom::document::kOpacityParameterRole), ids.opacityParameter},
+        },
+        bloom::document::kLayerOutputNodeSchemaVersion,
+    };
+    NodeRecord stackNode{ids.stackNode,
+                         std::string(bloom::document::kLayerStackNodeType),
+                         {},
+                         bloom::document::kLayerStackNodeSchemaVersion};
+    NodeRecord outputNode{ids.outputNode,
+                          std::string(bloom::document::kCompositionOutputNodeType),
+                          {},
+                          bloom::document::kCompositionOutputNodeSchemaVersion};
+    NodeRecord parameterReferenceNode{ids.parameterReferenceNode,
+                                      "com.example.parameter-reference",
+                                      {{"value", ids.positionParameter}},
+                                      1};
+
+    const bool graphBuilt =
+        graph.addNode(std::move(sourceNode)) && graph.addNode(std::move(layerOutputNode)) &&
+        graph.addNode(std::move(stackNode)) && graph.addNode(std::move(outputNode)) &&
+        graph.addNode(std::move(parameterReferenceNode)) &&
+        graph.addLayerOutput({ids.layerOutputNode, ids.layer, "Layer",
+                              std::string(bloom::document::kLayerOutputOutputPort)}) &&
+        graph.layerStack().append({ids.slot, ids.layer}) &&
+        graph.addEdge({ids.sourceEdge,
+                       {ids.sourceNode, "image"},
+                       NodeInputRef{ids.layerOutputNode,
+                                    std::string(bloom::document::kLayerOutputContentInputPort)}}) &&
+        graph.addEdge(
+            {ids.stackEdge,
+             {ids.layerOutputNode, std::string(bloom::document::kLayerOutputOutputPort)},
+             LayerStackInputRef{ids.stackNode, ids.slot,
+                                std::string(bloom::document::kLayerStackContentInputRole)}}) &&
+        graph.addEdge({ids.outputEdge,
+                       {ids.stackNode, std::string(bloom::document::kLayerStackOutputPort)},
+                       NodeInputRef{ids.outputNode,
+                                    std::string(bloom::document::kCompositionOutputInputPort)}});
+    graph.setCompositionOutput(
+        {ids.outputNode, std::string(bloom::document::kCompositionOutputOutputPort)});
+
+    Composition composition(ids.composition, "Composition", RationalTime::fromInteger(1),
+                            std::move(graph));
+    const bool parametersBuilt =
+        composition.parameters().insert({ids.positionParameter,
+                                         std::string(bloom::document::kPositionParameterSchemaKey),
+                                         ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        composition.parameters().insert({ids.opacityParameter,
+                                         std::string(bloom::document::kOpacityParameterSchemaKey),
+                                         ConstantValueSource{1.0}});
+    if (!graphBuilt || !parametersBuilt) {
+        throw std::logic_error("Could not build global ID validation fixture");
+    }
+    return composition;
+}
+
+[[nodiscard]] Project
+makeProject(const SingleLayerCompositionIds& first,
+            const std::optional<SingleLayerCompositionIds>& second = std::nullopt) {
+    Project project(id<ProjectId>(1), "Project");
+    if (!project.addComposition(makeSingleLayerComposition(first)) ||
+        (second.has_value() && !project.addComposition(makeSingleLayerComposition(*second)))) {
+        throw std::logic_error("Could not build multi-composition project fixture");
+    }
+    return project;
+}
+
+enum class DeclarationNamespace : std::uint8_t {
+    Node,
+    Edge,
+    Parameter,
+    Layer,
+    LayerSlot,
+};
+
+struct CollisionCase final {
+    DeclarationNamespace idNamespace;
+    std::string_view path;
+    std::string_view label;
+};
+
+inline constexpr std::array kCollisionCases{
+    CollisionCase{DeclarationNamespace::Node, "compositions[2].graph.nodes[100].id", "node"},
+    CollisionCase{DeclarationNamespace::Edge, "compositions[2].graph.edges[100].id", "edge"},
+    CollisionCase{DeclarationNamespace::Parameter, "compositions[2].parameters[100].id",
+                  "parameter"},
+    CollisionCase{DeclarationNamespace::Layer, "compositions[2].graph.layerOutputs[100].layerId",
+                  "layer"},
+    CollisionCase{DeclarationNamespace::LayerSlot,
+                  "compositions[2].graph.layerStack.entries[100].slotId", "layer-slot"},
+};
+
+[[nodiscard]] SingleLayerCompositionIds
+withCollision(SingleLayerCompositionIds second, const SingleLayerCompositionIds& first,
+              const DeclarationNamespace idNamespace) noexcept {
+    switch (idNamespace) {
+    case DeclarationNamespace::Node:
+        second.sourceNode = first.sourceNode;
+        break;
+    case DeclarationNamespace::Edge:
+        second.sourceEdge = first.sourceEdge;
+        break;
+    case DeclarationNamespace::Parameter:
+        second.positionParameter = first.positionParameter;
+        break;
+    case DeclarationNamespace::Layer:
+        second.layer = first.layer;
+        break;
+    case DeclarationNamespace::LayerSlot:
+        second.slot = first.slot;
+        break;
+    }
+    return second;
+}
+
 [[nodiscard]] Document makeDocument() {
     auto created =
         bloom::document::makeNewProject("Project", "Composition", RationalTime::fromInteger(1));
     return Document(std::move(created.project));
+}
+
+void testProjectGlobalDeclarationIds(ExpectationContext& expectations) {
+    constexpr auto first = compositionIds(1, 100);
+    constexpr auto second = [] {
+        auto ids = compositionIds(2, 200);
+        ids.sourceEdge = id<EdgeId>(104);
+        return ids;
+    }();
+    const auto disjoint = makeProject(first, second);
+    expectations.expect(first.sourceNode.value() == first.sourceEdge.value() &&
+                            first.sourceNode.value() == first.positionParameter.value() &&
+                            first.sourceNode.value() == first.layer.value() &&
+                            first.sourceNode.value() == first.slot.value() &&
+                            first.parameterReferenceNode.value() == second.sourceEdge.value(),
+                        "the fixture reuses raw values across typed namespaces and compositions");
+    expectations.expect(disjoint.validate().ok(),
+                        "ordinary repeated parameter and layer references are not declarations");
+
+    for (const auto& collision : kCollisionCases) {
+        const auto collidingSecond = withCollision(second, first, collision.idNamespace);
+        auto invalidProject = makeProject(first, collidingSecond);
+        const auto validation = invalidProject.validate();
+        bool constructorRejected = false;
+        try {
+            [[maybe_unused]] Document invalidDocument(std::move(invalidProject));
+        } catch (const std::invalid_argument&) {
+            constructorRejected = true;
+        }
+        const auto constructorMessage =
+            std::string("document construction rejects a cross-composition ") +
+            std::string(collision.label) + " declaration collision at its stable path";
+        expectations.expect(
+            hasOnlyIssueAt(validation, ValidationCode::DuplicateId, collision.path) &&
+                constructorRejected,
+            constructorMessage);
+
+        Document document(makeProject(first));
+        const auto before = document.snapshot();
+        auto draft = document.draft(before);
+        const bool compositionAdded =
+            draft.project().addComposition(makeSingleLayerComposition(collidingSecond));
+        const auto rejected = document.commit(before.revision(), std::move(draft));
+        const auto after = document.snapshot();
+        const auto commitMessage = std::string("commit rejects a cross-composition ") +
+                                   std::string(collision.label) +
+                                   " declaration collision without publishing it";
+        expectations.expect(
+            compositionAdded && rejected.status == CommitStatus::InvalidDraft &&
+                !rejected.snapshot.has_value() &&
+                hasOnlyIssueAt(rejected.validation, ValidationCode::DuplicateId, collision.path) &&
+                after.revision() == before.revision() && after.project().compositions().size() == 1,
+            commitMessage);
+    }
 }
 
 void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectations) {
@@ -190,8 +416,14 @@ void testAllocatorExhaustionSurvivesRestore(ExpectationContext& expectations) {
 } // namespace
 
 int main() {
-    ExpectationContext expectations;
-    testPublicationReconcilesAllocatorHighWater(expectations);
-    testAllocatorExhaustionSurvivesRestore(expectations);
-    return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
+    try {
+        ExpectationContext expectations;
+        testProjectGlobalDeclarationIds(expectations);
+        testPublicationReconcilesAllocatorHighWater(expectations);
+        testAllocatorExhaustionSurvivesRestore(expectations);
+        return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return EXIT_FAILURE;
+    }
 }
