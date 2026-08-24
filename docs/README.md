@@ -12,7 +12,8 @@ provide research or rationale, but they are not binding until adopted here.
 1. [`product/foundation.md`](product/foundation.md) — product identity, current decisions, v0 proof,
    and non-goals.
 2. [`product/quality-bar.md`](product/quality-bar.md) — professional artist experience, reliability,
-   responsiveness, and VFX expectations.
+   responsiveness, and VFX expectations; [`product/node-catalogue.md`](product/node-catalogue.md) —
+   planned artist-facing node families and delivery levels.
 3. [`standards/strategy.md`](standards/strategy.md) — standards-first pipeline and interoperability
    policy.
 4. [`ux/compositing-workspace.md`](ux/compositing-workspace.md) — the UI sketch as an interaction
@@ -21,6 +22,7 @@ provide research or rationale, but they are not binding until adopted here.
    dependency direction.
 6. [`architecture/module-system.md`](architecture/module-system.md),
    [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
+   [`architecture/evaluation-primitives.md`](architecture/evaluation-primitives.md),
    [`architecture/task-system.md`](architecture/task-system.md),
    [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
    [`architecture/project-format.md`](architecture/project-format.md),

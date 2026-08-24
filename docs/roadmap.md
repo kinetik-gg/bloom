@@ -22,6 +22,16 @@ Bloom currently has:
   priority, cancellation, task groups, coalescing, progress, diagnostics, and non-blocking results
 - committed Qt-free CPU image contracts for checked extents and layouts, premultiplied `RGBA32F`
   storage, immutable views, color identity, and prepared packed display buffers
+- checked Float32/Float64 scalar primitives with stable IDs and versioned, failure-aware semantics;
+  color remains excluded from generic scalar/vector arithmetic
+- a frozen startup node-definition registry and deterministic snapshot compiler that follows only
+  the graph reachable from the explicit composition output
+- an application-owned preview controller that suppresses stale revision/generation results and
+  projects honest plan states into replaceable Viewer panels
+- a rate-limited Qt task bridge, shared monitor model, and replaceable Jobs editor with stable-ID
+  cancellation, progress, duration, terminal history, and complete plain-text diagnostics
+- staged application shutdown that intercepts window and application quit paths, keeps processing
+  Qt events, publishes final terminal task snapshots, and exits only after runtime quiescence
 - a shared composition session projected through Viewer, Timeline, Nodes, Media, and Properties
 - atomic text-layer authoring with stable node, layer, slot, edge, and parameter IDs
 - strict warnings, formatting, repository hygiene, architecture-boundary checks, and focused local
@@ -29,13 +39,11 @@ Bloom currently has:
 - accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
   add-ons, Apache-2.0 distribution, and the native `.bloom` container
 
-The local Batch 1 authoring checkpoint is implemented and has been launched: Add Solid is available
-from the Timeline's accessible menu, while its durable layer, node, selection, and exact/HDR
-property projections remain synchronized through command execution and undo/redo. The Viewer
-deliberately remains a presentation placeholder and receives no evaluated pixels. The task runtime
-and image values are foundations, not a preview pipeline: Bloom does not yet compile a composition
-snapshot, evaluate pixels, publish generation-safe results into Qt, show Jobs, store keyframes, or
-save a project.
+The local Batch 2 checkpoint is implemented and has been launched. Add Solid remains synchronized
+through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
+composition snapshots asynchronously, publishes only the current revision/generation, and exposes
+the work through the swappable Jobs editor. The Viewer deliberately reports plan lifecycle without
+claiming evaluated pixels. Pixel evaluation, keyframes, and project persistence remain deferred.
 
 Before the next feature is called cross-platform complete, the current checkpoint and each new
 merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
@@ -160,6 +168,9 @@ no pixel-rendering claim is made.
 Goal: prove that real composition-derived work can execute, report progress, be superseded, and
 publish safely before image allocation increases the cost of mistakes.
 
+Implementation status: implemented and locally verified. The visual checkpoint has been launched;
+cross-platform parity still requires the configured Linux, macOS, and Windows CI matrix.
+
 Parallel work packages:
 
 1. `src/runtime`: a startup-built and then frozen `NodeDefinitionRegistry`, typed port/parameter
@@ -198,6 +209,11 @@ Suggested commits:
 
 Visual checkpoint: launch Bloom with deliberately observable plan work. Viewer must show only the
 current revision while Jobs shows superseded/cancelled generations honestly.
+
+Checkpoint result: the Viewer projects only the application-owned controller's current derived
+state and continues to say that no pixels are available. Jobs is a sixth normal editor type and
+retains bounded task history when its panel is replaced. Window and application quit paths use the
+same non-blocking staged shutdown.
 
 ## Batch 3 — Deterministic CPU Composition Preview
 

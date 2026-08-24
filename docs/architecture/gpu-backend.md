@@ -138,7 +138,8 @@ Every initial accelerated operation also has a CPU reference implementation. GPU
 with documented absolute, relative, and image-level tolerances appropriate to the operation; it is
 not assumed to be bit-identical across vendors. Cache keys include the implementation revision,
 shader revision, quality mode, relevant capabilities, and device/driver identity when those can
-change results.
+change results. The normative value, precision, color, alpha, and primitive-version contracts are
+owned by [`evaluation-primitives.md`](evaluation-primitives.md).
 
 Until the parity suite is accepted, deterministic final export uses the CPU reference path by
 default. Enabling GPU final rendering is a deliberate capability, not an automatic consequence of

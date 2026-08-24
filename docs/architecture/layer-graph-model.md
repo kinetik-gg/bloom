@@ -145,7 +145,8 @@ than rerunning a topology heuristic against the current graph.
 An immutable composition snapshot freezes nodes, stack entries and order, edges, parameter sources,
 animation, assets, required type versions, and document revision. Runtime compilation lowers layer
 semantics into explicit time-map, mask/matte, transform, opacity, and ordered blend operations in
-derived state only.
+derived state only. Artist node schemas and backend-neutral primitive semantics remain separate as
+defined in [`evaluation-primitives.md`](evaluation-primitives.md).
 
 ## Hard-Case Contracts
 

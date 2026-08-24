@@ -189,11 +189,16 @@ The complete contract and game-engine pipeline fitness test are defined in
   active scaffold.
 - The node editor uses Bloom-owned `QGraphicsScene`/`QGraphicsView` presentation over immutable
   document snapshots; external node frameworks do not own graph, persistence, or undo semantics.
+- Artist nodes lower through versioned definitions into shared checked primitives. Color, mask,
+  vector, image, and future geometry values remain semantically distinct; see
+  [`evaluation-primitives.md`](evaluation-primitives.md).
 - `.bloom` uses a constrained ZIP container with strict deterministic JSON, explicit schema
   versions, unknown-data preservation, and atomic task-system save/open behavior; see
   [`project-format.md`](project-format.md).
-- Canonical in-memory pixel representation and CPU image library.
-- Dependency management strategy for Qt and ASWF libraries.
+- The canonical CPU image representation is premultiplied `RGBA32F` with explicit color identity;
+  production color transformation remains an explicit render-service boundary.
+- Dependency-management details for Qt and adopted pipeline libraries remain to be proven through
+  reproducible cross-platform packaging.
 
 The modular-monolith structure and optional pipeline model are accepted. The exact public SDK and
 binary loading strategy remain deferred until an external extension workflow enters scope.

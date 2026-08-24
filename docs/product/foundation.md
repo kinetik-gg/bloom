@@ -121,6 +121,8 @@ should normally wait.
 - [`../ux/visual-language.md`](../ux/visual-language.md)
 - [`../architecture/task-system.md`](../architecture/task-system.md)
 - [`../architecture/layer-graph-model.md`](../architecture/layer-graph-model.md)
+- [`node-catalogue.md`](node-catalogue.md)
+- [`../architecture/evaluation-primitives.md`](../architecture/evaluation-primitives.md)
 - [`../architecture/scripting-and-addons.md`](../architecture/scripting-and-addons.md)
 - [`../architecture/module-system.md`](../architecture/module-system.md)
 - [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
