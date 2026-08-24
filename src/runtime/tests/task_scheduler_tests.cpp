@@ -360,6 +360,40 @@ void testFailuresAndHistoryBound(Expectations& expectations) {
                         "oldest terminal record is evicted first");
 }
 
+void testOrderedFailureDiagnostics(Expectations& expectations) {
+    using namespace bloom::runtime;
+    TaskScheduler scheduler(testConfig());
+    const std::vector<TaskDiagnostic> expected{{.code = "bloom.runtime.primary-failure",
+                                                .severity = DiagnosticSeverity::Error,
+                                                .summary = "Primary failure",
+                                                .detail = {},
+                                                .suggestedAction = {}},
+                                               {.code = "bloom.runtime.secondary-failure",
+                                                .severity = DiagnosticSeverity::Warning,
+                                                .summary = "Secondary failure",
+                                                .detail = {},
+                                                .suggestedAction = {}}};
+    auto typed = scheduler.submit<int>(
+        TaskRequest("Ordered typed failure", owner(70)),
+        [expected](TaskContext&) { return TaskResult<int>::failed(expected); });
+    auto untyped = scheduler.submit<void>(
+        TaskRequest("Ordered void failure", owner(71)),
+        [expected](TaskContext&) { return TaskResult<void>::failed(expected); });
+
+    const auto typedResult = awaitResult(typed.handle);
+    const auto untypedResult = awaitResult(untyped.handle);
+    expectations.expect(typedResult.has_value() && typedResult->diagnostics() == expected,
+                        "typed failed results preserve every diagnostic in source order");
+    expectations.expect(untypedResult.has_value() && untypedResult->diagnostics() == expected,
+                        "void failed results preserve every diagnostic in source order");
+    const auto typedSnapshot = scheduler.snapshot(typed.handle.id());
+    const auto untypedSnapshot = scheduler.snapshot(untyped.handle.id());
+    expectations.expect(typedSnapshot.has_value() && typedSnapshot->diagnostics == expected,
+                        "typed task snapshots preserve ordered failure diagnostics");
+    expectations.expect(untypedSnapshot.has_value() && untypedSnapshot->diagnostics == expected,
+                        "void task snapshots preserve ordered failure diagnostics");
+}
+
 void testStagedShutdown(Expectations& expectations) {
     using namespace bloom::runtime;
     TaskScheduler scheduler(testConfig());
@@ -402,6 +436,7 @@ int main() {
     testCoalescing(expectations);
     testOwnerAndGroupCancellation(expectations);
     testFailuresAndHistoryBound(expectations);
+    testOrderedFailureDiagnostics(expectations);
     testStagedShutdown(expectations);
 
     if (expectations.failures() != 0) {

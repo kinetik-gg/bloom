@@ -71,6 +71,10 @@ template <TaskResultValue Value> class TaskResult final {
         return TaskResult(TaskState::Failed, std::nullopt, std::move(diagnostics));
     }
 
+    [[nodiscard]] static TaskResult failed(std::vector<TaskDiagnostic> diagnostics) {
+        return TaskResult(TaskState::Failed, std::nullopt, std::move(diagnostics));
+    }
+
     [[nodiscard]] TaskState state() const noexcept { return state_; }
     [[nodiscard]] const std::optional<Value>& value() const& noexcept { return value_; }
     [[nodiscard]] std::optional<Value>&& value() && noexcept { return std::move(value_); }
@@ -106,6 +110,10 @@ template <> class TaskResult<void> final {
     [[nodiscard]] static TaskResult failed(TaskDiagnostic diagnostic) {
         std::vector<TaskDiagnostic> diagnostics;
         diagnostics.push_back(std::move(diagnostic));
+        return TaskResult(TaskState::Failed, std::move(diagnostics));
+    }
+
+    [[nodiscard]] static TaskResult failed(std::vector<TaskDiagnostic> diagnostics) {
         return TaskResult(TaskState::Failed, std::move(diagnostics));
     }
 
