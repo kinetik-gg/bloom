@@ -116,6 +116,7 @@ void CompositionPreviewController::beginShutdown() {
 
     shuttingDown_ = true;
     disconnect(&session_, nullptr, this, nullptr);
+    pending_.reset();
     cancelAndDetachActive();
 
     CompositionPreviewState cancelled = state_;
@@ -129,7 +130,6 @@ void CompositionPreviewController::beginShutdown() {
 
 void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
-    cancelAndDetachActive();
 
     const document::Snapshot snapshot = session_.snapshot();
     const document::CompositionId compositionId = session_.compositionId();
@@ -141,6 +141,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
     }
 
     if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        pending_.reset();
+        if (active_.has_value()) {
+            active_->handle.cancel();
+        }
         CompositionPreviewState failed{
             .activity = PreviewActivity::Failed,
             .freshness = FrameFreshness::None,
@@ -169,6 +173,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
 
     const auto publishTerminal = [this, &desiredIdentity,
                                   &retainedFrame](const PreviewActivity activity, QString message) {
+        pending_.reset();
+        if (active_.has_value()) {
+            active_->handle.cancel();
+        }
         CompositionPreviewState terminal{
             .activity = activity,
             .freshness = FrameFreshness::None,
@@ -198,19 +206,46 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
         return;
     }
 
-    runtime::TaskRequest request("Render composition preview",
-                                 {.kind = runtime::TaskOwnerKind::Composition,
-                                  .id = runtime::TaskOwnerId::fromRaw(compositionId.value())},
-                                 runtime::TaskPriority::Visible);
+    PendingRequest pendingRequest{.snapshot = snapshot,
+                                  .desiredIdentity = desiredIdentity,
+                                  .pixelStorageByteLimit = settings_.pixelStorageByteLimit};
+
+    if (active_.has_value()) {
+        active_->handle.cancel();
+        // The cancelled handle remains the admission gate until its terminal result is observed.
+        pending_.emplace(std::move(pendingRequest));
+        publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
+        taskUiBridge_.wake();
+        return;
+    }
+
+    Q_ASSERT(!pending_.has_value());
+    submitPreview(std::move(pendingRequest), std::move(retainedFrame));
+}
+
+void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
+                                                 PreparedPreviewFrameHandle retainedFrame) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!active_.has_value());
+
+    const auto desiredIdentity = pendingRequest.desiredIdentity;
+
+    runtime::TaskRequest request(
+        "Render composition preview",
+        {.kind = runtime::TaskOwnerKind::Composition,
+         .id = runtime::TaskOwnerId::fromRaw(desiredIdentity.compositionId.value())},
+        runtime::TaskPriority::Visible);
     request.coalescingKey = "bloom.preview.render";
-    request.sourceVersion = {.documentRevision = snapshot.revision().value(),
-                             .requestGeneration = generation};
+    request.sourceVersion = {
+        .documentRevision = desiredIdentity.sourceRevision.value(),
+        .requestGeneration = desiredIdentity.requestGeneration,
+    };
 
     auto preparation = preparation_;
-    const std::size_t pixelStorageByteLimit = settings_.pixelStorageByteLimit;
+    const std::size_t pixelStorageByteLimit = pendingRequest.pixelStorageByteLimit;
     auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
         std::move(request),
-        [snapshot, desiredIdentity, pixelStorageByteLimit,
+        [snapshot = std::move(pendingRequest.snapshot), desiredIdentity, pixelStorageByteLimit,
          preparation = std::move(preparation)](runtime::TaskContext& context) mutable {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
@@ -241,11 +276,18 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
     const runtime::TaskId taskId = submission.handle.id();
     active_.emplace(
         ActiveRequest{.handle = std::move(submission.handle), .desiredIdentity = desiredIdentity});
+    publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
+    taskUiBridge_.wake();
+}
+
+void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
+                                                    std::optional<runtime::TaskId> taskId,
+                                                    PreparedPreviewFrameHandle retainedFrame) {
     CompositionPreviewState rendering{
         .activity = PreviewActivity::Rendering,
         .freshness = FrameFreshness::None,
-        .desiredIdentity = desiredIdentity,
-        .taskId = taskId,
+        .desiredIdentity = std::move(desiredIdentity),
+        .taskId = std::move(taskId),
         .frame = std::move(retainedFrame),
         .diagnostics = {},
         .message = {},
@@ -255,7 +297,6 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
                             ? tr("Rendering the current composition; showing the previous frame")
                             : tr("Rendering the current composition");
     publish(std::move(rendering));
-    taskUiBridge_.wake();
 }
 
 void CompositionPreviewController::consumeReadyResult() {
@@ -271,7 +312,16 @@ void CompositionPreviewController::consumeReadyResult() {
 
     ActiveRequest completed = std::move(*active_);
     active_.reset();
-    if (shuttingDown_ || !isCurrent(completed)) {
+    if (shuttingDown_) {
+        return;
+    }
+    if (pending_.has_value()) {
+        PendingRequest pendingRequest = std::move(*pending_);
+        pending_.reset();
+        submitPreview(std::move(pendingRequest), state_.frame);
+        return;
+    }
+    if (!isCurrent(completed)) {
         return;
     }
     if (!liveSessionMatches(completed.desiredIdentity)) {

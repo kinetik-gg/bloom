@@ -32,6 +32,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <source_location>
 #include <string>
 #include <thread>
@@ -242,6 +243,93 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
                                                     return value == currentGeneration;
                                                 }),
                         "the obsolete revision never publishes Ready");
+
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
+void testNewestPendingRequestGate(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Preview Gate Test");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    WorkerGate firstRequest;
+    std::mutex invocationMutex;
+    std::vector<std::uint64_t> invokedGenerations;
+    std::atomic<int> inFlight = 0;
+    std::atomic<int> maximumInFlight = 0;
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&firstRequest, &invocationMutex, &invokedGenerations, &inFlight, &maximumInFlight,
+         pipeline = fixture.pipeline](const document::Snapshot& snapshot,
+                                      const runtime::PreviewRequestIdentity& desiredIdentity,
+                                      const std::size_t pixelStorageByteLimit,
+                                      runtime::TaskContext& context) mutable {
+            const int concurrent = inFlight.fetch_add(1) + 1;
+            int previousMaximum = maximumInFlight.load();
+            while (concurrent > previousMaximum &&
+                   !maximumInFlight.compare_exchange_weak(previousMaximum, concurrent)) {
+            }
+            std::size_t invocationIndex = 0;
+            {
+                std::scoped_lock lock(invocationMutex);
+                invocationIndex = invokedGenerations.size();
+                invokedGenerations.push_back(desiredIdentity.requestGeneration);
+            }
+            if (invocationIndex == 0) {
+                firstRequest.enterAndWait();
+            }
+            auto result = pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            --inFlight;
+            return result;
+        });
+
+    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
+                        "the active preview enters preparation before the request storm");
+    const auto activeGeneration = generation(controller.state());
+    std::vector<std::uint64_t> requestedGenerations;
+    for (int request = 0; request < 6; ++request) {
+        controller.requestRefresh();
+        requestedGenerations.push_back(generation(controller.state()));
+    }
+    const auto newestGeneration = requestedGenerations.back();
+
+    expectations.expect(
+        controller.state().activity == ui::PreviewActivity::Rendering &&
+            controller.state().desiredIdentity->requestGeneration == newestGeneration &&
+            !controller.state().taskId.has_value(),
+        "the desired identity advances immediately while the newest request remains pending");
+    expectations.expect(
+        scheduler.snapshots().size() == 1,
+        "the controller retains one scheduler submission while an active task gates");
+    {
+        std::scoped_lock lock(invocationMutex);
+        expectations.expect(invokedGenerations == std::vector{activeGeneration},
+                            "pending request replacement does not invoke preparation");
+    }
+
+    firstRequest.release();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the newest pending preview starts after the active task reaches terminal");
+    {
+        std::scoped_lock lock(invocationMutex);
+        expectations.expect(invokedGenerations == std::vector{activeGeneration, newestGeneration},
+                            "only the active and newest pending generations invoke preparation");
+        expectations.expect(
+            std::ranges::none_of(requestedGenerations |
+                                     std::views::take(requestedGenerations.size() - 1),
+                                 [&invokedGenerations](const auto intermediate) {
+                                     return std::ranges::find(invokedGenerations, intermediate) !=
+                                            invokedGenerations.end();
+                                 }),
+            "intermediate pending generations never invoke preparation");
+    }
+    expectations.expect(maximumInFlight.load() == 1,
+                        "preview preparation never overlaps across the request gate");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
@@ -497,6 +585,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testRevisionAndPanelSuppression(expectations);
+    testNewestPendingRequestGate(expectations);
     testSameRevisionGenerationAndSelection(expectations);
     testLastGoodAndOutcomeMapping(expectations);
     testCompositionSwitchClearsPixels(expectations);

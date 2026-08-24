@@ -89,7 +89,17 @@ class CompositionPreviewController final : public QObject {
         runtime::PreviewRequestIdentity desiredIdentity;
     };
 
+    struct PendingRequest final {
+        document::Snapshot snapshot;
+        runtime::PreviewRequestIdentity desiredIdentity;
+        std::size_t pixelStorageByteLimit;
+    };
+
     void requestPreview(bool clearLastGoodFrame);
+    void submitPreview(PendingRequest request, PreparedPreviewFrameHandle retainedFrame);
+    void publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
+                          std::optional<runtime::TaskId> taskId,
+                          PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
     void consumeReadyResult();
@@ -106,6 +116,7 @@ class CompositionPreviewController final : public QObject {
     CompositionPreviewSettings settings_;
     CompositionPreviewState state_;
     std::optional<ActiveRequest> active_;
+    std::optional<PendingRequest> pending_;
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
 };
