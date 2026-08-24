@@ -66,6 +66,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &CompositionPreviewController::handleCompositionChanged);
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &CompositionPreviewController::handleCurrentTimeChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     requestPreview(true);
@@ -91,6 +93,19 @@ void CompositionPreviewController::handleCompositionChanged() {
     if (!shuttingDown_) {
         requestPreview(true);
     }
+}
+
+void CompositionPreviewController::handleCurrentTimeChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_) {
+        return;
+    }
+    if (state_.desiredIdentity.has_value() &&
+        state_.desiredIdentity->compositionId == session_.compositionId() &&
+        state_.desiredIdentity->time == session_.currentTime()) {
+        return;
+    }
+    requestPreview(false);
 }
 
 void CompositionPreviewController::beginShutdown() {
@@ -145,7 +160,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
         .compositionId = compositionId,
         .sourceRevision = snapshot.revision(),
         .requestGeneration = generation,
-        .time = settings_.time,
+        .time = session_.currentTime(),
         .output = runtime::PreviewOutput::Composition,
         .resolution = settings_.resolution,
         .quality = settings_.quality,

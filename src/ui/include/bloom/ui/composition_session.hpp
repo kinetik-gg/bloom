@@ -2,6 +2,7 @@
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 
@@ -46,8 +47,10 @@ class CompositionSession final : public QObject {
     [[nodiscard]] document::CompositionId compositionId() const noexcept;
     [[nodiscard]] const document::Composition* composition() const noexcept;
     [[nodiscard]] const CompositionSelection& selection() const noexcept;
+    [[nodiscard]] core::RationalTime currentTime() const noexcept;
 
     [[nodiscard]] bool setComposition(document::CompositionId compositionId);
+    [[nodiscard]] bool setCurrentTime(core::RationalTime time);
     void clearSelection();
     void selectLayer(document::LayerId layerId);
     void selectNode(document::NodeId nodeId);
@@ -85,6 +88,7 @@ class CompositionSession final : public QObject {
   signals:
     void snapshotChanged();
     void compositionChanged();
+    void currentTimeChanged();
     void selectionChanged();
     void historyChanged();
     void commandRejected(const QString& message);
@@ -106,6 +110,7 @@ class CompositionSession final : public QObject {
     commands::CommandStack& commandStack_;
     document::Snapshot snapshot_;
     document::CompositionId compositionId_;
+    core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
 };
 

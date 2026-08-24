@@ -79,6 +79,8 @@ const document::Composition* CompositionSession::composition() const noexcept {
 
 const CompositionSelection& CompositionSession::selection() const noexcept { return selection_; }
 
+core::RationalTime CompositionSession::currentTime() const noexcept { return currentTime_; }
+
 bool CompositionSession::setComposition(const document::CompositionId compositionId) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (compositionId == compositionId_) {
@@ -90,12 +92,27 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     }
 
     compositionId_ = compositionId;
+    const bool timeChanged = currentTime_ != core::RationalTime::fromInteger(0);
+    currentTime_ = core::RationalTime::fromInteger(0);
     const bool hadSelection = selection_.primary.index() != 0;
     selection_ = {};
     emit compositionChanged();
+    if (timeChanged) {
+        emit currentTimeChanged();
+    }
     if (hadSelection) {
         emit selectionChanged();
     }
+    return true;
+}
+
+bool CompositionSession::setCurrentTime(const core::RationalTime time) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (currentTime_ == time) {
+        return false;
+    }
+    currentTime_ = time;
+    emit currentTimeChanged();
     return true;
 }
 

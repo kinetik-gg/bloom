@@ -22,7 +22,6 @@ class TaskUiBridge;
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit = 512U * 1024U * 1024U;
 
 struct CompositionPreviewSettings final {
-    core::RationalTime time = core::RationalTime::fromInteger(0);
     runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent =
@@ -92,6 +91,7 @@ class CompositionPreviewController final : public QObject {
 
     void requestPreview(bool clearLastGoodFrame);
     void handleCompositionChanged();
+    void handleCurrentTimeChanged();
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);

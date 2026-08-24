@@ -269,6 +269,30 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "initial same-revision frame becomes ready");
+    const auto halfway = core::RationalTime::create(1, 2);
+    if (!halfway.has_value()) {
+        expectations.expect(false, "session time fixture is valid");
+        reachQuiescence(controller, bridge, scheduler, expectations);
+        return;
+    }
+    const auto revisionBeforeTime = session.snapshot().revision();
+    const auto generationBeforeTime = generation(controller.state());
+    expectations.expect(session.setCurrentTime(*halfway) &&
+                            generation(controller.state()) > generationBeforeTime &&
+                            controller.state().desiredIdentity->time == *halfway &&
+                            session.snapshot().revision() == revisionBeforeTime,
+                        "session time advances preview intent without dirtying the document");
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the exact session time reaches the prepared frame");
+    const auto callsAfterTime = invocationCount.load();
+    const auto generationAfterTime = generation(controller.state());
+    expectations.expect(!session.setCurrentTime(*halfway),
+                        "setting the same exact session time is a no-op");
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(invocationCount.load() == callsAfterTime &&
+                            generation(controller.state()) == generationAfterTime,
+                        "an unchanged session time creates no preview churn");
+
     const auto firstFrame = controller.state().frame;
     const auto revision = controller.state().desiredIdentity->sourceRevision;
     const auto firstGeneration = generation(controller.state());
@@ -444,12 +468,18 @@ void testCompositionSwitchClearsPixels(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "first composition frame becomes ready");
     const auto firstFrame = controller.state().frame;
+    const auto nonzeroTime = core::RationalTime::create(3, 2);
+    expectations.expect(nonzeroTime.has_value() && session.setCurrentTime(*nonzeroTime),
+                        "composition switch fixture starts at a nonzero session time");
     expectations.expect(session.setComposition(secondCompositionId),
                         "session switches to the second composition");
     expectations.expect(controller.state().activity == ui::PreviewActivity::Rendering &&
                             controller.state().freshness == ui::FrameFreshness::None &&
-                            controller.state().frame == nullptr,
-                        "composition switch clears pixels synchronously before replacement work");
+                            controller.state().frame == nullptr &&
+                            session.currentTime() == core::RationalTime::fromInteger(0) &&
+                            controller.state().desiredIdentity->time ==
+                                core::RationalTime::fromInteger(0),
+                        "composition switch resets time and clears pixels in one preview intent");
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "second composition frame becomes ready");
     expectations.expect(controller.state().frame != firstFrame &&
