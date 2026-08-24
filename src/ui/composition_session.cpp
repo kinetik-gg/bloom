@@ -412,20 +412,29 @@ bool CompositionSession::setSelectionScalarParameter(const std::string_view role
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
     }
-    const auto* source = std::get_if<document::ConstantValueSource>(&parameter->source);
-    if (source == nullptr || std::get_if<double>(&source->value) == nullptr) {
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    if (const auto* constantSource =
+            std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        if (std::get_if<double>(&constantSource->value) == nullptr) {
+            reportUnavailable(QStringLiteral("The parameter value does not match its schema"));
+            return false;
+        }
+        transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                          document::ConstantValueSource{value});
+    } else if (const auto* animationSource =
+                   std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
+                                                         currentTime_, value);
+    } else {
         reportUnavailable(
-            QStringLiteral("Disconnect or convert the driven parameter before editing its value"));
+            QStringLiteral("Disconnect the driven parameter before editing its value"));
         return false;
     }
-
-    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
-    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
-                                                      document::ConstantValueSource{value});
     return execute(std::move(transaction));
 }
 
 bool CompositionSession::setSelectedPosition(const double x, const double y) {
+    Q_ASSERT(QThread::currentThread() == thread());
     const auto* position = parameterForSelection(document::kPositionParameterRole);
     if (position == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose a position"));
@@ -435,16 +444,25 @@ bool CompositionSession::setSelectedPosition(const double x, const double y) {
         reportUnavailable(QStringLiteral("Position values must be finite"));
         return false;
     }
-    const auto* source = std::get_if<document::ConstantValueSource>(&position->source);
-    if (source == nullptr || std::get_if<document::Vec2d>(&source->value) == nullptr) {
+    const document::Vec2d value{x, y};
+    commands::Transaction transaction("Set Position", snapshot_.revision());
+    if (const auto* constantSource =
+            std::get_if<document::ConstantValueSource>(&position->source)) {
+        if (std::get_if<document::Vec2d>(&constantSource->value) == nullptr) {
+            reportUnavailable(QStringLiteral("The position value does not match its schema"));
+            return false;
+        }
+        transaction.emplace<commands::SetParameterSource>(compositionId_, position->id,
+                                                          document::ConstantValueSource{value});
+    } else if (const auto* animationSource =
+                   std::get_if<document::AnimationCurveSource>(&position->source)) {
+        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
+                                                         currentTime_, value);
+    } else {
         reportUnavailable(
-            QStringLiteral("Disconnect or convert the driven position before editing its value"));
+            QStringLiteral("Disconnect the driven position before editing its value"));
         return false;
     }
-
-    commands::Transaction transaction("Set Position", snapshot_.revision());
-    transaction.emplace<commands::SetParameterSource>(
-        compositionId_, position->id, document::ConstantValueSource{document::Vec2d{x, y}});
     return execute(std::move(transaction));
 }
 
