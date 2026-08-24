@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -34,6 +35,9 @@ using bloom::document::Document;
 using bloom::document::DriverBindingId;
 using bloom::document::DriverBindingSource;
 using bloom::document::EdgeId;
+using bloom::document::ExtensionRecordId;
+using bloom::document::IdAllocator;
+using bloom::document::IdAllocatorHighWater;
 using bloom::document::KeyframeId;
 using bloom::document::LayerId;
 using bloom::document::LayerSlotId;
@@ -49,6 +53,9 @@ using bloom::document::ScalarKeyframe;
 using bloom::document::ValidationCode;
 using bloom::document::ValidationResult;
 using bloom::document::Vec2d;
+
+static_assert(std::is_aggregate_v<IdAllocatorHighWater>);
+static_assert(std::is_trivially_copyable_v<IdAllocatorHighWater>);
 
 class ExpectationContext final {
   public:
@@ -242,6 +249,243 @@ withCollision(SingleLayerCompositionIds second, const SingleLayerCompositionIds&
     return Document(std::move(created.project));
 }
 
+[[nodiscard]] Project makePersistedAllocatorProject() {
+    auto project = makeProject(compositionIds(1, 100));
+    auto* composition = project.findComposition(id<CompositionId>(1));
+    const bool animationStateBuilt =
+        composition != nullptr &&
+        composition->animationCurves().insert(ScalarAnimationCurve{
+            id<AnimationCurveId>(200),
+            {ScalarKeyframe{id<KeyframeId>(201), RationalTime::fromInteger(0), 0.75}},
+        }) &&
+        composition->parameters().insert({id<ParameterId>(202),
+                                          std::string(bloom::document::kOpacityParameterSchemaKey),
+                                          AnimationCurveSource{id<AnimationCurveId>(200)}}) &&
+        composition->parameters().insert({id<ParameterId>(203), "com.example.driver-value",
+                                          DriverBindingSource{id<DriverBindingId>(204)}});
+    if (!animationStateBuilt || !project.validate().ok()) {
+        throw std::logic_error("Could not build persisted allocator fixture");
+    }
+    return project;
+}
+
+[[nodiscard]] IdAllocatorHighWater persistedAllocatorHighWater() noexcept {
+    return {
+        .composition = 9,
+        .node = 150,
+        .edge = 140,
+        .layer = 130,
+        .layerSlot = 120,
+        .parameter = 250,
+        .animationCurve = 220,
+        .keyframe = 230,
+        .driverBinding = 240,
+        .extensionRecord = 260,
+    };
+}
+
+void testInclusiveAllocatorState(ExpectationContext& expectations) {
+    IdAllocator fresh;
+    expectations.expect(fresh.highWater() == IdAllocatorHighWater{},
+                        "a fresh allocator exposes zero inclusive high-water values");
+    expectations.expect(!fresh.covers(NodeId{}) && !fresh.covers(id<NodeId>(1)),
+                        "a fresh allocator covers no invalid or unissued node ID");
+
+    const auto firstComposition = fresh.allocateComposition();
+    const auto firstNode = fresh.allocateNode();
+    const auto firstEdge = fresh.allocateEdge();
+    const auto firstLayer = fresh.allocateLayer();
+    const auto firstLayerSlot = fresh.allocateLayerSlot();
+    const auto firstParameter = fresh.allocateParameter();
+    const auto firstCurve = fresh.allocateAnimationCurve();
+    const auto firstKeyframe = fresh.allocateKeyframe();
+    const auto firstDriver = fresh.allocateDriverBinding();
+    const auto firstExtension = fresh.allocateExtensionRecord();
+    const IdAllocatorHighWater allOne{
+        .composition = 1,
+        .node = 1,
+        .edge = 1,
+        .layer = 1,
+        .layerSlot = 1,
+        .parameter = 1,
+        .animationCurve = 1,
+        .keyframe = 1,
+        .driverBinding = 1,
+        .extensionRecord = 1,
+    };
+    expectations.expect(
+        firstComposition == id<CompositionId>(1) && firstNode == id<NodeId>(1) &&
+            firstEdge == id<EdgeId>(1) && firstLayer == id<LayerId>(1) &&
+            firstLayerSlot == id<LayerSlotId>(1) && firstParameter == id<ParameterId>(1) &&
+            firstCurve == id<AnimationCurveId>(1) && firstKeyframe == id<KeyframeId>(1) &&
+            firstDriver == id<DriverBindingId>(1) && firstExtension == id<ExtensionRecordId>(1) &&
+            fresh.highWater() == allOne,
+        "each typed namespace independently issues one from a fresh allocator");
+
+    auto deletedGap = IdAllocator::fromHighWater(persistedAllocatorHighWater());
+    expectations.expect(
+        deletedGap.highWater() == persistedAllocatorHighWater() &&
+            deletedGap.allocateNode() == id<NodeId>(151) &&
+            deletedGap.allocateDriverBinding() == id<DriverBindingId>(241) &&
+            deletedGap.allocateExtensionRecord() == id<ExtensionRecordId>(261),
+        "restoration preserves deleted gaps and allocates above inclusive watermarks");
+
+    IdAllocatorHighWater sharedRaw;
+    sharedRaw.node = 41;
+    sharedRaw.edge = 41;
+    sharedRaw.driverBinding = 41;
+    sharedRaw.extensionRecord = 41;
+    auto typed = IdAllocator::fromHighWater(sharedRaw);
+    const auto typedNode = typed.allocateNode();
+    const auto typedEdge = typed.allocateEdge();
+    const auto typedDriver = typed.allocateDriverBinding();
+    const auto typedExtension = typed.allocateExtensionRecord();
+    expectations.expect(
+        typed.covers(id<NodeId>(41)) && typed.covers(id<EdgeId>(41)) &&
+            typed.covers(id<DriverBindingId>(41)) && typed.covers(id<ExtensionRecordId>(41)) &&
+            typedNode == id<NodeId>(42) && typedEdge == id<EdgeId>(42) &&
+            typedDriver == id<DriverBindingId>(42) && typedExtension == id<ExtensionRecordId>(42),
+        "equal raw IDs remain independent across typed namespaces");
+
+    IdAllocatorHighWater uneven;
+    uneven.node = 7;
+    uneven.edge = 3;
+    const auto coverage = IdAllocator::fromHighWater(uneven);
+    expectations.expect(coverage.covers(id<NodeId>(7)) && !coverage.covers(id<NodeId>(8)) &&
+                            !coverage.covers(id<EdgeId>(7)) && coverage.covers(id<EdgeId>(3)),
+                        "coverage checks use the matching typed namespace only");
+
+    IdAllocatorHighWater maximum;
+    maximum.node = std::numeric_limits<std::uint64_t>::max();
+    maximum.extensionRecord = std::numeric_limits<std::uint64_t>::max();
+    auto exhausted = IdAllocator::fromHighWater(maximum);
+    exhausted.reserveExisting(id<NodeId>(1));
+    expectations.expect(!exhausted.allocateNode().has_value() &&
+                            !exhausted.allocateExtensionRecord().has_value() &&
+                            exhausted.highWater() == maximum,
+                        "a restored maximum watermark is permanent namespace exhaustion");
+
+    IdAllocatorHighWater beforeMaximum;
+    beforeMaximum.node = std::numeric_limits<std::uint64_t>::max() - 1;
+    auto finalAllocation = IdAllocator::fromHighWater(beforeMaximum);
+    expectations.expect(
+        finalAllocation.allocateNode() == id<NodeId>(std::numeric_limits<std::uint64_t>::max()) &&
+            !finalAllocation.allocateNode().has_value() &&
+            finalAllocation.highWater().node == std::numeric_limits<std::uint64_t>::max(),
+        "the maximum ID is issued once before the namespace becomes exhausted");
+}
+
+void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
+    Document inventoried(makePersistedAllocatorProject());
+    const IdAllocatorHighWater declarations{
+        .composition = 1,
+        .node = 104,
+        .edge = 102,
+        .layer = 100,
+        .layerSlot = 100,
+        .parameter = 203,
+        .animationCurve = 200,
+        .keyframe = 201,
+        .driverBinding = 204,
+        .extensionRecord = 0,
+    };
+    expectations.expect(
+        inventoried.snapshot().ids().highWater() == declarations,
+        "ordinary document construction inventories every live allocator namespace");
+
+    const auto persisted = persistedAllocatorHighWater();
+    Document restored(makePersistedAllocatorProject(), persisted);
+    const auto historical = restored.snapshot();
+    expectations.expect(historical.ids().highWater() == persisted,
+                        "persisted construction retains deleted gaps and extension state exactly");
+
+    struct RequiredNamespace final {
+        std::uint64_t IdAllocatorHighWater::* member;
+        std::string_view label;
+    };
+    constexpr std::array requiredNamespaces{
+        RequiredNamespace{&IdAllocatorHighWater::composition, "composition"},
+        RequiredNamespace{&IdAllocatorHighWater::node, "node"},
+        RequiredNamespace{&IdAllocatorHighWater::edge, "edge"},
+        RequiredNamespace{&IdAllocatorHighWater::layer, "layer"},
+        RequiredNamespace{&IdAllocatorHighWater::layerSlot, "layer-slot"},
+        RequiredNamespace{&IdAllocatorHighWater::parameter, "parameter"},
+        RequiredNamespace{&IdAllocatorHighWater::animationCurve, "animation-curve"},
+        RequiredNamespace{&IdAllocatorHighWater::keyframe, "keyframe"},
+        RequiredNamespace{&IdAllocatorHighWater::driverBinding, "driver-binding"},
+    };
+    for (const auto& requiredNamespace : requiredNamespaces) {
+        auto belowDeclaration = declarations;
+        --(belowDeclaration.*(requiredNamespace.member));
+        bool rejected = false;
+        try {
+            [[maybe_unused]] Document invalid(makePersistedAllocatorProject(), belowDeclaration);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        const auto message =
+            std::string("persisted construction rejects a watermark below a live ") +
+            std::string(requiredNamespace.label) + " declaration";
+        expectations.expect(rejected, message);
+    }
+
+    auto advancing = restored.draft(historical);
+    const bool everyNamespaceAdvanced =
+        advancing.ids().allocateComposition() == id<CompositionId>(10) &&
+        advancing.ids().allocateNode() == id<NodeId>(151) &&
+        advancing.ids().allocateEdge() == id<EdgeId>(141) &&
+        advancing.ids().allocateLayer() == id<LayerId>(131) &&
+        advancing.ids().allocateLayerSlot() == id<LayerSlotId>(121) &&
+        advancing.ids().allocateParameter() == id<ParameterId>(251) &&
+        advancing.ids().allocateAnimationCurve() == id<AnimationCurveId>(221) &&
+        advancing.ids().allocateKeyframe() == id<KeyframeId>(231) &&
+        advancing.ids().allocateDriverBinding() == id<DriverBindingId>(241) &&
+        advancing.ids().allocateExtensionRecord() == id<ExtensionRecordId>(261);
+    advancing.project().setName("Advanced");
+    const auto committed = restored.commit(historical.revision(), std::move(advancing));
+    if (!expectations.expect(everyNamespaceAdvanced && committed.committed() &&
+                                 committed.snapshot.has_value(),
+                             "a draft publishes advances in every allocator namespace")) {
+        return;
+    }
+    if (!committed.snapshot.has_value()) {
+        return;
+    }
+    const auto& committedSnapshot = *committed.snapshot;
+
+    auto advanced = persisted;
+    ++advanced.composition;
+    ++advanced.node;
+    ++advanced.edge;
+    ++advanced.layer;
+    ++advanced.layerSlot;
+    ++advanced.parameter;
+    ++advanced.animationCurve;
+    ++advanced.keyframe;
+    ++advanced.driverBinding;
+    ++advanced.extensionRecord;
+    expectations.expect(committedSnapshot.ids().highWater() == advanced,
+                        "snapshot publication exposes the exact advanced watermarks");
+
+    auto loweredDraft = restored.draft(committedSnapshot);
+    loweredDraft.ids() = IdAllocator{};
+    loweredDraft.project().setName("Attempted Lowering");
+    const auto reconciled = restored.commit(committedSnapshot.revision(), std::move(loweredDraft));
+    if (!expectations.expect(reconciled.committed() && reconciled.snapshot.has_value() &&
+                                 reconciled.snapshot->ids().highWater() == advanced,
+                             "commit cannot lower previously published allocator state")) {
+        return;
+    }
+    if (!reconciled.snapshot.has_value()) {
+        return;
+    }
+
+    const auto undone = restored.restore(reconciled.snapshot->revision(), historical);
+    expectations.expect(undone.committed() && undone.snapshot.has_value() &&
+                            undone.snapshot->ids().highWater() == advanced,
+                        "restoring historical project truth cannot lower allocator state");
+}
+
 void testProjectGlobalDeclarationIds(ExpectationContext& expectations) {
     constexpr auto first = compositionIds(1, 100);
     constexpr auto second = [] {
@@ -405,10 +649,15 @@ void testAllocatorExhaustionSurvivesRestore(ExpectationContext& expectations) {
     const auto historical = document.snapshot();
     auto exhaustedDraft = document.draft(historical);
     exhaustedDraft.ids().reserveExisting(id<NodeId>(std::numeric_limits<std::uint64_t>::max()));
+    exhaustedDraft.ids().reserveExisting(
+        id<ExtensionRecordId>(std::numeric_limits<std::uint64_t>::max()));
     exhaustedDraft.project().setName("Exhausted");
     const auto exhausted = document.commit(historical.revision(), std::move(exhaustedDraft));
     if (!expectations.expect(exhausted.committed() && exhausted.snapshot.has_value(),
                              "exhausted allocator fixture publishes")) {
+        return;
+    }
+    if (!exhausted.snapshot.has_value()) {
         return;
     }
 
@@ -417,9 +666,13 @@ void testAllocatorExhaustionSurvivesRestore(ExpectationContext& expectations) {
                              "historical project state restores after allocator exhaustion")) {
         return;
     }
+    if (!restored.snapshot.has_value()) {
+        return;
+    }
     auto restoredDraft = document.draft(*restored.snapshot);
-    expectations.expect(!restoredDraft.ids().allocateNode().has_value(),
-                        "restore preserves the prior published exhausted allocator sentinel");
+    expectations.expect(!restoredDraft.ids().allocateNode().has_value() &&
+                            !restoredDraft.ids().allocateExtensionRecord().has_value(),
+                        "restore preserves published exhaustion in independent namespaces");
 }
 
 } // namespace
@@ -427,6 +680,8 @@ void testAllocatorExhaustionSurvivesRestore(ExpectationContext& expectations) {
 int main() {
     try {
         ExpectationContext expectations;
+        testInclusiveAllocatorState(expectations);
+        testPersistedAllocatorConstruction(expectations);
         testProjectGlobalDeclarationIds(expectations);
         testPublicationReconcilesAllocatorHighWater(expectations);
         testAllocatorExhaustionSurvivesRestore(expectations);

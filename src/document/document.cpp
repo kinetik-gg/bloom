@@ -10,48 +10,85 @@ struct DocumentIdentity final {};
 
 // Central inventory for allocator-backed IDs in durable project truth. When a new durable
 // collection or allocator namespace is added, extend this walk and the publication inventory test.
-static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept {
+template <typename Visitor>
+[[nodiscard]] static bool visitProjectIds(const Project& project, Visitor&& visitor) noexcept {
     for (const auto& composition : project.compositions()) {
-        ids.reserveExisting(composition.id());
+        if (!visitor(composition.id())) {
+            return false;
+        }
         for (const auto& parameter : composition.parameters().records()) {
-            ids.reserveExisting(parameter.id);
-            if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source)) {
-                ids.reserveExisting(driver->driverId);
+            if (!visitor(parameter.id)) {
+                return false;
+            }
+            if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source);
+                driver != nullptr && !visitor(driver->driverId)) {
+                return false;
             }
         }
         for (const auto& record : composition.animationCurves().records()) {
-            ids.reserveExisting(animationCurveId(record));
-            const auto reserveKeyframes = [&](const auto& curve) {
+            if (!visitor(animationCurveId(record))) {
+                return false;
+            }
+            const auto visitKeyframes = [&](const auto& curve) {
                 for (const auto& keyframe : curve.keyframes) {
-                    ids.reserveExisting(keyframe.id);
+                    if (!visitor(keyframe.id)) {
+                        return false;
+                    }
                 }
+                return true;
             };
             if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
-                reserveKeyframes(*scalar);
-            } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
-                reserveKeyframes(*vector);
+                if (!visitKeyframes(*scalar)) {
+                    return false;
+                }
+            } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record);
+                       vector != nullptr && !visitKeyframes(*vector)) {
+                return false;
             }
         }
         for (const auto& node : composition.graph().nodes()) {
-            ids.reserveExisting(node.id);
+            if (!visitor(node.id)) {
+                return false;
+            }
         }
         for (const auto& edge : composition.graph().edges()) {
-            ids.reserveExisting(edge.id);
+            if (!visitor(edge.id)) {
+                return false;
+            }
         }
         for (const auto& boundary : composition.graph().layerOutputs()) {
-            ids.reserveExisting(boundary.layerId);
+            if (!visitor(boundary.layerId)) {
+                return false;
+            }
         }
         for (const auto& entry : composition.graph().layerStack().entries()) {
-            ids.reserveExisting(entry.slotId);
-            ids.reserveExisting(entry.layerId);
+            if (!visitor(entry.slotId) || !visitor(entry.layerId)) {
+                return false;
+            }
         }
     }
+    return true;
+}
+
+static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept {
+    [[maybe_unused]] const auto visited = visitProjectIds(project, [&ids](const auto id) {
+        ids.reserveExisting(id);
+        return true;
+    });
+}
+
+[[nodiscard]] static bool projectIdsAreCovered(const IdAllocator& ids,
+                                               const Project& project) noexcept {
+    return visitProjectIds(project, [&ids](const auto id) { return ids.covers(id); });
 }
 
 struct DocumentState {
     explicit DocumentState(Project projectValue) : project(std::move(projectValue)) {
         reserveProjectIds(ids, project);
     }
+
+    DocumentState(Project projectValue, const IdAllocatorHighWater persistedHighWater)
+        : project(std::move(projectValue)), ids(IdAllocator::fromHighWater(persistedHighWater)) {}
 
     Project project;
     IdAllocator ids;
@@ -121,6 +158,21 @@ Document::Document(Project initialProject) {
     const auto validation = initialState->project.validate();
     if (!validation.ok()) {
         throw std::invalid_argument("Initial Bloom document project is invalid");
+    }
+    identity_ = std::make_shared<detail::DocumentIdentity>();
+    state_ = std::move(initialState);
+}
+
+Document::Document(Project initialProject, const IdAllocatorHighWater persistedHighWater) {
+    auto initialState =
+        std::make_shared<detail::DocumentState>(std::move(initialProject), persistedHighWater);
+    const auto validation = initialState->project.validate();
+    if (!validation.ok()) {
+        throw std::invalid_argument("Initial Bloom document project is invalid");
+    }
+    if (!detail::projectIdsAreCovered(initialState->ids, initialState->project)) {
+        throw std::invalid_argument(
+            "Persisted Bloom allocator state does not cover every declared project ID");
     }
     identity_ = std::make_shared<detail::DocumentIdentity>();
     state_ = std::move(initialState);

@@ -104,6 +104,7 @@ struct CommitResult {
 class Document final {
   public:
     explicit Document(Project initialProject);
+    Document(Project initialProject, IdAllocatorHighWater persistedHighWater);
     Document(const Document&) = delete;
     Document& operator=(const Document&) = delete;
     Document(Document&&) = delete;
