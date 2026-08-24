@@ -19,6 +19,7 @@ include(BloomWarnings)
 bloom_configure_quality_tools()
 
 add_subdirectory(src/core)
+add_subdirectory(src/runtime)
 add_subdirectory(src/render)
 add_subdirectory(src/document)
 add_subdirectory(src/commands)
