@@ -4,14 +4,16 @@
 
 namespace bloom::ui {
 
+class EditorRegistry;
+
 class MainWindow final : public QMainWindow {
   public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(const EditorRegistry& editorRegistry, QWidget* parent = nullptr);
 
   private:
     void createMenus();
     void createWorkspaceSwitcher();
-    void createEditorLayout();
+    void createEditorLayout(const EditorRegistry& editorRegistry);
     void applyFoundationTheme();
 };
 

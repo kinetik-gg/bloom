@@ -3,11 +3,14 @@ add_library(bloom_ui STATIC)
 target_sources(
     bloom_ui
     PRIVATE
+        editor_registry.cpp
         main_window.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
-        FILES include/bloom/ui/main_window.hpp
+        FILES
+            include/bloom/ui/editor_registry.hpp
+            include/bloom/ui/main_window.hpp
 )
 
 target_compile_features(bloom_ui PUBLIC cxx_std_20)

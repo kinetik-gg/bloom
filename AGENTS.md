@@ -34,5 +34,10 @@
 - Keep project state, session/UI state, and derived runtime/cache state separate.
 - Keep render semantics independent of a particular GPU or operating-system API. Maintain a CPU
   reference path and capability-tested accelerated paths.
+- Build a modular monolith: explicit module ownership and pipeline extension registries, with
+  direct typed C++ dependencies for ordinary in-tree code. Do not introduce a global service
+  locator, catch-all event bus, or interface for every class.
+- Keep module dependencies declared and acyclic. Optional pipelines register capabilities through
+  owning editor, document, command, node, render, adapter, and task boundaries.
 - Prefer a small vertical slice over speculative subsystem breadth.
 - Add tests for durable document, command, project I/O, and rendering behavior.

@@ -31,7 +31,8 @@ Repository documentation is Bloom's canonical source of truth. Begin with:
 4. [`docs/standards/strategy.md`](docs/standards/strategy.md)
 5. [`docs/ux/compositing-workspace.md`](docs/ux/compositing-workspace.md)
 6. [`docs/architecture/overview.md`](docs/architecture/overview.md)
-7. [`docs/roadmap.md`](docs/roadmap.md)
+7. [`docs/architecture/module-system.md`](docs/architecture/module-system.md)
+8. [`docs/roadmap.md`](docs/roadmap.md)
 
 Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 

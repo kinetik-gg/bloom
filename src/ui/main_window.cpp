@@ -1,3 +1,4 @@
+#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/main_window.hpp>
 
 #include <QAction>
@@ -11,13 +12,15 @@
 #include <QPalette>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace {
 
-QWidget* makeEditorPanel(const QString& editorName, const QString& placeholder, QWidget* parent) {
+QWidget* makeEditorPanel(const bloom::ui::EditorRegistry& registry,
+                         const std::string& initialEditorId, QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setObjectName("editorPanel");
 
@@ -25,9 +28,7 @@ QWidget* makeEditorPanel(const QString& editorName, const QString& placeholder, 
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    auto* content = new QLabel(placeholder, panel);
-    content->setAlignment(Qt::AlignCenter);
-    content->setObjectName("editorPlaceholder");
+    auto* content = new QStackedWidget(panel);
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     auto* header = new QWidget(panel);
@@ -36,29 +37,38 @@ QWidget* makeEditorPanel(const QString& editorName, const QString& placeholder, 
     headerLayout->setContentsMargins(8, 5, 8, 5);
 
     auto* editorPicker = new QComboBox(header);
-    editorPicker->addItems({"Compositor", "Nodes", "Timeline", "Media", "Properties"});
-    editorPicker->setCurrentText(editorName);
+    int initialIndex = 0;
+    int index = 0;
+    for (const auto& editor : registry.editors()) {
+        editorPicker->addItem(editor.displayName, QString::fromStdString(editor.id));
+        content->addWidget(editor.create(content));
+        if (editor.id == initialEditorId) {
+            initialIndex = index;
+        }
+        ++index;
+    }
+    editorPicker->setCurrentIndex(initialIndex);
+    content->setCurrentIndex(initialIndex);
     editorPicker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     headerLayout->addWidget(editorPicker, 0, Qt::AlignLeft);
 
-    QObject::connect(editorPicker, &QComboBox::currentTextChanged, content,
-                     [content](const QString& selectedEditor) {
-                         content->setText(selectedEditor + "\n\nEditor scaffold");
-                     });
+    QObject::connect(editorPicker, &QComboBox::currentIndexChanged, content,
+                     &QStackedWidget::setCurrentIndex);
 
     layout->addWidget(header);
     layout->addWidget(content, 1);
     return panel;
 }
 
-QDockWidget* makeDock(const QString& title, const QString& placeholder, QWidget* parent,
+QDockWidget* makeDock(const bloom::ui::EditorRegistry& registry, const QString& title,
+                      const std::string& initialEditorId, QWidget* parent,
                       Qt::DockWidgetAreas areas) {
     auto* dock = new QDockWidget(title, parent);
     dock->setObjectName(title.toLower() + "Dock");
     dock->setAllowedAreas(areas);
     dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
-    dock->setWidget(makeEditorPanel(title, placeholder, dock));
+    dock->setWidget(makeEditorPanel(registry, initialEditorId, dock));
     return dock;
 }
 
@@ -66,7 +76,8 @@ QDockWidget* makeDock(const QString& title, const QString& placeholder, QWidget*
 
 namespace bloom::ui {
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(const EditorRegistry& editorRegistry, QWidget* parent)
+    : QMainWindow(parent) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -75,7 +86,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     createMenus();
     createWorkspaceSwitcher();
-    createEditorLayout();
+    createEditorLayout(editorRegistry);
     applyFoundationTheme();
 
     statusBar()->showMessage("Bloom C++/Qt foundation — no project loaded");
@@ -105,22 +116,20 @@ void MainWindow::createWorkspaceSwitcher() {
     }
 }
 
-void MainWindow::createEditorLayout() {
+void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
     auto* centralEditors = new QSplitter(Qt::Horizontal, this);
     centralEditors->setObjectName("centralEditors");
-    centralEditors->addWidget(makeEditorPanel(
-        "Compositor", "Viewer\n\nProject frame output appears here", centralEditors));
-    centralEditors->addWidget(makeEditorPanel(
-        "Nodes", "Node graph\n\nCanonical composition graph appears here", centralEditors));
+    centralEditors->addWidget(makeEditorPanel(editorRegistry, "compositor", centralEditors));
+    centralEditors->addWidget(makeEditorPanel(editorRegistry, "nodes", centralEditors));
     centralEditors->setStretchFactor(0, 1);
     centralEditors->setStretchFactor(1, 1);
     setCentralWidget(centralEditors);
 
-    auto* sourceDock = makeDock("Media", "Assets and compositions", this,
+    auto* sourceDock = makeDock(editorRegistry, "Media", "media", this,
                                 Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    auto* propertiesDock = makeDock("Properties", "Selection-driven parameters", this,
+    auto* propertiesDock = makeDock(editorRegistry, "Properties", "properties", this,
                                     Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    auto* timelineDock = makeDock("Timeline", "Layers, animation, and current time", this,
+    auto* timelineDock = makeDock(editorRegistry, "Timeline", "timeline", this,
                                   Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
 
     addDockWidget(Qt::RightDockWidgetArea, sourceDock);

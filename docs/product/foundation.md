@@ -28,6 +28,9 @@ remain part of the broader direction but are not commitments for the first imple
 - Use GPU acceleration wherever it is correct and beneficial while preserving deterministic CPU
   reference behavior.
 - Treat Linux, macOS, and Windows as first-class product targets with equivalent feature semantics.
+- Build Bloom as a modular monolith whose optional pipelines can contribute coherent editor,
+  document, command, evaluation, render, interchange, and task capabilities without fragmenting
+  ordinary in-tree code behind unnecessary abstractions.
 - Keep repository documentation as Bloom's canonical current documentation.
 - Adopt architectural decisions deliberately through repository documentation and tested behavior.
 - Keep the application local-first and capable of headless document and render testing.
@@ -82,6 +85,8 @@ should normally wait.
 - The UI event loop never waits for decode, evaluation, rendering, media scanning, hashing, proxy
   generation, import, export, or external tools.
 - A user-visible feature is not complete until it behaves coherently on Linux, macOS, and Windows.
+- Project data owned by an unavailable optional module is preserved and diagnosed rather than
+  silently discarded.
 
 ## Initial Non-Goals
 
@@ -109,5 +114,6 @@ should normally wait.
 - [`../standards/strategy.md`](../standards/strategy.md)
 - [`../ux/compositing-workspace.md`](../ux/compositing-workspace.md)
 - [`../architecture/task-system.md`](../architecture/task-system.md)
+- [`../architecture/module-system.md`](../architecture/module-system.md)
 - [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
 - [`../architecture/platform-support.md`](../architecture/platform-support.md)

@@ -79,6 +79,9 @@ The accepted product model is:
 - layouts do not affect project evaluation
 - editors communicate through shared application services rather than direct panel-to-panel calls
 
+Editor types come from the host-owned typed editor registry. Built-in and optional pipeline editors
+follow the same context, command, lifecycle, and workspace-serialization contract.
+
 The precise layout mechanism—enhanced Qt docking or a custom split-area tree—will be chosen by a UX
 prototype. Replaceability is not optional regardless of mechanism.
 

@@ -14,6 +14,7 @@ workflow is demonstrable and its durable behavior is tested.
 - Launch a placeholder Compositing workspace based on the UI sketch.
 - Establish the quality bar, standards-first policy, task-system contract, GPU direction, and
   cross-platform parity contract.
+- Establish the modular-monolith and optional pipeline extension contract.
 - Maintain a Linux, macOS, and Windows CI matrix; its first remote execution begins when this root
   is published.
 
@@ -25,6 +26,8 @@ Acceptance: a clean checkout configures, builds, tests, and launches the Qt shel
 - Model a minimal project, composition, canonical graph, layer facade, and parameters.
 - Add typed commands, interaction transactions, undo/redo, and dirty state.
 - Connect selection and Properties to read-only document projections.
+- Replace the hard-coded editor list with a typed compiled-in editor registry and introduce the
+  smallest application composition/module catalog needed to own it.
 - Add the task scheduler contract and a non-blocking job/status surface.
 - Run a small GPU portability spike on Linux, macOS, and Windows before GPU interfaces harden.
 
@@ -34,6 +37,8 @@ UI without direct panel mutation.
 ## M2 — First Evaluation Path
 
 - Compile an immutable composition snapshot.
+- Register built-in node definitions and CPU evaluators through their owning typed registries while
+  keeping evaluation calls direct and strongly typed.
 - Evaluate minimal source, transform, composite, and output nodes on CPU.
 - Display the evaluated frame in the viewer.
 - Add explicit time and resolution requests, cancellation, diagnostics, and conservative caching.
@@ -56,6 +61,7 @@ layer and graph truth.
 ## M4 — Project Round Trip And Output
 
 - Define the first `.bloom` schema and container.
+- Record stable namespaced module/type IDs and preserve unavailable optional-module data.
 - Implement validation, atomic save, open, and version reporting.
 - Import still images and an initial image-sequence representation.
 - Render deterministic PNG or EXR output through the CPU reference path.

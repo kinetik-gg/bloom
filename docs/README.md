@@ -19,10 +19,11 @@ provide research or rationale, but they are not binding until adopted here.
    contract.
 5. [`architecture/overview.md`](architecture/overview.md) — boundaries, state ownership, and
    dependency direction.
-6. [`architecture/task-system.md`](architecture/task-system.md),
+6. [`architecture/module-system.md`](architecture/module-system.md),
+   [`architecture/task-system.md`](architecture/task-system.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md), and
    [`architecture/platform-support.md`](architecture/platform-support.md) — execution and platform
-   contracts.
+   contracts and extension boundaries.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
 

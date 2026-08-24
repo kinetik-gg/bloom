@@ -15,6 +15,10 @@ libraries.
 Artist-facing quality, non-blocking execution, standards interoperability, GPU acceleration, and
 cross-platform parity are architectural constraints from the beginning.
 
+Bloom is a modular monolith. The application is composed from owned modules and explicit optional
+pipeline contributions, but known in-tree modules use direct typed APIs instead of paying dynamic
+plug-in costs at every call.
+
 ## State Categories
 
 ### Project Truth
@@ -54,6 +58,12 @@ Derived state is never the source of authoring truth.
 ## Dependency Direction
 
 ```text
+Application Composition Root / Module Catalog
+        |
+        +---------------------> Optional Pipeline Modules
+        |                              |
+        |                         typed registries
+        v                              v
 Qt Application / Replaceable Editor Panels
         |
         | read models and issue commands
@@ -92,6 +102,7 @@ Platform/GPU capability -> project semantics
 | Area | Responsibility |
 | --- | --- |
 | `apps/bloom` | process entry point and final service wiring |
+| `src/host` | application services, compiled-in module catalog, dependency validation, registries |
 | `src/ui` | Qt shell, editor panels, view models, interaction adapters |
 | `src/core` | IDs, rational time, diagnostics, math, small value types |
 | `src/document` | persistent project authoring model and validation |
@@ -101,9 +112,28 @@ Platform/GPU capability -> project semantics
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
 | `src/platform` | narrow filesystem, system, and packaging services with OS parity |
+| `modules` | optional source-built pipeline modules that register coherent capabilities |
 
-Only `apps/bloom` and `src/ui` exist in the first scaffold. Other boundaries should be created when
-the first vertical proof needs them, rather than as empty speculative libraries.
+Only `apps/bloom` and `src/ui` exist in the first scaffold. Other boundaries, including `src/host`
+and `modules`, should be created when the first vertical proof needs their behavior rather than as
+empty speculative libraries.
+
+## Module Composition
+
+- `apps/bloom` is the only application composition root.
+- Foundation modules have explicit public surfaces and acyclic dependencies.
+- Ordinary in-tree collaboration uses direct typed C++ APIs.
+- Registries are reserved for extensible vocabularies such as editor types, node definitions,
+  import/export adapters, and render providers.
+- Optional first-party pipelines are source-built and statically linked by default.
+- Host services are passed explicitly; modules do not reach through a global service locator.
+- Module-provided authoring data uses stable namespaced IDs and remains preservable when its module
+  is unavailable.
+- Dynamic loading and a stable external ABI are future compatibility products, not accidental
+  promises made by internal C++ interfaces.
+
+The complete contract and game-engine pipeline fitness test are defined in
+[`module-system.md`](module-system.md).
 
 ## Qt Boundary
 
@@ -158,5 +188,8 @@ the first vertical proof needs them, rather than as empty speculative libraries.
 - Canonical in-memory pixel representation and CPU image library.
 - Serialization/container technology for `.bloom`.
 - Dependency management strategy for Qt and ASWF libraries.
+
+The modular-monolith structure and optional pipeline model are accepted. The exact public SDK and
+binary loading strategy remain deferred until an external extension workflow enters scope.
 
 See the focused task, GPU, and platform contracts for decisions that should not be duplicated here.
