@@ -5,6 +5,7 @@ target_sources(
     PRIVATE
         rational_time.cpp
         rational_interval.cpp
+        frame_time_mapping.cpp
         scalar_primitives.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -12,6 +13,7 @@ target_sources(
         FILES
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
+            include/bloom/core/frame_time_mapping.hpp
             include/bloom/core/id.hpp
             include/bloom/core/pixel_aspect_ratio.hpp
             include/bloom/core/rational_interval.hpp
@@ -45,6 +47,15 @@ if(BUILD_TESTING)
         NAME bloom.core.rational_interval
         COMMAND bloom_core_rational_interval_test
         LABELS unit primitives
+    )
+
+    add_executable(bloom_core_frame_time_mapping_test tests/frame_time_mapping_tests.cpp)
+    target_link_libraries(bloom_core_frame_time_mapping_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_frame_time_mapping_test)
+    bloom_add_test(
+        NAME bloom.core.frame_time_mapping
+        COMMAND bloom_core_frame_time_mapping_test
+        LABELS unit time
     )
 
     add_executable(bloom_core_scalar_primitives_test tests/scalar_primitives_tests.cpp)
