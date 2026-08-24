@@ -2,6 +2,10 @@
 
 Status: accepted
 
+Implementation status: foundational I/O memory accounting, canonical integer/rational and Base64
+codecs, durable allocator high-water state, and opaque extension envelopes are implemented. JSON,
+ZIP, migration, unknown-member overlay, and atomic filesystem publication remain pending.
+
 Updated: 2026-08-25
 
 ## Purpose And Ownership

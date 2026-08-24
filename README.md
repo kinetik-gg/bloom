@@ -3,9 +3,11 @@
 Bloom is a native motion, compositing, and editing application from Kinetik, built with C++ and Qt.
 
 Status: foundation implementation. The application launches a replaceable-panel compositing
-workspace backed by a canonical document, commands, an asynchronous task runtime, and snapshot
-compilation. Pixel evaluation is the next vertical checkpoint; the Viewer does not yet render the
-composition.
+workspace backed by a canonical document, commands, an asynchronous task runtime, exact animation
+sampling, and snapshot compilation. Its deterministic CPU path evaluates process frames and
+prepares separately identified display frames off the UI thread for the Viewer. Project
+persistence foundations are underway; complete archive I/O and standards-backed color/output
+adapters are the next major vertical checkpoints.
 
 ## Build
 

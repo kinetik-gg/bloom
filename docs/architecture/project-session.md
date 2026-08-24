@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Implementation status: synchronous Qt-free ownership, editable/degraded/preserved-read-only state,
+immutable document access, command forwarding, clean revision, dirty state, and savepoint acceptance
+are implemented. Runtime session generations, asynchronous Open/Save, round-trip state, unsaved
+continuations, and result acceptance remain pending.
+
 Updated: 2026-08-25
 
 ## Purpose

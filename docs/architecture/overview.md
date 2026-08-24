@@ -66,23 +66,24 @@ Application Composition Root / Module Catalog
         v                              v
 Qt Application / Replaceable Editor Panels
         |
-        | read models and issue commands
+        | read models and issue commands; no project ownership
         v
-Application Session ---------> Command Stack
-        |                             |
-        | schedule                    v
-        +---------------------> Task System
-                                      |
-                    immutable inputs | results / diagnostics
-                                      v
-                                Document Model <----> Project I/O / Standards Adapters
-                                      |
-                                      | immutable snapshot
-                                      v
-                              Evaluation Runtime
-                                      |
-                                      v
-                            CPU / GPU Render Backends
+Qt-free ProjectSession ------> Command Stack ------> Document Model
+(`src/host`)       |                                      |
+                   | schedule                             | immutable snapshots
+                   v                                      v
+               Task System ----------------------> Project I/O
+                   |                         / Standards Adapters
+                   |
+                   +---------------------------> Evaluation Runtime
+                                                       |
+                                                       v
+                                            CPU / GPU Render Backends
+                                                       |
+                                                       | immutable process frames
+                                                       v
+                                                Color / Frame Output
+                                                 Adapters And Tasks
 ```
 
 Forbidden dependencies include:
@@ -90,6 +91,7 @@ Forbidden dependencies include:
 ```text
 Document -> Qt UI
 Document -> GPU or platform APIs
+ProjectSession / `src/host` -> Qt UI
 UI callback -> raw mutable document
 UI thread -> heavy work or blocking wait
 Runtime cache -> authoring truth
@@ -102,7 +104,7 @@ Platform/GPU capability -> project semantics
 | Area | Responsibility |
 | --- | --- |
 | `apps/bloom` | process entry point and final service wiring |
-| `src/host` | application services, compiled-in module catalog, dependency validation, registries |
+| `src/host` | Qt-free application services and `ProjectSession`, compiled-in module catalog, dependency validation, registries |
 | `src/ui` | Qt shell, editor panels, view models, interaction adapters |
 | `src/core` | IDs, rational time, diagnostics, math, small value types |
 | `src/document` | persistent project authoring model and validation |
@@ -111,14 +113,23 @@ Platform/GPU capability -> project semantics
 | `src/runtime` | task scheduling, snapshot compilation, evaluation, cache contracts |
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
+| `src/color` | qualified OCIO configuration resolution and Qt-free CPU display-processing adapters |
+| `src/output` | output analysis, PNG/EXR adapter orchestration, verification, and atomic publication requests |
 | `src/platform` | narrow filesystem, system, and packaging services with OS parity |
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |
 
-`src/core`, `src/document`, `src/commands`, `src/render`, `src/runtime`, `src/ui`, and `apps/bloom`
-now form the first pixel-producing interactive vertical slice. Other boundaries, including
-`src/project`, `src/host`, `src/scripting`, and `modules`, should be created when the first proof
-needs their behavior rather than as empty speculative libraries.
+`ProjectSession` belongs in `src/host` because it coordinates document, command history, persistence
+round-trip state, path, editability, saved revision, and asynchronous open/save intent without
+depending on Qt. `src/ui` adapts its typed state and results into menus and panels; it does not own a
+parallel project lifecycle.
+
+`src/core`, `src/document`, `src/commands`, `src/project`, `src/host`, `src/render`, `src/runtime`,
+`src/ui`, and `apps/bloom` now contain proven behavior. Project I/O currently provides bounded
+memory and canonical primitive codecs rather than a complete archive reader/writer; host currently
+provides synchronous project ownership and publication ordering rather than the complete async
+lifecycle. `src/color`, `src/output`, `src/scripting`, and `modules` should be created when the first
+proof needs their behavior rather than as empty speculative libraries.
 
 ## Module Composition
 
@@ -197,12 +208,18 @@ The complete contract and game-engine pipeline fitness test are defined in
 - `.bloom` uses a constrained ZIP container with strict deterministic JSON, explicit schema
   versions, unknown-data preservation, and atomic task-system save/open behavior; see
   [`project-format.md`](project-format.md).
-- The canonical CPU image representation is premultiplied `RGBA32F` with explicit color identity;
-  production color transformation remains an explicit render-service boundary.
-- Dependency-management details for Qt and adopted pipeline libraries remain to be proven through
-  reproducible cross-platform packaging.
+- The v1 process image is finite premultiplied `RGBA32F` identified as `lin_rec709_scene`.
+  Project-qualified OCIO transforms remain explicit `src/color` boundaries; display processing and
+  file output do not alter durable project truth. See [`color-management.md`](color-management.md)
+  and [`frame-output.md`](frame-output.md).
+- The offline superbuild, reviewed lock, and qualified-prefix intake mechanism are accepted in
+  [ADR 0019](../decisions/0019-reproducible-dependency-intake.md). Exact dependency profiles remain
+  pending implementation and cross-platform qualification; see
+  [`dependency-intake.md`](dependency-intake.md).
 
 The modular-monolith structure and optional pipeline model are accepted. The exact public SDK and
 binary loading strategy remain deferred until an external extension workflow enters scope.
 
-See the focused task, GPU, and platform contracts for decisions that should not be duplicated here.
+See the focused [`task-system.md`](task-system.md), [`project-session.md`](project-session.md),
+[`gpu-backend.md`](gpu-backend.md), and [`platform-support.md`](platform-support.md) contracts for
+decisions that should not be duplicated here.

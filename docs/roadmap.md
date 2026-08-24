@@ -21,7 +21,8 @@ Bloom currently has:
 - a committed Qt-free bounded task runtime with separate CPU and blocking-I/O executors, semantic
   priority, cancellation, task groups, coalescing, progress, diagnostics, and non-blocking results
 - committed Qt-free CPU image contracts for checked extents and layouts, premultiplied `RGBA32F`
-  storage, immutable views, color identity, and prepared packed display buffers
+  storage, immutable views, exact `lin_rec709_scene` process identity, and prepared packed display
+  buffers; Solid authoring metadata remains separately identified
 - checked Float32/Float64 scalar primitives with stable IDs and versioned, failure-aware semantics;
   color remains excluded from generic scalar/vector arithmetic
 - a frozen startup node-definition registry and deterministic snapshot compiler that follows only
@@ -37,13 +38,28 @@ Bloom currently has:
 - strict warnings, formatting, repository hygiene, architecture-boundary checks, and focused local
   tests
 - accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
-  add-ons, Apache-2.0 distribution, and the native `.bloom` container
+  add-ons, Apache-2.0 distribution, the native `.bloom` container, application project-session
+  ownership, and reproducible dependency intake
+- exact rational interval factors, typed durable scalar/`Vec2d` curves and keyframes, versioned
+  Hold/Linear sampling, animated-parameter compilation/evaluation, and undoable animation authoring
+  commands
+- exact composition-session time as a non-dirty evaluation input and a preview controller bounded
+  to one active plus one newest pending request
+- bounded Project I/O memory accounting, allocation-free canonical integer/rational and Base64
+  codecs, and a portable streaming SHA-256 identity primitive
+- inclusive allocator high-water preservation across every durable namespace and project-global
+  opaque extension envelopes with typed subjects and explicit reference policies
+- a bounded application-wide publication coordinator and synchronous Qt-free `ProjectSession`
+  ownership with immutable snapshots, command history, clean revision, and dirty state
 
 The local Batch 3 checkpoint is implemented and has been launched. Add Solid remains synchronized
 through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
 composition snapshots, evaluates deterministic reference CPU pixels asynchronously, publishes only
 the current revision/generation, and exposes the work through swappable Viewer and Jobs editors.
-Animation, direct manipulation, and project persistence remain the next implementation slices.
+Batch 4's durable curves, authoring commands, exact sampler, CPU evaluator integration, exact
+session time, and one-active/one-newest preview gate are implemented. The 16 ms pointer cadence,
+timeline key projection, direct manipulation, and complete project persistence remain the next
+implementation slices.
 
 Before the next feature is called cross-platform complete, the current checkpoint and each new
 merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
@@ -262,7 +278,7 @@ Visual checkpoint: launch Bloom. Add two solids, edit position and opacity, reor
 that Viewer updates asynchronously without blocking.
 
 Checkpoint result: the closed Solid/Layer Output/Layer Stack/Composition Output plan now evaluates
-through deterministic reference-linear-sRGB CPU primitives under an aggregate pixel-memory budget.
+through deterministic `lin_rec709_scene` CPU primitives under an aggregate pixel-memory budget.
 The application schedules compile, evaluate, and display mapping as one cancellable task, suppresses
 obsolete generations, retains a visibly stale last-good frame, and paints only an immutable prepared
 RGBA8 handoff. The latest local build is launched for artist visual QA; subjective appearance remains
@@ -274,9 +290,10 @@ Goal: complete the time-dependent authoring part of the first vertical proof and
 ready for a stable project schema.
 
 Contract status: accepted in ADRs 0016 and 0017 and
-[`architecture/animation-and-time.md`](architecture/animation-and-time.md). Implementation proceeds
-from durable IDs and curve validation toward sampling, commands, session time, and gestures; cubic
-curves and shared animation are explicitly outside this batch.
+[`architecture/animation-and-time.md`](architecture/animation-and-time.md). Durable IDs, curve
+validation, sampling, commands, exact session time, and the one-active/one-newest request gate are
+implemented. The 16 ms pointer cadence, timeline projection, and direct gestures remain pending;
+cubic curves and shared animation are explicitly outside this batch.
 
 Implement in dependency order:
 
@@ -310,19 +327,38 @@ and undo each gesture.
 
 ## Batch 5 — Persistence-Ready Foundations
 
-Goal: freeze the first wire contract only after all required durable authoring state exists.
+Goal: implement the accepted wire, durable-state, platform-publication, and dependency-intake
+contracts needed by deterministic project I/O.
 
-Parallel tracks after animation storage lands:
+Contract status: ADRs 0015, 0018, and 0019 accept the container, project-session intent, and
+offline-superbuild/lock/qualified-prefix mechanism. Foundational I/O memory, integer/rational and
+Base64 codecs, durable allocator/extension state, publication ordering, and synchronous project
+session ownership are implemented. JSON/ZIP I/O, unknown-member overlay, filesystem publication,
+async session intent, color identity, and all concrete dependency profiles remain pending; no
+dependency is qualified merely because the intake mechanism is accepted. See
+[`architecture/project-format.md`](architecture/project-format.md),
+[`architecture/project-session.md`](architecture/project-session.md), and
+[`architecture/dependency-intake.md`](architecture/dependency-intake.md).
 
-### 5A — Format Contract And Fixtures
+Parallel implementation tracks:
 
-- freeze complete `manifest.json` and `document.json` shapes and their JSON Schema dialect
-- define requirements, every array's ordering, integer/negative-zero/rational encodings, extension
+### 5A — Format Schema, Codec Surface, And Fixtures
+
+Implementation status: canonical object-ID, allocator, signed-integer, JSON-`uint32`, normalized
+rational, positive-ratio, and strict padded Base64 codecs are implemented with adversarial tests.
+Float64, JSON strings/DOM, complete schemas, and golden document fixtures remain pending.
+
+- implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema
+  dialect without reopening their wire semantics
+- encode the accepted requirements, array ordering, integer/negative-zero/rational forms, extension
   payload bytes, resource limits, schema-version agreement, symlink policy, and canonical target
-  identity
+  identity in schemas and typed codec tests
 - add readable golden fixtures and an adversarial corpus
 
 ### 5B — Persistence-Ready Document State
+
+Implementation status: complete inclusive allocator high-water state and opaque extension envelopes
+are implemented and preserved through document snapshot, draft, commit, removal, and restore.
 
 - expose validated durable-ID allocation high-water state for every namespace, including keyframes
   and extension records
@@ -332,17 +368,31 @@ Parallel tracks after animation storage lands:
 
 ### 5C — Platform And Dependency Foundation
 
-- accept a reproducible dependency-intake policy
+Implementation status: the bounded application `PublicationCoordinator` is implemented. Platform
+preflight/staging/publication and concrete dependency profiles remain pending.
+
 - pin yyjson, libzip, zlib, and hashes; keep them private/SYSTEM and record licenses/SBOM metadata
 - add a narrow staged-file/atomic-publication interface with POSIX, macOS, and Windows behavior and
   fault-injection seams
+- implement the bounded application `PublicationCoordinator`, including admission RAII,
+  lowest-unresolved tombstone pruning, and shared ordering across Project I/O and frame output
+
+### 5D — Durable Color Identity And Built-In Asset
+
+- add project-level `ColorSettings` and `OcioConfigReference` to durable document state, with new
+  projects fixed to `lin_rec709_scene` and `bloom://ocio/neutral-v1/config.ocio`
+- provision the immutable Bloom Neutral v1 asset and its exact revision digest through the qualified
+  build/package profile; a digest mismatch or mutable alias fails the build/package gate
+- keep OCIO parsing, processor creation, display transforms, and output transforms out of this batch;
+  they remain Batch 7 work over the already-durable identity
 
 Suggested commits:
 
-- `docs: freeze project format implementation contract`
+- `feat: add project schema and codec fixtures`
 - `feat: make document state persistence-ready`
 - `build: pin project format dependencies`
 - `feat: add atomic file publication`
+- `build: provision Bloom Neutral color config`
 
 ### Batch 5 Merge Gate
 
@@ -350,16 +400,26 @@ Suggested commits:
 - Animation and extension records survive snapshot/draft/commit.
 - Atomic-publication tests distinguish pre-publication failure from post-publication durability
   warning.
+- Late path aliases cannot regress publication order, and coordinator record limits fail before
+  staging without wrap or unbounded tombstones.
+- New documents contain the exact Bloom Neutral v1 URI and qualified digest, and packaged asset
+  bytes reproduce that digest on Linux, macOS, and Windows.
 - Pinned dependency builds and platform adapters compile in all three CI environments.
 
 ## Batch 6 — Deterministic `.bloom` Save And Open
 
 Goal: save/reopen without changing project truth or blocking the UI.
 
+Contract status: persistence and Qt-free `ProjectSession` behavior are frozen in
+[`architecture/project-format.md`](architecture/project-format.md) and
+[`architecture/project-session.md`](architecture/project-session.md); implementation remains
+pending.
+
 Land in reviewable increments:
 
 1. strict bounded JSON parser/writer, duplicate-key rejection, migrations, move-only unknown-member
-   round-trip state, schemas, and deterministic golden bytes
+   round-trip state, schemas, deterministic golden bytes, and exact durable `ColorSettings`
+   round-trip
 2. constrained ZIP reader/writer with entry/path/attribute/CRC/resource validation and no extraction
 3. same-directory stage, close, reopen/decode validation, flush, then non-cancellable atomic
    publication
@@ -384,7 +444,9 @@ Suggested commits:
 - Traversal, duplicate entries, malformed UTF-8, CRC corruption, executable/symlink entries, and zip
   bombs are rejected.
 - Failed open leaves the active project, selection, and history unchanged.
-- Older saves cannot publish after newer saves; dirty state clears only for the revision on disk.
+- For two saves resolving to one canonical target, the lower intent may publish while the higher
+  alias is still unresolved, but it can never publish after the higher intent; dirty state clears
+  only for the exact revision accepted on disk.
 - Slow save/open leaves the UI responsive and inspectable through Jobs.
 - Shared fixtures round-trip on Linux, macOS, and Windows.
 
@@ -396,10 +458,17 @@ selection reset, animation, and layer/node structure.
 Goal: complete the first proof with professional color-managed presentation and deterministic file
 output rather than a private image writer.
 
+Contract status: the v1 `lin_rec709_scene` process identity, immutable Bloom Neutral v1 new-project
+default, project-qualified OCIO boundary, preservation analysis, and semantic-determinism
+PNG/flat-EXR publication contracts are accepted implementation contracts in
+[`architecture/color-management.md`](architecture/color-management.md) and
+[`architecture/frame-output.md`](architecture/frame-output.md). Dependency implementations and
+qualification remain pending.
+
 Implement:
 
-- qualified OpenColorIO configuration identity, CPU display processing, and explicit missing-config
-  diagnostics
+- resolve the already-durable, qualified OpenColorIO configuration identity; create CPU display
+  processors and explicit missing-config diagnostics
 - standards-backed PNG and flat OpenEXR output through qualified OpenImageIO/OpenEXR components
 - explicit alpha, color, data/display window, pixel aspect, channel, and metadata behavior
 - cancellable foreground render tasks using immutable snapshots and explicit quality/color intent
@@ -453,7 +522,8 @@ composition root. Parallel speed comes from stable boundaries, not conflict-heav
 - warnings-as-errors and `clang-format` pass
 - repository hygiene and architecture-boundary checks pass
 - focused unit tests and the full CTest suite pass
-- no Qt types enter core, document, commands, render, runtime, project, or platform contracts
+- no Qt types enter core, document, commands, host, render, runtime, project, color, output, or
+  platform contracts
 - no UI callback waits on futures, workers, I/O, GPU work, or task shutdown
 - no generic service locator, `std::any` result bus, duplicated project truth, or speculative public
   ABI enters the slice
