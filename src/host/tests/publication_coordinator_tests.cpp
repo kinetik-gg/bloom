@@ -1,8 +1,11 @@
 #include <bloom/host/publication_coordinator.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <barrier>
 #include <cstdint>
 #include <iostream>
+#include <latch>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -46,6 +49,7 @@ using bloom::host::PublicationAdmission;
 using bloom::host::PublicationAdmissionStatus;
 using bloom::host::PublicationCoordinator;
 using bloom::host::PublicationCoordinatorConfig;
+using bloom::host::PublicationGuard;
 using bloom::host::PublicationGuardStatus;
 using bloom::host::PublicationRegistrationStatus;
 using bloom::host::PublicationTargetClaim;
@@ -458,6 +462,202 @@ void testConcurrentRegistrationSelectsOneWinner(Expectations& expectations) {
                         "the highest process-wide intent is the sole concurrent winner");
 }
 
+void testConcurrentRegistrationAndGuardEntryLinearize(Expectations& expectations) {
+    constexpr std::size_t iterationCount = 64;
+    bool allIterationsValid = true;
+    for (std::size_t iteration = 0; iteration < iterationCount; ++iteration) {
+        auto coordinator = PublicationCoordinator::create();
+        if (!coordinator.has_value()) {
+            expectations.expect(false, "the registration-entry fixture creates a coordinator");
+            return;
+        }
+        const auto target = ArtifactTargetKey::fromRaw(2000 + iteration);
+        auto olderAdmission = coordinator->admit();
+        auto newerAdmission = coordinator->admit();
+        if (!olderAdmission || !newerAdmission) {
+            expectations.expect(false, "both racing operations are admitted");
+            return;
+        }
+        auto olderRegistration =
+            coordinator->registerTarget(std::move(olderAdmission).takeAdmission(), target);
+        if (!olderRegistration) {
+            expectations.expect(false, "the older racing operation registers");
+            return;
+        }
+
+        std::barrier start(2);
+        std::latch newerAttempted(1);
+        std::latch olderReleased(1);
+        std::atomic olderStatus{PublicationGuardStatus::InvalidClaim};
+        std::atomic newerInitialStatus{PublicationGuardStatus::InvalidClaim};
+        std::atomic newerFinalStatus{PublicationGuardStatus::InvalidClaim};
+        std::atomic registrationSucceeded{false};
+
+        std::thread olderWorker([claim = std::move(olderRegistration).takeClaim(), &start,
+                                 &newerAttempted, &olderReleased, &olderStatus]() mutable {
+            start.arrive_and_wait();
+            auto entry = claim.tryEnterPublication();
+            olderStatus.store(entry.status(), std::memory_order_relaxed);
+            std::optional<PublicationGuard> guard;
+            if (entry) {
+                guard.emplace(std::move(entry).takeGuard());
+            }
+            newerAttempted.wait();
+            guard.reset();
+            olderReleased.count_down();
+        });
+        std::thread newerWorker([&coordinator,
+                                 admission = std::move(newerAdmission).takeAdmission(), target,
+                                 &start, &newerAttempted, &olderReleased, &newerInitialStatus,
+                                 &newerFinalStatus, &registrationSucceeded]() mutable {
+            start.arrive_and_wait();
+            auto registration = coordinator->registerTarget(std::move(admission), target);
+            if (registration) {
+                registrationSucceeded.store(true, std::memory_order_relaxed);
+                auto claim = std::move(registration).takeClaim();
+                auto entry = claim.tryEnterPublication();
+                newerInitialStatus.store(entry.status(), std::memory_order_relaxed);
+                std::optional<PublicationGuard> guard;
+                if (entry) {
+                    guard.emplace(std::move(entry).takeGuard());
+                }
+                newerAttempted.count_down();
+                olderReleased.wait();
+                if (newerInitialStatus.load(std::memory_order_relaxed) ==
+                    PublicationGuardStatus::TargetBusy) {
+                    auto retry = claim.tryEnterPublication();
+                    newerFinalStatus.store(retry.status(), std::memory_order_relaxed);
+                }
+                return;
+            }
+            newerAttempted.count_down();
+            olderReleased.wait();
+        });
+        olderWorker.join();
+        newerWorker.join();
+
+        const auto older = olderStatus.load(std::memory_order_relaxed);
+        const auto newerInitial = newerInitialStatus.load(std::memory_order_relaxed);
+        const auto newerFinal = newerFinalStatus.load(std::memory_order_relaxed);
+        const bool olderWonLinearization = older == PublicationGuardStatus::Entered &&
+                                           newerInitial == PublicationGuardStatus::TargetBusy &&
+                                           newerFinal == PublicationGuardStatus::Entered;
+        const bool newerWonLinearization = older == PublicationGuardStatus::Superseded &&
+                                           newerInitial == PublicationGuardStatus::Entered;
+        const auto finalState = coordinator->snapshot();
+        allIterationsValid =
+            allIterationsValid && registrationSucceeded.load(std::memory_order_relaxed) &&
+            (olderWonLinearization || newerWonLinearization) &&
+            finalState.unresolvedAdmissionCount == 0 && finalState.targetRecordCount == 0 &&
+            finalState.activeTargetClaimCount == 0 && finalState.activePublicationGuardCount == 0;
+    }
+    expectations.expect(
+        allIterationsValid,
+        "registration and guard entry always choose one valid mutex-ordered linearization");
+}
+
+void testConcurrentCapacityReleaseDoesNotSkipIds(Expectations& expectations) {
+    constexpr std::size_t iterationCount = 64;
+    bool allIterationsValid = true;
+    for (std::size_t iteration = 0; iteration < iterationCount; ++iteration) {
+        auto coordinator =
+            PublicationCoordinator::create({.unresolvedAdmissionLimit = 4, .targetRecordLimit = 1});
+        if (!coordinator.has_value()) {
+            expectations.expect(false, "the capacity-race fixture creates a coordinator");
+            return;
+        }
+        auto oldAlias = coordinator->admit();
+        auto newer = coordinator->admit();
+        if (!oldAlias || !newer) {
+            expectations.expect(false, "the capacity-race intents are admitted");
+            return;
+        }
+        auto registration = coordinator->registerTarget(
+            std::move(newer).takeAdmission(), ArtifactTargetKey::fromRaw(3000 + iteration));
+        if (!registration) {
+            expectations.expect(false, "the capacity-race target registers");
+            return;
+        }
+        std::move(registration).takeClaim().reset();
+
+        std::barrier start(2);
+        std::atomic admissionStatus{PublicationAdmissionStatus::ResourceUnavailable};
+        std::atomic admittedId{std::uint64_t{0}};
+        std::thread releaseWorker(
+            [admission = std::move(oldAlias).takeAdmission(), &start]() mutable {
+                start.arrive_and_wait();
+                admission.abandon();
+            });
+        std::thread admissionWorker([&coordinator, &start, &admissionStatus, &admittedId] {
+            start.arrive_and_wait();
+            auto result = coordinator->admit();
+            admissionStatus.store(result.status(), std::memory_order_relaxed);
+            admittedId.store(result.intentId().value(), std::memory_order_relaxed);
+        });
+        releaseWorker.join();
+        admissionWorker.join();
+
+        const auto racedStatus = admissionStatus.load(std::memory_order_relaxed);
+        bool idSequenceValid = racedStatus == PublicationAdmissionStatus::Accepted &&
+                               admittedId.load(std::memory_order_relaxed) == 3;
+        if (racedStatus == PublicationAdmissionStatus::PublicationTrackingLimit) {
+            auto retry = coordinator->admit();
+            idSequenceValid = retry && retry.intentId().value() == 3;
+        }
+        const auto finalState = coordinator->snapshot();
+        allIterationsValid =
+            allIterationsValid && idSequenceValid && finalState.lastIssuedIntent.value() == 3 &&
+            finalState.unresolvedAdmissionCount == 0 && finalState.targetRecordCount == 0;
+    }
+    expectations.expect(allIterationsValid,
+                        "capacity release either admits ID 3 or rejects without consuming it");
+}
+
+void testHandlesReleaseAfterOwnerDestruction(Expectations& expectations) {
+    auto coordinator = PublicationCoordinator::create();
+    if (!coordinator.has_value()) {
+        expectations.expect(false, "the owner-destruction fixture creates a coordinator");
+        return;
+    }
+    auto unresolved = coordinator->admit();
+    auto registeredAdmission = coordinator->admit();
+    if (!unresolved || !registeredAdmission) {
+        expectations.expect(false, "the owner-destruction handles are admitted");
+        return;
+    }
+    auto registration = coordinator->registerTarget(std::move(registeredAdmission).takeAdmission(),
+                                                    ArtifactTargetKey::fromRaw(4000));
+    if (!registration) {
+        expectations.expect(false, "the owner-destruction claim registers");
+        return;
+    }
+
+    std::latch releaseHandles(1);
+    std::atomic admissionReleased{false};
+    std::atomic guardStatus{PublicationGuardStatus::InvalidClaim};
+    std::thread admissionWorker([admission = std::move(unresolved).takeAdmission(), &releaseHandles,
+                                 &admissionReleased]() mutable {
+        releaseHandles.wait();
+        admission.abandon();
+        admissionReleased.store(true, std::memory_order_relaxed);
+    });
+    std::thread claimWorker(
+        [claim = std::move(registration).takeClaim(), &releaseHandles, &guardStatus]() mutable {
+            releaseHandles.wait();
+            auto entry = claim.tryEnterPublication();
+            guardStatus.store(entry.status(), std::memory_order_relaxed);
+            claim.reset();
+        });
+    coordinator.reset();
+    releaseHandles.count_down();
+    admissionWorker.join();
+    claimWorker.join();
+    expectations.expect(admissionReleased.load(std::memory_order_relaxed) &&
+                            guardStatus.load(std::memory_order_relaxed) ==
+                                PublicationGuardStatus::Entered,
+                        "admission, claim, guard, and state safely outlive the owner wrapper");
+}
+
 } // namespace
 
 int main() {
@@ -472,5 +672,8 @@ int main() {
     testIdentityExhaustion(expectations);
     testHandlesOutliveCoordinatorWrapper(expectations);
     testConcurrentRegistrationSelectsOneWinner(expectations);
+    testConcurrentRegistrationAndGuardEntryLinearize(expectations);
+    testConcurrentCapacityReleaseDoesNotSkipIds(expectations);
+    testHandlesReleaseAfterOwnerDestruction(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
