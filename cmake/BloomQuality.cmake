@@ -1,10 +1,14 @@
 include_guard(GLOBAL)
 
 option(BLOOM_ENABLE_CLANG_TIDY "Run clang-tidy while compiling Bloom-owned targets" OFF)
+option(BLOOM_ENABLE_TEST_CLANG_TIDY "Also run clang-tidy while compiling test targets" OFF)
 
+# Bloom intentionally uses #pragma once; user-defined std::hash specializations are standard
+# extension points; and enum storage is chosen for semantic/ABI needs rather than a blanket size
+# heuristic. Keep those three checks disabled consistently instead of scattering NOLINT markers.
 set(
     BLOOM_CLANG_TIDY_CHECKS
-    "clang-analyzer-*,bugprone-*,performance-*,portability-*,modernize-use-override,readability-container-size-empty,readability-duplicate-include,readability-qualified-auto,-bugprone-easily-swappable-parameters"
+    "clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-std-namespace-modification,performance-*,-performance-enum-size,portability-*,-portability-avoid-pragma-once,modernize-use-override,readability-container-size-empty,readability-duplicate-include,readability-qualified-auto"
     CACHE STRING
     "clang-tidy checks used when BLOOM_ENABLE_CLANG_TIDY is enabled"
 )

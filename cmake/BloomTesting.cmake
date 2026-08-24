@@ -19,6 +19,13 @@ function(bloom_add_test)
     add_test(NAME "${ARG_NAME}" COMMAND ${ARG_COMMAND})
     set_tests_properties("${ARG_NAME}" PROPERTIES TIMEOUT "${ARG_TIMEOUT}")
 
+    # Production targets are the always-on static-analysis boundary. Tests retain strict compiler
+    # warnings, formatting, hygiene, and sanitizer coverage; their broader clang-tidy sweep is an
+    # explicit opt-in so fixture assertions do not dilute the production signal.
+    if(TARGET "${ARG_COMMAND}" AND NOT BLOOM_ENABLE_TEST_CLANG_TIDY)
+        set_property(TARGET "${ARG_COMMAND}" PROPERTY CXX_CLANG_TIDY "")
+    endif()
+
     if(ARG_LABELS)
         set_tests_properties("${ARG_NAME}" PROPERTIES LABELS "${ARG_LABELS}")
     endif()
