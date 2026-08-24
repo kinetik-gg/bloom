@@ -25,14 +25,17 @@ bool EditorRegistry::registerEditor(EditorDescriptor descriptor) {
 
 const std::vector<EditorDescriptor>& EditorRegistry::editors() const noexcept { return editors_; }
 
-bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session) {
+bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
+                               CompositionPreviewController& previewController) {
     const auto addEditor = [&registry](std::string id, QString name, EditorFactory factory) {
         return registry.registerEditor(
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
 
     return addEditor("bloom.viewer", "Compositor",
-                     [&session](QWidget* parent) { return new ViewerEditor(session, parent); }) &&
+                     [&session, &previewController](QWidget* parent) {
+                         return new ViewerEditor(session, previewController, parent);
+                     }) &&
            addEditor(
                "bloom.nodes", "Nodes",
                [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&

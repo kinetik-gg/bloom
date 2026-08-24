@@ -5,14 +5,22 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_editors.hpp>
+#include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/snapshot_compile_preparation.hpp>
+#include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QAction>
 #include <QApplication>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGraphicsItem>
 #include <QLabel>
 #include <QMenu>
@@ -20,10 +28,12 @@
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 
@@ -34,6 +44,16 @@ namespace {
         std::cerr << "Failure: " << message << '\n';
     }
     return condition;
+}
+
+template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < 2'000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        std::this_thread::yield();
+    }
+    return predicate();
 }
 
 const bloom::document::ParameterRecord*
@@ -59,8 +79,19 @@ parameterForRole(const bloom::document::Composition& composition,
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    if (!require(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                 "built-in node definitions register")) {
+        return false;
+    }
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge, ui::makeSnapshotCompilePreparation(snapshotCompiler));
     ui::EditorRegistry registry;
-    if (!require(ui::registerFoundationEditors(registry, session),
+    if (!require(ui::registerFoundationEditors(registry, session, previewController),
                  "foundation editor registration succeeds") ||
         !require(registry.editors().size() == 5,
                  "foundation registration exposes five replaceable editor types")) {
@@ -70,7 +101,16 @@ parameterForRole(const bloom::document::Composition& composition,
     ui::NodeGraphEditor nodes(session);
     ui::PropertiesEditor properties(session);
     [[maybe_unused]] ui::MediaEditor media(session);
-    ui::ViewerEditor viewer(session);
+    ui::ViewerEditor viewer(session, previewController);
+
+    if (!require(waitUntil([&] {
+                     return previewController.state().status == ui::CompositionPreviewStatus::Ready;
+                 }),
+                 "built-in registry and compiler prepare the initial composition") ||
+        !require(previewController.state().sourceRevision == session.snapshot().revision(),
+                 "prepared plan identifies the exact active revision")) {
+        return false;
+    }
 
     auto* addButton = timeline.findChild<QToolButton*>("addLayerButton");
     auto* addMenu = timeline.findChild<QMenu*>("addLayerMenu");
@@ -91,6 +131,19 @@ parameterForRole(const bloom::document::Composition& composition,
         return false;
     }
     addTextAction->trigger();
+
+    if (!require(waitUntil([&] {
+                     return previewController.state().status ==
+                            ui::CompositionPreviewStatus::Unsupported;
+                 }),
+                 "reachable text produces an explicit unsupported preview state") ||
+        !require(previewController.state().compileResult != nullptr &&
+                     !previewController.state().compileResult->diagnostics.empty() &&
+                     previewController.state().compileResult->diagnostics.front().code ==
+                         runtime::CompileDiagnosticCode::UnsupportedNode,
+                 "unsupported preview retains the compiler's structured diagnostic")) {
+        return false;
+    }
 
     const auto* composition = session.composition();
     if (!require(composition != nullptr, "active composition remains available") ||
@@ -279,12 +332,16 @@ parameterForRole(const bloom::document::Composition& composition,
         !require(restoredColor != nullptr &&
                      session.constantColorValue(restoredColor->id) == hdrColor,
                  "redo restores exact unclipped solid color truth") ||
-        !require(viewer.accessibleDescription().contains(QStringLiteral("no composition pixels")),
+        !require(viewer.accessibleDescription().contains(QStringLiteral("no composition pixels"),
+                                                         Qt::CaseInsensitive),
                  "Viewer explicitly reports that no rendered pixels are available")) {
         return false;
     }
 
-    return true;
+    previewController.beginShutdown();
+    taskUiBridge.beginShutdown();
+    return require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+                   "preview fixture reaches scheduler quiescence");
 }
 
 } // namespace

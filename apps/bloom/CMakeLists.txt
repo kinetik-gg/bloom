@@ -2,7 +2,7 @@ qt_add_executable(bloom
     main.cpp
 )
 
-target_link_libraries(bloom PRIVATE bloom_ui)
+target_link_libraries(bloom PRIVATE bloom_runtime bloom_runtime_compiler bloom_ui)
 bloom_enable_warnings(bloom)
 
 set_target_properties(

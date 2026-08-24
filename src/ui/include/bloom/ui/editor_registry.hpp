@@ -10,6 +10,7 @@ class QWidget;
 
 namespace bloom::ui {
 
+class CompositionPreviewController;
 class CompositionSession;
 
 using EditorFactory = std::function<QWidget*(QWidget* parent)>;
@@ -29,6 +30,7 @@ class EditorRegistry final {
     std::vector<EditorDescriptor> editors_;
 };
 
-[[nodiscard]] bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session);
+[[nodiscard]] bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
+                                             CompositionPreviewController& previewController);
 
 } // namespace bloom::ui

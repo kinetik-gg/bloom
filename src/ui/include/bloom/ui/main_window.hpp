@@ -3,6 +3,7 @@
 #include <QMainWindow>
 
 class QAction;
+class QCloseEvent;
 class QMenu;
 class QSettings;
 
@@ -14,6 +15,8 @@ class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
 class MainWindow final : public QMainWindow {
+    Q_OBJECT
+
   public:
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                QWidget* parent = nullptr);
@@ -21,6 +24,12 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
     void saveApplicationState(QSettings& settings) const;
+
+  signals:
+    void shutdownRequested();
+
+  protected:
+    void closeEvent(QCloseEvent* event) override;
 
   private:
     void createMenus();
@@ -42,6 +51,7 @@ class MainWindow final : public QMainWindow {
     QAction* closeAreaAction_ = nullptr;
     QAction* maximizeAreaAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;
+    bool shutdownRequested_ = false;
 };
 
 } // namespace bloom::ui

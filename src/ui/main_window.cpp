@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QColor>
 #include <QKeySequence>
 #include <QMenu>
@@ -59,6 +60,15 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
     if (workspaceLayoutWritable_) {
         workspaceHost_->persistLayout(settings, workspaceLayoutKey);
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    event->ignore();
+    if (shutdownRequested_) {
+        return;
+    }
+    shutdownRequested_ = true;
+    emit shutdownRequested();
 }
 
 void MainWindow::createMenus() {

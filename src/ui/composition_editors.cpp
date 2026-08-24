@@ -1,5 +1,6 @@
 #include <bloom/ui/composition_editors.hpp>
 
+#include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 #include <bloom/core/color.hpp>
@@ -80,6 +81,22 @@ QString layerName(const document::Composition& composition, const document::Laye
         return QStringLiteral("Layer %1").arg(layerId.value());
     }
     return QString::fromStdString(boundary->name);
+}
+
+QString previewStatusText(const CompositionPreviewState& state) {
+    switch (state.status) {
+    case CompositionPreviewStatus::Preparing:
+        return ViewerEditor::tr("Preparing composition plan\nNo pixels are displayed");
+    case CompositionPreviewStatus::Ready:
+        return ViewerEditor::tr("Composition plan ready\nPixel evaluation is not connected yet");
+    case CompositionPreviewStatus::Unsupported:
+        return ViewerEditor::tr("Preview unsupported\nNo pixels are displayed");
+    case CompositionPreviewStatus::Cancelled:
+        return ViewerEditor::tr("Preview preparation cancelled\nNo pixels are displayed");
+    case CompositionPreviewStatus::Failed:
+        return ViewerEditor::tr("Preview preparation failed\nNo pixels are displayed");
+    }
+    return ViewerEditor::tr("No composition pixels are displayed");
 }
 
 const document::NodeRecord* directSourceNode(const CompositionSession& session,
@@ -505,12 +522,11 @@ void PropertiesEditor::configureSolidColor() {
                           static_cast<qsizetype>(document::kSolidColorEncoding.size())));
 }
 
-ViewerEditor::ViewerEditor(CompositionSession& session, QWidget* parent)
-    : QWidget(parent), session_(session) {
+ViewerEditor::ViewerEditor(CompositionSession& session,
+                           CompositionPreviewController& previewController, QWidget* parent)
+    : QWidget(parent), session_(session), previewController_(previewController) {
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
-    setAccessibleDescription(
-        tr("Render evaluation is not connected; no composition pixels are displayed."));
     setMinimumSize(220, 150);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     connect(&session_, &CompositionSession::snapshotChanged, this,
@@ -519,6 +535,11 @@ ViewerEditor::ViewerEditor(CompositionSession& session, QWidget* parent)
             qOverload<>(&ViewerEditor::update));
     connect(&session_, &CompositionSession::selectionChanged, this,
             qOverload<>(&ViewerEditor::update));
+    connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
+        updatePreviewAccessibility();
+        update();
+    });
+    updatePreviewAccessibility();
 }
 
 void ViewerEditor::paintEvent(QPaintEvent* event) {
@@ -547,8 +568,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                             : QString::fromStdString(composition->name()));
 
     painter.setPen(QColor(139, 144, 153));
-    painter.drawText(frame, Qt::AlignCenter,
-                     tr("Composition output\nRender evaluation is not connected yet"));
+    painter.drawText(frame, Qt::AlignCenter, previewStatusText(previewController_.state()));
 
     if (session_.selection().contextualLayer.has_value() && composition != nullptr) {
         const QString name = layerName(*composition, *session_.selection().contextualLayer);
@@ -562,6 +582,11 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
             selectionStatus.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
             painter.fontMetrics().elidedText(status, Qt::ElideRight, selectionStatus.width() - 16));
     }
+}
+
+void ViewerEditor::updatePreviewAccessibility() {
+    const auto& preview = previewController_.state();
+    setAccessibleDescription(tr("%1. No composition pixels are displayed.").arg(preview.message));
 }
 
 MediaEditor::MediaEditor(CompositionSession& session, QWidget* parent)
