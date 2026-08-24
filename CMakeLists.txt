@@ -10,8 +10,13 @@ project(
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 include(CTest)
-include(cmake/BloomWarnings.cmake)
+include(BloomQuality)
+include(BloomWarnings)
+
+bloom_configure_quality_tools()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
 qt_standard_project_setup()
