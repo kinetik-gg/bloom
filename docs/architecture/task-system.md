@@ -37,13 +37,23 @@ The implemented Qt/application layer adds:
   structured diagnostic presentation
 - a frozen node-definition registry and deterministic compiler that consumes immutable document
   snapshots and emits typed composition plans without allocating images
-- an application-owned preview controller that accepts results only for the desired composition,
-  revision, and request generation
+- a bounded CPU composition evaluator that preflights aggregate image memory, evaluates immutable
+  plans, cooperatively cancels at operation and scanline boundaries, and maps display pixels on the
+  worker
+- one scheduled preview task per generation that runs compile, evaluate, and display preparation
+  sequentially without nested task submission or waits
+- an application-owned preview controller that accepts results only for the exact project,
+  composition, revision, request generation, time, resolution, quality, and color intent
+- separate preview activity and frame-freshness state, with the last good same-composition frame
+  retained during rendering, cancellation, unsupported outcomes, and failures
+- an extracted Viewer that borrows immutable packed RGBA8 only during paint, fits pixel aspect in
+  logical widget coordinates, and labels the temporary path `Reference display`
 - staged shutdown for window and application quit paths, with one stable terminal task publication
   before runtime quiescence permits process exit
 
-No current UI surface submits pixel evaluation to the kernel. `Ready` means that the current typed
-plan exists; it does not mean that composition pixels have been produced.
+`Ready` now means that an immutable process frame and prepared display buffer match the controller's
+current desired identity. It never means merely that a plan compiled. Qt types remain outside the
+task, compiler, evaluator, and frame contracts.
 
 ## Responsiveness Contract
 
@@ -119,6 +129,11 @@ Revision and generation acceptance are application-controller semantics, not sch
 kernel transports typed results and terminal state without knowing document revisions; the
 implemented preview controller performs these publication checks on the UI side of the neutral
 mailbox boundary.
+
+Preview cache identity is distinct from publication identity. It includes the complete immutable
+plan, rational time, output, resolution, quality, color/display intent, provider, and evaluator,
+image-primitive, and display-mapper semantics versions. Request generation, cancellation state,
+priority, and memory budget do not change pixels and therefore do not enter the cache identity.
 
 ## Scheduling And Priority
 

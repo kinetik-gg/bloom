@@ -115,10 +115,10 @@ Platform/GPU capability -> project semantics
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |
 
-`src/core`, `src/document`, `src/commands`, `src/ui`, and `apps/bloom` now form the first interactive
-vertical slice. Other boundaries, including `src/project`, `src/host`, `src/scripting`, and
-`modules`, should be created when the first proof needs their behavior rather than as empty
-speculative libraries.
+`src/core`, `src/document`, `src/commands`, `src/render`, `src/runtime`, `src/ui`, and `apps/bloom`
+now form the first pixel-producing interactive vertical slice. Other boundaries, including
+`src/project`, `src/host`, `src/scripting`, and `modules`, should be created when the first proof
+needs their behavior rather than as empty speculative libraries.
 
 ## Module Composition
 
@@ -163,8 +163,10 @@ The complete contract and game-engine pipeline fitness test are defined in
 
 ## Evaluation Direction
 
-- Start with a CPU reference evaluator for a minimal source, transform, composite, and output graph.
-- Compile immutable document snapshots into runtime plans.
+- The implemented CPU reference evaluator covers the minimal Solid, translation/opacity Layer
+  Output, ordered Layer Stack, and Composition Output graph.
+- Immutable document snapshots compile into closed typed runtime plans; evaluation and prepared
+  display publication remain separate typed stages within one scheduled task.
 - Make requests explicit about time, output, resolution, quality, and color intent.
 - Introduce cache keys only alongside the inputs that determine correctness.
 - Validate the portable GPU direction early with a cross-platform spike, then develop GPU execution

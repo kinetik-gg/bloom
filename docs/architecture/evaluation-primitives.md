@@ -122,6 +122,41 @@ non-finite result.
 These are kernels, not artist-visible node records. Artist nodes add typed ports, defaults, units,
 animation roles, UI metadata, and lowering without changing the kernel math.
 
+## CPU Image Primitive Vocabulary Version 1
+
+`bloom_render` now provides the allocation-free CPU reference row kernels used by the first
+composition evaluator. Their semantics version is `1`; the evaluator and prepared-frame cache
+identity record that version explicitly.
+
+- Solid authoring colors are straight reference-linear-sRGB `Color4d`. Conversion validates the
+  authored value, multiplies RGB by alpha in Float64, then performs one checked Float32 conversion.
+  Alpha that is authored as zero or rounds to Float32 zero produces exact transparent black.
+- Translation and opacity are validated once per operation. Bilinear sampling gathers
+  premultiplied pixels, uses transparent taps outside the source data window, preserves exact
+  integer/zero/one endpoints, and applies opacity to all four sampled components.
+- Source-over consumes separate source and in-place destination rows. The first Layer Stack entry is
+  topmost, so evaluation visits stack entries in reverse order and folds bottom-to-top. Process RGB
+  is never clamped.
+- The temporary reference display mapper robustly unpremultiplies, clips only at the display
+  boundary, applies the linear-sRGB to sRGB transfer, and produces straight packed RGBA8. Checked-in
+  inverse-transfer half-code thresholds make byte quantization independent of platform `libm`.
+- Every authored arithmetic boundary requires round-to-nearest with preserved subnormal inputs and
+  results. Primitive rows allocate no storage, start no threads, and expose structured failures.
+
+The initial evaluator treats a Layer Output position as an absolute source-center coordinate in the
+full composition raster. `(width / 2, height / 2)` is identity for the current composition-sized
+Solid source. Positive X moves right and positive Y moves down. A proxy scales the displacement per
+axis and derives a pixel aspect that preserves full-resolution display aspect. Pixel centers use the
+same half-pixel lattice on both sides of the inverse gather, so an integer displacement remains
+exact.
+
+Evaluation is deliberately full-frame and single-worker in this version. Preflight validates every
+operation reference, computes exact consumer counts and the peak live pixel bytes, and rejects the
+request before image allocation when its aggregate budget is insufficient. Images are released
+after their last consumer. Cancellation is checked at operation and scanline boundaries, and a
+cancelled or failed evaluation publishes no partial frame. The immutable successful frame owns both
+the premultiplied process image and the already-mapped display buffer.
+
 ## Primitive Families
 
 | Family | Owner | Examples | Priority |
@@ -180,9 +215,9 @@ Binding rules:
 9. CPU and GPU providers implement the same declared operation space and alpha equation. A backend
    cannot omit color processing or substitute display-referred math.
 
-Before the first pixels land, the authoring-to-process conversion must freeze its Float64-to-Float32
-rounding, range failure, premultiplication order, and zero-alpha behavior in tests. Layer opacity
-then multiplies all four premultiplied components. Reference source-over is:
+The implemented authoring-to-process conversion freezes its Float64-to-Float32 rounding, range
+failure, premultiplication order, and zero-alpha behavior in tests. Layer opacity multiplies all
+four premultiplied components. Reference source-over is:
 
 ```text
 out.rgb = source.rgb + destination.rgb * (1 - source.alpha)

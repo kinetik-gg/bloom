@@ -219,6 +219,9 @@ same non-blocking staged shutdown.
 
 Goal: render the first correct pixels through the asynchronous path.
 
+Implementation status: implemented and locally verified on Linux. The shared cross-platform CI
+matrix remains required before the batch is called platform-qualified.
+
 Implement:
 
 - a closed immutable plan containing Solid, translation/opacity Layer Output, ordered Layer Stack,
@@ -257,6 +260,13 @@ Suggested commits:
 
 Visual checkpoint: launch Bloom. Add two solids, edit position and opacity, reorder them, and verify
 that Viewer updates asynchronously without blocking.
+
+Checkpoint result: the closed Solid/Layer Output/Layer Stack/Composition Output plan now evaluates
+through deterministic reference-linear-sRGB CPU primitives under an aggregate pixel-memory budget.
+The application schedules compile, evaluate, and display mapping as one cancellable task, suppresses
+obsolete generations, retains a visibly stale last-good frame, and paints only an immutable prepared
+RGBA8 handoff. The latest local build is launched for artist visual QA; subjective appearance remains
+outside the automated merge gate.
 
 ## Batch 4 — Rational Time, Animation, And Direct Manipulation
 
