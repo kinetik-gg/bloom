@@ -7,6 +7,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_editors.hpp>
@@ -139,11 +140,13 @@ parameterForRole(const bloom::document::Composition& composition,
     nodeDefinitions.freeze();
     runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
     ui::CompositionPreviewController previewController(
         session, scheduler, taskUiBridge,
-        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator));
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator,
+                                           referenceDisplayPreparer));
     ui::EditorRegistry registry;
     if (!require(ui::registerFoundationEditors(registry, session, previewController),
                  "foundation editor registration succeeds") ||

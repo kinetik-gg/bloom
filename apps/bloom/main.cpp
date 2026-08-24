@@ -4,6 +4,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
@@ -44,11 +45,13 @@ int main(int argc, char* argv[]) {
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
+    bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     bloom::runtime::TaskScheduler taskScheduler;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge,
-        bloom::ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator));
+        bloom::ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator,
+                                                  referenceDisplayPreparer));
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     application.installEventFilter(&shutdownCoordinator);
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);

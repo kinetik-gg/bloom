@@ -7,6 +7,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -154,6 +155,7 @@ struct PipelineFixture final {
     bloom::runtime::NodeDefinitionRegistry definitions;
     bloom::runtime::SnapshotCompiler compiler;
     bloom::runtime::CpuCompositionEvaluator evaluator;
+    bloom::runtime::CpuReferenceDisplayPreparer displayPreparer;
     bloom::ui::PreviewPreparationFunction pipeline;
 
     PipelineFixture() : compiler(definitions) {
@@ -161,7 +163,7 @@ struct PipelineFixture final {
             std::abort();
         }
         definitions.freeze();
-        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator);
+        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer);
     }
 };
 
@@ -477,6 +479,12 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
     expectations.expect(lastGood != nullptr &&
                             controller.state().freshness == ui::FrameFreshness::Current,
                         "Ready owns one current immutable frame");
+    expectations.expect(
+        lastGood != nullptr && lastGood->processFrame() != nullptr &&
+            lastGood->displayFrame() != nullptr &&
+            lastGood->displayIdentity().processFrame == lastGood->processIdentity() &&
+            lastGood->displayBuffer().isValid(),
+        "preview publication retains distinct immutable process and display products");
 
     outcome.store(Outcome::SlowFailed);
     controller.requestRefresh();

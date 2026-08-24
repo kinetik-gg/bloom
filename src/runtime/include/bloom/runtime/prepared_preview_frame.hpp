@@ -1,6 +1,6 @@
 #pragma once
 
-#include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -30,31 +30,45 @@ class PreparedPreviewFrame final {
   public:
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     create(std::uint64_t requestGeneration,
-           std::shared_ptr<const EvaluatedFrame> evaluatedFrame) noexcept;
+           std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept;
 
     [[nodiscard]] const PreviewRequestIdentity& desiredIdentity() const& noexcept {
         return desiredIdentity_;
     }
     [[nodiscard]] const PreviewRequestIdentity& desiredIdentity() const&& = delete;
-    [[nodiscard]] const EvaluationCacheIdentity& cacheIdentity() const& noexcept {
-        return evaluatedFrame_->identity();
+    [[nodiscard]] const ProcessFrameIdentity& processIdentity() const& noexcept {
+        return displayFrame_->identity().processFrame;
     }
-    [[nodiscard]] const EvaluationCacheIdentity& cacheIdentity() const&& = delete;
+    [[nodiscard]] const ProcessFrameIdentity& processIdentity() const&& = delete;
+    [[nodiscard]] const ReferenceDisplayFrameIdentity& displayIdentity() const& noexcept {
+        return displayFrame_->identity();
+    }
+    [[nodiscard]] const ReferenceDisplayFrameIdentity& displayIdentity() const&& = delete;
+    [[nodiscard]] const std::shared_ptr<const ProcessFrame>& processFrame() const& noexcept {
+        return displayFrame_->processFrame();
+    }
+    [[nodiscard]] const std::shared_ptr<const ProcessFrame>& processFrame() const&& = delete;
+    [[nodiscard]] const std::shared_ptr<const ReferenceDisplayFrame>&
+    displayFrame() const& noexcept {
+        return displayFrame_;
+    }
+    [[nodiscard]] const std::shared_ptr<const ReferenceDisplayFrame>&
+    displayFrame() const&& = delete;
     [[nodiscard]] const render::Rgba32fImage& processImage() const& noexcept {
-        return evaluatedFrame_->processImage();
+        return displayFrame_->processFrame()->processImage();
     }
     [[nodiscard]] const render::Rgba32fImage& processImage() const&& = delete;
     [[nodiscard]] const render::PreparedReferenceDisplayBuffer& displayBuffer() const& noexcept {
-        return evaluatedFrame_->displayBuffer();
+        return displayFrame_->buffer();
     }
     [[nodiscard]] const render::PreparedReferenceDisplayBuffer& displayBuffer() const&& = delete;
 
   private:
     PreparedPreviewFrame(PreviewRequestIdentity desiredIdentity,
-                         std::shared_ptr<const EvaluatedFrame> evaluatedFrame) noexcept;
+                         std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept;
 
     PreviewRequestIdentity desiredIdentity_;
-    std::shared_ptr<const EvaluatedFrame> evaluatedFrame_;
+    std::shared_ptr<const ReferenceDisplayFrame> displayFrame_;
 };
 
 enum class PreviewPreparationStatus : std::uint8_t {

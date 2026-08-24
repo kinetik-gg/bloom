@@ -1,5 +1,6 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -171,6 +172,12 @@ requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budge
             .quality = runtime::EvaluationQuality::Reference,
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .pixelStorageByteLimit = budget};
+}
+
+[[nodiscard]] runtime::ReferenceDisplayPreparationRequest
+displayRequest(const std::size_t aggregateBudget = 1U << 20U) {
+    return {.intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
+            .aggregatePixelStorageByteLimit = aggregateBudget};
 }
 
 [[nodiscard]] bool near(const float value, const float expected, const float tolerance = 1.0e-6F) {
@@ -372,8 +379,10 @@ void testStackOrderingOpacityAndDisplay(Expectations& expectations) {
     expectations.expect(halfPixel != nullptr && halfPixel->red() == 0.5F &&
                             halfPixel->alpha() == 0.5F,
                         "layer opacity multiplies all premultiplied components");
-    if (halfResult.frame() != nullptr) {
-        const auto displayPixels = halfResult.frame()->displayBuffer().pixels();
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto halfDisplay = displayPreparer.prepare(halfResult.frame(), displayRequest(), {});
+    if (halfDisplay.frame() != nullptr) {
+        const auto displayPixels = halfDisplay.frame()->buffer().pixels();
         expectations.expect(!displayPixels.empty() && displayPixels.front().red == 255 &&
                                 displayPixels.front().green == 0 &&
                                 displayPixels.front().blue == 0 &&
@@ -391,9 +400,11 @@ void testEmptyStackIsTransparent(Expectations& expectations) {
         std::ranges::all_of(result.frame()->processImage().pixels(), [](const auto& value) {
             return value == render::Rgba32f::transparent();
         });
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto display = displayPreparer.prepare(result.frame(), displayRequest(), {});
     const bool displayTransparent =
-        result.frame() != nullptr &&
-        std::ranges::all_of(result.frame()->displayBuffer().pixels(), [](const auto& value) {
+        display.frame() != nullptr &&
+        std::ranges::all_of(display.frame()->buffer().pixels(), [](const auto& value) {
             return value.red == 0 && value.green == 0 && value.blue == 0 && value.alpha == 0;
         });
     expectations.expect(
@@ -432,8 +443,7 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                             near(proxyEdgePixel->alpha(), 0.5F),
                         "absolute authoring displacement is scaled independently for a proxy");
 
-    // 4x2 RGBA32F is 128 bytes. This plan peaks at two resident process images (256 bytes);
-    // the final 32-byte display buffer does not exceed that peak.
+    // 4x2 RGBA32F is 128 bytes. This plan peaks at two resident process images (256 bytes).
     const auto below = evaluator.evaluate(plan, requestFor(*plan, 255), {});
     const auto exact = evaluator.evaluate(plan, requestFor(*plan, 256), {});
     expectations.expect(below.status() == runtime::EvaluationStatus::Failed &&
@@ -450,6 +460,28 @@ void testProxyAndPeakBudget(Expectations& expectations) {
     expectations.expect(twoBelow.status() == runtime::EvaluationStatus::Failed &&
                             twoExact.status() == runtime::EvaluationStatus::Evaluated,
                         "peak simulation accounts for both live layers while stacking");
+
+    const auto emptyPlan = emptyStackPlan();
+    const auto processOnlyBelow = evaluator.evaluate(emptyPlan, requestFor(*emptyPlan, 127), {});
+    const auto processOnlyExact = evaluator.evaluate(emptyPlan, requestFor(*emptyPlan, 128), {});
+    expectations.expect(processOnlyBelow.status() == runtime::EvaluationStatus::Failed &&
+                            processOnlyExact.status() == runtime::EvaluationStatus::Evaluated,
+                        "process preflight excludes the later prepared-display allocation");
+
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto displayBelow =
+        displayPreparer.prepare(processOnlyExact.frame(), displayRequest(159), {});
+    const auto displayExact =
+        displayPreparer.prepare(processOnlyExact.frame(), displayRequest(160), {});
+    expectations.expect(
+        displayBelow.status() == runtime::ReferenceDisplayPreparationStatus::Failed &&
+            !displayBelow.diagnostics().empty() &&
+            displayBelow.diagnostics().front().code ==
+                runtime::ReferenceDisplayDiagnosticCode::PixelStorageBudgetExceeded,
+        "display preflight counts retained process bytes plus its pending allocation");
+    expectations.expect(
+        displayExact.status() == runtime::ReferenceDisplayPreparationStatus::Prepared,
+        "display preparation accepts the exact aggregate process-plus-display budget");
 }
 
 void testIdentityAndPreparedHandoff(Expectations& expectations) {
@@ -491,13 +523,31 @@ void testIdentityAndPreparedHandoff(Expectations& expectations) {
                             "resolution and primitive semantics participate in cache identity");
     }
 
-    const auto preparedOne = runtime::PreparedPreviewFrame::create(1, first.frame());
-    const auto preparedTwo = runtime::PreparedPreviewFrame::create(2, first.frame());
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto firstDisplay = displayPreparer.prepare(first.frame(), displayRequest(), {});
+    const auto largerDisplayBudget =
+        displayPreparer.prepare(first.frame(), displayRequest(1U << 21U), {});
+    expectations.expect(
+        firstDisplay.frame() != nullptr && largerDisplayBudget.frame() != nullptr &&
+            firstDisplay.frame()->identity() == largerDisplayBudget.frame()->identity() &&
+            firstDisplay.frame()->identity().processFrame == first.frame()->identity(),
+        "display identity starts from the exact process identity and excludes execution budget");
+    if (firstDisplay.frame() != nullptr) {
+        auto changedDisplaySemantics = firstDisplay.frame()->identity();
+        ++changedDisplaySemantics.mapperSemanticsVersion;
+        expectations.expect(changedDisplaySemantics != firstDisplay.frame()->identity() &&
+                                changedDisplaySemantics.processFrame == first.frame()->identity(),
+                            "display pipeline semantics change only the distinct display identity");
+    }
+
+    const auto preparedOne = runtime::PreparedPreviewFrame::create(1, firstDisplay.frame());
+    const auto preparedTwo = runtime::PreparedPreviewFrame::create(2, firstDisplay.frame());
     expectations.expect(preparedOne.has_value() && preparedTwo.has_value() &&
-                            preparedOne->cacheIdentity() == preparedTwo->cacheIdentity() &&
+                            preparedOne->processIdentity() == preparedTwo->processIdentity() &&
+                            preparedOne->displayIdentity() == preparedTwo->displayIdentity() &&
                             preparedOne->desiredIdentity() != preparedTwo->desiredIdentity(),
-                        "publication generation changes desired identity but not cache identity");
-    expectations.expect(!runtime::PreparedPreviewFrame::create(0, first.frame()).has_value(),
+                        "publication generation changes desired identity but not frame identities");
+    expectations.expect(!runtime::PreparedPreviewFrame::create(0, firstDisplay.frame()).has_value(),
                         "zero is not a publishable preview generation");
     const auto sharedPrepared =
         preparedOne.has_value()
@@ -554,7 +604,7 @@ void testStructuredFailuresAndProgress(Expectations& expectations) {
             monotonic = monotonic && progress[index].completed >= progress[index - 1].completed;
         }
     }
-    expectations.expect(monotonic, "preflight, operation, and display progress is monotonic");
+    expectations.expect(monotonic, "process preflight and operation progress is monotonic");
 
     const auto throwingProgress =
         evaluator.evaluate(plan, requestFor(*plan), {}, [](const runtime::EvaluationProgress&) {
@@ -596,12 +646,15 @@ void testRepeatability(Expectations& expectations) {
     const bool processEqual = first.frame() != nullptr && second.frame() != nullptr &&
                               std::ranges::equal(first.frame()->processImage().pixels(),
                                                  second.frame()->processImage().pixels());
-    const bool displayEqual = first.frame() != nullptr && second.frame() != nullptr &&
-                              std::ranges::equal(first.frame()->displayBuffer().pixels(),
-                                                 second.frame()->displayBuffer().pixels());
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto firstDisplay = displayPreparer.prepare(first.frame(), displayRequest(), {});
+    const auto secondDisplay = displayPreparer.prepare(second.frame(), displayRequest(), {});
+    const bool displayEqual = firstDisplay.frame() != nullptr && secondDisplay.frame() != nullptr &&
+                              std::ranges::equal(firstDisplay.frame()->buffer().pixels(),
+                                                 secondDisplay.frame()->buffer().pixels());
     expectations.expect(processEqual && displayEqual &&
                             first.frame()->identity() == second.frame()->identity(),
-                        "repeated CPU evaluation is byte-for-byte stable for process and display");
+                        "process evaluation and display preparation are independently repeatable");
 }
 
 class CancellationGate final {
@@ -620,6 +673,14 @@ class CancellationGate final {
         condition_.wait(lock, [this] { return released_; });
     }
 
+    void pauseAtFirstDisplayRow(const runtime::ReferenceDisplayProgress& progress) {
+        if (progress.stage != runtime::ReferenceDisplayProgressStage::Mapping ||
+            progress.completed != 1) {
+            return;
+        }
+        pause();
+    }
+
     [[nodiscard]] bool waitUntilEntered() {
         std::unique_lock lock(mutex_);
         return condition_.wait_for(lock, 2s, [this] { return entered_; });
@@ -632,6 +693,16 @@ class CancellationGate final {
     }
 
   private:
+    void pause() {
+        std::unique_lock lock(mutex_);
+        if (entered_) {
+            return;
+        }
+        entered_ = true;
+        condition_.notify_all();
+        condition_.wait(lock, [this] { return released_; });
+    }
+
     std::mutex mutex_;
     std::condition_variable condition_;
     bool entered_ = false;
@@ -685,6 +756,65 @@ void testDeterministicScanlineCancellation(Expectations& expectations) {
     expectations.expect(scheduler.isQuiescent(), "cancellation test shuts the scheduler down");
 }
 
+void testDisplayPreparationCancellationPublishesNothing(Expectations& expectations) {
+    const auto largeFormat = format(64, 64);
+    const auto plan = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {32.0, 32.0}, 1.0, largeFormat);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto process = evaluator.evaluate(plan, requestFor(*plan, 1U << 20U), {});
+    expectations.expect(process.frame() != nullptr,
+                        "display cancellation fixture has an immutable process frame");
+
+    runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    CancellationGate gate;
+    std::atomic_bool preparerCancelled = false;
+    std::atomic_bool framePublished = false;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest(
+            "Display cancellation fixture",
+            {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(2)}),
+        [frame = process.frame(), &displayPreparer, &gate, &preparerCancelled,
+         &framePublished](runtime::TaskContext& context) {
+            const auto result =
+                displayPreparer.prepare(frame, displayRequest(1U << 20U), context.cancellation(),
+                                        [&gate](const runtime::ReferenceDisplayProgress& update) {
+                                            gate.pauseAtFirstDisplayRow(update);
+                                        });
+            preparerCancelled.store(result.status() ==
+                                        runtime::ReferenceDisplayPreparationStatus::Cancelled,
+                                    std::memory_order_release);
+            framePublished.store(result.frame() != nullptr, std::memory_order_release);
+            return result.status() == runtime::ReferenceDisplayPreparationStatus::Cancelled
+                       ? runtime::TaskResult<void>::cancelled()
+                       : runtime::TaskResult<void>::succeeded();
+        });
+    expectations.expect(submission.accepted() && gate.waitUntilEntered(),
+                        "display cancellation fixture reaches an exact scanline boundary");
+    submission.handle.cancel();
+    gate.release();
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    std::optional<runtime::TaskResult<void>> taskResult;
+    while (!taskResult.has_value() && std::chrono::steady_clock::now() < deadline) {
+        taskResult = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    expectations.expect(taskResult.has_value() &&
+                            taskResult->state() == runtime::TaskState::Cancelled &&
+                            preparerCancelled.load(std::memory_order_acquire) &&
+                            !framePublished.load(std::memory_order_acquire),
+                        "cancelled display preparation publishes no partial display product");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    expectations.expect(scheduler.isQuiescent(),
+                        "display cancellation test shuts the scheduler down");
+}
+
 } // namespace
 
 int main() {
@@ -700,6 +830,7 @@ int main() {
         testStructuredFailuresAndProgress(expectations);
         testRepeatability(expectations);
         testDeterministicScanlineCancellation(expectations);
+        testDisplayPreparationCancellationPublishesNothing(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

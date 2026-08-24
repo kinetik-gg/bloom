@@ -27,11 +27,9 @@ template <typename Value> struct ResolvedCurveSample final {
 
 struct ResolvedEvaluation final {
     render::Rgba32fImageDescriptor imageDescriptor;
-    render::ReferenceDisplayBufferDescriptor displayDescriptor;
     double horizontalScale = 1.0;
     double verticalScale = 1.0;
     std::size_t imageBytes = 0;
-    std::size_t displayBytes = 0;
     std::vector<std::size_t> remainingConsumers;
     std::vector<ResolvedCurveSample<double>> scalarCurveValues;
     std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;

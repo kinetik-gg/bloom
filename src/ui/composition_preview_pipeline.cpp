@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <bloom/document/project.hpp>
@@ -88,6 +89,21 @@ taskDiagnostics(const bloom::runtime::EvaluationResult& result) {
     return diagnostics;
 }
 
+std::vector<bloom::runtime::TaskDiagnostic>
+taskDiagnostics(const bloom::runtime::ReferenceDisplayPreparationResult& result) {
+    std::vector<bloom::runtime::TaskDiagnostic> diagnostics;
+    diagnostics.reserve(result.diagnostics().size());
+    for (const auto& diagnostic : result.diagnostics()) {
+        diagnostics.push_back(
+            {.code = std::string(bloom::runtime::referenceDisplayDiagnosticCodeId(diagnostic.code)),
+             .severity = diagnostic.severity,
+             .summary = diagnostic.summary,
+             .detail = diagnostic.detail,
+             .suggestedAction = "Review the preview display intent and memory settings."});
+    }
+    return diagnostics;
+}
+
 bloom::runtime::TaskDiagnostic missingResultDiagnostic(std::string summary) {
     return {.code = "bloom.preview.pipeline.invalid-result",
             .severity = bloom::runtime::DiagnosticSeverity::Error,
@@ -108,12 +124,21 @@ void reportEvaluationProgress(bloom::runtime::TaskContext& context,
                        ? "Evaluating operation " + std::to_string(progress.operation->value())
                        : "Evaluating composition operations";
         break;
-    case bloom::runtime::EvaluationProgressStage::DisplayMapping:
-        subphase = "Preparing reference display pixels";
-        break;
     }
     context.reportProgress({.phase = "Rendering composition preview",
                             .subphase = std::move(subphase),
+                            .completed = progress.completed,
+                            .total = progress.total});
+}
+
+void reportDisplayProgress(bloom::runtime::TaskContext& context,
+                           const bloom::runtime::ReferenceDisplayProgress& progress) {
+    const std::string subphase =
+        progress.stage == bloom::runtime::ReferenceDisplayProgressStage::Preflight
+            ? "Validating the bounded reference display handoff"
+            : "Preparing reference display pixels";
+    context.reportProgress({.phase = "Preparing composition preview display",
+                            .subphase = subphase,
                             .completed = progress.completed,
                             .total = progress.total});
 }
@@ -124,11 +149,12 @@ namespace bloom::ui {
 
 PreviewPreparationFunction
 makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
-                               const runtime::CpuCompositionEvaluator& evaluator) {
-    return [&compiler, &evaluator](const document::Snapshot& snapshot,
-                                   const runtime::PreviewRequestIdentity& desiredIdentity,
-                                   const std::size_t pixelStorageByteLimit,
-                                   runtime::TaskContext& context) {
+                               const runtime::CpuCompositionEvaluator& evaluator,
+                               const runtime::CpuReferenceDisplayPreparer& displayPreparer) {
+    return [&compiler, &evaluator, &displayPreparer](
+               const document::Snapshot& snapshot,
+               const runtime::PreviewRequestIdentity& desiredIdentity,
+               const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) {
         using TaskResult = runtime::TaskResult<PreviewPreparationResultHandle>;
 
         if (context.isCancellationRequested()) {
@@ -209,8 +235,39 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
                 missingResultDiagnostic("Composition evaluation returned no frame"));
             return TaskResult::failed(std::move(diagnostics));
         }
+
+        const runtime::ReferenceDisplayPreparationRequest displayRequest{
+            .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
+            .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
+        };
+        auto displayResult = displayPreparer.prepare(
+            evaluationResult.frame(), displayRequest, context.cancellation(),
+            [&context](const runtime::ReferenceDisplayProgress& progress) {
+                reportDisplayProgress(context, progress);
+            });
+        auto displayDiagnostics = taskDiagnostics(displayResult);
+        diagnostics.insert(diagnostics.end(), std::make_move_iterator(displayDiagnostics.begin()),
+                           std::make_move_iterator(displayDiagnostics.end()));
+
+        switch (displayResult.status()) {
+        case runtime::ReferenceDisplayPreparationStatus::Cancelled:
+            return TaskResult::cancelled(std::move(diagnostics));
+        case runtime::ReferenceDisplayPreparationStatus::Failed:
+            if (diagnostics.empty()) {
+                diagnostics.push_back(
+                    missingResultDiagnostic("Reference display preparation failed"));
+            }
+            return TaskResult::failed(std::move(diagnostics));
+        case runtime::ReferenceDisplayPreparationStatus::Prepared:
+            break;
+        }
+        if (displayResult.frame() == nullptr) {
+            diagnostics.push_back(
+                missingResultDiagnostic("Display preparation returned no immutable frame"));
+            return TaskResult::failed(std::move(diagnostics));
+        }
         auto prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
-                                                              evaluationResult.frame());
+                                                              displayResult.frame());
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(
                 missingResultDiagnostic("The prepared frame identity did not match its request"));

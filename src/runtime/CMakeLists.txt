@@ -54,6 +54,7 @@ target_sources(
         cpu_composition_evaluator_support.hpp
         evaluation.cpp
         prepared_preview_frame.cpp
+        reference_display_preparation.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -62,6 +63,7 @@ target_sources(
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
+            include/bloom/runtime/reference_display_preparation.hpp
 )
 
 target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)

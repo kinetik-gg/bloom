@@ -377,13 +377,6 @@ template <typename Value>
         return PreflightOutcome::failure(
             imageDiagnostic(*descriptorResult.error(), {}, "Process image descriptor is invalid"));
     }
-    const auto displayDescriptorResult =
-        render::ReferenceDisplayBufferDescriptor::create(window, pixelAspect);
-    if (!displayDescriptorResult) {
-        return PreflightOutcome::failure(imageDiagnostic(*displayDescriptorResult.error(), {},
-                                                         "Display image descriptor is invalid"));
-    }
-
     const auto operationCount = plan->operations.size();
     std::vector<bool> reachable(operationCount, false);
     std::vector<std::size_t> pending{request.output.value()};
@@ -662,7 +655,6 @@ template <typename Value>
     }
 
     const auto imageBytes = descriptorResult.value()->layout().pixelStorageBytes;
-    const auto displayBytes = displayDescriptorResult.value()->layout().pixelStorageBytes;
     auto remaining = consumers;
     std::size_t residentBytes = 0;
     std::size_t peakBytes = 0;
@@ -690,11 +682,6 @@ template <typename Value>
                          }
                      });
     }
-    if (!checkedAdd(residentBytes, displayBytes, residentBytes)) {
-        return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
-                                                    "Prepared-frame working set overflowed"));
-    }
-    peakBytes = std::max(peakBytes, residentBytes);
     if (peakBytes > request.pixelStorageByteLimit) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
@@ -705,11 +692,9 @@ template <typename Value>
 
     return PreflightOutcome::success(
         ResolvedEvaluation{.imageDescriptor = *descriptorResult.value(),
-                           .displayDescriptor = *displayDescriptorResult.value(),
                            .horizontalScale = horizontalScale,
                            .verticalScale = verticalScale,
                            .imageBytes = imageBytes,
-                           .displayBytes = displayBytes,
                            .remainingConsumers = std::move(consumers),
                            .scalarCurveValues = std::move(scalarCurveValues),
                            .vec2CurveValues = std::move(vec2CurveValues)});
@@ -996,50 +981,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                              diagnostic(EvaluationDiagnosticCode::InternalInvariant,
                                         "Composition Output did not publish a process image"));
         }
-        auto processView = processImage->view();
-        if (!processView) {
-            return EvaluationResult::failed(
-                imageDiagnostic(*processView.error(), {}, "Published process image is invalid"));
-        }
-        auto displayBuilder = render::ReferenceDisplayBufferBuilder::create(
-            resolved.displayDescriptor, resolved.displayBytes);
-        if (!displayBuilder) {
-            return EvaluationResult::failed(imageDiagnostic(
-                *displayBuilder.error(), {}, "Display buffer could not be allocated"));
-        }
-        const auto window = resolved.displayDescriptor.displayWindow();
-        const auto height = window.extent().height();
-        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-            if (cancellation.isCancellationRequested()) {
-                return EvaluationResult::cancelled();
-            }
-            const auto y = window.originY() + static_cast<std::int64_t>(rowIndex);
-            auto outputRow = displayBuilder.value()->row(y);
-            if (!outputRow) {
-                return EvaluationResult::failed(imageDiagnostic(
-                    *outputRow.error(), {}, "Display output row could not be addressed"));
-            }
-            if (const auto rowStatus = render::mapLinearRec709SceneToSrgbRow(
-                    *processView.value(), window, y, *outputRow.value())) {
-                return EvaluationResult::failed(imageDiagnostic(
-                    *rowStatus, {}, "Reference display mapping could not be evaluated"));
-            }
-            reportProgress(progress, {.stage = EvaluationProgressStage::DisplayMapping,
-                                      .operation = request.output,
-                                      .completed = rowIndex + 1,
-                                      .total = height});
-        }
-        if (cancellation.isCancellationRequested()) {
-            return EvaluationResult::cancelled();
-        }
-        auto displayBuffer = std::move(*displayBuilder.value()).freeze();
-        if (!displayBuffer) {
-            return EvaluationResult::failed(imageDiagnostic(
-                *displayBuffer.error(), {}, "Display buffer could not be published"));
-        }
-
         const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion;
-        EvaluationCacheIdentity identity{
+        ProcessFrameIdentity identity{
             .plan = std::move(plan),
             .time = request.time,
             .output = request.output,
@@ -1047,14 +990,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .quality = request.quality,
             .colorIntent = request.colorIntent,
             .provider = EvaluationProvider::CpuReference,
-            .displayIntent = EvaluationDisplayIntent::LinearRec709SceneToSrgb,
             .evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
-            .displayMapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion,
         };
-        auto frame = std::shared_ptr<const EvaluatedFrame>(new EvaluatedFrame(
-            std::move(identity), std::move(*processImage), std::move(*displayBuffer.value())));
+        auto frame = std::shared_ptr<const ProcessFrame>(
+            new ProcessFrame(std::move(identity), std::move(*processImage)));
         return EvaluationResult::evaluated(std::move(frame));
     } catch (const std::bad_alloc&) {
         return unexpectedAllocationFailure();

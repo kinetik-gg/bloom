@@ -4,17 +4,15 @@
 
 namespace bloom::runtime {
 
-bool operator==(const EvaluationCacheIdentity& lhs, const EvaluationCacheIdentity& rhs) {
+bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs) {
     const bool plansEqual = lhs.plan == rhs.plan ||
                             (lhs.plan != nullptr && rhs.plan != nullptr && *lhs.plan == *rhs.plan);
     return plansEqual && lhs.time == rhs.time && lhs.output == rhs.output &&
            lhs.resolution == rhs.resolution && lhs.quality == rhs.quality &&
            lhs.colorIntent == rhs.colorIntent && lhs.provider == rhs.provider &&
-           lhs.displayIntent == rhs.displayIntent &&
            lhs.evaluatorSemanticsVersion == rhs.evaluatorSemanticsVersion &&
            lhs.animationSamplingSemanticsVersion == rhs.animationSamplingSemanticsVersion &&
-           lhs.imagePrimitiveSemanticsVersion == rhs.imagePrimitiveSemanticsVersion &&
-           lhs.displayMapperSemanticsVersion == rhs.displayMapperSemanticsVersion;
+           lhs.imagePrimitiveSemanticsVersion == rhs.imagePrimitiveSemanticsVersion;
 }
 
 std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code) noexcept {
@@ -45,12 +43,11 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
     return "bloom.runtime.evaluation.unknown";
 }
 
-EvaluatedFrame::EvaluatedFrame(EvaluationCacheIdentity identity, render::Rgba32fImage processImage,
-                               render::PreparedReferenceDisplayBuffer displayBuffer) noexcept
-    : identity_(std::move(identity)), processImage_(std::move(processImage)),
-      displayBuffer_(std::move(displayBuffer)) {}
+ProcessFrame::ProcessFrame(ProcessFrameIdentity identity,
+                           render::Rgba32fImage processImage) noexcept
+    : identity_(std::move(identity)), processImage_(std::move(processImage)) {}
 
-EvaluationResult EvaluationResult::evaluated(std::shared_ptr<const EvaluatedFrame> frame,
+EvaluationResult EvaluationResult::evaluated(std::shared_ptr<const ProcessFrame> frame,
                                              std::vector<EvaluationDiagnostic> diagnostics) {
     if (frame == nullptr) {
         return failed({.code = EvaluationDiagnosticCode::InternalInvariant,
@@ -77,7 +74,7 @@ EvaluationResult EvaluationResult::failed(std::vector<EvaluationDiagnostic> diag
 }
 
 EvaluationResult::EvaluationResult(const EvaluationStatus status,
-                                   std::shared_ptr<const EvaluatedFrame> frame,
+                                   std::shared_ptr<const ProcessFrame> frame,
                                    std::vector<EvaluationDiagnostic> diagnostics) noexcept
     : status_(status), frame_(std::move(frame)), diagnostics_(std::move(diagnostics)) {}
 

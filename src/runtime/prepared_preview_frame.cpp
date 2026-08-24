@@ -6,15 +6,17 @@ namespace bloom::runtime {
 
 std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
-                             std::shared_ptr<const EvaluatedFrame> evaluatedFrame) noexcept {
-    if (requestGeneration == 0 || evaluatedFrame == nullptr ||
-        evaluatedFrame->identity().plan == nullptr) {
+                             std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept {
+    if (requestGeneration == 0 || displayFrame == nullptr ||
+        displayFrame->processFrame() == nullptr ||
+        displayFrame->identity().processFrame.plan == nullptr) {
         return std::nullopt;
     }
 
-    const auto& cacheIdentity = evaluatedFrame->identity();
-    const auto& plan = *cacheIdentity.plan;
-    if (cacheIdentity.output != plan.output) {
+    const auto& processIdentity = displayFrame->identity().processFrame;
+    const auto& plan = *processIdentity.plan;
+    if (processIdentity.output != plan.output ||
+        displayFrame->processFrame()->identity() != processIdentity) {
         return std::nullopt;
     }
 
@@ -23,19 +25,19 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
         .compositionId = plan.compositionId,
         .sourceRevision = plan.sourceRevision,
         .requestGeneration = requestGeneration,
-        .time = cacheIdentity.time,
+        .time = processIdentity.time,
         .output = PreviewOutput::Composition,
-        .resolution = cacheIdentity.resolution,
-        .quality = cacheIdentity.quality,
-        .colorIntent = cacheIdentity.colorIntent,
+        .resolution = processIdentity.resolution,
+        .quality = processIdentity.quality,
+        .colorIntent = processIdentity.colorIntent,
     };
-    return PreparedPreviewFrame(std::move(desiredIdentity), std::move(evaluatedFrame));
+    return PreparedPreviewFrame(desiredIdentity, std::move(displayFrame));
 }
 
 PreparedPreviewFrame::PreparedPreviewFrame(
     PreviewRequestIdentity desiredIdentity,
-    std::shared_ptr<const EvaluatedFrame> evaluatedFrame) noexcept
-    : desiredIdentity_(std::move(desiredIdentity)), evaluatedFrame_(std::move(evaluatedFrame)) {}
+    std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept
+    : desiredIdentity_(desiredIdentity), displayFrame_(std::move(displayFrame)) {}
 
 std::optional<PreviewPreparationResult>
 PreviewPreparationResult::prepared(std::shared_ptr<const PreparedPreviewFrame> frame) noexcept {
