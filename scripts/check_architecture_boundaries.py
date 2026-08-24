@@ -16,6 +16,26 @@ _QT_TOKEN = re.compile(r"(?:#\s*include\s*[<\"]Q[A-Z]|\bQt::|\bQ[A-Z][A-Za-z0-9_
 _FORBIDDEN_SOURCE_INCLUDE = re.compile(
     r"#\s*include\s*[<\"](?:\.\.[/\\]|apps[/\\]|tests[/\\]|src[/\\])"
 )
+_BLOOM_MODULE_INCLUDE = re.compile(r"#\s*include\s*[<\"]bloom/(?P<module>[a-z][a-z0-9_]*)/")
+
+# Direct source dependencies follow the modular-monolith direction documented in
+# docs/architecture/overview.md. A module may always include itself. UI is the application-facing
+# adapter layer and may consume any Bloom module; apps remain the composition root and are outside
+# this source-module check.
+_ALLOWED_MODULE_DEPENDENCIES: dict[str, frozenset[str]] = {
+    "core": frozenset(),
+    "platform": frozenset({"core"}),
+    "document": frozenset({"core"}),
+    "commands": frozenset({"core", "document"}),
+    "project": frozenset({"core", "document", "platform"}),
+    "render": frozenset({"core"}),
+    "runtime": frozenset({"core", "document", "render"}),
+    "media": frozenset({"core", "platform", "render", "runtime"}),
+    "color": frozenset({"core", "platform", "render", "runtime"}),
+    "output": frozenset({"color", "core", "document", "platform", "render", "runtime"}),
+    "host": frozenset({"commands", "core", "document", "output", "project", "runtime"}),
+    "scripting": frozenset({"commands", "core", "document", "host", "runtime"}),
+}
 
 
 class Finding:
@@ -57,6 +77,12 @@ def _is_non_ui_source(relative: Path) -> bool:
     return len(relative.parts) >= 2 and relative.parts[0] == "src" and relative.parts[1] != "ui"
 
 
+def _source_module(relative: Path) -> str | None:
+    if len(relative.parts) < 2 or relative.parts[0] != "src":
+        return None
+    return relative.parts[1]
+
+
 def _check_public_header_path(relative: Path) -> Finding | None:
     parts = relative.parts
     if len(parts) < 4 or parts[0] != "src" or parts[2] != "include":
@@ -83,6 +109,7 @@ def scan_repository(root: Path, files: Sequence[Path] | None = None) -> list[Fin
             if public_path_finding is not None:
                 findings.append(public_path_finding)
 
+            source_module = _source_module(relative)
             for line_number, line in _lines(root / relative):
                 if _is_non_ui_source(relative) and _QT_TOKEN.search(line):
                     findings.append(
@@ -94,6 +121,22 @@ def scan_repository(root: Path, files: Sequence[Path] | None = None) -> list[Fin
                             relative,
                             line_number,
                             "src modules must not include apps/tests or bypass public include roots",
+                        )
+                    )
+                module_include = _BLOOM_MODULE_INCLUDE.search(line)
+                if (
+                    source_module in _ALLOWED_MODULE_DEPENDENCIES
+                    and module_include is not None
+                    and module_include.group("module") != source_module
+                    and module_include.group("module")
+                    not in _ALLOWED_MODULE_DEPENDENCIES[source_module]
+                ):
+                    imported_module = module_include.group("module")
+                    findings.append(
+                        Finding(
+                            relative,
+                            line_number,
+                            f"src/{source_module} may not depend on bloom/{imported_module}",
                         )
                     )
 

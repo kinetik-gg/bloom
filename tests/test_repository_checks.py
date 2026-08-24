@@ -114,6 +114,34 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         findings = self.scan("src/core/include/bloom/wrong.hpp", "#pragma once\n")
         self.assertTrue(any("public header" in item.message for item in findings))
 
+    def test_allows_declared_lower_level_dependency(self) -> None:
+        findings = self.scan(
+            "src/runtime/compiler.cpp",
+            "#include <bloom/document/document.hpp>\n",
+        )
+        self.assertEqual(findings, [])
+
+    def test_rejects_upward_module_dependency(self) -> None:
+        findings = self.scan(
+            "src/document/model.cpp",
+            "#include <bloom/runtime/evaluation.hpp>\n",
+        )
+        self.assertTrue(any("src/document may not depend" in item.message for item in findings))
+
+    def test_rejects_core_dependency_on_higher_module(self) -> None:
+        findings = self.scan(
+            "src/core/value.cpp",
+            "#include <bloom/document/project.hpp>\n",
+        )
+        self.assertTrue(any("src/core may not depend" in item.message for item in findings))
+
+    def test_ui_may_adapt_any_module(self) -> None:
+        findings = self.scan(
+            "src/ui/project_panel.cpp",
+            "#include <bloom/host/publication_coordinator.hpp>\n",
+        )
+        self.assertEqual(findings, [])
+
 
 if __name__ == "__main__":
     unittest.main()
