@@ -68,9 +68,10 @@ template <PrimitiveFloat T> class [[nodiscard]] ScalarResult final {
         return error_ == ScalarEvaluationError::None;
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr const T* value() const noexcept {
+    [[nodiscard]] constexpr const T* value() const& noexcept {
         return hasValue() ? &value_ : nullptr;
     }
+    [[nodiscard]] constexpr const T* value() const&& = delete;
     [[nodiscard]] constexpr ScalarEvaluationError error() const noexcept { return error_; }
 
   private:

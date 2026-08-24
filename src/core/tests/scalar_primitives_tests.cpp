@@ -35,6 +35,19 @@ template <typename T>
 concept ScalarEvaluable =
     requires(const std::span<const T> inputs) { evaluateScalar(ScalarPrimitive::Add, inputs); };
 
+template <typename Result>
+concept ExposesValueFromLvalue = requires(Result& result) { result.value(); };
+
+template <typename Result>
+concept ExposesValueFromConstLvalue = requires(const Result& result) { result.value(); };
+
+template <typename Result>
+concept ExposesValueFromRvalue = requires(Result result) { static_cast<Result&&>(result).value(); };
+
+template <typename Result>
+concept ExposesValueFromConstRvalue =
+    requires(Result result) { static_cast<const Result&&>(result).value(); };
+
 static_assert(PrimitiveFloat<float>);
 static_assert(PrimitiveFloat<double>);
 static_assert(!PrimitiveFloat<long double>);
@@ -43,6 +56,14 @@ static_assert(ScalarEvaluable<double>);
 static_assert(!ScalarEvaluable<bloom::core::Color4d>);
 static_assert(std::is_trivially_copyable_v<ScalarResult<float>>);
 static_assert(std::is_trivially_copyable_v<ScalarResult<double>>);
+static_assert(ExposesValueFromLvalue<ScalarResult<float>>);
+static_assert(ExposesValueFromConstLvalue<ScalarResult<float>>);
+static_assert(!ExposesValueFromRvalue<ScalarResult<float>>);
+static_assert(!ExposesValueFromConstRvalue<ScalarResult<float>>);
+static_assert(ExposesValueFromLvalue<ScalarResult<double>>);
+static_assert(ExposesValueFromConstLvalue<ScalarResult<double>>);
+static_assert(!ExposesValueFromRvalue<ScalarResult<double>>);
+static_assert(!ExposesValueFromConstRvalue<ScalarResult<double>>);
 
 class Expectations final {
   public:

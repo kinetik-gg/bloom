@@ -29,9 +29,10 @@ class [[nodiscard]] RationalIntervalFactorResult final {
         return error_ == RationalIntervalError::None;
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr const double* value() const noexcept {
+    [[nodiscard]] constexpr const double* value() const& noexcept {
         return hasValue() ? &value_ : nullptr;
     }
+    [[nodiscard]] constexpr const double* value() const&& = delete;
     [[nodiscard]] constexpr RationalIntervalError error() const noexcept { return error_; }
 
   private:

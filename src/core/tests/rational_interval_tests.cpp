@@ -12,7 +12,26 @@ namespace {
 
 using bloom::core::RationalIntervalError;
 using bloom::core::rationalIntervalFactor;
+using bloom::core::RationalIntervalFactorResult;
 using bloom::core::RationalTime;
+
+template <typename Result>
+concept ExposesValueFromLvalue = requires(Result& result) { result.value(); };
+
+template <typename Result>
+concept ExposesValueFromConstLvalue = requires(const Result& result) { result.value(); };
+
+template <typename Result>
+concept ExposesValueFromRvalue = requires(Result result) { static_cast<Result&&>(result).value(); };
+
+template <typename Result>
+concept ExposesValueFromConstRvalue =
+    requires(Result result) { static_cast<const Result&&>(result).value(); };
+
+static_assert(ExposesValueFromLvalue<RationalIntervalFactorResult>);
+static_assert(ExposesValueFromConstLvalue<RationalIntervalFactorResult>);
+static_assert(!ExposesValueFromRvalue<RationalIntervalFactorResult>);
+static_assert(!ExposesValueFromConstRvalue<RationalIntervalFactorResult>);
 
 class Expectations final {
   public:
