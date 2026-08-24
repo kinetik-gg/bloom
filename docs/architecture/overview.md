@@ -182,9 +182,9 @@ The complete contract and game-engine pipeline fitness test are defined in
 
 ## Current Architecture Decisions
 
-- Qt's built-in docking versus Qt Advanced Docking System.
-- Replaceable editor panels are required; whether their layout uses enhanced docks or a custom
-  Blender-like split tree remains an implementation decision.
+- Replaceable editor panels are required. A custom recursive split tree is the current working
+  implementation and remains gated on cross-platform UX validation; Qt docking is no longer the
+  active scaffold.
 - Canonical in-memory pixel representation and CPU image library.
 - Serialization/container technology for `.bloom`.
 - Dependency management strategy for Qt and ASWF libraries.

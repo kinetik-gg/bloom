@@ -38,13 +38,13 @@ bool registerFoundationEditors(EditorRegistry& registry) {
              }});
     };
 
-    return addPlaceholder("compositor", "Compositor",
+    return addPlaceholder("bloom.viewer", "Compositor",
                           "Viewer\n\nProject frame output appears here") &&
-           addPlaceholder("nodes", "Nodes",
+           addPlaceholder("bloom.nodes", "Nodes",
                           "Node graph\n\nCanonical composition graph appears here") &&
-           addPlaceholder("timeline", "Timeline", "Layers, animation, and current time") &&
-           addPlaceholder("media", "Media", "Assets and compositions") &&
-           addPlaceholder("properties", "Properties", "Selection-driven parameters");
+           addPlaceholder("bloom.timeline", "Timeline", "Layers, animation, and current time") &&
+           addPlaceholder("bloom.media", "Media", "Assets and compositions") &&
+           addPlaceholder("bloom.properties", "Properties", "Selection-driven parameters");
 }
 
 } // namespace bloom::ui

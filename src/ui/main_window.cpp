@@ -1,76 +1,23 @@
-#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/main_window.hpp>
+
+#include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
-#include <QComboBox>
-#include <QDockWidget>
-#include <QFrame>
-#include <QLabel>
+#include <QColor>
+#include <QMenu>
 #include <QMenuBar>
 #include <QPalette>
-#include <QSizePolicy>
-#include <QSplitter>
-#include <QStackedWidget>
-#include <QStatusBar>
-#include <QVBoxLayout>
-#include <QWidget>
+#include <QSettings>
+#include <QStringList>
 
 namespace {
 
-QWidget* makeEditorPanel(const bloom::ui::EditorRegistry& registry,
-                         const std::string& initialEditorId, QWidget* parent) {
-    auto* panel = new QFrame(parent);
-    panel->setObjectName("editorPanel");
-
-    auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
-    auto* content = new QStackedWidget(panel);
-    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    auto* header = new QWidget(panel);
-    header->setObjectName("editorHeader");
-    auto* headerLayout = new QVBoxLayout(header);
-    headerLayout->setContentsMargins(8, 5, 8, 5);
-
-    auto* editorPicker = new QComboBox(header);
-    int initialIndex = 0;
-    int index = 0;
-    for (const auto& editor : registry.editors()) {
-        editorPicker->addItem(editor.displayName, QString::fromStdString(editor.id));
-        content->addWidget(editor.create(content));
-        if (editor.id == initialEditorId) {
-            initialIndex = index;
-        }
-        ++index;
-    }
-    editorPicker->setCurrentIndex(initialIndex);
-    content->setCurrentIndex(initialIndex);
-    editorPicker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    headerLayout->addWidget(editorPicker, 0, Qt::AlignLeft);
-
-    QObject::connect(editorPicker, &QComboBox::currentIndexChanged, content,
-                     &QStackedWidget::setCurrentIndex);
-
-    layout->addWidget(header);
-    layout->addWidget(content, 1);
-    return panel;
-}
-
-QDockWidget* makeDock(const bloom::ui::EditorRegistry& registry, const QString& title,
-                      const std::string& initialEditorId, QWidget* parent,
-                      Qt::DockWidgetAreas areas) {
-    auto* dock = new QDockWidget(title, parent);
-    dock->setObjectName(title.toLower() + "Dock");
-    dock->setAllowedAreas(areas);
-    dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
-                      QDockWidget::DockWidgetFloatable);
-    dock->setWidget(makeEditorPanel(registry, initialEditorId, dock));
-    return dock;
-}
+constexpr auto workspaceLayoutKey = "workspace/compositing/layout";
+constexpr auto windowGeometryKey = "window/main/geometry";
 
 } // namespace
 
@@ -81,22 +28,40 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, QWidget* parent)
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
-    setDockOptions(QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks |
-                   QMainWindow::AnimatedDocks);
 
     createMenus();
     createWorkspaceSwitcher();
     createEditorLayout(editorRegistry);
+    createWorkspaceActions();
     applyFoundationTheme();
+}
 
-    statusBar()->showMessage("Bloom C++/Qt foundation — no project loaded");
+WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
+
+WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& settings) {
+    const auto geometry = settings.value(windowGeometryKey).toByteArray();
+    if (!geometry.isEmpty()) {
+        restoreGeometry(geometry);
+    }
+
+    const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
+    workspaceLayoutWritable_ = result != WorkspaceLayoutRestoreResult::UnsupportedVersion;
+    updateWorkspaceActions();
+    return result;
+}
+
+void MainWindow::saveApplicationState(QSettings& settings) const {
+    settings.setValue(windowGeometryKey, saveGeometry());
+    if (workspaceLayoutWritable_) {
+        workspaceHost_->persistLayout(settings, workspaceLayoutKey);
+    }
 }
 
 void MainWindow::createMenus() {
     menuBar()->addMenu("&File");
     menuBar()->addMenu("&Edit");
     menuBar()->addMenu("&View");
-    menuBar()->addMenu("&Window");
+    windowMenu_ = menuBar()->addMenu("&Window");
     menuBar()->addMenu("&Help");
 }
 
@@ -117,28 +82,74 @@ void MainWindow::createWorkspaceSwitcher() {
 }
 
 void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
-    auto* centralEditors = new QSplitter(Qt::Horizontal, this);
-    centralEditors->setObjectName("centralEditors");
-    centralEditors->addWidget(makeEditorPanel(editorRegistry, "compositor", centralEditors));
-    centralEditors->addWidget(makeEditorPanel(editorRegistry, "nodes", centralEditors));
-    centralEditors->setStretchFactor(0, 1);
-    centralEditors->setStretchFactor(1, 1);
-    setCentralWidget(centralEditors);
+    workspaceHost_ = new WorkspaceHost(editorRegistry, this);
+    setCentralWidget(workspaceHost_);
 
-    auto* sourceDock = makeDock(editorRegistry, "Media", "media", this,
-                                Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    auto* propertiesDock = makeDock(editorRegistry, "Properties", "properties", this,
-                                    Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    auto* timelineDock = makeDock(editorRegistry, "Timeline", "timeline", this,
-                                  Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
+    resetCompositingLayout();
+}
 
-    addDockWidget(Qt::RightDockWidgetArea, sourceDock);
-    addDockWidget(Qt::RightDockWidgetArea, propertiesDock);
-    splitDockWidget(sourceDock, propertiesDock, Qt::Vertical);
-    addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
+void MainWindow::resetCompositingLayout() {
+    workspaceHost_->resetToSingleArea("bloom.viewer");
+    auto* viewer = workspaceHost_->activeArea();
+    (void)workspaceHost_->splitArea(*viewer, Qt::Vertical, "bloom.timeline", 0.32);
+    auto* nodes = workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.nodes", 0.50);
+    auto* media = workspaceHost_->splitArea(*nodes, Qt::Horizontal, "bloom.media", 0.28);
+    (void)workspaceHost_->splitArea(*media, Qt::Vertical, "bloom.properties", 0.65);
+    workspaceHost_->setActiveArea(viewer);
+    workspaceLayoutWritable_ = true;
+}
 
-    resizeDocks({sourceDock, propertiesDock}, {260, 620}, Qt::Vertical);
-    resizeDocks({timelineDock}, {340}, Qt::Vertical);
+void MainWindow::createWorkspaceActions() {
+    splitLeftRightAction_ = windowMenu_->addAction("Split Active Area Left/Right");
+    splitLeftRightAction_->setObjectName("splitAreaLeftRightAction");
+    connect(splitLeftRightAction_, &QAction::triggered, workspaceHost_,
+            [this] { workspaceHost_->splitActiveArea(Qt::Horizontal); });
+
+    splitTopBottomAction_ = windowMenu_->addAction("Split Active Area Top/Bottom");
+    splitTopBottomAction_->setObjectName("splitAreaTopBottomAction");
+    connect(splitTopBottomAction_, &QAction::triggered, workspaceHost_,
+            [this] { workspaceHost_->splitActiveArea(Qt::Vertical); });
+
+    windowMenu_->addSeparator();
+
+    closeAreaAction_ = windowMenu_->addAction("Close Active Area");
+    closeAreaAction_->setObjectName("closeAreaAction");
+    connect(closeAreaAction_, &QAction::triggered, workspaceHost_,
+            [this] { (void)workspaceHost_->closeActiveArea(); });
+
+    maximizeAreaAction_ = windowMenu_->addAction("Maximize Active Area");
+    maximizeAreaAction_->setObjectName("maximizeAreaAction");
+    maximizeAreaAction_->setCheckable(true);
+    connect(maximizeAreaAction_, &QAction::triggered, workspaceHost_,
+            [this] { workspaceHost_->toggleMaximizeActiveArea(); });
+
+    windowMenu_->addSeparator();
+    auto* resetLayoutAction = windowMenu_->addAction("Reset Compositing Layout");
+    resetLayoutAction->setObjectName("resetCompositingLayoutAction");
+    connect(resetLayoutAction, &QAction::triggered, this, [this] {
+        resetCompositingLayout();
+        updateWorkspaceActions();
+    });
+
+    connect(workspaceHost_, &WorkspaceHost::areaCountChanged, this,
+            [this] { updateWorkspaceActions(); });
+    connect(workspaceHost_, &WorkspaceHost::maximizeStateChanged, this,
+            [this] { updateWorkspaceActions(); });
+    connect(workspaceHost_, &WorkspaceHost::activeAreaChanged, this,
+            [this] { updateWorkspaceActions(); });
+    updateWorkspaceActions();
+}
+
+void MainWindow::updateWorkspaceActions() {
+    const bool hasMultipleAreas = workspaceHost_->areaCount() > 1;
+    const bool canChangeStructure = !workspaceHost_->isAreaMaximized();
+    splitLeftRightAction_->setEnabled(canChangeStructure);
+    splitTopBottomAction_->setEnabled(canChangeStructure);
+    closeAreaAction_->setEnabled(hasMultipleAreas && canChangeStructure);
+    maximizeAreaAction_->setEnabled(hasMultipleAreas);
+    maximizeAreaAction_->setChecked(workspaceHost_->isAreaMaximized());
+    maximizeAreaAction_->setText(workspaceHost_->isAreaMaximized() ? "Restore Active Area"
+                                                                   : "Maximize Active Area");
 }
 
 void MainWindow::applyFoundationTheme() {
@@ -155,7 +166,7 @@ void MainWindow::applyFoundationTheme() {
     QApplication::setPalette(palette);
 
     setStyleSheet(R"(
-        QMainWindow, QMenuBar, QMenu, QStatusBar {
+        QMainWindow, QMenuBar, QMenu {
             background: #121212;
             color: #d7d7d7;
         }
@@ -163,16 +174,18 @@ void MainWindow::applyFoundationTheme() {
             background: #303030;
             border-radius: 4px;
         }
-        QDockWidget::title, #editorHeader {
-            background: #171717;
-            border-bottom: 1px solid #292929;
-            padding: 4px;
-        }
-        #editorPanel {
+        QFrame#editorArea {
             background: #111111;
             border: 1px solid #292929;
         }
-        #editorPlaceholder {
+        QFrame#editorArea[active="true"] {
+            border-color: #178ee6;
+        }
+        QWidget#editorHeader {
+            background: #171717;
+            border-bottom: 1px solid #292929;
+        }
+        QLabel#editorPlaceholder {
             color: #777777;
         }
         QComboBox {
@@ -180,6 +193,13 @@ void MainWindow::applyFoundationTheme() {
             border: 1px solid #303030;
             border-radius: 4px;
             padding: 3px 8px;
+        }
+        QToolButton {
+            color: #bcbcbc;
+            padding: 2px 4px;
+        }
+        QToolButton:hover {
+            background: #303030;
         }
         QSplitter::handle {
             background: #292929;

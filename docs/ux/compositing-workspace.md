@@ -54,13 +54,17 @@ temporary drags remain session state.
 ## Layer And Graph Relationship
 
 - A composition owns one canonical graph.
-- A compatible graph region may be represented as a layer.
-- Editing a layer property edits the corresponding canonical graph parameter.
-- Advanced or graph-only regions remain valid but must be visibly distinguished in the layer view.
-- Deleting or reordering a layer compiles into explicit graph mutations rather than silently editing
-  an unrelated layer model.
+- An explicit Layer Output boundary and stable Layer Stack participation make a graph result
+  layer-addressable; Bloom does not infer a layer from arbitrary topology.
+- Editing a layer property edits the same stable parameter used by Nodes and evaluation.
+- Advanced or graph-only regions remain valid and are visibly distinguished as Structured, Custom
+  Graph, or Graph-only Processing.
+- Deleting or reordering a layer is a typed, localized graph mutation with exact undo rather than an
+  edit to an unrelated layer model.
+- Node graph scopes are filters over the same graph, never copied shadow graphs.
 
-The exact graph-region representation remains an implementation decision for the vertical proof.
+The working document and render contract is defined in
+[`../architecture/layer-graph-model.md`](../architecture/layer-graph-model.md).
 
 ## Panel Shell
 
@@ -68,10 +72,11 @@ Every workspace content area is a panel. The application menu bar is the only fi
 panel has an editor header and its editor type may be replaced without recreating or mutating project
 data.
 
-The current scaffold uses Qt dock widgets as a low-cost proof and gives each editor a type selector.
+The current working implementation uses one custom recursive split tree. Every leaf is the same
+editor-area type and gives the artist an editor selector plus split, close, and maximize controls.
 The accepted product model is:
 
-- a dock hosts one replaceable `EditorPanel`
+- an area hosts one replaceable editor implementation
 - editor type and target are session/layout state
 - workspaces save and restore panel arrangements
 - any workspace panel may change to any registered compatible editor type
@@ -80,10 +85,10 @@ The accepted product model is:
 - editors communicate through shared application services rather than direct panel-to-panel calls
 
 Editor types come from the host-owned typed editor registry. Built-in and optional pipeline editors
-follow the same context, command, lifecycle, and workspace-serialization contract.
-
-The precise layout mechanism—enhanced Qt docking or a custom split-area tree—will be chosen by a UX
-prototype. Replaceability is not optional regardless of mechanism.
+follow the same context, command, lifecycle, and workspace-serialization contract. The custom
+split-area tree is the working mechanism and remains gated on Linux, macOS, and Windows behavior
+before it is treated as final. See
+[`../architecture/workspace-layout.md`](../architecture/workspace-layout.md).
 
 ## Terminology To Resolve
 
@@ -104,11 +109,12 @@ prototype. Replaceability is not optional regardless of mechanism.
 
 ## Panel-System Evaluation
 
-The implementation spike should compare:
+The initial implementation compared the product requirements against:
 
 1. Enhanced dock widgets with replaceable editor content.
 2. A custom split-area tree with Blender-like split, merge, and editor replacement behavior.
 
-The selected mechanism must support stable layout serialization, multi-monitor floating windows,
-high-DPI transitions, keyboard focus, panel maximization, and equivalent behavior on Linux, macOS,
-and Windows.
+The custom split-area tree now proves editor replacement, stable layout serialization, keyboard and
+mouse focus, resizing, close, and non-destructive panel maximization. Multi-monitor floating
+windows, detached areas, high-DPI transitions, and equivalent behavior on Linux, macOS, and Windows
+remain acceptance gates rather than completed claims.

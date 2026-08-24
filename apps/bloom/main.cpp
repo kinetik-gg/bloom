@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QSettings>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -16,7 +17,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    QSettings settings;
     bloom::ui::MainWindow window(editorRegistry);
+    (void)window.restoreApplicationState(settings);
+    QObject::connect(&application, &QApplication::aboutToQuit, &window, [&window, &settings] {
+        window.saveApplicationState(settings);
+        settings.sync();
+    });
     window.show();
 
     return application.exec();

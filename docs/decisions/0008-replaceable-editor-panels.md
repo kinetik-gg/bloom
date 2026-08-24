@@ -20,8 +20,10 @@ the application hard-coding one permanent arrangement.
 - Editors communicate through application context, commands, and read models rather than direct
   panel-to-panel ownership.
 
-The initial Qt dock-widget shell is a feasibility scaffold. Enhanced docking and a custom split-area
-tree will be compared before the workspace layout mechanism is treated as final.
+The initial Qt dock-widget shell was a feasibility scaffold. The first UX prototype now uses a
+custom recursive split-area tree. This mechanism remains a working implementation until focus,
+persistence, scaling, and recovery behavior pass Linux, macOS, and Windows validation; editor
+replaceability remains accepted regardless of that gate.
 
 ## Consequences
 

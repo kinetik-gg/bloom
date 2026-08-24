@@ -16,11 +16,13 @@ provide research or rationale, but they are not binding until adopted here.
 3. [`standards/strategy.md`](standards/strategy.md) — standards-first pipeline and interoperability
    policy.
 4. [`ux/compositing-workspace.md`](ux/compositing-workspace.md) — the UI sketch as an interaction
-   contract.
+   contract; [`ux/visual-language.md`](ux/visual-language.md) — iconography and typography.
 5. [`architecture/overview.md`](architecture/overview.md) — boundaries, state ownership, and
    dependency direction.
 6. [`architecture/module-system.md`](architecture/module-system.md),
+   [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
    [`architecture/task-system.md`](architecture/task-system.md),
+   [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md), and
    [`architecture/platform-support.md`](architecture/platform-support.md) — execution and platform
    contracts and extension boundaries.

@@ -23,6 +23,8 @@ remain part of the broader direction but are not commitments for the first imple
   do not create incompatible substitutes for color, image, timeline, or effect interchange.
 - Make all workspace content replaceable editor panels. The menu bar is the only fixed application
   surface.
+- Use Phosphor Icons for interface iconography, Plus Jakarta Sans for interface typography, and
+  Geist Mono for monospaced interface text through native, pinned assets.
 - Keep every potentially heavy operation off the UI thread and expose its progress, cancellation,
   failure, and completion state.
 - Use GPU acceleration wherever it is correct and beneficial while preserving deterministic CPU
@@ -43,8 +45,8 @@ remain part of the broader direction but are not commitments for the first imple
 - A `Sequence` is an editorial/program container.
 - A `Composition` is a visual compositing and motion unit.
 - A composition owns one canonical processing graph.
-- A layer stack is an authoring view over compatible regions of that graph, not a second render
-  truth.
+- A native Layer Stack and explicit layer boundaries provide structured layer authoring inside that
+  graph; they are not a second render truth.
 - Parameters may be static, animated, or driven while retaining one canonical value contract.
 - Persistent edits flow through commands so undo, autosave, scripting, validation, and runtime
   invalidation observe the same mutations.
@@ -113,7 +115,9 @@ should normally wait.
 - [`quality-bar.md`](quality-bar.md)
 - [`../standards/strategy.md`](../standards/strategy.md)
 - [`../ux/compositing-workspace.md`](../ux/compositing-workspace.md)
+- [`../ux/visual-language.md`](../ux/visual-language.md)
 - [`../architecture/task-system.md`](../architecture/task-system.md)
+- [`../architecture/layer-graph-model.md`](../architecture/layer-graph-model.md)
 - [`../architecture/module-system.md`](../architecture/module-system.md)
 - [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
 - [`../architecture/platform-support.md`](../architecture/platform-support.md)
