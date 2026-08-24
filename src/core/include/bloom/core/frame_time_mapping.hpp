@@ -69,9 +69,10 @@ class [[nodiscard]] FrameTimeMappingCreateResult final {
         return error_ == FrameTimeMappingError::None;
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr const FrameTimeMapping* value() const noexcept {
+    [[nodiscard]] constexpr const FrameTimeMapping* value() const& noexcept {
         return hasValue() ? &value_ : nullptr;
     }
+    [[nodiscard]] constexpr const FrameTimeMapping* value() const&& = delete;
     [[nodiscard]] constexpr FrameTimeMappingError error() const noexcept { return error_; }
 
   private:
@@ -92,9 +93,10 @@ class [[nodiscard]] FrameTimeResult final {
         return error_ == FrameTimeError::None;
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr const RationalTime* value() const noexcept {
+    [[nodiscard]] constexpr const RationalTime* value() const& noexcept {
         return hasValue() ? &value_ : nullptr;
     }
+    [[nodiscard]] constexpr const RationalTime* value() const&& = delete;
     [[nodiscard]] constexpr FrameTimeError error() const noexcept { return error_; }
 
   private:

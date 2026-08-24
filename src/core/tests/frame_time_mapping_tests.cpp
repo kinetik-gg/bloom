@@ -10,8 +10,22 @@ namespace {
 
 using bloom::core::FrameTimeError;
 using bloom::core::FrameTimeMapping;
+using bloom::core::FrameTimeMappingCreateResult;
 using bloom::core::FrameTimeMappingError;
+using bloom::core::FrameTimeResult;
 using bloom::core::RationalTime;
+
+template <typename Result>
+concept ExposesValueFromRvalue = requires(Result result) { static_cast<Result&&>(result).value(); };
+
+template <typename Result>
+concept ExposesValueFromConstRvalue =
+    requires(Result result) { static_cast<const Result&&>(result).value(); };
+
+static_assert(!ExposesValueFromRvalue<FrameTimeMappingCreateResult>);
+static_assert(!ExposesValueFromRvalue<FrameTimeResult>);
+static_assert(!ExposesValueFromConstRvalue<FrameTimeMappingCreateResult>);
+static_assert(!ExposesValueFromConstRvalue<FrameTimeResult>);
 
 [[noreturn]] void fail(const std::string_view message) {
     std::cerr << "frame time mapping test failed: " << message << '\n';
@@ -97,6 +111,58 @@ void testRateNormalizationAndExtremeArithmetic() {
             "an unrepresentable complete frame range is rejected");
 }
 
+void testExtremeRateRoundingBoundary() {
+    constexpr auto maximumInt = std::numeric_limits<std::int64_t>::max();
+    constexpr auto maximumRate = std::numeric_limits<std::uint32_t>::max();
+    constexpr auto rateDenominator = maximumRate - 1;
+    constexpr auto lowerFrame = std::uint64_t{1'073'741'823};
+    constexpr auto commonDenominator = static_cast<std::int64_t>(std::uint64_t{2} * maximumRate);
+    constexpr auto halfwayNumeratorMagnitude =
+        ((std::uint64_t{2} * lowerFrame) + 1) * rateDenominator;
+    static_assert(halfwayNumeratorMagnitude <= static_cast<std::uint64_t>(maximumInt));
+    constexpr auto halfwayNumerator = static_cast<std::int64_t>(halfwayNumeratorMagnitude);
+    static_assert(static_cast<std::uint64_t>(halfwayNumerator / 2) >
+                  std::numeric_limits<std::uint64_t>::max() / maximumRate);
+
+    const auto value = mapping(time(maximumInt, maximumRate), maximumRate, rateDenominator);
+    require(value.rateNumerator() == maximumRate && value.rateDenominator() == rateDenominator,
+            "an extreme coprime rate remains normalized");
+    require(value.nearestFrameIndex(time(halfwayNumerator - 1, commonDenominator)) == lowerFrame,
+            "multi-limb rounding selects the lower frame immediately below halfway");
+    require(value.nearestFrameIndex(time(halfwayNumerator, commonDenominator)) == lowerFrame + 1,
+            "multi-limb rounding selects the greater frame exactly halfway");
+    require(value.nearestFrameIndex(time(halfwayNumerator + 1, commonDenominator)) ==
+                lowerFrame + 1,
+            "multi-limb rounding selects the greater frame immediately above halfway");
+}
+
+void testMaximumIndexDomainBoundary() {
+    constexpr auto maximumIndex = std::numeric_limits<std::uint64_t>::max();
+    constexpr auto rateNumerator = std::uint32_t{1} << 31U;
+    constexpr auto exactDuration = std::int64_t{1} << 33U;
+
+    const auto exact = mapping(time(exactDuration), rateNumerator, 1);
+    require(exact.maximumFrameIndex() == maximumIndex,
+            "the complete uint64 frame-index domain is accepted");
+
+    const auto adjacent = FrameTimeMapping::create(time(exactDuration + 1), rateNumerator, 1);
+    require(!adjacent.hasValue() && adjacent.error() == FrameTimeMappingError::FrameIndexOverflow,
+            "the mapping immediately beyond the uint64 frame-index domain is rejected");
+}
+
+void testExactTimeRepresentationBoundary() {
+    constexpr auto maximumInt = std::numeric_limits<std::int64_t>::max();
+    constexpr auto boundaryFrame = static_cast<std::uint64_t>(maximumInt);
+    const auto value = mapping(time(maximumInt, 2), 3, 1);
+
+    const auto atBoundary = value.timeForFrame(boundaryFrame);
+    require(atBoundary.hasValue() && *atBoundary.value() == time(maximumInt, 3),
+            "an exact frame time at the signed numerator limit is representable");
+    require(value.timeForFrame(boundaryFrame + 1).error() ==
+                FrameTimeError::TimeRepresentationOverflow,
+            "the adjacent frame reports exact-time representation overflow");
+}
+
 void testStructuredFailures() {
     require(FrameTimeMapping::create(time(1), 0, 1).error() == FrameTimeMappingError::InvalidRate &&
                 FrameTimeMapping::create(time(1), 1, 0).error() ==
@@ -122,6 +188,9 @@ int main() {
     testStrictFrameRangeAndExactTimes();
     testNearestTiesAndClamping();
     testRateNormalizationAndExtremeArithmetic();
+    testExtremeRateRoundingBoundary();
+    testMaximumIndexDomainBoundary();
+    testExactTimeRepresentationBoundary();
     testStructuredFailures();
     return 0;
 }
