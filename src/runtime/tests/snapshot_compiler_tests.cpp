@@ -242,11 +242,13 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
             std::nullopt};
 }
 
-[[nodiscard]] runtime::SnapshotCompileResult compile(document::Project project,
-                                                     runtime::NodeDefinitionRegistry& registry) {
+[[nodiscard]] runtime::SnapshotCompileResult
+compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
+        std::optional<runtime::SnapshotParameterOverride> parameterOverride = std::nullopt) {
     document::Document document(std::move(project));
     runtime::SnapshotCompiler compiler(registry);
-    return compiler.compile({document.snapshot(), kCompositionId}, runtime::CancellationToken{});
+    return compiler.compile({document.snapshot(), kCompositionId, std::move(parameterOverride)},
+                            runtime::CancellationToken{});
 }
 
 [[nodiscard]] bool hasDiagnostic(const runtime::SnapshotCompileResult& result,
@@ -643,6 +645,115 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
         "driver source stays unsupported until its Batch 4 typed output contract");
 }
 
+void testRequestScopedParameterOverrides(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    const auto base = compile(makeProject(singleLayerOptions()), registry);
+    const runtime::SnapshotParameterOverride firstOverride{document::Revision{}, kFirstPosition,
+                                                           document::Vec2d{12.5, -4.0}};
+    const auto first = compile(makeProject(singleLayerOptions()), registry, firstOverride);
+    const auto second =
+        compile(makeProject(singleLayerOptions()), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                   document::Vec2d{12.5, -3.0}});
+    const auto* layer = first.plan == nullptr
+                            ? nullptr
+                            : std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations[1]);
+    const auto* position =
+        layer == nullptr ? nullptr : std::get_if<document::Vec2d>(&layer->position.source);
+    expectations.expect(
+        first.status == runtime::SnapshotCompileStatus::Compiled && first.plan &&
+            position != nullptr && *position == document::Vec2d{12.5, -4.0} && base.plan &&
+            *base.plan != *first.plan && second.plan && *first.plan != *second.plan,
+        "a typed request override enters the immutable plan without document edits");
+
+    const auto wrongRevision =
+        compile(makeProject(singleLayerOptions()), registry,
+                runtime::SnapshotParameterOverride{document::Revision::fromRaw(1), kFirstPosition,
+                                                   document::Vec2d{0.0, 0.0}});
+    expectations.expect(
+        wrongRevision.status == runtime::SnapshotCompileStatus::Failed &&
+            hasDiagnostic(wrongRevision, runtime::CompileDiagnosticCode::InvalidParameterOverride),
+        "override admission rejects a captured revision mismatch first");
+
+    const auto wrongKind =
+        compile(makeProject(singleLayerOptions()), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition, 0.5});
+    const auto wrongDomain =
+        compile(makeProject(singleLayerOptions()), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, kFirstOpacity, 1.5});
+    expectations.expect(
+        wrongKind.status == runtime::SnapshotCompileStatus::Failed &&
+            hasDiagnostic(wrongKind, runtime::CompileDiagnosticCode::InvalidParameterOverride) &&
+            wrongDomain.status == runtime::SnapshotCompileStatus::Failed &&
+            hasDiagnostic(wrongDomain, runtime::CompileDiagnosticCode::InvalidParameterOverride),
+        "override value kind and parameter domain are validated before lowering");
+
+    auto unreachableProject = makeProject(singleLayerOptions());
+    auto* unreachableComposition = unreachableProject.findComposition(kCompositionId);
+    constexpr auto unreachableParameter = document::ParameterId::fromRaw(90);
+    document::NodeRecord unreachableNode{document::NodeId::fromRaw(91),
+                                         "example.unreachable",
+                                         {{"position", unreachableParameter}},
+                                         1};
+    require(unreachableComposition != nullptr &&
+                unreachableComposition->parameters().insert(
+                    {unreachableParameter, std::string(document::kPositionParameterSchemaKey),
+                     document::ConstantValueSource{document::Vec2d{1.0, 2.0}}}) &&
+                unreachableComposition->graph().addNode(std::move(unreachableNode)) &&
+                unreachableProject.validate().ok(),
+            "unreachable override fixture must remain valid document truth");
+    const auto unreachable =
+        compile(std::move(unreachableProject), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, unreachableParameter,
+                                                   document::Vec2d{3.0, 4.0}});
+    expectations.expect(
+        unreachable.status == runtime::SnapshotCompileStatus::Failed &&
+            hasDiagnostic(unreachable, runtime::CompileDiagnosticCode::InvalidParameterOverride),
+        "override targets must participate in the requested output path");
+
+    auto drivenProject = makeProject(singleLayerOptions());
+    require(
+        drivenProject.findComposition(kCompositionId)
+                ->parameters()
+                .setSource(kFirstPosition,
+                           document::DriverBindingSource{document::DriverBindingId::fromRaw(92)}) &&
+            drivenProject.validate().ok(),
+        "driven override fixture must remain valid document truth");
+    const auto driven =
+        compile(std::move(drivenProject), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                   document::Vec2d{3.0, 4.0}});
+    expectations.expect(
+        driven.status == runtime::SnapshotCompileStatus::Unsupported &&
+            hasDiagnostic(driven, runtime::CompileDiagnosticCode::UnsupportedParameterOverride),
+        "an override never hides or disconnects a driver source");
+
+    auto animatedProject = makeProject(singleLayerOptions());
+    auto* animatedComposition = animatedProject.findComposition(kCompositionId);
+    constexpr auto curveId = document::AnimationCurveId::fromRaw(93);
+    require(animatedComposition->animationCurves().insert(document::Vec2AnimationCurve{
+                curveId,
+                {{document::KeyframeId::fromRaw(94),
+                  core::RationalTime::fromInteger(0),
+                  {120.0, 80.0},
+                  document::KeyframeInterpolation::Linear}},
+            }) &&
+                animatedComposition->parameters().setSource(
+                    kFirstPosition, document::AnimationCurveSource{curveId}) &&
+                animatedProject.validate().ok(),
+            "animated override fixture must remain valid document truth");
+    const auto animated =
+        compile(std::move(animatedProject), registry,
+                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                   document::Vec2d{7.0, 8.0}});
+    expectations.expect(animated.status == runtime::SnapshotCompileStatus::Compiled &&
+                            animated.plan && animated.plan->vec2Curves.empty(),
+                        "an accepted override lowers as a constant and omits its dormant curve");
+}
+
 [[nodiscard]] document::Project makeCancellationStressProject(const std::size_t edgeCount) {
     auto project = makeProject();
     auto& graph = project.findComposition(kCompositionId)->graph();
@@ -810,6 +921,7 @@ int main() {
         testReachableSchemaDiagnostics(expectations);
         testTypedParameterDiagnostics(expectations);
         testParameterSourcesAndDiagnosticIds(expectations);
+        testRequestScopedParameterOverrides(expectations);
         testMidWorkCancellationIsBounded(expectations);
     } catch (const std::exception& error) {
         std::cerr << "Unexpected test fixture failure: " << error.what() << '\n';

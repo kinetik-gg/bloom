@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace bloom::runtime {
@@ -35,6 +36,8 @@ enum class CompileDiagnosticCode {
     ParameterSchemaMismatch,
     ParameterValueKindMismatch,
     UnsupportedParameterSource,
+    InvalidParameterOverride,
+    UnsupportedParameterOverride,
     TopologyInvariant,
 };
 
@@ -62,9 +65,19 @@ struct CompileDiagnostic {
     friend bool operator==(const CompileDiagnostic&, const CompileDiagnostic&) = default;
 };
 
+struct SnapshotParameterOverride final {
+    document::Revision sourceRevision;
+    document::ParameterId parameterId;
+    std::variant<double, document::Vec2d> value;
+
+    friend bool operator==(const SnapshotParameterOverride&,
+                           const SnapshotParameterOverride&) = default;
+};
+
 struct SnapshotCompileRequest {
     document::Snapshot snapshot;
     document::CompositionId compositionId;
+    std::optional<SnapshotParameterOverride> parameterOverride = std::nullopt;
 };
 
 struct SnapshotCompileResult {

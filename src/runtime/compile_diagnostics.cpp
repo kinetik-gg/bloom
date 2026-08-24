@@ -32,6 +32,10 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.parameter-value-kind-mismatch";
     case CompileDiagnosticCode::UnsupportedParameterSource:
         return "bloom.runtime.compile.unsupported-parameter-source";
+    case CompileDiagnosticCode::InvalidParameterOverride:
+        return "bloom.runtime.compile.invalid-parameter-override";
+    case CompileDiagnosticCode::UnsupportedParameterOverride:
+        return "bloom.runtime.compile.unsupported-parameter-override";
     case CompileDiagnosticCode::TopologyInvariant:
         return "bloom.runtime.compile.topology-invariant";
     }

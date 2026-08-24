@@ -70,6 +70,10 @@
             if (cancelled()) {
                 return std::nullopt;
             }
+            if (request_.parameterOverride.has_value() &&
+                request_.parameterOverride->parameterId == binding.parameterId) {
+                continue;
+            }
             const auto* parameter = findParameter(binding.parameterId);
             const auto* source =
                 parameter == nullptr
@@ -302,6 +306,13 @@ compiledScalarParameter(const document::ParameterBinding* binding) const noexcep
     if (parameter == nullptr) {
         return std::nullopt;
     }
+    if (request_.parameterOverride.has_value() &&
+        request_.parameterOverride->parameterId == parameter->id) {
+        const auto* value = std::get_if<double>(&request_.parameterOverride->value);
+        return value == nullptr
+                   ? std::nullopt
+                   : std::optional(runtime::CompiledScalarParameter{parameter->id, *value});
+    }
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         const auto* value = std::get_if<double>(&constant->value);
         return value == nullptr
@@ -324,6 +335,14 @@ compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept 
     const auto* parameter = findParameter(binding->parameterId);
     if (parameter == nullptr) {
         return std::nullopt;
+    }
+    if (request_.parameterOverride.has_value() &&
+        request_.parameterOverride->parameterId == parameter->id) {
+        const auto* value =
+            std::get_if<document::Vec2d>(&request_.parameterOverride->value);
+        return value == nullptr
+                   ? std::nullopt
+                   : std::optional(runtime::CompiledVec2Parameter{parameter->id, *value});
     }
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         const auto* value = std::get_if<document::Vec2d>(&constant->value);

@@ -7,6 +7,7 @@
 #include <bloom/document/parameter.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -99,6 +100,7 @@ class CompilePass final {
         validateEdges();
         validateInputs();
         validateParameters();
+        validateParameterOverride();
         if (cancelled()) {
             return result(runtime::SnapshotCompileStatus::Cancelled);
         }
@@ -539,6 +541,108 @@ class CompilePass final {
                 validateParameter(*node, parameterDefinition,
                                   binding == bindings.end() ? nullptr : binding->second);
             }
+        }
+    }
+
+    void validateParameterOverride() {
+        if (!request_.parameterOverride.has_value()) {
+            return;
+        }
+        const auto& parameterOverride = *request_.parameterOverride;
+        auto diagnosticSubject = subject({}, "parameterOverride");
+        diagnosticSubject.parameterId = parameterOverride.parameterId;
+        const auto reject = [&](const runtime::CompileDiagnosticCode code, std::string summary,
+                                std::string detail) {
+            auto overrideSubject = diagnosticSubject;
+            addFailure(code, std::move(overrideSubject), std::move(summary), std::move(detail));
+        };
+
+        if (parameterOverride.sourceRevision != request_.snapshot.revision()) {
+            reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                   "Parameter override revision does not match the snapshot",
+                   "Recreate the interaction from the current immutable snapshot.");
+            return;
+        }
+        const auto* parameter = findParameter(parameterOverride.parameterId);
+        if (parameter == nullptr) {
+            reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                   "Parameter override target does not exist",
+                   "The target parameter is absent from the requested composition.");
+            return;
+        }
+
+        const document::NodeRecord* ownerNode = nullptr;
+        const runtime::NodeDefinition* ownerDefinition = nullptr;
+        const runtime::ParameterDefinition* parameterDefinition = nullptr;
+        for (const auto* node : reachableNodes_) {
+            if (cancelled()) {
+                return;
+            }
+            const auto binding = std::ranges::find(node->parameters, parameterOverride.parameterId,
+                                                   &document::ParameterBinding::parameterId);
+            if (binding == node->parameters.end()) {
+                continue;
+            }
+            if (ownerNode != nullptr) {
+                reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                       "Parameter override target has multiple reachable owners",
+                       "Version-one parameters must have one canonical node binding.");
+                return;
+            }
+            const auto definition = definitions_.find(node->id);
+            if (definition == definitions_.end()) {
+                return;
+            }
+            const auto declaredParameter = std::ranges::find(
+                definition->second->parameters, binding->role, &runtime::ParameterDefinition::role);
+            if (declaredParameter == definition->second->parameters.end()) {
+                return;
+            }
+            ownerNode = node;
+            ownerDefinition = definition->second;
+            parameterDefinition = &*declaredParameter;
+            diagnosticSubject.nodeId = node->id;
+        }
+        if (ownerNode == nullptr || ownerDefinition == nullptr || parameterDefinition == nullptr) {
+            reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                   "Parameter override target is not reachable",
+                   "Overrides may affect only parameters on the requested output path.");
+            return;
+        }
+        const bool isPosition =
+            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
+            parameterDefinition->role == document::kPositionParameterRole &&
+            parameterDefinition->schemaKey == document::kPositionParameterSchemaKey;
+        const bool isOpacity =
+            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
+            parameterDefinition->role == document::kOpacityParameterRole &&
+            parameterDefinition->schemaKey == document::kOpacityParameterSchemaKey;
+        const auto* scalar = std::get_if<double>(&parameterOverride.value);
+        const auto* vector = std::get_if<document::Vec2d>(&parameterOverride.value);
+        const bool kindMatches =
+            (isPosition && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
+             vector != nullptr) ||
+            (isOpacity && parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
+             scalar != nullptr);
+        if (parameter->schemaKey != parameterDefinition->schemaKey || !kindMatches) {
+            reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                   "Parameter override type does not match its target",
+                   "Version one accepts only typed Layer Output position and opacity overrides.");
+            return;
+        }
+        if ((vector != nullptr && (!std::isfinite(vector->x) || !std::isfinite(vector->y))) ||
+            (scalar != nullptr && (!std::isfinite(*scalar) || *scalar < 0.0 || *scalar > 1.0))) {
+            reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                   "Parameter override value is outside its schema domain",
+                   "Position must be finite and opacity must be finite within zero and one.");
+            return;
+        }
+        if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+            auto overrideSubject = diagnosticSubject;
+            addUnsupported(runtime::CompileDiagnosticCode::UnsupportedParameterOverride,
+                           std::move(overrideSubject),
+                           "Driven parameters cannot be overridden interactively",
+                           "Disconnect or explicitly transition the driver before editing.");
         }
     }
 
