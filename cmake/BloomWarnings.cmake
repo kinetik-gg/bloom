@@ -2,6 +2,30 @@ include_guard(GLOBAL)
 
 option(BLOOM_WARNINGS_AS_ERRORS "Treat warnings in Bloom-owned targets as errors" ON)
 
+function(bloom_enable_strict_floating_point target)
+    if(NOT TARGET ${target})
+        message(
+            FATAL_ERROR
+            "bloom_enable_strict_floating_point expected an existing target: ${target}"
+        )
+    endif()
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /fp:strict)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        target_compile_options(
+            ${target}
+            PRIVATE -fno-fast-math -ffp-contract=off -frounding-math
+        )
+    else()
+        message(
+            FATAL_ERROR
+            "Bloom reference floating-point kernels do not define strict flags for "
+            "${CMAKE_CXX_COMPILER_ID}"
+        )
+    endif()
+endfunction()
+
 function(bloom_enable_warnings target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "bloom_enable_warnings expected an existing target: ${target}")

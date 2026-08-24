@@ -1,8 +1,9 @@
 #include <bloom/core/scalar_primitives.hpp>
 
+#include <bloom/core/floating_point.hpp>
+
 #include <algorithm>
 #include <array>
-#include <cfenv>
 #include <cmath>
 #include <limits>
 
@@ -60,23 +61,6 @@ template <bloom::core::primitives::PrimitiveFloat T>
         return failure<T>(ScalarEvaluationError::NonFiniteResult);
     }
     return {value, ScalarEvaluationError::None};
-}
-
-template <bloom::core::primitives::PrimitiveFloat T>
-[[nodiscard]] bool hasSupportedFloatingPointEnvironment() noexcept {
-    if (std::fegetround() != FE_TONEAREST) {
-        return false;
-    }
-
-    // Bloom's CPU reference semantics preserve IEEE-754 subnormal inputs and results. These
-    // volatile probes reject per-thread FTZ/DAZ modes before authored arithmetic is evaluated.
-    volatile const T minimumNormal = std::numeric_limits<T>::min();
-    volatile const T half = T{0.5};
-    volatile const T producedSubnormal = minimumNormal * half;
-    volatile const T minimumSubnormal = std::numeric_limits<T>::denorm_min();
-    volatile const T one = T{1};
-    volatile const T consumedSubnormal = minimumSubnormal * one;
-    return producedSubnormal != T{0} && consumedSubnormal != T{0};
 }
 
 template <bloom::core::primitives::PrimitiveFloat T>
@@ -164,7 +148,7 @@ template <bloom::core::primitives::PrimitiveFloat T>
     if (std::ranges::any_of(inputs, [](const T value) { return !std::isfinite(value); })) {
         return failure<T>(ScalarEvaluationError::NonFiniteInput);
     }
-    if (!hasSupportedFloatingPointEnvironment<T>()) {
+    if (!bloom::core::supportsReferenceFloatingPointEnvironment<T>()) {
         return failure<T>(ScalarEvaluationError::UnsupportedFloatingPointEnvironment);
     }
 
@@ -211,15 +195,6 @@ template <bloom::core::primitives::PrimitiveFloat T>
 }
 
 static_assert(sizeof(float) == 4, "Scalar Float32 primitives require 32-bit float");
-static_assert(std::numeric_limits<float>::is_iec559,
-              "Scalar Float32 primitives require IEEE-754 behavior");
-static_assert(std::numeric_limits<double>::is_iec559,
-              "Scalar Float64 primitives require IEEE-754 behavior");
-static_assert(std::numeric_limits<float>::has_denorm == std::denorm_present,
-              "Scalar Float32 primitives require subnormal support");
-static_assert(std::numeric_limits<double>::has_denorm == std::denorm_present,
-              "Scalar Float64 primitives require subnormal support");
-
 } // namespace
 
 namespace bloom::core::primitives {
