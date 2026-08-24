@@ -162,7 +162,7 @@ const document::NodeRecord* CompositionSession::selectedNode() const noexcept {
 }
 
 std::optional<document::LayerId>
-CompositionSession::layerForNode(const document::NodeId nodeId) const noexcept {
+CompositionSession::layerForNode(const document::NodeId nodeId) const {
     const auto* current = composition();
     if (current == nullptr) {
         return std::nullopt;
@@ -217,6 +217,38 @@ CompositionSession::boundaryNodeForLayer(const document::LayerId layerId) const 
     return boundary->nodeId;
 }
 
+std::optional<document::NodeId>
+CompositionSession::directSourceNodeForLayer(const document::LayerId layerId) const noexcept {
+    const auto* current = composition();
+    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
+    if (current == nullptr || !boundaryNodeId.has_value()) {
+        return std::nullopt;
+    }
+
+    std::optional<document::NodeId> sourceNodeId;
+    for (const auto& edge : current->graph().edges()) {
+        const auto* destination = std::get_if<document::NodeInputRef>(&edge.destination);
+        if (destination == nullptr || destination->nodeId != *boundaryNodeId ||
+            destination->port != document::kLayerOutputContentInputPort) {
+            continue;
+        }
+        const auto* sourceNode = current->graph().findNode(edge.source.nodeId);
+        if (sourceNodeId.has_value() || sourceNode == nullptr) {
+            return std::nullopt;
+        }
+        if ((sourceNode->typeId == document::kSolidSourceNodeType &&
+             sourceNode->schemaVersion == document::kSolidSourceNodeSchemaVersion &&
+             edge.source.port != document::kSolidSourceOutputPort) ||
+            (sourceNode->typeId == document::kTextSourceNodeType &&
+             sourceNode->schemaVersion == document::kTextSourceNodeSchemaVersion &&
+             edge.source.port != document::kTextSourceOutputPort)) {
+            return std::nullopt;
+        }
+        sourceNodeId = edge.source.nodeId;
+    }
+    return sourceNodeId;
+}
+
 const document::ParameterRecord*
 CompositionSession::parameterForSelection(const std::string_view role) const noexcept {
     const auto* current = composition();
@@ -225,7 +257,15 @@ CompositionSession::parameterForSelection(const std::string_view role) const noe
         return nullptr;
     }
     if (node != nullptr) {
-        return parameterForNode(*node, role);
+        if (const auto* parameter = parameterForNode(*node, role)) {
+            return parameter;
+        }
+        if (const auto* layerId = std::get_if<document::LayerId>(&selection_.primary)) {
+            const auto sourceNodeId = directSourceNodeForLayer(*layerId);
+            const auto* sourceNode =
+                sourceNodeId.has_value() ? current->graph().findNode(*sourceNodeId) : nullptr;
+            return sourceNode == nullptr ? nullptr : parameterForNode(*sourceNode, role);
+        }
     }
     if (const auto* parameterId = std::get_if<document::ParameterId>(&selection_.primary)) {
         for (const auto& candidate : current->graph().nodes()) {
@@ -275,6 +315,40 @@ CompositionSession::constantVec2Value(const document::ParameterId parameterId) c
     }
     const auto* value = std::get_if<document::Vec2d>(&source->value);
     return value == nullptr ? std::nullopt : std::optional<document::Vec2d>(*value);
+}
+
+std::optional<core::Color4d>
+CompositionSession::constantColorValue(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return std::nullopt;
+    }
+    const auto* parameter = current->parameters().find(parameterId);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    const auto* source = std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    const auto* value = std::get_if<core::Color4d>(&source->value);
+    return value == nullptr ? std::nullopt : std::optional<core::Color4d>(*value);
+}
+
+bool CompositionSession::addSolidLayer(QString name, const core::Color4d color) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    commands::Transaction transaction("Add Solid Layer", snapshot_.revision());
+    transaction.emplace<commands::AddSolidLayer>(compositionId_, name.toStdString(), color,
+                                                 document::Vec2d{});
+    const auto result = commandStack_.execute(std::move(transaction));
+    const auto layerId = result.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
+    if (!handleResult(result)) {
+        return false;
+    }
+    if (layerId.has_value()) {
+        selectLayer(*layerId);
+    }
+    return true;
 }
 
 bool CompositionSession::addTextLayer(QString name, QString text) {

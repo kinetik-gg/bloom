@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 
@@ -53,16 +54,20 @@ class CompositionSession final : public QObject {
     void selectParameter(document::ParameterId parameterId);
 
     [[nodiscard]] const document::NodeRecord* selectedNode() const noexcept;
-    [[nodiscard]] std::optional<document::LayerId>
-    layerForNode(document::NodeId nodeId) const noexcept;
+    [[nodiscard]] std::optional<document::LayerId> layerForNode(document::NodeId nodeId) const;
     [[nodiscard]] std::optional<document::NodeId>
     boundaryNodeForLayer(document::LayerId layerId) const noexcept;
+    [[nodiscard]] std::optional<document::NodeId>
+    directSourceNodeForLayer(document::LayerId layerId) const noexcept;
     [[nodiscard]] const document::ParameterRecord*
     parameterForSelection(std::string_view role) const noexcept;
     [[nodiscard]] std::optional<double> constantValue(document::ParameterId parameterId) const;
     [[nodiscard]] std::optional<document::Vec2d>
     constantVec2Value(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<core::Color4d>
+    constantColorValue(document::ParameterId parameterId) const;
 
+    [[nodiscard]] bool addSolidLayer(QString name, core::Color4d color);
     [[nodiscard]] bool addTextLayer(QString name, QString text);
     [[nodiscard]] bool setSelectedPosition(double x, double y);
     [[nodiscard]] bool setSelectedOpacity(double opacity);

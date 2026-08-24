@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
@@ -22,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -66,6 +68,15 @@ QString parameterText(const document::ParameterRecord& parameter) {
                 return QString::number(value, 'f', 2);
             } else if constexpr (std::is_same_v<Value, document::Vec2d>) {
                 return QStringLiteral("%1, %2").arg(value.x, 0, 'f', 1).arg(value.y, 0, 'f', 1);
+            } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+                return QStringLiteral("RGBA %1, %2, %3, %4")
+                    .arg(QString::number(value.red, 'g', std::numeric_limits<double>::max_digits10))
+                    .arg(QString::number(value.green, 'g',
+                                         std::numeric_limits<double>::max_digits10))
+                    .arg(
+                        QString::number(value.blue, 'g', std::numeric_limits<double>::max_digits10))
+                    .arg(QString::number(value.alpha, 'g',
+                                         std::numeric_limits<double>::max_digits10));
             } else if constexpr (std::is_same_v<Value, std::string>) {
                 return QString::fromStdString(value).left(24);
             } else {
@@ -274,7 +285,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
                                   : bounds.adjusted(-120.0, -120.0, 120.0, 120.0));
 }
 
-QGraphicsItem* NodeGraphicsScene::findNodeItem(const document::NodeId nodeId) const noexcept {
+QGraphicsItem* NodeGraphicsScene::findNodeItem(const document::NodeId nodeId) const {
     const auto matching = items();
     const auto found = std::ranges::find_if(matching, [nodeId](const auto* item) {
         return item->data(kNodeItemKindRole).toString() == QStringLiteral("node") &&
@@ -379,11 +390,7 @@ void NodeGraphEditor::sceneSelectionChanged() {
         session_.clearSelection();
         return;
     }
-    if (const auto layerId = session_.layerForNode(item->id()); layerId.has_value()) {
-        session_.selectLayer(*layerId);
-    } else {
-        session_.selectNode(item->id());
-    }
+    session_.selectNode(item->id());
 }
 
 } // namespace bloom::ui

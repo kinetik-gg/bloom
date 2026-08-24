@@ -23,7 +23,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
     explicit NodeGraphicsScene(QObject* parent = nullptr);
 
     void setProjection(const document::Snapshot& snapshot, document::CompositionId compositionId);
-    [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const noexcept;
+    [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const;
 
   private:
     void rebuildEdges(const document::Composition& composition);

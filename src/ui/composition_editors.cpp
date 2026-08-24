@@ -2,17 +2,20 @@
 
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QSignalBlocker>
@@ -22,8 +25,14 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <variant>
 
 namespace bloom::ui {
@@ -32,6 +41,7 @@ namespace {
 constexpr int kTimelineLayerIdRole = Qt::UserRole + 1;
 constexpr int kTimelineSlotIdRole = Qt::UserRole + 2;
 constexpr int kCompositionIdRole = Qt::UserRole + 1;
+constexpr core::Color4d kDefaultSolidColor{0.18, 0.18, 0.18, 1.0};
 
 const document::LayerOutputBoundary* layerBoundary(const document::Composition& composition,
                                                    const document::LayerId layerId) {
@@ -70,6 +80,72 @@ QString layerName(const document::Composition& composition, const document::Laye
         return QStringLiteral("Layer %1").arg(layerId.value());
     }
     return QString::fromStdString(boundary->name);
+}
+
+const document::NodeRecord* directSourceNode(const CompositionSession& session,
+                                             const document::LayerId layerId) {
+    const auto* composition = session.composition();
+    const auto sourceNodeId = session.directSourceNodeForLayer(layerId);
+    return composition != nullptr && sourceNodeId.has_value()
+               ? composition->graph().findNode(*sourceNodeId)
+               : nullptr;
+}
+
+bool isKnownSource(const document::NodeRecord* node, const std::string_view typeId,
+                   const std::uint32_t schemaVersion) {
+    return node != nullptr && node->typeId == typeId && node->schemaVersion == schemaVersion;
+}
+
+const document::NodeRecord* selectedPresentationSource(const CompositionSession& session) {
+    if (const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary)) {
+        return directSourceNode(session, *layerId);
+    }
+    return session.selectedNode();
+}
+
+QString layerKind(const CompositionSession& session, const document::LayerId layerId) {
+    const auto* sourceNode = directSourceNode(session, layerId);
+    if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
+                      document::kSolidSourceNodeSchemaVersion)) {
+        return TimelineEditor::tr("Solid");
+    }
+    if (isKnownSource(sourceNode, document::kTextSourceNodeType,
+                      document::kTextSourceNodeSchemaVersion)) {
+        return TimelineEditor::tr("Text");
+    }
+    return TimelineEditor::tr("Layer");
+}
+
+qulonglong nextLayerNumber(const CompositionSession& session, const std::string_view typeId,
+                           const std::uint32_t schemaVersion) {
+    qulonglong count = 0;
+    const auto* composition = session.composition();
+    if (composition == nullptr) {
+        return 1;
+    }
+    for (const auto& entry : composition->graph().layerStack().entries()) {
+        const auto* sourceNode = directSourceNode(session, entry.layerId);
+        if (isKnownSource(sourceNode, typeId, schemaVersion)) {
+            ++count;
+        }
+    }
+    return count + 1;
+}
+
+QString exactNumber(const double value) {
+    std::array<char, 64> buffer{};
+    const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
+                                      std::chars_format::general);
+    if (result.ec != std::errc{}) {
+        return QString::number(value, 'g', std::numeric_limits<double>::max_digits10);
+    }
+    return QString::fromLatin1(buffer.data(), static_cast<qsizetype>(result.ptr - buffer.data()));
+}
+
+QString exactColor(const core::Color4d color) {
+    return QStringLiteral("R %1  G %2  B %3  A %4")
+        .arg(exactNumber(color.red), exactNumber(color.green), exactNumber(color.blue),
+             exactNumber(color.alpha));
 }
 
 QString selectionName(const CompositionSession& session) {
@@ -121,12 +197,24 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
 
     auto* title = new QLabel(tr("Layers"), controls);
     title->setObjectName("editorSectionTitle");
-    addTextButton_ = makeToolButton(tr("Add Text"), tr("Add text layer"), controls);
-    addTextButton_->setObjectName("addTextLayerButton");
+    addButton_ = makeToolButton(tr("Add"), tr("Add layer"), controls);
+    addButton_->setObjectName("addLayerButton");
+    addButton_->setPopupMode(QToolButton::InstantPopup);
+    addButton_->setToolTip(tr("Add a structured layer"));
+    auto* addMenu = new QMenu(tr("Add Layer"), addButton_);
+    addMenu->setObjectName("addLayerMenu");
+    addMenu->setAccessibleName(tr("Add layer menu"));
+    auto* addSolidAction = addMenu->addAction(tr("Solid"));
+    addSolidAction->setObjectName("addSolidLayerAction");
+    addSolidAction->setToolTip(tr("Add a middle-gray solid layer"));
+    auto* addTextAction = addMenu->addAction(tr("Text"));
+    addTextAction->setObjectName("addTextLayerAction");
+    addTextAction->setToolTip(tr("Add a text layer"));
+    addButton_->setMenu(addMenu);
     undoButton_ = makeToolButton(tr("Undo"), tr("Undo last edit"), controls);
     redoButton_ = makeToolButton(tr("Redo"), tr("Redo last edit"), controls);
     controlsLayout->addWidget(title);
-    controlsLayout->addWidget(addTextButton_);
+    controlsLayout->addWidget(addButton_);
     controlsLayout->addStretch(1);
     controlsLayout->addWidget(undoButton_);
     controlsLayout->addWidget(redoButton_);
@@ -147,13 +235,14 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(controls);
     layout->addWidget(layers_, 1);
 
-    connect(addTextButton_, &QToolButton::clicked, this, [this] {
-        const auto layerNumber =
-            session_.composition() == nullptr
-                ? qulonglong{1}
-                : static_cast<qulonglong>(
-                      session_.composition()->graph().layerStack().entries().size()) +
-                      qulonglong{1};
+    connect(addSolidAction, &QAction::triggered, this, [this] {
+        const auto layerNumber = nextLayerNumber(session_, document::kSolidSourceNodeType,
+                                                 document::kSolidSourceNodeSchemaVersion);
+        (void)session_.addSolidLayer(tr("Solid %1").arg(layerNumber), kDefaultSolidColor);
+    });
+    connect(addTextAction, &QAction::triggered, this, [this] {
+        const auto layerNumber = nextLayerNumber(session_, document::kTextSourceNodeType,
+                                                 document::kTextSourceNodeSchemaVersion);
         (void)session_.addTextLayer(tr("Text %1").arg(layerNumber), tr("Text"));
     });
     connect(undoButton_, &QToolButton::clicked, &session_, &CompositionSession::undo);
@@ -189,7 +278,7 @@ void TimelineEditor::rebuild() {
         for (const auto& entry : composition->graph().layerStack().entries()) {
             const auto* boundary = layerBoundary(*composition, entry.layerId);
             const QString name = layerName(*composition, entry.layerId);
-            QString kind = tr("Layer");
+            const QString kind = layerKind(session_, entry.layerId);
             QString opacity = QStringLiteral("—");
             if (boundary != nullptr) {
                 if (const auto* parameter = nodeParameter(*composition, boundary->nodeId,
@@ -300,6 +389,41 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     transformForm->addRow(tr("Position"), position);
     transformForm->addRow(tr("Opacity"), opacity_);
     layout->addLayout(transformForm);
+
+    solidColorPanel_ = new QWidget(this);
+    solidColorPanel_->setObjectName("solidColorProperties");
+    auto* solidColorLayout = new QVBoxLayout(solidColorPanel_);
+    solidColorLayout->setContentsMargins(0, 4, 0, 0);
+    solidColorLayout->setSpacing(7);
+    auto* solidColorTitle = new QLabel(tr("Solid Source"), solidColorPanel_);
+    solidColorTitle->setObjectName("editorSectionTitle");
+    solidColorLayout->addWidget(solidColorTitle);
+
+    auto* solidColorForm = new QFormLayout;
+    solidColorForm->setContentsMargins(0, 0, 0, 0);
+    solidColorForm->setHorizontalSpacing(10);
+    solidColorForm->setVerticalSpacing(7);
+    solidColorValue_ = new QLabel(solidColorPanel_);
+    solidColorValue_->setObjectName("solidColorValue");
+    solidColorValue_->setAccessibleName(tr("Solid RGBA value"));
+    solidColorValue_->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                              Qt::TextSelectableByKeyboard);
+    solidColorValue_->setWordWrap(true);
+    solidAlphaAssociation_ = new QLabel(solidColorPanel_);
+    solidAlphaAssociation_->setObjectName("solidAlphaAssociation");
+    solidAlphaAssociation_->setAccessibleName(tr("Solid alpha association"));
+    solidAlphaAssociation_->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                                    Qt::TextSelectableByKeyboard);
+    solidColorEncoding_ = new QLabel(solidColorPanel_);
+    solidColorEncoding_->setObjectName("solidColorEncoding");
+    solidColorEncoding_->setAccessibleName(tr("Solid color encoding"));
+    solidColorEncoding_->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                                 Qt::TextSelectableByKeyboard);
+    solidColorForm->addRow(tr("RGBA"), solidColorValue_);
+    solidColorForm->addRow(tr("Alpha"), solidAlphaAssociation_);
+    solidColorForm->addRow(tr("Encoding"), solidColorEncoding_);
+    solidColorLayout->addLayout(solidColorForm);
+    layout->addWidget(solidColorPanel_);
     layout->addStretch(1);
 
     const auto commitPosition = [this] {
@@ -344,6 +468,7 @@ void PropertiesEditor::rebuild() {
     positionY_->setToolTip(positionTip);
 
     configureOpacity();
+    configureSolidColor();
     rebuilding_ = false;
 }
 
@@ -357,10 +482,35 @@ void PropertiesEditor::configureOpacity() {
                                               : sourceDescription(*parameter));
 }
 
+void PropertiesEditor::configureSolidColor() {
+    const auto* parameter = session_.parameterForSelection(document::kSolidColorParameterRole);
+    const auto* sourceNode = selectedPresentationSource(session_);
+    const bool isSolid = isKnownSource(sourceNode, document::kSolidSourceNodeType,
+                                       document::kSolidSourceNodeSchemaVersion) &&
+                         parameter != nullptr &&
+                         parameter->schemaKey == document::kSolidColorParameterSchemaKey;
+    solidColorPanel_->setVisible(isSolid);
+    if (!isSolid) {
+        return;
+    }
+
+    const auto value = session_.constantColorValue(parameter->id);
+    solidColorValue_->setText(value.has_value() ? exactColor(*value)
+                                                : sourceDescription(*parameter));
+    solidColorValue_->setToolTip(
+        tr("Straight scene-linear authoring values; negative and HDR RGB are not clipped"));
+    solidAlphaAssociation_->setText(tr("Straight (unassociated)"));
+    solidColorEncoding_->setText(
+        QString::fromUtf8(document::kSolidColorEncoding.data(),
+                          static_cast<qsizetype>(document::kSolidColorEncoding.size())));
+}
+
 ViewerEditor::ViewerEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
+    setAccessibleDescription(
+        tr("Render evaluation is not connected; no composition pixels are displayed."));
     setMinimumSize(220, 150);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     connect(&session_, &CompositionSession::snapshotChanged, this,
@@ -402,17 +552,15 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
 
     if (session_.selection().contextualLayer.has_value() && composition != nullptr) {
         const QString name = layerName(*composition, *session_.selection().contextualLayer);
-        const QRect selectionFrame = frame.adjusted(frame.width() / 4, frame.height() / 3,
-                                                    -frame.width() / 4, -frame.height() / 3);
-        painter.setPen(QPen(QColor(44, 158, 232), 2.0));
-        painter.drawRect(selectionFrame);
-        painter.fillRect(QRect(selectionFrame.left(), selectionFrame.top() - 24,
-                               std::min(220, selectionFrame.width()), 24),
-                         QColor(44, 158, 232));
-        painter.setPen(Qt::white);
-        painter.drawText(QRect(selectionFrame.left() + 7, selectionFrame.top() - 24,
-                               std::min(206, selectionFrame.width() - 14), 24),
-                         Qt::AlignVCenter | Qt::AlignLeft, name);
+        const QRect selectionStatus(frame.left() + 12, frame.bottom() - 38, frame.width() - 24, 26);
+        painter.setPen(QPen(QColor(44, 158, 232), 1.0));
+        painter.setBrush(QColor(27, 46, 61));
+        painter.drawRoundedRect(selectionStatus, 4.0, 4.0);
+        painter.setPen(QColor(208, 231, 247));
+        const QString status = tr("Selected: %1 · evaluated bounds unavailable").arg(name);
+        painter.drawText(
+            selectionStatus.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
+            painter.fontMetrics().elidedText(status, Qt::ElideRight, selectionStatus.width() - 16));
     }
 }
 
