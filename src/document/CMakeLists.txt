@@ -5,6 +5,7 @@ target_sources(
     PRIVATE
         animation.cpp
         document.cpp
+        extension_records.cpp
         graph.cpp
         layer_stack.cpp
         new_project.cpp
@@ -17,12 +18,14 @@ target_sources(
             include/bloom/document/animation.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
+            include/bloom/document/extension_records.hpp
             include/bloom/document/graph.hpp
             include/bloom/document/ids.hpp
             include/bloom/document/layer_stack.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
             include/bloom/document/project.hpp
+            include/bloom/document/schema_version.hpp
             include/bloom/document/validation.hpp
 )
 
@@ -54,5 +57,14 @@ if(BUILD_TESTING)
         NAME bloom.document.animation-model
         COMMAND bloom_document_animation_model_test
         LABELS unit animation
+    )
+
+    add_executable(bloom_document_extension_records_test tests/extension_records_tests.cpp)
+    target_link_libraries(bloom_document_extension_records_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_extension_records_test)
+    bloom_add_test(
+        NAME bloom.document.extension-records
+        COMMAND bloom_document_extension_records_test
+        LABELS unit persistence
     )
 endif()

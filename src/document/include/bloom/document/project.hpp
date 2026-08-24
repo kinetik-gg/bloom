@@ -3,6 +3,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
@@ -62,10 +63,17 @@ class Project final {
     }
     [[nodiscard]] const Composition* findComposition(CompositionId id) const noexcept;
     [[nodiscard]] Composition* findComposition(CompositionId id) noexcept;
+    [[nodiscard]] std::span<const ExtensionRecord> extensionRecords() const noexcept {
+        return extensionRecords_;
+    }
+    [[nodiscard]] const ExtensionRecord* findExtensionRecord(ExtensionRecordId id) const noexcept;
+    [[nodiscard]] ExtensionRecord* findExtensionRecord(ExtensionRecordId id) noexcept;
 
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool addComposition(Composition composition);
     [[nodiscard]] bool removeComposition(CompositionId id);
+    [[nodiscard]] bool addExtensionRecord(ExtensionRecord record);
+    [[nodiscard]] bool removeExtensionRecord(ExtensionRecordId id);
 
     [[nodiscard]] ValidationResult validate() const;
 
@@ -73,6 +81,7 @@ class Project final {
     ProjectId id_;
     std::string name_;
     std::vector<Composition> compositions_;
+    std::vector<ExtensionRecord> extensionRecords_;
 };
 
 } // namespace bloom::document

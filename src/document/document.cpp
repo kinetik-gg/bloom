@@ -12,6 +12,11 @@ struct DocumentIdentity final {};
 // collection or allocator namespace is added, extend this walk and the publication inventory test.
 template <typename Visitor>
 [[nodiscard]] static bool visitProjectIds(const Project& project, Visitor&& visitor) noexcept {
+    for (const auto& record : project.extensionRecords()) {
+        if (!visitor(record.id)) {
+            return false;
+        }
+    }
     for (const auto& composition : project.compositions()) {
         if (!visitor(composition.id())) {
             return false;

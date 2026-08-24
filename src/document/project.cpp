@@ -85,6 +85,37 @@ bool Project::removeComposition(const CompositionId id) {
     return true;
 }
 
+const ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) const noexcept {
+    const auto iterator = std::ranges::lower_bound(extensionRecords_, id, {}, &ExtensionRecord::id);
+    return iterator == extensionRecords_.end() || iterator->id != id ? nullptr : &*iterator;
+}
+
+ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) noexcept {
+    return const_cast<ExtensionRecord*>(std::as_const(*this).findExtensionRecord(id));
+}
+
+bool Project::addExtensionRecord(ExtensionRecord record) {
+    if (!record.id.isValid()) {
+        return false;
+    }
+    const auto insertion =
+        std::ranges::lower_bound(extensionRecords_, record.id, {}, &ExtensionRecord::id);
+    if (insertion != extensionRecords_.end() && insertion->id == record.id) {
+        return false;
+    }
+    extensionRecords_.insert(insertion, std::move(record));
+    return true;
+}
+
+bool Project::removeExtensionRecord(const ExtensionRecordId id) {
+    const auto iterator = std::ranges::lower_bound(extensionRecords_, id, {}, &ExtensionRecord::id);
+    if (iterator == extensionRecords_.end() || iterator->id != id) {
+        return false;
+    }
+    extensionRecords_.erase(iterator);
+    return true;
+}
+
 ValidationResult Project::validate() const {
     ValidationResult result;
     if (!id_.isValid()) {
@@ -161,6 +192,7 @@ ValidationResult Project::validate() const {
                                              "Layer Stack slot", layerSlotDeclarations, result);
         }
     }
+    result.append("", validateExtensionRecords(*this));
     return result;
 }
 
