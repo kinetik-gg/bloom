@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,17 @@ class RepositoryHygieneTests(unittest.TestCase):
         messages = [item.message for item in findings]
         self.assertTrue(any("attribution inventory" in message for message in messages))
         self.assertTrue(any("upstream license" in message for message in messages))
+
+    def test_repository_files_skip_deleted_tracked_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "present.txt").write_text("present\n", encoding="utf-8")
+            with mock.patch.object(
+                self.checker,
+                "_git_repository_files",
+                return_value=[Path("deleted.txt"), Path("present.txt")],
+            ):
+                self.assertEqual(self.checker.repository_files(root), [Path("present.txt")])
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):

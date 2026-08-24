@@ -224,7 +224,10 @@ def _git_repository_files(root: Path) -> list[Path] | None:
 def repository_files(root: Path) -> list[Path]:
     git_files = _git_repository_files(root)
     if git_files is not None:
-        return git_files
+        # `git ls-files --cached` intentionally reports tracked paths deleted in the working tree.
+        # A legitimate rename/delete has no bytes to inspect and must not become a read failure.
+        # `lexists` retains dangling symlinks so the path policy can still diagnose them.
+        return [relative for relative in git_files if os.path.lexists(root / relative)]
 
     files: list[Path] = []
     for path in root.rglob("*"):
