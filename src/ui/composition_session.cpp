@@ -50,6 +50,11 @@ QString statusMessage(const commands::CommandResult& result) {
     return QStringLiteral("The edit could not be applied");
 }
 
+[[nodiscard]] document::Vec2d compositionCenter(const document::Composition& composition) {
+    const auto format = composition.format();
+    return {static_cast<double>(format.width()) * 0.5, static_cast<double>(format.height()) * 0.5};
+}
+
 } // namespace
 
 CompositionSession::CompositionSession(document::Document& document,
@@ -337,9 +342,14 @@ CompositionSession::constantColorValue(const document::ParameterId parameterId) 
 
 bool CompositionSession::addSolidLayer(QString name, const core::Color4d color) {
     Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr) {
+        reportUnavailable(QStringLiteral("No composition is available for the new solid layer"));
+        return false;
+    }
     commands::Transaction transaction("Add Solid Layer", snapshot_.revision());
     transaction.emplace<commands::AddSolidLayer>(compositionId_, name.toStdString(), color,
-                                                 document::Vec2d{});
+                                                 compositionCenter(*current));
     const auto result = commandStack_.execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
     if (!handleResult(result)) {
@@ -353,9 +363,14 @@ bool CompositionSession::addSolidLayer(QString name, const core::Color4d color) 
 
 bool CompositionSession::addTextLayer(QString name, QString text) {
     Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr) {
+        reportUnavailable(QStringLiteral("No composition is available for the new text layer"));
+        return false;
+    }
     commands::Transaction transaction("Add Text Layer", snapshot_.revision());
     transaction.emplace<commands::AddTextLayer>(compositionId_, name.toStdString(),
-                                                text.toStdString(), document::Vec2d{});
+                                                text.toStdString(), compositionCenter(*current));
     const auto result = commandStack_.execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {
