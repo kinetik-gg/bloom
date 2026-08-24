@@ -64,6 +64,18 @@ concept BorrowsDescriptorFromRvalue = requires(T value) { std::move(value).descr
 template <typename T>
 concept BorrowsMutableRowFromRvalue = requires(T value) { std::move(value).row(0); };
 
+template <typename T>
+concept AccessesValueFromRvalue = requires(T result) { std::move(result).value(); };
+
+template <typename T>
+concept AccessesConstValueFromRvalue = requires(const T result) { std::move(result).value(); };
+
+template <typename T>
+concept AccessesErrorFromRvalue = requires(T result) { std::move(result).error(); };
+
+template <typename T>
+concept AccessesConstErrorFromRvalue = requires(const T result) { std::move(result).error(); };
+
 static_assert(!BorrowsPixelsFromRvalue<Rgba32fImage>);
 static_assert(!BorrowsViewFromRvalue<Rgba32fImage>);
 static_assert(!BorrowsDescriptorFromRvalue<Rgba32fImage>);
@@ -74,6 +86,22 @@ static_assert(!BorrowsMutableRowFromRvalue<Rgba32fImageBuilder>);
 static_assert(!BorrowsPixelsFromRvalue<PreparedReferenceDisplayBuffer>);
 static_assert(!BorrowsViewFromRvalue<PreparedReferenceDisplayBuffer>);
 static_assert(!BorrowsDescriptorFromRvalue<PreparedReferenceDisplayBuffer>);
+
+using PixelResult = ImageResult<Rgba32f>;
+using MoveOnlyImageResult = ImageResult<Rgba32fImage>;
+
+static_assert(std::is_same_v<decltype(std::declval<PixelResult&>().value()), Rgba32f*>);
+static_assert(std::is_same_v<decltype(std::declval<const PixelResult&>().value()), const Rgba32f*>);
+static_assert(
+    std::is_same_v<decltype(std::declval<PixelResult&>().error()), bloom::render::ImageError*>);
+static_assert(std::is_same_v<decltype(std::declval<const PixelResult&>().error()),
+                             const bloom::render::ImageError*>);
+static_assert(!AccessesValueFromRvalue<PixelResult>);
+static_assert(!AccessesConstValueFromRvalue<PixelResult>);
+static_assert(!AccessesErrorFromRvalue<PixelResult>);
+static_assert(!AccessesConstErrorFromRvalue<PixelResult>);
+static_assert(std::is_move_constructible_v<MoveOnlyImageResult>);
+static_assert(!std::is_copy_constructible_v<MoveOnlyImageResult>);
 
 template <typename T>
 [[nodiscard]] bool hasError(const ImageResult<T>& result, const ImageErrorCode code) {
@@ -225,9 +253,10 @@ void testBudgetAndMutableConstruction(ExpectationContext& expectations) {
                         "mutable construction owns the exact packed pixel storage");
 
     const auto wideRange = pixel(-2.5F, 8.0F, 0.25F, 0.5F);
-    expectations.expect(!builder.write(-10, -5, wideRange).has_value() &&
-                            builder.read(-10, -5).value() != nullptr &&
-                            *builder.read(-10, -5).value() == wideRange,
+    const auto writeStatus = builder.write(-10, -5, wideRange);
+    const auto storedPixel = builder.read(-10, -5);
+    expectations.expect(!writeStatus.has_value() && storedPixel &&
+                            *storedPixel.value() == wideRange,
                         "data-window origin participates in coordinate access");
     const auto firstRow = builder.row(-5);
     expectations.expect(firstRow && firstRow.value()->size() == 2 &&
@@ -290,17 +319,22 @@ void testFreezePublicationAndMoves(ExpectationContext& expectations) {
     static_assert(
         std::is_same_v<decltype(std::as_const(sourceImage).pixels()), std::span<const Rgba32f>>);
     const auto publishedView = sourceImage.view();
-    expectations.expect(sourceImage.isValid() && publishedView &&
-                            publishedView.value()->read(-2, 3).value() != nullptr &&
-                            publishedView.value()->read(-2, 3).value()->red() == 2.0F,
+    if (!publishedView) {
+        expectations.expect(false, "a valid published image exposes an immutable view");
+        return;
+    }
+    const auto publishedPixel = publishedView.value()->read(-2, 3);
+    expectations.expect(sourceImage.isValid() && publishedPixel &&
+                            publishedPixel.value()->red() == 2.0F,
                         "published owners and their views expose immutable pixel access");
 
     auto movedImage = std::move(sourceImage);
+    const auto movedPixel = movedImage.read(-1, 3);
     expectations.expect(
         !sourceImage.isValid() && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
             sourceImage.descriptor() == nullptr && sourceImage.pixels().empty() &&
             hasError(sourceImage.view(), ImageErrorCode::InvalidState) && movedImage.isValid() &&
-            movedImage.read(-1, 3).value() != nullptr,
+            movedPixel,
         "immutable image moves leave a coherent source and preserve the owner");
     const auto ownerBackedView = movedImage.view();
     expectations.expect(ownerBackedView &&

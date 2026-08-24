@@ -77,12 +77,16 @@ template <typename T> class [[nodiscard]] ImageResult final {
 
     [[nodiscard]] bool hasValue() const noexcept { return std::holds_alternative<T>(storage_); }
     [[nodiscard]] explicit operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] T* value() noexcept { return std::get_if<T>(&storage_); }
-    [[nodiscard]] const T* value() const noexcept { return std::get_if<T>(&storage_); }
-    [[nodiscard]] ImageError* error() noexcept { return std::get_if<ImageError>(&storage_); }
-    [[nodiscard]] const ImageError* error() const noexcept {
+    [[nodiscard]] T* value() & noexcept { return std::get_if<T>(&storage_); }
+    [[nodiscard]] const T* value() const& noexcept { return std::get_if<T>(&storage_); }
+    [[nodiscard]] T* value() && = delete;
+    [[nodiscard]] const T* value() const&& = delete;
+    [[nodiscard]] ImageError* error() & noexcept { return std::get_if<ImageError>(&storage_); }
+    [[nodiscard]] const ImageError* error() const& noexcept {
         return std::get_if<ImageError>(&storage_);
     }
+    [[nodiscard]] ImageError* error() && = delete;
+    [[nodiscard]] const ImageError* error() const&& = delete;
 
   private:
     explicit ImageResult(T&& value) noexcept : storage_(std::in_place_index<0>, std::move(value)) {}

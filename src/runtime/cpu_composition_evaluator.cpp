@@ -346,8 +346,13 @@ template <typename Value>
                        "Evaluation output is not the plan's terminal Composition Output"));
     }
 
-    render::ImageExtent extent =
-        *render::ImageExtent::create(plan->format.width(), plan->format.height()).value();
+    const auto extentResult =
+        render::ImageExtent::create(plan->format.width(), plan->format.height());
+    if (!extentResult) {
+        return PreflightOutcome::failure(
+            imageDiagnostic(*extentResult.error(), {}, "Evaluation extent is invalid"));
+    }
+    auto extent = *extentResult.value();
     core::PixelAspectRatio pixelAspect = plan->format.pixelAspect();
     double horizontalScale = 1.0;
     double verticalScale = 1.0;
