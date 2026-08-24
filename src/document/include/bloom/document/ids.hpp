@@ -17,6 +17,7 @@ struct LayerIdTag;
 struct LayerSlotIdTag;
 struct ParameterIdTag;
 struct AnimationCurveIdTag;
+struct KeyframeIdTag;
 struct DriverBindingIdTag;
 
 using ProjectId = core::Id<ProjectIdTag>;
@@ -27,6 +28,7 @@ using LayerId = core::Id<LayerIdTag>;
 using LayerSlotId = core::Id<LayerSlotIdTag>;
 using ParameterId = core::Id<ParameterIdTag>;
 using AnimationCurveId = core::Id<AnimationCurveIdTag>;
+using KeyframeId = core::Id<KeyframeIdTag>;
 using DriverBindingId = core::Id<DriverBindingIdTag>;
 
 class IdAllocator final {
@@ -52,6 +54,9 @@ class IdAllocator final {
     [[nodiscard]] std::optional<AnimationCurveId> allocateAnimationCurve() noexcept {
         return allocate<AnimationCurveId>(nextAnimationCurve_);
     }
+    [[nodiscard]] std::optional<KeyframeId> allocateKeyframe() noexcept {
+        return allocate<KeyframeId>(nextKeyframe_);
+    }
     [[nodiscard]] std::optional<DriverBindingId> allocateDriverBinding() noexcept {
         return allocate<DriverBindingId>(nextDriverBinding_);
     }
@@ -63,6 +68,7 @@ class IdAllocator final {
     void reserveExisting(LayerSlotId id) noexcept { reserve(id, nextLayerSlot_); }
     void reserveExisting(ParameterId id) noexcept { reserve(id, nextParameter_); }
     void reserveExisting(AnimationCurveId id) noexcept { reserve(id, nextAnimationCurve_); }
+    void reserveExisting(KeyframeId id) noexcept { reserve(id, nextKeyframe_); }
     void reserveExisting(DriverBindingId id) noexcept { reserve(id, nextDriverBinding_); }
 
     void mergeHighWater(const IdAllocator& other) noexcept {
@@ -73,6 +79,7 @@ class IdAllocator final {
         merge(nextLayerSlot_, other.nextLayerSlot_);
         merge(nextParameter_, other.nextParameter_);
         merge(nextAnimationCurve_, other.nextAnimationCurve_);
+        merge(nextKeyframe_, other.nextKeyframe_);
         merge(nextDriverBinding_, other.nextDriverBinding_);
     }
 
@@ -119,6 +126,7 @@ class IdAllocator final {
     std::uint64_t nextLayerSlot_ = 1;
     std::uint64_t nextParameter_ = 1;
     std::uint64_t nextAnimationCurve_ = 1;
+    std::uint64_t nextKeyframe_ = 1;
     std::uint64_t nextDriverBinding_ = 1;
 };
 

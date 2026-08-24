@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -27,6 +28,10 @@ class Composition final {
     [[nodiscard]] CompositionFormat format() const noexcept { return format_; }
     [[nodiscard]] const ParameterStore& parameters() const noexcept { return parameters_; }
     [[nodiscard]] ParameterStore& parameters() noexcept { return parameters_; }
+    [[nodiscard]] const AnimationCurveStore& animationCurves() const noexcept {
+        return animationCurves_;
+    }
+    [[nodiscard]] AnimationCurveStore& animationCurves() noexcept { return animationCurves_; }
     [[nodiscard]] const CanonicalGraph& graph() const noexcept { return graph_; }
     [[nodiscard]] CanonicalGraph& graph() noexcept { return graph_; }
 
@@ -42,6 +47,7 @@ class Composition final {
     core::RationalTime duration_;
     CompositionFormat format_;
     ParameterStore parameters_;
+    AnimationCurveStore animationCurves_;
     CanonicalGraph graph_;
 };
 

@@ -15,10 +15,21 @@ static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept
         ids.reserveExisting(composition.id());
         for (const auto& parameter : composition.parameters().records()) {
             ids.reserveExisting(parameter.id);
-            if (const auto* animation = std::get_if<AnimationCurveSource>(&parameter.source)) {
-                ids.reserveExisting(animation->curveId);
-            } else if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source)) {
+            if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source)) {
                 ids.reserveExisting(driver->driverId);
+            }
+        }
+        for (const auto& record : composition.animationCurves().records()) {
+            ids.reserveExisting(animationCurveId(record));
+            const auto reserveKeyframes = [&](const auto& curve) {
+                for (const auto& keyframe : curve.keyframes) {
+                    ids.reserveExisting(keyframe.id);
+                }
+            };
+            if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
+                reserveKeyframes(*scalar);
+            } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
+                reserveKeyframes(*vector);
             }
         }
         for (const auto& node : composition.graph().nodes()) {

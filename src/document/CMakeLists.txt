@@ -3,6 +3,7 @@ add_library(bloom_document STATIC)
 target_sources(
     bloom_document
     PRIVATE
+        animation.cpp
         document.cpp
         graph.cpp
         layer_stack.cpp
@@ -13,6 +14,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/document/animation.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
             include/bloom/document/graph.hpp
@@ -43,5 +45,14 @@ if(BUILD_TESTING)
         NAME bloom.document.publication
         COMMAND bloom_document_publication_test
         LABELS unit
+    )
+
+    add_executable(bloom_document_animation_model_test tests/animation_model_tests.cpp)
+    target_link_libraries(bloom_document_animation_model_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_animation_model_test)
+    bloom_add_test(
+        NAME bloom.document.animation-model
+        COMMAND bloom_document_animation_model_test
+        LABELS unit animation
     )
 endif()

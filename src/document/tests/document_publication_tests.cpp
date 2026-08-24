@@ -1,4 +1,5 @@
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -33,6 +34,7 @@ using bloom::document::Document;
 using bloom::document::DriverBindingId;
 using bloom::document::DriverBindingSource;
 using bloom::document::EdgeId;
+using bloom::document::KeyframeId;
 using bloom::document::LayerId;
 using bloom::document::LayerSlotId;
 using bloom::document::LayerStackInputRef;
@@ -42,6 +44,8 @@ using bloom::document::NodeRecord;
 using bloom::document::ParameterId;
 using bloom::document::Project;
 using bloom::document::ProjectId;
+using bloom::document::ScalarAnimationCurve;
+using bloom::document::ScalarKeyframe;
 using bloom::document::ValidationCode;
 using bloom::document::ValidationResult;
 using bloom::document::Vec2d;
@@ -321,6 +325,10 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
             bloom::document::kLayerOutputNodeSchemaVersion,
         };
         return composition != nullptr &&
+               composition->animationCurves().insert(ScalarAnimationCurve{
+                   id<AnimationCurveId>(100),
+                   {ScalarKeyframe{id<KeyframeId>(100), RationalTime::fromInteger(0), 0.0}},
+               }) &&
                composition->parameters().insert(
                    {positionId, std::string(bloom::document::kPositionParameterSchemaKey),
                     ConstantValueSource{Vec2d{10.0, 20.0}}}) &&
@@ -328,7 +336,7 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                    {opacityId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     ConstantValueSource{0.5}}) &&
                composition->parameters().insert(
-                   {animationParameterId, "com.example.animation",
+                   {animationParameterId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     AnimationCurveSource{id<AnimationCurveId>(100)}}) &&
                composition->parameters().insert({driverParameterId, "com.example.driver",
                                                  DriverBindingSource{id<DriverBindingId>(100)}}) &&
@@ -387,6 +395,7 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                             next.ids().allocateLayerSlot() == id<LayerSlotId>(101) &&
                             next.ids().allocateParameter() == id<ParameterId>(48) &&
                             next.ids().allocateAnimationCurve() == id<AnimationCurveId>(101) &&
+                            next.ids().allocateKeyframe() == id<KeyframeId>(101) &&
                             next.ids().allocateDriverBinding() == id<DriverBindingId>(101),
                         "publication reconciles all currently durable allocator namespaces");
 }

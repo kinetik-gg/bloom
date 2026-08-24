@@ -66,8 +66,8 @@ constantMatchesSchema(const std::string_view schemaKey,
         return constantMatchesSchema(schemaKey, *constant);
     }
 
-    // Animation-curve and driver result types become enforceable when their typed records land in
-    // Batch 4. Until then publication can validate only their stable reference identities.
+    // Composition validation owns typed curve resolution because a ParameterStore cannot inspect
+    // its composition's curve store. Driver evaluation remains deferred.
     return true;
 }
 

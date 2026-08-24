@@ -49,6 +49,8 @@ ValidationResult Composition::validate() const {
     }
 
     result.append("parameters", parameters_.validate());
+    result.append("animationCurves", animationCurves_.validate());
+    result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));
     result.append("graph", graph_.validate(parameters_));
     return result;
 }
@@ -93,6 +95,8 @@ ValidationResult Project::validate() const {
     std::unordered_map<NodeId, std::size_t> nodeDeclarations;
     std::unordered_map<EdgeId, std::size_t> edgeDeclarations;
     std::unordered_map<ParameterId, std::size_t> parameterDeclarations;
+    std::unordered_map<AnimationCurveId, std::size_t> animationCurveDeclarations;
+    std::unordered_map<KeyframeId, std::size_t> keyframeDeclarations;
     std::unordered_map<LayerId, std::size_t> layerDeclarations;
     std::unordered_map<LayerSlotId, std::size_t> layerSlotDeclarations;
 
@@ -124,6 +128,24 @@ ValidationResult Project::validate() const {
                                              path + ".parameters[" +
                                                  std::to_string(parameter.id.value()) + "].id",
                                              "Parameter", parameterDeclarations, result);
+        }
+        for (const auto& record : composition.animationCurves().records()) {
+            const auto curveId = animationCurveId(record);
+            const auto curvePath =
+                path + ".animationCurves[" + std::to_string(curveId.value()) + "]";
+            validateProjectUniqueDeclaration(curveId, compositionOrdinal, curvePath + ".id",
+                                             "Animation curve", animationCurveDeclarations, result);
+            std::visit(
+                [&](const auto& curve) {
+                    for (const auto& keyframe : curve.keyframes) {
+                        validateProjectUniqueDeclaration(keyframe.id, compositionOrdinal,
+                                                         curvePath + ".keyframes[" +
+                                                             std::to_string(keyframe.id.value()) +
+                                                             "].id",
+                                                         "Keyframe", keyframeDeclarations, result);
+                    }
+                },
+                record);
         }
         for (const auto& boundary : composition.graph().layerOutputs()) {
             validateProjectUniqueDeclaration(boundary.layerId, compositionOrdinal,
