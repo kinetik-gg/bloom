@@ -186,6 +186,8 @@ The complete contract and game-engine pipeline fitness test are defined in
 - Replaceable editor panels are required. A custom recursive split tree is the current working
   implementation and remains gated on cross-platform UX validation; Qt docking is no longer the
   active scaffold.
+- The node editor uses Bloom-owned `QGraphicsScene`/`QGraphicsView` presentation over immutable
+  document snapshots; external node frameworks do not own graph, persistence, or undo semantics.
 - Canonical in-memory pixel representation and CPU image library.
 - Serialization/container technology for `.bloom`.
 - Dependency management strategy for Qt and ASWF libraries.
