@@ -1,5 +1,7 @@
 #include <bloom/document/graph.hpp>
 
+#include <bloom/document/persisted_text.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -76,7 +78,7 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
     }
 }
 
-[[nodiscard]] NodeId destinationNode(const InputPortRef& destination) noexcept {
+[[nodiscard]] NodeId destinationNode(const InputPortRef& destination) {
     return std::visit(
         [](const auto& input) {
             using Input = std::decay_t<decltype(input)>;
@@ -103,14 +105,15 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
         destination);
 }
 
-[[nodiscard]] bool validDestination(const InputPortRef& destination) noexcept {
+[[nodiscard]] bool validDestination(const InputPortRef& destination) {
     return std::visit(
         [](const auto& input) {
             using Input = std::decay_t<decltype(input)>;
             if constexpr (std::is_same_v<Input, NodeInputRef>) {
-                return input.nodeId.isValid() && !input.port.empty();
+                return input.nodeId.isValid() && bloom::document::isValidStructuralText(input.port);
             } else {
-                return input.stackNodeId.isValid() && input.slotId.isValid() && !input.role.empty();
+                return input.stackNodeId.isValid() && input.slotId.isValid() &&
+                       bloom::document::isValidStructuralText(input.role);
             }
         },
         destination);
@@ -131,14 +134,14 @@ NodeRecord* CanonicalGraph::findNode(const NodeId id) noexcept {
 }
 
 bool CanonicalGraph::addNode(NodeRecord node) {
-    if (!node.id.isValid() || node.typeId.empty() || node.schemaVersion == 0 ||
-        findNode(node.id) != nullptr) {
+    if (!node.id.isValid() || !isValidNamespacedIdentifier(node.typeId) ||
+        node.schemaVersion == 0 || findNode(node.id) != nullptr) {
         return false;
     }
 
     std::unordered_set<std::string> roles;
     for (const auto& binding : node.parameters) {
-        if (binding.role.empty() || !binding.parameterId.isValid() ||
+        if (!isValidStructuralText(binding.role) || !binding.parameterId.isValid() ||
             !roles.insert(binding.role).second) {
             return false;
         }
@@ -149,8 +152,8 @@ bool CanonicalGraph::addNode(NodeRecord node) {
 }
 
 bool CanonicalGraph::addEdge(EdgeRecord edge) {
-    if (!edge.id.isValid() || !edge.source.nodeId.isValid() || edge.source.port.empty() ||
-        !validDestination(edge.destination)) {
+    if (!edge.id.isValid() || !edge.source.nodeId.isValid() ||
+        !isValidStructuralText(edge.source.port) || !validDestination(edge.destination)) {
         return false;
     }
 
@@ -169,8 +172,8 @@ bool CanonicalGraph::addEdge(EdgeRecord edge) {
 }
 
 bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
-    if (!boundary.nodeId.isValid() || !boundary.layerId.isValid() || boundary.name.empty() ||
-        boundary.outputPort.empty()) {
+    if (!boundary.nodeId.isValid() || !boundary.layerId.isValid() ||
+        !isValidHumanFacingName(boundary.name) || !isValidStructuralText(boundary.outputPort)) {
         return false;
     }
 
@@ -198,22 +201,23 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
         } else if (!nodeIds.insert(node.id).second) {
             result.add(ValidationCode::DuplicateId, path + ".id", "Node ID is duplicated");
         }
-        if (node.typeId.empty()) {
-            result.add(ValidationCode::EmptyKey, path + ".typeId",
-                       "Node type ID must not be empty");
-        }
+        validateNamespacedIdentifier(node.typeId, path + ".typeId", "Node type ID", result);
         if (node.schemaVersion == 0) {
             result.add(ValidationCode::InvalidValue, path + ".schemaVersion",
                        "Node schema version must not be zero");
         }
 
         std::unordered_set<std::string> roles;
-        for (const auto& binding : node.parameters) {
-            const auto bindingPath = path + ".parameters[" + binding.role + "]";
-            if (binding.role.empty()) {
-                result.add(ValidationCode::EmptyKey, bindingPath,
-                           "Parameter binding role must not be empty");
-            } else if (!roles.insert(binding.role).second) {
+        for (std::size_t bindingIndex = 0; bindingIndex < node.parameters.size(); ++bindingIndex) {
+            const auto& binding = node.parameters[bindingIndex];
+            const bool roleIsValid = isValidStructuralText(binding.role);
+            const bool roleCanIdentifyPath = roleIsValid || binding.role.empty();
+            const auto bindingIdentity =
+                roleCanIdentifyPath ? binding.role : std::to_string(bindingIndex);
+            auto bindingPath = path;
+            bindingPath.append(".parameters[").append(bindingIdentity).push_back(']');
+            validateStructuralText(binding.role, bindingPath, "Parameter binding role", result);
+            if (roleIsValid && !roles.insert(binding.role).second) {
                 result.add(ValidationCode::DuplicateId, bindingPath,
                            "Parameter binding role is duplicated on the node");
             }
@@ -245,13 +249,9 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
             result.add(ValidationCode::InvalidId, path,
                        "Layer Output node and layer IDs must not be zero");
         }
-        if (boundary.outputPort.empty()) {
-            result.add(ValidationCode::EmptyKey, path + ".outputPort",
-                       "Layer Output port must not be empty");
-        }
-        if (boundary.name.empty()) {
-            result.add(ValidationCode::EmptyKey, path + ".name", "Layer name must not be empty");
-        }
+        validateStructuralText(boundary.outputPort, path + ".outputPort", "Layer Output port",
+                               result);
+        validateHumanFacingName(boundary.name, path + ".name", "Layer name", result);
         if (!boundaryNodeIds.insert(boundary.nodeId).second ||
             !boundariesByLayer.emplace(boundary.layerId, &boundary).second) {
             result.add(ValidationCode::DuplicateId, path,
@@ -283,7 +283,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
         } else if (!edgeIds.insert(edge.id).second) {
             result.add(ValidationCode::DuplicateId, path + ".id", "Edge ID is duplicated");
         }
-        if (!edge.source.nodeId.isValid() || edge.source.port.empty()) {
+        if (!edge.source.nodeId.isValid() || !isValidStructuralText(edge.source.port)) {
             result.add(ValidationCode::InvalidValue, path + ".source",
                        "Edge source must have a node and port");
         } else if (findNode(edge.source.nodeId) == nullptr) {
@@ -359,7 +359,8 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
     if (!compositionOutput_.has_value()) {
         result.add(ValidationCode::MissingCompositionOutput, "compositionOutput",
                    "Composition graph requires one explicit output endpoint");
-    } else if (!compositionOutput_->nodeId.isValid() || compositionOutput_->port.empty()) {
+    } else if (!compositionOutput_->nodeId.isValid() ||
+               !isValidStructuralText(compositionOutput_->port)) {
         result.add(ValidationCode::InvalidValue, "compositionOutput",
                    "Composition output endpoint is invalid");
     } else if (findNode(compositionOutput_->nodeId) == nullptr) {

@@ -8,6 +8,7 @@ target_sources(
         frame_time_mapping.cpp
         scalar_primitives.cpp
         sha256.cpp
+        utf8.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -22,6 +23,7 @@ target_sources(
             include/bloom/core/rational_time.hpp
             include/bloom/core/scalar_primitives.hpp
             include/bloom/core/sha256.hpp
+            include/bloom/core/utf8.hpp
 )
 
 target_compile_features(bloom_core PUBLIC cxx_std_20)
@@ -79,4 +81,9 @@ if(BUILD_TESTING)
         COMMAND bloom_core_sha256_test
         LABELS unit identity
     )
+
+    add_executable(bloom_core_utf8_test tests/utf8_tests.cpp)
+    target_link_libraries(bloom_core_utf8_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_utf8_test)
+    bloom_add_test(NAME bloom.core.utf8 COMMAND bloom_core_utf8_test LABELS unit text)
 endif()

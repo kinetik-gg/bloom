@@ -10,6 +10,7 @@ target_sources(
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
+        persisted_text.cpp
         project.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -24,6 +25,7 @@ target_sources(
             include/bloom/document/layer_stack.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
+            include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp
             include/bloom/document/schema_version.hpp
             include/bloom/document/validation.hpp
@@ -66,5 +68,14 @@ if(BUILD_TESTING)
         NAME bloom.document.extension-records
         COMMAND bloom_document_extension_records_test
         LABELS unit persistence
+    )
+
+    add_executable(bloom_document_persisted_text_test tests/persisted_text_tests.cpp)
+    target_link_libraries(bloom_document_persisted_text_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_persisted_text_test)
+    bloom_add_test(
+        NAME bloom.document.persisted-text
+        COMMAND bloom_document_persisted_text_test
+        LABELS unit persistence text
     )
 endif()

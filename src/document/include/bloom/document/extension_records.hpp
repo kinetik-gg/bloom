@@ -18,8 +18,6 @@ namespace bloom::document {
 
 class Project;
 
-inline constexpr std::size_t kMaxExtensionIdentifierBytes = 128;
-inline constexpr std::size_t kMaxExtensionStructuralStringBytes = 256;
 inline constexpr std::size_t kMaxOpaqueExtensionPayloadBytes = 67'108'864;
 inline constexpr std::size_t kMaxAggregateOpaqueExtensionPayloadBytes = 134'217'728;
 

@@ -1,5 +1,7 @@
 #include <bloom/document/project.hpp>
 
+#include <bloom/document/persisted_text.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <string>
@@ -43,6 +45,7 @@ ValidationResult Composition::validate() const {
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Composition ID must not be zero");
     }
+    validateHumanFacingName(name_, "name", "Composition name", result);
     if (duration_ <= core::RationalTime{}) {
         result.add(ValidationCode::InvalidValue, "duration",
                    "Composition duration must be greater than zero");
@@ -67,7 +70,8 @@ Composition* Project::findComposition(const CompositionId id) noexcept {
 }
 
 bool Project::addComposition(Composition composition) {
-    if (!composition.id().isValid() || findComposition(composition.id()) != nullptr) {
+    if (!composition.id().isValid() || !isValidHumanFacingName(composition.name()) ||
+        findComposition(composition.id()) != nullptr) {
         return false;
     }
     compositions_.push_back(std::move(composition));
@@ -121,6 +125,7 @@ ValidationResult Project::validate() const {
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }
+    validateHumanFacingName(name_, "name", "Project name", result);
 
     std::unordered_set<CompositionId> compositionIds;
     std::unordered_map<NodeId, std::size_t> nodeDeclarations;

@@ -1,11 +1,12 @@
 #include <bloom/document/extension_records.hpp>
 
+#include <bloom/core/utf8.hpp>
+#include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
-#include <algorithm>
+#include <compare>
 #include <concepts>
 #include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,79 +17,6 @@
 namespace {
 
 using namespace bloom::document;
-
-[[nodiscard]] bool isIdentifierCharacter(const char character) noexcept {
-    return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') ||
-           character == '.' || character == '_' || character == '-';
-}
-
-[[nodiscard]] bool isNamespacedIdentifier(const std::string_view value) noexcept {
-    return !value.empty() && value.size() <= kMaxExtensionIdentifierBytes &&
-           ((value.front() >= 'a' && value.front() <= 'z') ||
-            (value.front() >= '0' && value.front() <= '9')) &&
-           std::ranges::all_of(value, isIdentifierCharacter);
-}
-
-[[nodiscard]] bool isContinuationByte(const std::uint8_t byte) noexcept {
-    return (byte & 0xC0U) == 0x80U;
-}
-
-[[nodiscard]] bool isValidUtf8(const std::string_view value) noexcept {
-    const auto* bytes = reinterpret_cast<const std::uint8_t*>(value.data());
-    std::size_t offset = 0;
-    while (offset < value.size()) {
-        const auto lead = bytes[offset];
-        if (lead <= 0x7FU) {
-            ++offset;
-            continue;
-        }
-
-        if (lead >= 0xC2U && lead <= 0xDFU) {
-            if (offset + 1 >= value.size() || !isContinuationByte(bytes[offset + 1])) {
-                return false;
-            }
-            offset += 2;
-            continue;
-        }
-
-        if (lead >= 0xE0U && lead <= 0xEFU) {
-            if (offset + 2 >= value.size() || !isContinuationByte(bytes[offset + 1]) ||
-                !isContinuationByte(bytes[offset + 2])) {
-                return false;
-            }
-            if ((lead == 0xE0U && bytes[offset + 1] < 0xA0U) ||
-                (lead == 0xEDU && bytes[offset + 1] >= 0xA0U)) {
-                return false;
-            }
-            offset += 3;
-            continue;
-        }
-
-        if (lead >= 0xF0U && lead <= 0xF4U) {
-            if (offset + 3 >= value.size() || !isContinuationByte(bytes[offset + 1]) ||
-                !isContinuationByte(bytes[offset + 2]) || !isContinuationByte(bytes[offset + 3])) {
-                return false;
-            }
-            if ((lead == 0xF0U && bytes[offset + 1] < 0x90U) ||
-                (lead == 0xF4U && bytes[offset + 1] >= 0x90U)) {
-                return false;
-            }
-            offset += 4;
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
-
-[[nodiscard]] bool utf8BytesLess(const std::string_view left,
-                                 const std::string_view right) noexcept {
-    return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end(),
-                                        [](const char leftByte, const char rightByte) {
-                                            return static_cast<unsigned char>(leftByte) <
-                                                   static_cast<unsigned char>(rightByte);
-                                        });
-}
 
 struct TargetDeclarations final {
     ProjectId project;
@@ -163,26 +91,6 @@ struct TargetDeclarations final {
     return declarations;
 }
 
-void validateIdentifier(const std::string_view value, std::string path,
-                        const std::string_view label, ValidationResult& result) {
-    if (!isNamespacedIdentifier(value)) {
-        result.add(ValidationCode::InvalidValue, std::move(path),
-                   std::string(label) +
-                       " must be a lowercase ASCII identifier of at most 128 bytes");
-    }
-}
-
-void validateStructuralString(const std::string_view value, std::string path,
-                              const std::string_view label, ValidationResult& result) {
-    if (value.empty()) {
-        result.add(ValidationCode::EmptyKey, std::move(path),
-                   std::string(label) + " must not be empty");
-    } else if (value.size() > kMaxExtensionStructuralStringBytes || !isValidUtf8(value)) {
-        result.add(ValidationCode::InvalidValue, std::move(path),
-                   std::string(label) + " must be valid UTF-8 of at most 256 bytes");
-    }
-}
-
 } // namespace
 
 namespace bloom::document {
@@ -220,8 +128,9 @@ ValidationResult validateExtensionRecords(const Project& project) {
         }
         previousId = record.id;
 
-        validateIdentifier(record.ownerId, path + ".ownerId", "Extension owner ID", result);
-        validateIdentifier(record.typeId, path + ".typeId", "Extension type ID", result);
+        validateNamespacedIdentifier(record.ownerId, path + ".ownerId", "Extension owner ID",
+                                     result);
+        validateNamespacedIdentifier(record.typeId, path + ".typeId", "Extension type ID", result);
         if (!record.schemaVersion.isValid()) {
             result.add(ValidationCode::InvalidValue, path + ".schemaVersion",
                        "Extension schema major version must not be zero");
@@ -230,7 +139,7 @@ ValidationResult validateExtensionRecords(const Project& project) {
             result.add(ValidationCode::MissingReference, path + ".subject",
                        "Extension subject must resolve in current project truth");
         }
-        validateStructuralString(record.mediaType, path + ".mediaType", "Media type", result);
+        validateStructuralText(record.mediaType, path + ".mediaType", "Media type", result);
 
         if (record.payload.size() > kMaxOpaqueExtensionPayloadBytes) {
             result.add(ValidationCode::InvalidValue, path + ".payload",
@@ -253,9 +162,10 @@ ValidationResult validateExtensionRecords(const Project& project) {
                 const auto& reference = table->references[index];
                 const auto referencePath =
                     path + ".referencePolicy.references[" + std::to_string(index) + "]";
-                validateStructuralString(reference.key, referencePath + ".key",
-                                         "Host reference key", result);
-                if (hasPreviousKey && !utf8BytesLess(previousKey, reference.key)) {
+                validateStructuralText(reference.key, referencePath + ".key", "Host reference key",
+                                       result);
+                if (hasPreviousKey && core::compareUtf8Bytes(previousKey, reference.key) !=
+                                          std::strong_ordering::less) {
                     result.add(ValidationCode::InvalidOrder, referencePath + ".key",
                                "Host reference keys must be unique and sorted by UTF-8 bytes");
                 }
@@ -268,8 +178,8 @@ ValidationResult validateExtensionRecords(const Project& project) {
             }
         } else if (const auto* remapper =
                        std::get_if<ExtensionOwnerRemapper>(&record.referencePolicy)) {
-            validateIdentifier(remapper->remapperId, path + ".referencePolicy.remapperId",
-                               "Extension remapper ID", result);
+            validateNamespacedIdentifier(remapper->remapperId, path + ".referencePolicy.remapperId",
+                                         "Extension remapper ID", result);
             if (!remapper->version.isValid()) {
                 result.add(ValidationCode::InvalidValue, path + ".referencePolicy.version",
                            "Extension remapper major version must not be zero");

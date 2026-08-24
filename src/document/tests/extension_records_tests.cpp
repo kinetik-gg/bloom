@@ -5,6 +5,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -365,9 +366,8 @@ void testEnvelopeAndReferencePolicyValidation(ExpectationContext& expectations) 
     auto oversizedKey = makeProjectWithTargets();
     auto oversizedKeyRecord = record(1);
     oversizedKeyRecord.referencePolicy = ExtensionHostReferenceTable{{
-        ExtensionHostReference{
-            std::string(bloom::document::kMaxExtensionStructuralStringBytes + 1, 'k'),
-            ExtensionTarget{kIds.project}},
+        ExtensionHostReference{std::string(bloom::document::kMaxStructuralTextBytes + 1, 'k'),
+                               ExtensionTarget{kIds.project}},
     }};
     const bool oversizedKeyAdded = oversizedKey.addExtensionRecord(std::move(oversizedKeyRecord));
     expectations.expect(oversizedKeyAdded &&
@@ -378,7 +378,7 @@ void testEnvelopeAndReferencePolicyValidation(ExpectationContext& expectations) 
     auto invalidFields = makeProjectWithTargets();
     auto invalidRecord = record(1);
     invalidRecord.ownerId = "Vendor.Module";
-    invalidRecord.typeId = std::string(bloom::document::kMaxExtensionIdentifierBytes + 1, 'a');
+    invalidRecord.typeId = std::string(bloom::document::kMaxNamespacedIdentifierBytes + 1, 'a');
     invalidRecord.schemaVersion = {};
     invalidRecord.mediaType = std::string("\xC0\x80", 2);
     invalidRecord.referencePolicy = ExtensionOwnerRemapper{"invalid/remapper", {}};

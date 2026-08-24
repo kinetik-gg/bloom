@@ -1,5 +1,8 @@
 #include <bloom/document/parameter.hpp>
 
+#include <bloom/core/utf8.hpp>
+#include <bloom/document/persisted_text.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -10,8 +13,7 @@
 
 namespace {
 
-[[nodiscard]] bool
-isGenericallyValidSource(const bloom::document::ParameterSource& source) noexcept {
+[[nodiscard]] bool isGenericallyValidSource(const bloom::document::ParameterSource& source) {
     return std::visit(
         [](const auto& valueSource) {
             using Source = std::decay_t<decltype(valueSource)>;
@@ -24,6 +26,9 @@ isGenericallyValidSource(const bloom::document::ParameterSource& source) noexcep
                 }
                 if (const auto* value = std::get_if<bloom::core::Color4d>(&valueSource.value)) {
                     return value->isValid();
+                }
+                if (const auto* value = std::get_if<std::string>(&valueSource.value)) {
+                    return bloom::core::isValidUtf8(*value);
                 }
                 return true;
             } else if constexpr (std::is_same_v<Source, bloom::document::AnimationCurveSource>) {
@@ -58,7 +63,7 @@ constantMatchesSchema(const std::string_view schemaKey,
 }
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
-                                          const bloom::document::ParameterSource& source) noexcept {
+                                          const bloom::document::ParameterSource& source) {
     if (!isGenericallyValidSource(source)) {
         return false;
     }
@@ -82,7 +87,7 @@ const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept
 }
 
 bool ParameterStore::insert(ParameterRecord record) {
-    if (!record.id.isValid() || record.schemaKey.empty() ||
+    if (!record.id.isValid() || !isValidStructuralText(record.schemaKey) ||
         !isValidSourceForSchema(record.schemaKey, record.source) || find(record.id) != nullptr) {
         return false;
     }
@@ -124,10 +129,8 @@ ValidationResult ParameterStore::validate() const {
         } else if (!ids.insert(record.id).second) {
             result.add(ValidationCode::DuplicateId, path, "Parameter ID is duplicated");
         }
-        if (record.schemaKey.empty()) {
-            result.add(ValidationCode::EmptyKey, path + ".schemaKey",
-                       "Parameter schema key must not be empty");
-        }
+        validateStructuralText(record.schemaKey, path + ".schemaKey", "Parameter schema key",
+                               result);
         if (!isValidSourceForSchema(record.schemaKey, record.source)) {
             result.add(ValidationCode::InvalidValue, path + ".source",
                        "Parameter source does not satisfy its schema");

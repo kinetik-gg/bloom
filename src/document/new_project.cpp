@@ -1,6 +1,7 @@
 #include <bloom/document/new_project.hpp>
 
 #include <bloom/document/graph.hpp>
+#include <bloom/document/persisted_text.hpp>
 
 #include <stdexcept>
 #include <string>
@@ -19,8 +20,8 @@ constexpr EdgeId kInitialOutputEdgeId = EdgeId::fromRaw(1);
 
 NewProject makeNewProject(std::string projectName, std::string compositionName,
                           const core::RationalTime duration, const CompositionFormat format) {
-    if (projectName.empty() || compositionName.empty()) {
-        throw std::invalid_argument("New project and composition names must not be empty");
+    if (!isValidHumanFacingName(projectName) || !isValidHumanFacingName(compositionName)) {
+        throw std::invalid_argument("New project and composition names are invalid");
     }
     if (duration <= core::RationalTime{}) {
         throw std::invalid_argument("New composition duration must be greater than zero");
