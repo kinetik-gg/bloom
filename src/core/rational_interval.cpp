@@ -164,7 +164,8 @@ positiveDifferenceNumerator(const bloom::core::RationalTime later,
         }
     }
 
-    const auto biasedExponent = static_cast<std::uint64_t>(exponent + 1023);
+    const auto biasedExponentValue = static_cast<std::int64_t>(exponent) + 1023;
+    const auto biasedExponent = static_cast<std::uint64_t>(biasedExponentValue);
     const auto fraction = significand - (std::uint64_t{1} << 52U);
     return std::bit_cast<double>((biasedExponent << 52U) | fraction);
 }
