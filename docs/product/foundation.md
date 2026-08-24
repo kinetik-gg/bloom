@@ -64,7 +64,8 @@ an editorial sequence.
 The first useful Bloom should demonstrate this complete workflow:
 
 1. Create a project and composition.
-2. Add a simple source such as a solid, still image, or text item.
+2. Add a deterministic solid source. Text remains authorable, but its portable font pipeline is not
+   part of the first evaluator.
 3. Represent it coherently in the layer timeline and canonical node graph.
 4. Synchronize selection across viewer, timeline, graph, and properties.
 5. Edit transform and opacity through properties and direct viewer manipulation.
@@ -111,7 +112,6 @@ should normally wait.
 - Whether Bloom should ultimately be described as motion/compositing-first or as a balanced hybrid
   editor and compositor.
 - The exact relationship between sequence clips, compositions, and nested compositions.
-- Which source type should anchor the first proof: still image, solid, or text.
 
 ## Related Contracts
 

@@ -148,10 +148,13 @@ archive, then publishes through a narrow `src/platform` primitive:
 - Windows flushes the staged file and uses `ReplaceFileW` for an existing target or a same-volume
   move for first publication.
 
-Failure leaves the previous project untouched; staging cleanup is best effort and diagnosable.
-Saves are serialized per canonical target so an older background task cannot overwrite a newer
-one. `SaveResult` reports the snapshot revision that reached disk, and the UI clears dirty state
-only when the live document still has that revision.
+Any failure before atomic publication leaves the previous project untouched; staging cleanup is
+best effort and diagnosable. If replacement succeeds but a subsequent directory durability flush
+fails, the new project may already be visible. Bloom reports a distinct
+`PublishedWithDurabilityWarning` outcome rather than claiming that the previous file survived or
+that the save completed cleanly. Saves are serialized per canonical target so an older background
+task cannot overwrite a newer one. `SaveResult` reports the snapshot revision that reached disk,
+and the UI clears dirty state only when the live document still has that revision.
 
 ## Asset Locators
 

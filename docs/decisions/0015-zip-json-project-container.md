@@ -33,6 +33,8 @@ need for an explicit schema and migration policy.
 - Treat an unprovable preservation path as degraded/read-only rather than silently dropping data.
 - Run synchronous codec calls only from the task system; the UI thread never performs project I/O.
 - Publish saves atomically through a narrow, parity-tested platform primitive.
+- Distinguish failure before publication from a durability warning after replacement has already
+  become visible; never claim that the previous file remains after a successful replacement.
 - Qualify libzip 1.11.4, its required zlib 1.3.2 dependency, and yyjson 0.12.0 as private pinned
   implementation dependencies. Their library types do not appear in public headers or persisted
   data.

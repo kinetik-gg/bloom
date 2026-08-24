@@ -4,85 +4,425 @@ Status: working
 
 Updated: 2026-08-25
 
-The roadmap is ordered by proof, not by subsystem completeness. A milestone is complete only when its
-workflow is demonstrable and its durable behavior is tested.
+This roadmap is ordered by end-to-end proof and dependency safety. It is the execution plan; the
+focused architecture documents own detailed semantics and must not be duplicated here.
 
-## M0 — Repository Rebaseline
+## Verified Current Checkpoint
 
-- Establish C++20, CMake, Qt 6 Widgets, warnings, and a smoke test.
-- Make repository documentation canonical.
-- Launch a placeholder Compositing workspace based on the UI sketch.
-- Establish the quality bar, standards-first policy, task-system contract, GPU direction, and
-  cross-platform parity contract.
-- Establish the modular-monolith and optional pipeline extension contract.
-- Maintain a Linux, macOS, and Windows CI matrix; its first remote execution begins when this root
-  is published.
+Bloom currently has:
 
-Acceptance: a clean checkout configures, builds, tests, and launches the Qt shell.
+- a C++20 and Qt 6 application shell with a replaceable split-tree workspace
+- a Qt-free canonical project, composition, graph, Layer Stack, parameter, and snapshot model
+- typed transactional commands with revision-safe undo and redo
+- a shared composition session projected through Viewer, Timeline, Nodes, Media, and Properties
+- atomic text-layer authoring with stable node, layer, slot, edge, and parameter IDs
+- strict warnings, formatting, repository hygiene, architecture-boundary checks, and seven local
+  tests
+- accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
+  add-ons, Apache-2.0 distribution, and the native `.bloom` container
 
-## M1 — Document And Command Spine
+The current Viewer is a presentation placeholder. Bloom does not yet evaluate pixels, store
+keyframes, save a project, or run heavy work through a task scheduler. Those absences define the
+next batches.
 
-- Add stable IDs, rational composition time, and diagnostics.
-- Model a minimal project, composition, canonical graph, layer facade, and parameters.
-- Add typed commands, interaction transactions, undo/redo, and dirty state.
-- Connect selection and Properties to read-only document projections.
-- Replace the hard-coded editor list with a typed compiled-in editor registry and introduce the
-  smallest application composition/module catalog needed to own it.
-- Add the task scheduler contract and a non-blocking job/status surface.
-- Run a small GPU portability spike on Linux, macOS, and Windows before GPU interfaces harden.
+Before the next feature is called cross-platform complete, the current checkpoint and each new
+merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
+establish platform parity.
 
-Acceptance: source, transform, opacity, selection, and undo behavior work headlessly and through the
-UI without direct panel mutation.
+## Execution Order
 
-## M2 — First Evaluation Path
+```text
+Batch 1: async/render foundations (three parallel tracks)
+             |
+             v
+Batch 2: snapshot compiler + Jobs + stale-safe preview state
+             |
+             v
+Batch 3: deterministic CPU pixels in Viewer
+             |
+             v
+Batch 4: rational time + animation + direct manipulation
+             |
+             v
+Batch 5: persistence-ready document/platform/dependencies
+             |
+             v
+Batch 6: deterministic .bloom save/open
+             |
+             v
+Batch 7: standards-backed display and PNG/EXR output
 
-- Compile an immutable composition snapshot.
-- Register built-in node definitions and CPU evaluators through their owning typed registries while
-  keeping evaluation calls direct and strongly typed.
-- Evaluate minimal source, transform, composite, and output nodes on CPU.
-- Display the evaluated frame in the viewer.
-- Add explicit time and resolution requests, cancellation, diagnostics, and conservative caching.
-- Keep decode and evaluation asynchronous with no UI-thread waits.
-- Add the first accelerated source/transform/composite/output path behind the backend-neutral render
-  contract once CPU reference fixtures exist.
+GPU qualification starts after Batch 3 and runs beside Batches 4–7.
+```
 
-Acceptance: the same snapshot and request produce the same image and cache identity.
+Only one active track may make structural document-schema changes at a time. Runtime, render,
+platform, project, and UI work may proceed concurrently when their public seams are frozen and
+their source ownership does not overlap.
 
-## M3 — Layer, Node, And Animation Proof
+## Batch 1 — Asynchronous And Render Foundations
 
-- Present one canonical graph through the node editor and layer timeline.
-- Synchronize selection across viewer, nodes, timeline, and Properties.
-- Add keyframes, rational-time scrubbing, and direct viewer manipulation.
-- Ensure one interaction creates one undoable transaction.
+Goal: establish the independent contracts needed by every later heavy operation without building a
+generic workflow engine or a renderer-shaped task system.
 
-Acceptance: the complete interaction described in `product/foundation.md` works without duplicated
-layer and graph truth.
+Three tracks run in parallel.
 
-## M4 — Project Round Trip And Output
+### 1A — Bounded Task Runtime
 
-- Implement the accepted [`.bloom` schema and container](architecture/project-format.md), including
-  deterministic JSON, resource limits, and migration fixtures.
-- Record stable namespaced module/type IDs and preserve unavailable optional-module data.
-- Implement validation, atomic save, open, and version reporting.
-- Import still images and an initial image-sequence representation.
-- Render deterministic PNG or EXR output through the CPU reference path.
-- Integrate OCIO and OpenEXR/OIIO according to the standards policy rather than creating substitute
-  color or professional image semantics.
-- Exercise the vertical proof in Linux, macOS, and Windows CI.
+Create the Qt-free task kernel in `src/runtime`:
 
-Acceptance: save/reopen preserves the evaluated frame and a fixture project renders identically in
-headless tests.
+- strong task and task-group IDs
+- semantic `Interactive`, `Visible`, `Foreground`, and `Background` priorities
+- independently bounded CPU and blocking-I/O executors
+- application, project, composition, panel-request, and export owner scopes represented by stable
+  values rather than object pointers
+- cooperative cancellation, task groups, structured progress, diagnostics, and terminal outcomes
+- typed non-blocking result handles; UI-facing code has no `wait`, blocking `get`, or join path
+- coalescing by owner and request key, fair scheduling, backpressure, and bounded terminal history
+- completion delivery through a neutral mailbox rather than worker callbacks into Qt
+- staged shutdown that rejects new work and reaches quiescence before service destruction
 
-## Deferred Until The Proof Is Stable
+The command stack remains synchronous on the authoring thread. Background tasks never mutate a
+Document or invoke widgets.
 
-- editorial sequences and advanced timeline tools
-- audio playback and processing
-- grading workspace
-- embedded Python, the public add-on SDK, add-on management, custom PySide UI, and native add-ons;
-  current foundation APIs must still follow the boundaries in
-  [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md)
+Suggested commit: `feat: add bounded task runtime`
+
+### 1B — Composition Truth And Solid Authoring
+
+Extend the document and command model with only the durable fields required by evaluation:
+
+- composition extent, square-or-rational pixel aspect, and rational frame rate
+- explicit defaults of 1920×1080, square pixels, and 24/1 for a new proof composition
+- node schema version in durable node identity; registry lookup uses namespaced type ID plus version
+- finite `Color4d`, `bloom.solid-source`, and `bloom.solid.color`
+- typed `AddSolidLayer` using the same source → Layer Output → stable Layer Stack topology as other
+  structured layers
+- commands and validation for format changes
+
+Time remains exact rational seconds; frame numbers are display labels. Widget size never becomes
+semantic render resolution.
+
+Text stays authorable but is not faked by the first evaluator. Portable deterministic text requires
+font asset identity, resolution, shaping, and rasterization contracts that belong in a later batch.
+
+Suggested commits:
+
+- `feat: add composition render settings`
+- `feat: add solid layer authoring`
+
+### 1C — Canonical CPU Image Values
+
+Create `src/render` with Qt-free, allocation-checked values:
+
+- image extent, row layout, data and display windows, pixel aspect, and color-encoding identity
+- canonical CPU `RGBA32F` pixels with premultiplied alpha
+- explicit immutable ownership and non-owning views
+- bounded allocation and overflow diagnostics
+- a prepared packed display-buffer result type for later UI handoff
+
+Initial reference pixels use a clearly labelled linear-sRGB encoding. RGB retains finite negative
+and HDR values; alpha is finite in `[0, 1]`; transparent canonical pixels have zero RGB. Production
+OCIO display processing remains a separate later stage.
+
+Suggested commit: `feat: define CPU image contracts`
+
+### Batch 1 Merge Gate
+
+- Deterministic task tests cover priorities, fairness, pool separation, queue bounds, coalescing,
+  cancellation, groups, progress, exception conversion, history bounds, and shutdown.
+- Composition values reject zero, overflow, invalid rate/aspect, and hostile extents.
+- Solid creation is one exact undoable transaction with stable IDs.
+- Image math passes allocation-overflow and alpha/HDR invariants without Qt linkage.
+- Strict build, format, hygiene, architecture checks, CTest, and the three-platform matrix pass.
+
+Visual checkpoint: relaunch only if Add Solid and its synchronized layer/node/property projections
+are complete enough to inspect. No pixel-rendering claim is made yet.
+
+## Batch 2 — Snapshot Compiler, Jobs, And Preview Lifecycle
+
+Goal: prove that real composition-derived work can execute, report progress, be superseded, and
+publish safely before image allocation increases the cost of mistakes.
+
+Parallel work packages:
+
+1. `src/runtime`: a startup-built and then frozen `NodeDefinitionRegistry`, typed port/parameter
+   schemas, and deterministic `SnapshotCompiler`.
+2. `src/ui`: a `TaskUiBridge`, `TaskMonitorModel`, and replaceable `bloom.jobs` editor. Workers never
+   retain a `QObject`.
+3. `src/ui` application service: a composition preview controller with owner scope, revision, and
+   request generation. It exposes `Preparing`, `Ready`, `Unsupported`, `Cancelled`, and `Failed`
+   derived states.
+
+The compiler follows only the graph reachable from the explicit composition output, validates node
+type/version, ports, required parameter roles and value kinds, and lowers to a closed typed runtime
+operation vocabulary. Type erasure is allowed at registration/compile boundaries, not inside the
+hot evaluator.
+
+The Jobs editor is a normal replaceable panel, not a fixed status bar. It shows phase, progress,
+priority, state, duration, cancellation, and diagnostics after the initiating panel changes or
+closes. Application close uses staged asynchronous shutdown and keeps processing Qt events.
+
+Suggested commits:
+
+- `feat: compile composition snapshots`
+- `feat: add jobs editor`
+- `feat: manage asynchronous preview requests`
+
+### Batch 2 Merge Gate
+
+- Rapid revisions and same-revision generations suppress every obsolete result.
+- Selection-only changes do not compile a graph.
+- Replacing Viewer or Jobs during slow fake work is safe and never joins a worker.
+- UI progress is rate-limited and delivered only on the UI thread.
+- Unsupported reachable nodes carry stable object-scoped diagnostics; unreachable optional nodes do
+  not invalidate a valid output path.
+- Closing the application with cooperative work in flight remains responsive and reaches clean
+  quiescence.
+
+Visual checkpoint: launch Bloom with deliberately observable plan work. Viewer must show only the
+current revision while Jobs shows superseded/cancelled generations honestly.
+
+## Batch 3 — Deterministic CPU Composition Preview
+
+Goal: render the first correct pixels through the asynchronous path.
+
+Implement:
+
+- a closed immutable plan containing Solid, translation/opacity Layer Output, ordered Layer Stack,
+  and Composition Output operations
+- explicit evaluation requests containing rational time, output, composition format or proxy
+  extent, quality, and color intent
+- bounded full-frame CPU evaluation with cooperative cancellation at operation and scanline
+  boundaries
+- fractional translation with defined bilinear sampling and transparent borders
+- premultiplied source-over compositing
+- first Layer Stack entry as topmost; evaluation folds from bottom to top
+- conservative document-runtime cache identity containing every input that can change pixels
+- a worker-side reference linear-sRGB → sRGB packed display mapper with visible `Reference display`
+  status
+- Viewer publication of already-prepared display pixels with last-good-frame, rendering, stale, and
+  failed states
+
+Use two differently colored solids as the main proof fixture. Reordering them must produce a
+non-commutatively different result.
+
+Suggested commits:
+
+- `feat: add deterministic CPU compositor`
+- `feat: render composition previews asynchronously`
+
+### Batch 3 Merge Gate
+
+- Golden pixel fixtures cover translucent overlap, clipping, fractional translation, opacity 0/1,
+  reorder, undo/redo, repeatability, and cache identity.
+- Invalid schemas, missing evaluators, unsupported parameter sources, memory pressure, overflow, and
+  cancellation produce structured outcomes.
+- A slow evaluator proves panel switching, numeric editing, undo/redo, and cancellation keep the Qt
+  event loop responsive.
+- Stale frames never flash after rapid edits.
+- ASan/UBSan render tests and the cross-platform build/test matrix pass.
+
+Visual checkpoint: launch Bloom. Add two solids, edit position and opacity, reorder them, and verify
+that Viewer updates asynchronously without blocking.
+
+## Batch 4 — Rational Time, Animation, And Direct Manipulation
+
+Goal: complete the time-dependent authoring part of the first vertical proof and make the document
+ready for a stable project schema.
+
+Implement in dependency order:
+
+1. durable keyframe IDs, animation-curve storage, interpolation modes, validation, and allocator
+   support
+2. typed insert/update/delete keyframe commands and gesture transactions
+3. exact parameter sampling at rational request time in the CPU evaluator
+4. composition-session current time, playhead/scrub behavior, and timeline keyframe projection
+5. direct Viewer translation using one command transaction per gesture
+6. asynchronous coalescing so rapid scrubbing publishes only the newest requested frame
+
+Start with scalar and `Vec2d` animation needed by opacity and position. Do not design every future
+curve modifier or expression feature in this batch.
+
+Suggested commits:
+
+- `feat: add animation curve authoring`
+- `feat: evaluate animated parameters`
+- `feat: add timeline scrubbing and keyframes`
+- `feat: add viewer transform interaction`
+
+### Batch 4 Merge Gate
+
+- Curve storage survives snapshot, commit, undo, and redo with exact IDs and rational times.
+- One drag creates one understandable undo step.
+- Scrub storms remain bounded and never publish an old frame.
+- Timeline, Viewer, Nodes, and Properties retain one primary/contextual selection truth.
+
+Visual checkpoint: animate position/opacity, scrub the playhead, directly move the selected layer,
+and undo each gesture.
+
+## Batch 5 — Persistence-Ready Foundations
+
+Goal: freeze the first wire contract only after all required durable authoring state exists.
+
+Parallel tracks after animation storage lands:
+
+### 5A — Format Contract And Fixtures
+
+- freeze complete `manifest.json` and `document.json` shapes and their JSON Schema dialect
+- define requirements, every array's ordering, integer/negative-zero/rational encodings, extension
+  payload bytes, resource limits, schema-version agreement, symlink policy, and canonical target
+  identity
+- add readable golden fixtures and an adversarial corpus
+
+### 5B — Persistence-Ready Document State
+
+- expose validated durable-ID allocation high-water state for every namespace, including keyframes
+  and extension records
+- restore allocator state exactly so deleted IDs cannot be reused after reopen
+- add opaque extension records with stable record ID, namespaced owner/type, schema version, optional
+  typed subject, media type, and payload bytes
+
+### 5C — Platform And Dependency Foundation
+
+- accept a reproducible dependency-intake policy
+- pin yyjson, libzip, zlib, and hashes; keep them private/SYSTEM and record licenses/SBOM metadata
+- add a narrow staged-file/atomic-publication interface with POSIX, macOS, and Windows behavior and
+  fault-injection seams
+
+Suggested commits:
+
+- `docs: freeze project format implementation contract`
+- `feat: make document state persistence-ready`
+- `build: pin project format dependencies`
+- `feat: add atomic file publication`
+
+### Batch 5 Merge Gate
+
+- Deleted IDs remain unavailable after exact allocator reconstruction.
+- Animation and extension records survive snapshot/draft/commit.
+- Atomic-publication tests distinguish pre-publication failure from post-publication durability
+  warning.
+- Pinned dependency builds and platform adapters compile in all three CI environments.
+
+## Batch 6 — Deterministic `.bloom` Save And Open
+
+Goal: save/reopen without changing project truth or blocking the UI.
+
+Land in reviewable increments:
+
+1. strict bounded JSON parser/writer, duplicate-key rejection, migrations, move-only unknown-member
+   round-trip state, schemas, and deterministic golden bytes
+2. constrained ZIP reader/writer with entry/path/attribute/CRC/resource validation and no extraction
+3. same-directory stage, close, reopen/decode validation, flush, then non-cancellable atomic
+   publication
+4. an application-owned project session containing Document, Command Stack, round-trip state, path,
+   editability, and saved revision
+5. File → New/Open/Save/Save As, dirty state, unsaved-change flow, recent path, and actionable
+   degraded/read-only state, all through foreground I/O tasks
+
+Suggested commits:
+
+- `feat: add deterministic project json codec`
+- `feat: add Bloom project container`
+- `feat: add asynchronous project service`
+- `feat: connect project save and open workflow`
+
+### Batch 6 Merge Gate
+
+- Same snapshot produces identical canonical `document.json` bytes.
+- IDs, allocator watermarks, integer extrema, exact finite doubles, Unicode, rationals, animation,
+  graph order, and extension payloads round-trip.
+- Unknown additive members survive stable-ID edits; unknown core discriminators open read-only.
+- Traversal, duplicate entries, malformed UTF-8, CRC corruption, executable/symlink entries, and zip
+  bombs are rejected.
+- Failed open leaves the active project, selection, and history unchanged.
+- Older saves cannot publish after newer saves; dirty state clears only for the revision on disk.
+- Slow save/open leaves the UI responsive and inspectable through Jobs.
+- Shared fixtures round-trip on Linux, macOS, and Windows.
+
+Visual checkpoint: save the animated composition, close/reopen it, and verify the evaluated frame,
+selection reset, animation, and layer/node structure.
+
+## Batch 7 — Standards-Backed Display And Output
+
+Goal: complete the first proof with professional color-managed presentation and deterministic file
+output rather than a private image writer.
+
+Implement:
+
+- qualified OpenColorIO configuration identity, CPU display processing, and explicit missing-config
+  diagnostics
+- standards-backed PNG and flat OpenEXR output through qualified OpenImageIO/OpenEXR components
+- explicit alpha, color, data/display window, pixel aspect, channel, and metadata behavior
+- cancellable foreground render tasks using immutable snapshots and explicit quality/color intent
+- export capability/loss reporting even for the initially small supported subset
+
+Suggested commits:
+
+- `feat: add color-managed CPU display`
+- `feat: render PNG and OpenEXR output`
+
+### Batch 7 Merge Gate
+
+- Viewer and output color intent are explicit and tested; preview compromises remain labelled.
+- Fixed HDR/negative/alpha fixtures survive the declared output subset.
+- Save/reopen preserves the same evaluated frame and headless output identity.
+- Final output never silently falls back to preview quality or missing color processing.
+
+Visual checkpoint: reopen a project, select an OCIO view, and render a deterministic PNG or EXR.
+Completing this gate completes the first vertical proof in `product/foundation.md`.
+
+## Parallel GPU Qualification Lane
+
+Begin the gated Vulkan/MoltenVK spike only after Batch 3 supplies CPU fixtures, task scheduling, and
+request semantics. It may run beside Batches 4–7 under separate `src/render` backend files and
+dependency manifests.
+
+The spike must not change document semantics or replace the CPU final path. Promotion requires the
+cross-platform capability, parity, cancellation, presentation, memory-pressure, shader-failure, and
+device-loss gates in [`architecture/gpu-backend.md`](architecture/gpu-backend.md). Until then the
+GPU direction remains working rather than accepted.
+
+## Agent Workload Protocol
+
+Each execution wave uses root plus up to three agents:
+
+1. Root freezes the smallest public seam, assigns non-overlapping source ownership, and reserves
+   top-level CMake, app composition, shared registries, and canonical docs for integration.
+2. Agents work in module-local files and do not commit. One agent owns implementation, another may
+   own independent adversarial tests, and a third owns a separate module/UI projection.
+3. Root reviews boundary direction and failure behavior, stages exact paths, runs the full gate, and
+   creates focused Conventional Commits.
+4. A failed or unclear boundary is corrected before downstream agents build more code on it.
+5. A new build is launched at the visual checkpoints above, not for invisible internal-only
+   commits.
+
+Two agents do not concurrently edit the same document schema, CMake file, registry, or application
+composition root. Parallel speed comes from stable boundaries, not conflict-heavy shared edits.
+
+## Quality Gate For Every Merge
+
+- warnings-as-errors and `clang-format` pass
+- repository hygiene and architecture-boundary checks pass
+- focused unit tests and the full CTest suite pass
+- no Qt types enter core, document, commands, render, runtime, project, or platform contracts
+- no UI callback waits on futures, workers, I/O, GPU work, or task shutdown
+- no generic service locator, `std::any` result bus, duplicated project truth, or speculative public
+  ABI enters the slice
+- active production files remain cohesive and normally below the repository's 700-line review
+  threshold
+- ASan/UBSan cover image/project parsing paths; TSan covers scheduler and publication services where
+  available
+- Linux, macOS, and Windows shared semantics remain green before a feature is called complete
+
+## Deferred Until The First Proof Is Stable
+
+- deterministic text shaping/rasterization and font asset management
+- still/video ingest, broad codecs, and audio
+- masks, mattes, effects, blend-mode breadth, adjustment layers, and nested compositions
+- full nonlinear editing, grading, and delivery workspaces
+- public Python/add-on runtime implementation and custom PySide UI
 - OpenFX hosting
-- broad interchange and video delivery
+- persistent render caches, distributed rendering, and render farms
+- a stable public native plug-in ABI
 
-GPU breadth and optimization are deferred; the backend contract and a minimal accelerated path are
-not.
+These are deliberate deferrals, not permission for the current boundaries to make them impossible.
