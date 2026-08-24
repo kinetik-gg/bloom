@@ -55,6 +55,13 @@ remain part of the broader direction but are not commitments for the first imple
 - Persistent edits flow through commands so undo, autosave, scripting, validation, and runtime
   invalidation observe the same mutations.
 - Time uses explicit rational values and domain-aware mappings. Frame numbers are display labels.
+- The first process-image contract is finite premultiplied `RGBA32F` in
+  `lin_rec709_scene`; project-qualified OCIO transforms resolve source interpretation and
+  display/output intent without changing that v1 process identity.
+- New version 1 projects start with immutable Bloom Neutral v1 at
+  `bloom://ocio/neutral-v1/config.ocio`. Its qualified build profile supplies the exact content
+  revision, and existing projects retain their saved locator and digest rather than following an
+  ambient or mutable default.
 
 Sequence behavior is retained as a working model, but the first implementation proof does not need
 an editorial sequence.
@@ -121,6 +128,10 @@ should normally wait.
 - [`../ux/visual-language.md`](../ux/visual-language.md)
 - [`../architecture/task-system.md`](../architecture/task-system.md)
 - [`../architecture/layer-graph-model.md`](../architecture/layer-graph-model.md)
+- [`../architecture/project-session.md`](../architecture/project-session.md)
+- [`../architecture/color-management.md`](../architecture/color-management.md)
+- [`../architecture/frame-output.md`](../architecture/frame-output.md)
+- [`../architecture/dependency-intake.md`](../architecture/dependency-intake.md)
 - [`node-catalogue.md`](node-catalogue.md)
 - [`../architecture/evaluation-primitives.md`](../architecture/evaluation-primitives.md)
 - [`../architecture/scripting-and-addons.md`](../architecture/scripting-and-addons.md)

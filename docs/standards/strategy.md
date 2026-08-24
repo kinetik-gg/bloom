@@ -46,7 +46,7 @@ owning workflow is active.
 
 | Domain | Contract or implementation | Bloom direction | Timing |
 | --- | --- | --- | --- |
-| Color management | [OpenColorIO][ocio] (OCIO) configuration and C++ implementation | Foundational choice. Use project-selected configurations for file interpretation, working transforms, and display/view transforms. Do not hard-code one studio's color pipeline. | Required before claiming a production color-managed viewer or render path |
+| Color management | [OpenColorIO][ocio] (OCIO) configuration and C++ implementation | Foundational choice. New v1 projects start from immutable Bloom Neutral v1 at `bloom://ocio/neutral-v1/config.ocio`; projects retain exact locator and content revision. Other explicitly selected configs must qualify the same required process/output identities. Bloom v1 process images remain `lin_rec709_scene`; selecting a configuration does not silently redefine that identity. | Required before claiming a production color-managed viewer or render path |
 | Color workflow | [ACES][aces] encodings and transforms | Support through validated OCIO configurations as an option. ACES is not forced as every project's working space. | Alongside production color management |
 | HDR/VFX images | [OpenEXR][openexr] format and reference libraries | Primary high-dynamic-range image interchange. Preserve windows, channels, alpha convention, pixel aspect, compression intent where supported, and relevant attributes. | Early image import/output; flat frames first, advanced multipart/deep features declared separately |
 | General image I/O | [OpenImageIO][oiio] (OIIO) | Preferred C++ library candidate for format-agnostic image access, metadata, and processing utilities. OIIO is a library, not Bloom's interchange standard or canonical image model. | Evaluate when still and sequence I/O enters the vertical proof |
@@ -67,8 +67,19 @@ here does not commit Bloom to shipping it.
 Color management is a correctness boundary shared by import, viewer presentation, cache identity,
 effects, and output.
 
-- Store a stable identifier for the selected OCIO configuration and enough provenance to diagnose a
-  missing or changed configuration. Do not rely only on an ambient environment variable.
+- Identify Bloom v1 process pixels as finite premultiplied `RGBA32F` in `lin_rec709_scene`.
+  Project-qualified transforms convert interpreted sources into that process identity and convert
+  process pixels to an explicit display or output intent; the selected configuration does not make
+  the process space ambient or arbitrary.
+- Create new v1 projects with Bloom Neutral v1 at the immutable URI
+  `bloom://ocio/neutral-v1/config.ocio`. The qualified dependency/build profile supplies its exact
+  SHA-256 content revision, the config resolves `lin_rec709_scene` and
+  `srgb_rec709_display`, and any payload change requires a new URI. Existing projects retain their
+  saved locator and expected revision.
+- Store a content-qualified locator, expected aggregate revision, and explicit context for the
+  selected OCIO configuration. The expanded resource manifest is derived qualification evidence,
+  not a second persisted truth. Diagnose missing or changed content and never rely on an ambient
+  environment variable as project truth.
 - Store source color interpretation and alpha association explicitly. File-name rules may propose an
   interpretation, but an artist can inspect and override it.
 - Keep scene/process pixels separate from display-referred presentation. A viewer transform never
@@ -76,6 +87,8 @@ effects, and output.
 - Include all color-transform inputs that affect pixels in render and cache identity.
 - Validate configurations and report missing roles, color spaces, displays, views, LUTs, or context
   variables as actionable diagnostics.
+- Fail closed when a required project-qualified transform cannot be reproduced. A manually selected
+  reference mapper is visibly unqualified and cannot satisfy production display or output intent.
 - A `data` channel or source bypasses color transforms by declared intent, not by a filename guess
   hidden from the artist.
 
@@ -165,6 +178,12 @@ The native format uses a constrained ZIP document container and strict RFC 8259 
 inventing new low-level container or text encodings. Its accepted contract, versioning, migration,
 and preservation rules are defined in
 [`../architecture/project-format.md`](../architecture/project-format.md).
+
+Focused implementation contracts:
+
+- [`../architecture/color-management.md`](../architecture/color-management.md)
+- [`../architecture/frame-output.md`](../architecture/frame-output.md)
+- [`../architecture/dependency-intake.md`](../architecture/dependency-intake.md)
 
 [ocio]: https://opencolorio.org/
 [ocio-config]: https://opencolorio.readthedocs.io/en/latest/guides/authoring/overview.html

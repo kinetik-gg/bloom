@@ -37,13 +37,20 @@ The implemented Qt/application layer adds:
   structured diagnostic presentation
 - a frozen node-definition registry and deterministic compiler that consumes immutable document
   snapshots and emits typed composition plans without allocating images
-- a bounded CPU composition evaluator that preflights aggregate image memory, evaluates immutable
-  plans, cooperatively cancels at operation and scanline boundaries, and maps display pixels on the
-  worker
+- a bounded CPU composition evaluator that preflights process-image memory, evaluates immutable
+  plans, cooperatively cancels at operation and scanline boundaries, and publishes a process-only
+  immutable frame
+- a separate CPU reference-display preparer with its own typed frame, identity, diagnostics,
+  progress, exact aggregate process-plus-display budget, and no-partial-publication cancellation
 - one scheduled preview task per generation that runs compile, evaluate, and display preparation
   sequentially without nested task submission or waits
 - an application-owned preview controller that accepts results only for the exact project,
   composition, revision, request generation, time, resolution, quality, and color intent
+- exact `CompositionSession` rational time as an evaluation-request input, outside project truth,
+  dirty state, and undo history
+- a one-active/one-newest-pending preview gate: superseding intent immediately advances generation,
+  cancels but retains the active handle until terminal, and replaces rather than accumulates pending
+  work
 - separate preview activity and frame-freshness state, with the last good same-composition frame
   retained during rendering, cancellation, unsupported outcomes, and failures
 - an extracted Viewer that borrows immutable packed RGBA8 only during paint, fits pixel aspect in
@@ -51,9 +58,11 @@ The implemented Qt/application layer adds:
 - staged shutdown for window and application quit paths, with one stable terminal task publication
   before runtime quiescence permits process exit
 
-`Ready` now means that an immutable process frame and prepared display buffer match the controller's
-current desired identity. It never means merely that a plan compiled. Qt types remain outside the
-task, compiler, evaluator, and frame contracts.
+`Ready` now means that a `PreparedPreviewFrame` containing a `ProcessFrame` and separately
+identified `ReferenceDisplayFrame` matches the controller's current desired publication identity.
+It never means merely that a plan compiled. Process and display identities remain independent cache
+boundaries. Qt types remain outside the task, compiler, evaluator, display preparer, and frame
+contracts.
 
 ## Responsiveness Contract
 
@@ -130,10 +139,15 @@ kernel transports typed results and terminal state without knowing document revi
 implemented preview controller performs these publication checks on the UI side of the neutral
 mailbox boundary.
 
-Preview cache identity is distinct from publication identity. It includes the complete immutable
-plan, rational time, output, resolution, quality, color/display intent, provider, and evaluator,
-image-primitive, and display-mapper semantics versions. Request generation, cancellation state,
-priority, and memory budget do not change pixels and therefore do not enter the cache identity.
+Pixel cache identity is distinct from publication identity and split by product. Process-cache
+identity includes the complete immutable plan, rational time, output, resolution, process quality,
+provider, evaluator and image-primitive versions, and only color configuration/context inputs used
+by process operations. It excludes display/view, looks, monitor/output intent, packing, and display
+processor. Display-cache identity begins with the exact process-frame identity and adds every
+display/view, look, context, monitor/output intent, prepared-processor, packing, and display-mapper
+version that can change display pixels. The caches have separate bounded budgets; a combined
+preview cache key is forbidden. Request generation, cancellation state, priority, and memory budget
+do not change pixels and therefore enter neither key.
 
 ## Scheduling And Priority
 
@@ -152,14 +166,17 @@ New interactive requests coalesce or supersede equivalent queued requests. For e
 through twenty times should not require evaluating nineteen frames the user no longer wants.
 Already-running work is cancelled when safe or allowed to finish without publishing stale results.
 
-The preview controller adds bounded trailing coalescing above the scheduler for high-frequency
-session changes. Current time or a direct-manipulation override advances the desired generation
-immediately, while submission uses an injectable 16 ms cadence with at most one retained active
-handle and one newest pending request per preview owner. A superseded active request is cancelled
-but remains the gate until it reaches terminal. Gesture end bypasses the cadence for the newest
-desired request, but submission still waits for that active terminal state. Scheduler coalescing,
-cancellation, and revision/generation publication checks remain mandatory backstops rather than
-alternative semantics.
+The preview controller now bounds high-frequency session changes above the scheduler with at most
+one retained active handle and one newest pending request per preview owner. Current-time changes
+advance desired generation immediately. A superseded active request is cancelled but remains the
+gate until terminal; only then is the newest pending immutable request submitted. Scheduler
+coalescing, cancellation, and revision/generation publication checks remain mandatory backstops.
+
+The accepted interaction contract additionally requires an injectable 16 ms trailing cadence for
+pointer-driven scrub and direct-manipulation storms. Gesture end bypasses that delay for the newest
+desired request without bypassing the active-request gate. The cadence, timeline projection, and
+direct-manipulation request source remain pending; this document does not report them as live merely
+because the active/pending gate is implemented.
 
 Tasks declare the resources they need where practical: CPU, blocking I/O, GPU device/queue, external
 process, and estimated memory. Executors use bounded queues, concurrency limits, and memory budgets.
@@ -222,6 +239,31 @@ Executors and task primitives belong below the Qt boundary. `src/ui` adapts task
 models and delivers completion through queued UI-thread dispatch. Core task APIs do not expose
 `QThread`, `QFuture`, `QPromise`, Qt containers, signals, slots, or `QObject` lifetime semantics.
 
+Host-side color resource validation, hashing, and processor preparation are blocking-I/O stages.
+The immutable qualified Bloom Neutral built-in may construct and apply its processor in-process
+only after the bounded cross-platform gates in [`color-management.md`](color-management.md) pass.
+Every project-relative or external config delegates all OCIO parsing, processor construction, and
+transform application to a supervised, memory-limited `bloom-color-worker`. The owning blocking-I/O
+task drives bounded IPC and monotonic deadlines directly; it does not wait on another Bloom task or
+worker. Cancellation and shutdown terminate an unresponsive helper within the accepted deadline,
+invalidate its opaque processor tokens, reclaim its IPC slabs, and publish no partial product.
+
+The application controller submits each dependent color stage only after receiving its
+predecessor's typed successful result. An in-process built-in applies a prepared processor in
+bounded CPU chunks; a helper-backed stage exchanges distinct bounded shared-memory slabs. Neither
+path nests task submission, blocks the UI event loop, or exposes OCIO objects through task results.
+
+Project saves and frame exports share one `src/platform::StagedArtifactCoordinator`. Canonical
+target preflight and no-follow inspection run on blocking I/O. Accepted operations receive monotonic
+publication-intent IDs. Before atomic publication, an older save or export is `Superseded` when a
+newer intent owns the same canonical target, so worker completion order cannot reverse artist
+intent. Each move-only `StagedArtifactLease` pins the canonical parent identity, rejects a
+symlink/reparse or non-regular final target, and revalidates the observed target fingerprint before
+atomic replacement.
+An external change is a typed conflict, never implicit overwrite permission. The detailed lease,
+cleanup, and publication outcomes are defined by
+[`frame-output.md`](frame-output.md) and [`project-format.md`](project-format.md).
+
 ## Device Loss And Runtime Recovery
 
 The GPU backend treats device loss as a recoverable runtime state, not a UI-thread exception:
@@ -266,8 +308,9 @@ conversion, terminal/result coherence, bounded registries and history, and shutd
 
 Integration tests now cover stale revision and same-revision generation suppression, selection-only
 changes, Viewer and Jobs replacement during live work, rate-limited UI-thread progress delivery,
-ordered diagnostics, stable terminal publication, application-level quit interception, and staged
-shutdown with cooperative preview work.
+ordered diagnostics, exact session-time publication, one-active/one-newest request storms, stable
+terminal publication, application-level quit interception, and staged shutdown with cooperative
+preview work.
 
 Later batches still need to cover project destruction, partial-output cleanup and atomic
 publication, simulated device loss and fallback policy, and shutdown decisions for active save and
@@ -280,11 +323,13 @@ the implementation grows.
 
 ## Implemented Boundary And Next Integration
 
-The bounded executors, snapshot compiler, revision/generation-safe preview controller, Qt bridge,
-Jobs surface, clean application quiescence, and Batch 3 CPU preview path are implemented. The
+The bounded executors, snapshot compiler, revision/generation-safe preview controller, exact session
+time, one-active/one-newest preview gate, Qt bridge, Jobs surface, clean application quiescence, and
+Batch 3 CPU preview path are implemented. The
 immutable typed plan is consumed by a deterministic CPU evaluator that publishes real pixels
 without weakening the established ownership, cancellation, color, alpha, or stale-result
-contracts.
+contracts. The 16 ms pointer cadence, timeline key projection, and direct manipulation remain
+pending interaction work.
 
 Distributed rendering, persistent job databases, and a general workflow engine are not required.
 The contract above is intentionally broader than the first implementation so later media and GPU
