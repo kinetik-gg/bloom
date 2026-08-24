@@ -3,6 +3,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_stack.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/validation.hpp>
@@ -342,6 +343,42 @@ void testInvalidConstruction(ExpectationContext& expectations) {
     expectations.expect(threw, "document rejects a zero project ID");
 }
 
+void testNewProjectFactory(ExpectationContext& expectations) {
+    auto newProject =
+        bloom::document::makeNewProject("Untitled", "Composition 1", RationalTime::fromInteger(10));
+    const auto* composition = newProject.project.findComposition(newProject.initialCompositionId);
+    if (!expectations.expect(newProject.project.validate().ok() && composition != nullptr,
+                             "new project factory creates a valid initial composition")) {
+        return;
+    }
+
+    expectations.expect(newProject.project.name() == "Untitled" &&
+                            composition->name() == "Composition 1" &&
+                            composition->duration() == RationalTime::fromInteger(10),
+                        "new project factory preserves requested project settings");
+    expectations.expect(composition->graph().nodes().size() == 2 &&
+                            composition->graph().edges().size() == 1 &&
+                            composition->graph().layerStack().entries().empty(),
+                        "initial composition contains only stack and output topology");
+
+    Document document(std::move(newProject.project));
+    auto draft = document.draft(document.snapshot());
+    expectations.expect(draft.ids().allocateComposition() == id<CompositionId>(2) &&
+                            draft.ids().allocateNode() == id<NodeId>(3) &&
+                            draft.ids().allocateEdge() == id<EdgeId>(2),
+                        "initial topology reserves its durable IDs in the document allocator");
+
+    bool rejectedInvalidSettings = false;
+    try {
+        [[maybe_unused]] auto invalid =
+            bloom::document::makeNewProject("", "Composition 1", RationalTime::fromInteger(10));
+    } catch (const std::invalid_argument&) {
+        rejectedInvalidSettings = true;
+    }
+    expectations.expect(rejectedInvalidSettings,
+                        "new project factory rejects incomplete project settings");
+}
+
 void testDocumentProvenance(ExpectationContext& expectations) {
     Document first(validProject());
     Document second(validProject());
@@ -389,6 +426,7 @@ int main() {
     testCanonicalGraphAndLayerOrder(expectations);
     testDocumentSnapshots(expectations);
     testInvalidConstruction(expectations);
+    testNewProjectFactory(expectations);
     testDocumentProvenance(expectations);
 
     return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;

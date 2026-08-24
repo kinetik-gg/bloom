@@ -6,6 +6,7 @@ target_sources(
         document.cpp
         graph.cpp
         layer_stack.cpp
+        new_project.cpp
         parameter.cpp
         project.cpp
     PUBLIC
@@ -16,6 +17,7 @@ target_sources(
             include/bloom/document/graph.hpp
             include/bloom/document/ids.hpp
             include/bloom/document/layer_stack.hpp
+            include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
             include/bloom/document/project.hpp
             include/bloom/document/validation.hpp

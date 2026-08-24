@@ -24,6 +24,9 @@ inline constexpr std::string_view kTextSourceOutputPort = "image";
 inline constexpr std::string_view kLayerOutputContentInputPort = "image";
 inline constexpr std::string_view kLayerOutputOutputPort = "image";
 inline constexpr std::string_view kLayerStackContentInputRole = "content";
+inline constexpr std::string_view kLayerStackOutputPort = "image";
+inline constexpr std::string_view kCompositionOutputInputPort = "image";
+inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
