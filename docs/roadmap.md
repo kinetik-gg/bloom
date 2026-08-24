@@ -14,8 +14,8 @@ Bloom currently has:
 - a C++20 and Qt 6 application shell with a replaceable split-tree workspace
 - a Qt-free canonical project, composition, graph, Layer Stack, parameter, and snapshot model
 - typed transactional commands with revision-safe undo and redo
-- durable composition extent, rational pixel aspect and frame rate, versioned node records, and
-  validated finite color values
+- durable composition extent and frame rate, one canonical rational pixel-aspect value shared by
+  document and render, versioned node records, and validated finite color values
 - exact undoable solid-layer authoring through the same source, Layer Output, and stable Layer Stack
   topology used by other structured layers
 - a committed Qt-free bounded task runtime with separate CPU and blocking-I/O executors, semantic
@@ -29,11 +29,13 @@ Bloom currently has:
 - accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
   add-ons, Apache-2.0 distribution, and the native `.bloom` container
 
-The current Viewer is still a presentation placeholder and receives no evaluated pixels. The task
-runtime and image values are foundations, not a preview pipeline: Bloom does not yet compile a
-composition snapshot, evaluate pixels, publish generation-safe results into Qt, show Jobs, store
-keyframes, or save a project. Add Solid's synchronized UI projections and the Batch 1 visual
-checkpoint remain in progress.
+The local Batch 1 authoring checkpoint is implemented and has been launched: Add Solid is available
+from the Timeline's accessible menu, while its durable layer, node, selection, and exact/HDR
+property projections remain synchronized through command execution and undo/redo. The Viewer
+deliberately remains a presentation placeholder and receives no evaluated pixels. The task runtime
+and image values are foundations, not a preview pipeline: Bloom does not yet compile a composition
+snapshot, evaluate pixels, publish generation-safe results into Qt, show Jobs, store keyframes, or
+save a project.
 
 Before the next feature is called cross-platform complete, the current checkpoint and each new
 merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
@@ -74,9 +76,9 @@ their source ownership does not overlap.
 Goal: establish the independent contracts needed by every later heavy operation without building a
 generic workflow engine or a renderer-shaped task system.
 
-Implementation status: the 1A, 1B, and 1C foundation code is implemented and locally verified. The
-artist-visible Add Solid projection and visual checkpoint are still in progress, and the configured
-three-platform matrix remains the authority for cross-platform completion.
+Implementation status: the 1A, 1B, and 1C foundation code and artist-visible Add Solid projection
+are implemented and locally verified. The visual checkpoint has been launched for inspection. The
+configured three-platform matrix remains the authority for cross-platform completion.
 
 The three tracks were developed independently so their public seams could be reviewed before preview
 integration.
@@ -149,8 +151,9 @@ Suggested commit: `feat: define CPU image contracts`
 - Image math passes allocation-overflow and alpha/HDR invariants without Qt linkage.
 - Strict build, format, hygiene, architecture checks, CTest, and the three-platform matrix pass.
 
-Visual checkpoint: relaunch only if Add Solid and its synchronized layer/node/property projections
-are complete enough to inspect. No pixel-rendering claim is made yet.
+Visual checkpoint: launched locally with Add Solid inspectable through synchronized Timeline,
+Nodes, selection, and Properties projections. The Viewer states that evaluation is not connected;
+no pixel-rendering claim is made.
 
 ## Batch 2 — Snapshot Compiler, Jobs, And Preview Lifecycle
 
