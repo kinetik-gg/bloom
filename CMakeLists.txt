@@ -18,6 +18,9 @@ include(BloomWarnings)
 
 bloom_configure_quality_tools()
 
+add_subdirectory(src/core)
+add_subdirectory(src/document)
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
 qt_standard_project_setup()
 
