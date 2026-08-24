@@ -12,11 +12,11 @@ OperationResult OperationResult::applied(std::vector<OperationOutput> outputs) {
     };
 }
 
-OperationResult OperationResult::noChange() {
+OperationResult OperationResult::noChange(std::vector<OperationOutput> outputs) {
     return {
         .status = OperationStatus::NoChange,
         .issues = {},
-        .outputs = {},
+        .outputs = std::move(outputs),
     };
 }
 

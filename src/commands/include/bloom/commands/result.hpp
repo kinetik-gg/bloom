@@ -38,7 +38,7 @@ struct OperationIssue {
 using DurableObjectId =
     std::variant<document::CompositionId, document::NodeId, document::EdgeId, document::LayerId,
                  document::LayerSlotId, document::ParameterId, document::AnimationCurveId,
-                 document::DriverBindingId>;
+                 document::KeyframeId, document::DriverBindingId>;
 
 struct OperationOutput {
     std::string name;
@@ -53,7 +53,7 @@ struct OperationResult {
     std::vector<OperationOutput> outputs;
 
     [[nodiscard]] static OperationResult applied(std::vector<OperationOutput> outputs = {});
-    [[nodiscard]] static OperationResult noChange();
+    [[nodiscard]] static OperationResult noChange(std::vector<OperationOutput> outputs = {});
     [[nodiscard]] static OperationResult rejected(OperationIssueCode code, std::string message);
 };
 

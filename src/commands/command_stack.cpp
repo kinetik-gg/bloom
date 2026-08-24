@@ -108,8 +108,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     }
 
     if (!changed) {
-        return makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
-                          std::string(transaction.label()));
+        auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
+                                 std::string(transaction.label()));
+        result.outputs = std::move(outputs);
+        return result;
     }
 
     document::CommitResult commitResult = document_.commit(before.revision(), std::move(draft));

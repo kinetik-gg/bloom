@@ -3,6 +3,7 @@ add_library(bloom_commands STATIC)
 target_sources(
     bloom_commands
     PRIVATE
+        animation_operations.cpp
         command_stack.cpp
         operations.cpp
         result.cpp
@@ -11,6 +12,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/commands/animation_operations.hpp
             include/bloom/commands/command_stack.hpp
             include/bloom/commands/operation.hpp
             include/bloom/commands/operations.hpp
