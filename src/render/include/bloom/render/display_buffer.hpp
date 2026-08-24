@@ -4,6 +4,7 @@
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -62,6 +63,7 @@ class ReferenceDisplayBufferView final {
 
   private:
     friend class PreparedReferenceDisplayBuffer;
+    friend class ReferenceDisplayBufferBuilder;
 
     constexpr ReferenceDisplayBufferView(const ReferenceDisplayBufferDescriptor descriptor,
                                          const std::span<const Rgba8> pixels) noexcept
@@ -92,8 +94,43 @@ class PreparedReferenceDisplayBuffer final {
     [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const&& = delete;
 
   private:
+    friend class ReferenceDisplayBufferBuilder;
+
     PreparedReferenceDisplayBuffer(ReferenceDisplayBufferDescriptor descriptor,
                                    std::vector<Rgba8> pixels) noexcept;
+    void reset() noexcept;
+
+    std::optional<ReferenceDisplayBufferDescriptor> descriptor_;
+    std::vector<Rgba8> pixels_;
+};
+
+// Mutation is confined to worker-side construction. Freeze consumes the builder and publishes the
+// immutable packed display handoff without copying its pixel payload.
+class ReferenceDisplayBufferBuilder final {
+  public:
+    ReferenceDisplayBufferBuilder(const ReferenceDisplayBufferBuilder&) = delete;
+    ReferenceDisplayBufferBuilder& operator=(const ReferenceDisplayBufferBuilder&) = delete;
+    ReferenceDisplayBufferBuilder(ReferenceDisplayBufferBuilder&& other) noexcept;
+    ReferenceDisplayBufferBuilder& operator=(ReferenceDisplayBufferBuilder&& other) noexcept;
+    ~ReferenceDisplayBufferBuilder() = default;
+
+    [[nodiscard]] static ImageResult<ReferenceDisplayBufferBuilder>
+    create(ReferenceDisplayBufferDescriptor descriptor, std::size_t pixelStorageByteLimit) noexcept;
+
+    [[nodiscard]] bool isValid() const noexcept;
+    [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const& noexcept;
+    [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const&& = delete;
+    [[nodiscard]] std::span<const Rgba8> pixels() const& noexcept { return pixels_; }
+    [[nodiscard]] std::span<const Rgba8> pixels() const&& = delete;
+    [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const& noexcept;
+    [[nodiscard]] ImageResult<ReferenceDisplayBufferView> view() const&& = delete;
+    [[nodiscard]] ImageResult<std::span<Rgba8>> row(std::int64_t y) & noexcept;
+    [[nodiscard]] ImageResult<std::span<Rgba8>> row(std::int64_t y) && = delete;
+    [[nodiscard]] ImageResult<PreparedReferenceDisplayBuffer> freeze() && noexcept;
+
+  private:
+    ReferenceDisplayBufferBuilder(ReferenceDisplayBufferDescriptor descriptor,
+                                  std::vector<Rgba8> pixels) noexcept;
     void reset() noexcept;
 
     std::optional<ReferenceDisplayBufferDescriptor> descriptor_;

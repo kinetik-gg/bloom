@@ -3,4 +3,15 @@ include(BloomTesting)
 add_executable(bloom_render_image_test render_image_test.cpp)
 target_link_libraries(bloom_render_image_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_image_test)
+bloom_enable_strict_floating_point(bloom_render_image_test)
 bloom_add_test(NAME bloom.render.image COMMAND bloom_render_image_test LABELS unit)
+
+add_executable(bloom_render_cpu_image_primitives_test cpu_image_primitives_test.cpp)
+target_link_libraries(bloom_render_cpu_image_primitives_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_cpu_image_primitives_test)
+bloom_enable_strict_floating_point(bloom_render_cpu_image_primitives_test)
+bloom_add_test(
+    NAME bloom.render.cpu_image_primitives
+    COMMAND bloom_render_cpu_image_primitives_test
+    LABELS unit primitives
+)

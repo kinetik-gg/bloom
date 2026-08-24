@@ -24,6 +24,10 @@ enum class ImageErrorCode : std::uint8_t {
     InvalidStorageSize,
     CoordinateOutOfBounds,
     InvalidState,
+    InvalidParameter,
+    UnsupportedFloatingPointEnvironment,
+    IncompatibleImageDescriptor,
+    NonFiniteResult,
 };
 
 struct ImageError final {

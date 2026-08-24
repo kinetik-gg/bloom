@@ -3,6 +3,7 @@ add_library(bloom_render STATIC)
 target_sources(
     bloom_render
     PRIVATE
+        cpu_image_primitives.cpp
         display_buffer.cpp
         image.cpp
         image_types.cpp
@@ -10,6 +11,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
@@ -18,6 +20,7 @@ target_sources(
 target_compile_features(bloom_render PUBLIC cxx_std_20)
 target_link_libraries(bloom_render PUBLIC bloom_core)
 bloom_enable_warnings(bloom_render)
+bloom_enable_strict_floating_point(bloom_render)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
