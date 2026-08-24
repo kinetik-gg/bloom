@@ -3,13 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
 
 namespace {
 
-[[nodiscard]] bool isValidSource(const bloom::document::ParameterSource& source) noexcept {
+[[nodiscard]] bool
+isGenericallyValidSource(const bloom::document::ParameterSource& source) noexcept {
     return std::visit(
         [](const auto& valueSource) {
             using Source = std::decay_t<decltype(valueSource)>;
@@ -20,6 +22,9 @@ namespace {
                 if (const auto* value = std::get_if<bloom::document::Vec2d>(&valueSource.value)) {
                     return std::isfinite(value->x) && std::isfinite(value->y);
                 }
+                if (const auto* value = std::get_if<bloom::core::Color4d>(&valueSource.value)) {
+                    return value->isValid();
+                }
                 return true;
             } else if constexpr (std::is_same_v<Source, bloom::document::AnimationCurveSource>) {
                 return valueSource.curveId.isValid();
@@ -28,6 +33,42 @@ namespace {
             }
         },
         source);
+}
+
+[[nodiscard]] bool
+constantMatchesSchema(const std::string_view schemaKey,
+                      const bloom::document::ConstantValueSource& constant) noexcept {
+    using namespace bloom::document;
+    if (schemaKey == kSolidColorParameterSchemaKey) {
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid();
+    }
+    if (schemaKey == kPositionParameterSchemaKey) {
+        const auto* position = std::get_if<Vec2d>(&constant.value);
+        return position != nullptr && std::isfinite(position->x) && std::isfinite(position->y);
+    }
+    if (schemaKey == kOpacityParameterSchemaKey) {
+        const auto* opacity = std::get_if<double>(&constant.value);
+        return opacity != nullptr && std::isfinite(*opacity) && *opacity >= 0.0 && *opacity <= 1.0;
+    }
+    if (schemaKey == kTextParameterSchemaKey) {
+        return std::holds_alternative<std::string>(constant.value);
+    }
+    return true;
+}
+
+[[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
+                                          const bloom::document::ParameterSource& source) noexcept {
+    if (!isGenericallyValidSource(source)) {
+        return false;
+    }
+    if (const auto* constant = std::get_if<bloom::document::ConstantValueSource>(&source)) {
+        return constantMatchesSchema(schemaKey, *constant);
+    }
+
+    // Animation-curve and driver result types become enforceable when their typed records land in
+    // Batch 4. Until then publication can validate only their stable reference identities.
+    return true;
 }
 
 } // namespace
@@ -40,13 +81,9 @@ const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept
     return iterator == records_.end() ? nullptr : &*iterator;
 }
 
-ParameterRecord* ParameterStore::find(const ParameterId id) noexcept {
-    return const_cast<ParameterRecord*>(std::as_const(*this).find(id));
-}
-
 bool ParameterStore::insert(ParameterRecord record) {
-    if (!record.id.isValid() || record.schemaKey.empty() || !isValidSource(record.source) ||
-        find(record.id) != nullptr) {
+    if (!record.id.isValid() || record.schemaKey.empty() ||
+        !isValidSourceForSchema(record.schemaKey, record.source) || find(record.id) != nullptr) {
         return false;
     }
 
@@ -66,8 +103,9 @@ bool ParameterStore::erase(const ParameterId id) {
 }
 
 bool ParameterStore::setSource(const ParameterId id, ParameterSource source) {
-    auto* record = find(id);
-    if (record == nullptr || !isValidSource(source)) {
+    const auto record = std::find_if(records_.begin(), records_.end(),
+                                     [id](const auto& item) { return item.id == id; });
+    if (record == records_.end() || !isValidSourceForSchema(record->schemaKey, source)) {
         return false;
     }
 
@@ -90,9 +128,9 @@ ValidationResult ParameterStore::validate() const {
             result.add(ValidationCode::EmptyKey, path + ".schemaKey",
                        "Parameter schema key must not be empty");
         }
-        if (!isValidSource(record.source)) {
+        if (!isValidSourceForSchema(record.schemaKey, record.source)) {
             result.add(ValidationCode::InvalidValue, path + ".source",
-                       "Parameter source is invalid");
+                       "Parameter source does not satisfy its schema");
         }
     }
 

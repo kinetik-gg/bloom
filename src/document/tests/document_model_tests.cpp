@@ -1,4 +1,6 @@
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -20,16 +22,22 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace {
 
+inline constexpr std::uint32_t kTestSourceNodeSchemaVersion = 1;
+
+using bloom::core::Color4d;
 using bloom::core::RationalTime;
 using bloom::document::AnimationCurveId;
 using bloom::document::CanonicalGraph;
 using bloom::document::CommitStatus;
 using bloom::document::Composition;
+using bloom::document::CompositionFormat;
 using bloom::document::CompositionId;
 using bloom::document::ConstantValueSource;
 using bloom::document::Document;
@@ -37,6 +45,7 @@ using bloom::document::DriverBindingId;
 using bloom::document::DriverBindingSource;
 using bloom::document::EdgeId;
 using bloom::document::EdgeRecord;
+using bloom::document::FrameRate;
 using bloom::document::LayerId;
 using bloom::document::LayerOutputBoundary;
 using bloom::document::LayerSlotId;
@@ -48,6 +57,7 @@ using bloom::document::NodeRecord;
 using bloom::document::OutputPortRef;
 using bloom::document::ParameterId;
 using bloom::document::ParameterRecord;
+using bloom::document::PixelAspectRatio;
 using bloom::document::Project;
 using bloom::document::ProjectId;
 using bloom::document::ValidationCode;
@@ -105,19 +115,36 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
     constexpr auto slotB = id<LayerSlotId>(31);
     constexpr auto opacityA = id<ParameterId>(40);
     constexpr auto opacityB = id<ParameterId>(41);
+    constexpr auto positionA = id<ParameterId>(42);
+    constexpr auto positionB = id<ParameterId>(43);
 
     CanonicalGraph graph(stackNode);
-    NodeRecord sourceNodeA{sourceA, "bloom.solid", {}};
-    NodeRecord layerOutputNodeA{layerOutputA,
-                                std::string(bloom::document::kLayerOutputNodeType),
-                                {{std::string(bloom::document::kOpacityParameterRole), opacityA}}};
-    NodeRecord sourceNodeB{sourceB, "bloom.solid", {}};
-    NodeRecord layerOutputNodeB{layerOutputB,
-                                std::string(bloom::document::kLayerOutputNodeType),
-                                {{std::string(bloom::document::kOpacityParameterRole), opacityB}}};
-    NodeRecord stackRecord{stackNode, std::string(bloom::document::kLayerStackNodeType), {}};
-    NodeRecord outputRecord{
-        outputNode, std::string(bloom::document::kCompositionOutputNodeType), {}};
+    NodeRecord sourceNodeA{sourceA, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
+    NodeRecord layerOutputNodeA{
+        layerOutputA,
+        std::string(bloom::document::kLayerOutputNodeType),
+        {
+            {std::string(bloom::document::kPositionParameterRole), positionA},
+            {std::string(bloom::document::kOpacityParameterRole), opacityA},
+        },
+        bloom::document::kLayerOutputNodeSchemaVersion};
+    NodeRecord sourceNodeB{sourceB, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
+    NodeRecord layerOutputNodeB{
+        layerOutputB,
+        std::string(bloom::document::kLayerOutputNodeType),
+        {
+            {std::string(bloom::document::kPositionParameterRole), positionB},
+            {std::string(bloom::document::kOpacityParameterRole), opacityB},
+        },
+        bloom::document::kLayerOutputNodeSchemaVersion};
+    NodeRecord stackRecord{stackNode,
+                           std::string(bloom::document::kLayerStackNodeType),
+                           {},
+                           bloom::document::kLayerStackNodeSchemaVersion};
+    NodeRecord outputRecord{outputNode,
+                            std::string(bloom::document::kCompositionOutputNodeType),
+                            {},
+                            bloom::document::kCompositionOutputNodeSchemaVersion};
     if (!graph.addNode(std::move(sourceNodeA)) || !graph.addNode(std::move(layerOutputNodeA)) ||
         !graph.addNode(std::move(sourceNodeB)) || !graph.addNode(std::move(layerOutputNodeB)) ||
         !graph.addNode(std::move(stackRecord)) || !graph.addNode(std::move(outputRecord))) {
@@ -156,7 +183,13 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
                                           ConstantValueSource{1.0}}) ||
         !composition.parameters().insert({opacityB,
                                           std::string(bloom::document::kOpacityParameterSchemaKey),
-                                          ConstantValueSource{0.75}})) {
+                                          ConstantValueSource{0.75}}) ||
+        !composition.parameters().insert({positionA,
+                                          std::string(bloom::document::kPositionParameterSchemaKey),
+                                          ConstantValueSource{Vec2d{0.0, 0.0}}}) ||
+        !composition.parameters().insert({positionB,
+                                          std::string(bloom::document::kPositionParameterSchemaKey),
+                                          ConstantValueSource{Vec2d{0.0, 0.0}}})) {
         throw std::logic_error("Could not create parameters");
     }
 
@@ -201,6 +234,22 @@ void testIdsAndParameters(ExpectationContext& expectations) {
                         "typed project allocator advances independently");
     expectations.expect(firstNode != std::optional<NodeId>{}, "allocated IDs are nonzero");
 
+    bloom::document::IdAllocator laterAllocator;
+    laterAllocator.reserveExisting(id<NodeId>(200));
+    allocator.mergeHighWater(laterAllocator);
+    expectations.expect(allocator.allocateNode() == id<NodeId>(201),
+                        "allocator high-water merge retains the furthest published ID");
+
+    bloom::document::IdAllocator exhaustedAllocator;
+    exhaustedAllocator.reserveExisting(id<NodeId>(std::numeric_limits<std::uint64_t>::max()));
+    allocator.mergeHighWater(exhaustedAllocator);
+    expectations.expect(!allocator.allocateNode().has_value(),
+                        "an exhausted high-water mark dominates a finite allocator");
+    bloom::document::IdAllocator finiteAllocator;
+    exhaustedAllocator.mergeHighWater(finiteAllocator);
+    expectations.expect(!exhaustedAllocator.allocateNode().has_value(),
+                        "an exhausted allocator cannot be revived by a finite merge");
+
     bloom::document::ParameterStore parameters;
     constexpr auto parameterId = id<ParameterId>(1);
     expectations.expect(
@@ -214,6 +263,18 @@ void testIdsAndParameters(ExpectationContext& expectations) {
     expectations.expect(
         !parameters.insert({ParameterId{}, "bloom.invalid", ConstantValueSource{0.0}}),
         "zero parameter ID is rejected");
+    const auto initialOpacitySource = parameters.find(parameterId)->source;
+    expectations.expect(
+        !parameters.setSource(parameterId, ConstantValueSource{std::string("opaque")}) &&
+            !parameters.setSource(parameterId, ConstantValueSource{-0.01}) &&
+            !parameters.setSource(parameterId, ConstantValueSource{1.01}) &&
+            parameters.find(parameterId)->source == initialOpacitySource,
+        "opacity rejects wrong-type and out-of-range constants without mutation");
+    expectations.expect(
+        !parameters.insert({id<ParameterId>(10),
+                            std::string(bloom::document::kOpacityParameterSchemaKey),
+                            ConstantValueSource{std::string("opaque")}}),
+        "known schemas reject a wrong-type constant during insertion");
     expectations.expect(!parameters.setSource(parameterId, DriverBindingSource{DriverBindingId{}}),
                         "invalid driver source is rejected");
     expectations.expect(
@@ -232,6 +293,169 @@ void testIdsAndParameters(ExpectationContext& expectations) {
         !parameters.setSource(
             positionId, ConstantValueSource{Vec2d{std::numeric_limits<double>::infinity(), 0.0}}),
         "non-finite vector parameter components are rejected");
+    expectations.expect(!parameters.setSource(positionId, ConstantValueSource{960.0}),
+                        "position schema rejects constants of the wrong type");
+
+    constexpr auto colorId = id<ParameterId>(3);
+    expectations.expect(
+        parameters.insert({colorId, std::string(bloom::document::kSolidColorParameterSchemaKey),
+                           ConstantValueSource{Color4d{-0.25, 2.0, 0.5, 0.75}}}),
+        "finite HDR color parameters preserve negative and above-one RGB values");
+    expectations.expect(!parameters.setSource(
+                            colorId, ConstantValueSource{Color4d{
+                                         0.0, 0.0, 0.0, std::numeric_limits<double>::quiet_NaN()}}),
+                        "color parameters reject a non-finite alpha component");
+    expectations.expect(
+        !parameters.setSource(colorId, ConstantValueSource{Color4d{0.0, 0.0, 0.0, 1.5}}),
+        "color parameters reject alpha outside the unit interval");
+    expectations.expect(!parameters.setSource(colorId, ConstantValueSource{Vec2d{0.0, 0.0}}),
+                        "solid color schema rejects constants of the wrong type");
+
+    constexpr auto textId = id<ParameterId>(4);
+    expectations.expect(
+        parameters.insert({textId, std::string(bloom::document::kTextParameterSchemaKey),
+                           ConstantValueSource{std::string("Bloom")}}) &&
+            !parameters.setSource(textId, ConstantValueSource{std::int64_t{42}}),
+        "text schema accepts strings and rejects constants of the wrong type");
+
+    constexpr auto extensionId = id<ParameterId>(5);
+    expectations.expect(
+        parameters.insert(
+            {extensionId, "com.example.extension.vector", ConstantValueSource{Vec2d{1.0, 2.0}}}) &&
+            parameters.setSource(extensionId, ConstantValueSource{std::string("extension-owned")}),
+        "unknown extension schemas retain generically valid constant values");
+    expectations.expect(
+        !parameters.setSource(extensionId,
+                              ConstantValueSource{std::numeric_limits<double>::quiet_NaN()}),
+        "extension schemas still reject generically invalid values");
+
+    static_assert(
+        std::is_same_v<decltype(std::declval<bloom::document::ParameterStore&>().find(parameterId)),
+                       const ParameterRecord*>,
+        "ordinary parameter lookup must not expose mutable record identity");
+    expectations.expect(bloom::document::kSolidColorEncoding ==
+                            std::string_view("bloom.reference.linear-srgb"),
+                        "initial solid authoring color schema names its linear-sRGB encoding");
+}
+
+void testBuiltInBindingSchemaValidation(ExpectationContext& expectations) {
+    const auto bindingIsAccepted = [](NodeRecord node, ParameterRecord parameter) {
+        auto project = validProject();
+        auto* composition = project.findComposition(id<CompositionId>(4));
+        return composition->parameters().insert(std::move(parameter)) &&
+               composition->graph().addNode(std::move(node)) && project.validate().ok();
+    };
+
+    constexpr auto extensionParameterId = id<ParameterId>(100);
+    expectations.expect(
+        bindingIsAccepted(
+            {id<NodeId>(100), "com.example.extension-node", {{"payload", extensionParameterId}}, 7},
+            {extensionParameterId, "com.example.extension-value",
+             ConstantValueSource{std::string("preserved")}}),
+        "unknown node and parameter schemas remain preservable");
+
+    const auto bindingIsRejected = [](NodeRecord node, ParameterRecord parameter) {
+        auto project = validProject();
+        auto* composition = project.findComposition(id<CompositionId>(4));
+        if (!composition->parameters().insert(std::move(parameter)) ||
+            !composition->graph().addNode(std::move(node))) {
+            throw std::logic_error("Invalid built-in binding validation fixture");
+        }
+        return hasIssue(project.validate(), ValidationCode::InvalidValue);
+    };
+
+    constexpr auto mismatchedParameterId = id<ParameterId>(101);
+    expectations.expect(bindingIsRejected({id<NodeId>(101),
+                                           std::string(bloom::document::kSolidSourceNodeType),
+                                           {{std::string(bloom::document::kSolidColorParameterRole),
+                                             mismatchedParameterId}},
+                                           bloom::document::kSolidSourceNodeSchemaVersion},
+                                          {mismatchedParameterId, "com.example.extension-value",
+                                           ConstantValueSource{std::string("not a color")}}),
+                        "solid-source version one rejects a color role backed by the wrong schema");
+    expectations.expect(
+        bindingIsRejected(
+            {id<NodeId>(102),
+             std::string(bloom::document::kTextSourceNodeType),
+             {{std::string(bloom::document::kTextParameterRole), mismatchedParameterId}},
+             bloom::document::kTextSourceNodeSchemaVersion},
+            {mismatchedParameterId, std::string(bloom::document::kOpacityParameterSchemaKey),
+             ConstantValueSource{0.5}}),
+        "text-source version one rejects a text role backed by the wrong schema");
+    expectations.expect(
+        bindingIsRejected(
+            {id<NodeId>(103),
+             std::string(bloom::document::kLayerOutputNodeType),
+             {
+                 {std::string(bloom::document::kPositionParameterRole), mismatchedParameterId},
+                 {std::string(bloom::document::kOpacityParameterRole), id<ParameterId>(40)},
+             },
+             bloom::document::kLayerOutputNodeSchemaVersion},
+            {mismatchedParameterId, std::string(bloom::document::kOpacityParameterSchemaKey),
+             ConstantValueSource{0.5}}),
+        "layer-output version one rejects a position role backed by the wrong schema");
+
+    Document document(validProject());
+    const auto before = document.snapshot();
+    auto draft = document.draft(before);
+    const bool corruptionInserted = [&draft, mismatchedParameterId] {
+        auto* composition = draft.project().findComposition(id<CompositionId>(4));
+        NodeRecord corruptedNode{
+            id<NodeId>(101),
+            std::string(bloom::document::kSolidSourceNodeType),
+            {{std::string(bloom::document::kSolidColorParameterRole), mismatchedParameterId}},
+            bloom::document::kSolidSourceNodeSchemaVersion,
+        };
+        return composition->parameters().insert(
+                   {mismatchedParameterId, "com.example.extension-value",
+                    ConstantValueSource{std::string("not a color")}}) &&
+               composition->graph().addNode(std::move(corruptedNode));
+    }();
+    const auto rejected = document.commit(before.revision(), std::move(draft));
+    expectations.expect(corruptionInserted && rejected.status == CommitStatus::InvalidDraft &&
+                            hasIssue(rejected.validation, ValidationCode::InvalidValue) &&
+                            document.snapshot().revision() == before.revision(),
+                        "publication rejects a relabeled built-in parameter binding atomically");
+}
+
+void testCompositionSettings(ExpectationContext& expectations) {
+    const CompositionFormat defaults;
+    expectations.expect(defaults.width() == 1920 && defaults.height() == 1080,
+                        "composition format defaults to 1920 by 1080");
+    expectations.expect(defaults.pixelAspect() == PixelAspectRatio::square(),
+                        "composition format defaults to square pixels");
+    expectations.expect(defaults.frameRate() == FrameRate::framesPerSecond24(),
+                        "composition format defaults to 24 frames per second");
+
+    const auto widescreenPixels = PixelAspectRatio::create(4, 3);
+    const auto cinemaRate = FrameRate::create(24'000, 1'001);
+    const auto normalizedPixels = PixelAspectRatio::create(2, 2);
+    const auto normalizedRate = FrameRate::create(48, 2);
+    expectations.expect(widescreenPixels.has_value() && cinemaRate.has_value(),
+                        "positive rational pixel aspects and frame rates are accepted");
+    expectations.expect(normalizedPixels == PixelAspectRatio::square() &&
+                            normalizedRate == FrameRate::framesPerSecond24(),
+                        "composition ratios normalize to deterministic terms");
+    expectations.expect(!PixelAspectRatio::create(0, 1).has_value() &&
+                            !PixelAspectRatio::create(1, 0).has_value() &&
+                            !FrameRate::create(0, 1).has_value() &&
+                            !FrameRate::create(1, 0).has_value(),
+                        "zero rational components are rejected");
+
+    const auto custom = CompositionFormat::create(3'840, 2'160, *widescreenPixels, *cinemaRate);
+    expectations.expect(
+        custom.has_value() && custom->width() == 3'840 && custom->height() == 2'160 &&
+            custom->pixelAspect() == *widescreenPixels && custom->frameRate() == *cinemaRate,
+        "custom composition format preserves normalized durable settings");
+    expectations.expect(!CompositionFormat::create(0, 1).has_value() &&
+                            !CompositionFormat::create(1, 0).has_value(),
+                        "zero composition extents are rejected");
+    expectations.expect(
+        !CompositionFormat::create(CompositionFormat::kMaximumDimension + 1U, 1).has_value() &&
+            !CompositionFormat::create(CompositionFormat::kMaximumDimension,
+                                       CompositionFormat::kMaximumDimension)
+                 .has_value(),
+        "hostile dimensions and pixel counts are rejected before render allocation");
 }
 
 void testCanonicalGraphAndLayerOrder(ExpectationContext& expectations) {
@@ -257,8 +481,13 @@ void testCanonicalGraphAndLayerOrder(ExpectationContext& expectations) {
                         "duplicate stable slot is rejected");
     expectations.expect(!graph.layerStack().append({id<LayerSlotId>(99), id<LayerId>(20)}),
                         "duplicate layer participation is rejected");
-    expectations.expect(!graph.addNode({id<NodeId>(10), "bloom.duplicate", {}}),
-                        "duplicate node ID is rejected");
+    expectations.expect(
+        !graph.addNode({id<NodeId>(10), "bloom.duplicate", {}, kTestSourceNodeSchemaVersion}),
+        "duplicate node ID is rejected");
+    expectations.expect(!graph.addNode({id<NodeId>(99), "bloom.invalid-version", {}, 0}),
+                        "zero node schema version is rejected");
+    expectations.expect(graph.nodes().front().schemaVersion == kTestSourceNodeSchemaVersion,
+                        "node records preserve their explicitly selected schema version");
     expectations.expect(
         !graph.addEdge(
             {id<EdgeId>(99), {id<NodeId>(10), "image"}, NodeInputRef{id<NodeId>(11), "image"}}),
@@ -319,10 +548,11 @@ void testDocumentSnapshots(ExpectationContext& expectations) {
                             restoredComposition->graph().layerOutputs()[0].name == "Foreground",
                         "restore retains exact graph, layer, and human-readable layer identity");
     auto restoredDraft = document.draft(*restored.snapshot);
-    expectations.expect(restoredDraft.ids().allocateNode() == id<NodeId>(16),
-                        "restore also restores the project-owned ID allocator");
+    expectations.expect(restoredDraft.ids().allocateNode() == id<NodeId>(17),
+                        "restore retains published allocator high-water marks");
 
     auto invalidDraft = document.draft(*restored.snapshot);
+    const auto rejectedAllocation = invalidDraft.ids().allocateNode();
     auto* composition = invalidDraft.project().findComposition(id<CompositionId>(4));
     composition->graph().findNode(id<NodeId>(10))->typeId.clear();
     const auto invalid = document.commit(restored.snapshot->revision(), std::move(invalidDraft));
@@ -330,6 +560,10 @@ void testDocumentSnapshots(ExpectationContext& expectations) {
                         "invalid draft cannot publish");
     expectations.expect(document.snapshot().revision() == restored.snapshot->revision(),
                         "failed commit leaves revision and state unchanged");
+    auto freshDraft = document.draft(document.snapshot());
+    expectations.expect(rejectedAllocation == id<NodeId>(17) &&
+                            freshDraft.ids().allocateNode() == rejectedAllocation,
+                        "rejected unpublished drafts consume no durable IDs");
 }
 
 void testInvalidConstruction(ExpectationContext& expectations) {
@@ -356,6 +590,8 @@ void testNewProjectFactory(ExpectationContext& expectations) {
                             composition->name() == "Composition 1" &&
                             composition->duration() == RationalTime::fromInteger(10),
                         "new project factory preserves requested project settings");
+    expectations.expect(composition->format() == CompositionFormat{},
+                        "new project factory applies the default composition format");
     expectations.expect(composition->graph().nodes().size() == 2 &&
                             composition->graph().edges().size() == 1 &&
                             composition->graph().layerStack().entries().empty(),
@@ -377,6 +613,16 @@ void testNewProjectFactory(ExpectationContext& expectations) {
     }
     expectations.expect(rejectedInvalidSettings,
                         "new project factory rejects incomplete project settings");
+
+    const auto customFormat = CompositionFormat::create(4'096, 2'160, PixelAspectRatio::square(),
+                                                        *FrameRate::create(24'000, 1'001));
+    auto customProject = bloom::document::makeNewProject(
+        "Custom", "Scope", RationalTime::fromInteger(5), *customFormat);
+    const auto* customComposition =
+        customProject.project.findComposition(customProject.initialCompositionId);
+    expectations.expect(customComposition != nullptr &&
+                            customComposition->format() == *customFormat,
+                        "new project factory preserves an explicit composition format");
 }
 
 void testDocumentProvenance(ExpectationContext& expectations) {
@@ -423,6 +669,8 @@ int main() {
     ExpectationContext expectations;
     testRationalTime(expectations);
     testIdsAndParameters(expectations);
+    testBuiltInBindingSchemaValidation(expectations);
+    testCompositionSettings(expectations);
     testCanonicalGraphAndLayerOrder(expectations);
     testDocumentSnapshots(expectations);
     testInvalidConstruction(expectations);

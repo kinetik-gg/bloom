@@ -18,7 +18,7 @@ constexpr EdgeId kInitialOutputEdgeId = EdgeId::fromRaw(1);
 } // namespace
 
 NewProject makeNewProject(std::string projectName, std::string compositionName,
-                          const core::RationalTime duration) {
+                          const core::RationalTime duration, const CompositionFormat format) {
     if (projectName.empty() || compositionName.empty()) {
         throw std::invalid_argument("New project and composition names must not be empty");
     }
@@ -28,8 +28,14 @@ NewProject makeNewProject(std::string projectName, std::string compositionName,
 
     CanonicalGraph graph(kInitialLayerStackNodeId);
     const bool topologyCreated =
-        graph.addNode({kInitialLayerStackNodeId, std::string(kLayerStackNodeType), {}}) &&
-        graph.addNode({kInitialOutputNodeId, std::string(kCompositionOutputNodeType), {}}) &&
+        graph.addNode({kInitialLayerStackNodeId,
+                       std::string(kLayerStackNodeType),
+                       {},
+                       kLayerStackNodeSchemaVersion}) &&
+        graph.addNode({kInitialOutputNodeId,
+                       std::string(kCompositionOutputNodeType),
+                       {},
+                       kCompositionOutputNodeSchemaVersion}) &&
         graph.addEdge(
             {kInitialOutputEdgeId,
              {kInitialLayerStackNodeId, std::string(kLayerStackOutputPort)},
@@ -41,7 +47,7 @@ NewProject makeNewProject(std::string projectName, std::string compositionName,
 
     Project project(kInitialProjectId, std::move(projectName));
     if (!project.addComposition(Composition(kInitialCompositionId, std::move(compositionName),
-                                            duration, std::move(graph))) ||
+                                            duration, std::move(graph), format)) ||
         !project.validate().ok()) {
         throw std::logic_error("Could not create a valid initial Bloom project");
     }

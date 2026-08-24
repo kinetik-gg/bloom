@@ -8,6 +8,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/core/color.hpp
             include/bloom/core/id.hpp
             include/bloom/core/rational_time.hpp
 )

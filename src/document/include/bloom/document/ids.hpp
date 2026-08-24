@@ -2,6 +2,7 @@
 
 #include <bloom/core/id.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -64,6 +65,17 @@ class IdAllocator final {
     void reserveExisting(AnimationCurveId id) noexcept { reserve(id, nextAnimationCurve_); }
     void reserveExisting(DriverBindingId id) noexcept { reserve(id, nextDriverBinding_); }
 
+    void mergeHighWater(const IdAllocator& other) noexcept {
+        merge(nextComposition_, other.nextComposition_);
+        merge(nextNode_, other.nextNode_);
+        merge(nextEdge_, other.nextEdge_);
+        merge(nextLayer_, other.nextLayer_);
+        merge(nextLayerSlot_, other.nextLayerSlot_);
+        merge(nextParameter_, other.nextParameter_);
+        merge(nextAnimationCurve_, other.nextAnimationCurve_);
+        merge(nextDriverBinding_, other.nextDriverBinding_);
+    }
+
   private:
     template <core::TypedId IdType>
     [[nodiscard]] static std::optional<IdType> allocate(std::uint64_t& next) noexcept {
@@ -90,6 +102,14 @@ class IdAllocator final {
         } else {
             next = id.value() + 1;
         }
+    }
+
+    static void merge(std::uint64_t& next, const std::uint64_t otherNext) noexcept {
+        if (next == 0 || otherNext == 0) {
+            next = 0;
+            return;
+        }
+        next = std::max(next, otherNext);
     }
 
     std::uint64_t nextComposition_ = 1;

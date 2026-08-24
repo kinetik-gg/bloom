@@ -1,6 +1,7 @@
 #include <bloom/document/graph.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <deque>
 #include <string>
@@ -15,6 +16,65 @@ using bloom::document::InputPortRef;
 using bloom::document::LayerStackInputRef;
 using bloom::document::NodeId;
 using bloom::document::NodeInputRef;
+
+struct ExpectedParameterBinding final {
+    std::string_view role;
+    std::string_view schemaKey;
+};
+
+constexpr std::array kSolidSourceBindings{
+    ExpectedParameterBinding{bloom::document::kSolidColorParameterRole,
+                             bloom::document::kSolidColorParameterSchemaKey},
+};
+constexpr std::array kTextSourceBindings{
+    ExpectedParameterBinding{bloom::document::kTextParameterRole,
+                             bloom::document::kTextParameterSchemaKey},
+};
+constexpr std::array kLayerOutputBindings{
+    ExpectedParameterBinding{bloom::document::kPositionParameterRole,
+                             bloom::document::kPositionParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kOpacityParameterRole,
+                             bloom::document::kOpacityParameterSchemaKey},
+};
+
+[[nodiscard]] std::span<const ExpectedParameterBinding>
+expectedBindings(const bloom::document::NodeRecord& node) noexcept {
+    using namespace bloom::document;
+    if (node.typeId == kSolidSourceNodeType &&
+        node.schemaVersion == kSolidSourceNodeSchemaVersion) {
+        return kSolidSourceBindings;
+    }
+    if (node.typeId == kTextSourceNodeType && node.schemaVersion == kTextSourceNodeSchemaVersion) {
+        return kTextSourceBindings;
+    }
+    if (node.typeId == kLayerOutputNodeType &&
+        node.schemaVersion == kLayerOutputNodeSchemaVersion) {
+        return kLayerOutputBindings;
+    }
+    return {};
+}
+
+void validateExpectedBindings(const bloom::document::NodeRecord& node,
+                              const bloom::document::ParameterStore& parameters,
+                              const std::string& path, bloom::document::ValidationResult& result) {
+    using namespace bloom::document;
+    for (const auto& expected : expectedBindings(node)) {
+        const auto binding =
+            std::find_if(node.parameters.begin(), node.parameters.end(),
+                         [&](const auto& item) { return item.role == expected.role; });
+        const auto bindingPath = path + ".parameters[" + std::string(expected.role) + "]";
+        if (binding == node.parameters.end()) {
+            result.add(ValidationCode::MissingReference, bindingPath,
+                       "Known node schema requires this parameter binding");
+            continue;
+        }
+        const auto* parameter = parameters.find(binding->parameterId);
+        if (parameter != nullptr && parameter->schemaKey != expected.schemaKey) {
+            result.add(ValidationCode::InvalidValue, bindingPath,
+                       "Parameter binding uses the wrong schema for this node role");
+        }
+    }
+}
 
 [[nodiscard]] NodeId destinationNode(const InputPortRef& destination) noexcept {
     return std::visit(
@@ -71,7 +131,8 @@ NodeRecord* CanonicalGraph::findNode(const NodeId id) noexcept {
 }
 
 bool CanonicalGraph::addNode(NodeRecord node) {
-    if (!node.id.isValid() || node.typeId.empty() || findNode(node.id) != nullptr) {
+    if (!node.id.isValid() || node.typeId.empty() || node.schemaVersion == 0 ||
+        findNode(node.id) != nullptr) {
         return false;
     }
 
@@ -141,6 +202,10 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
             result.add(ValidationCode::EmptyKey, path + ".typeId",
                        "Node type ID must not be empty");
         }
+        if (node.schemaVersion == 0) {
+            result.add(ValidationCode::InvalidValue, path + ".schemaVersion",
+                       "Node schema version must not be zero");
+        }
 
         std::unordered_set<std::string> roles;
         for (const auto& binding : node.parameters) {
@@ -160,6 +225,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
                            "Parameter binding references a missing parameter");
             }
         }
+        validateExpectedBindings(node, parameters, path, result);
     }
 
     const auto* stackNode = findNode(layerStack_.nodeId());

@@ -5,6 +5,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -17,9 +18,16 @@ namespace bloom::document {
 
 inline constexpr std::string_view kLayerOutputNodeType = "bloom.layer-output";
 inline constexpr std::string_view kLayerStackNodeType = "bloom.layer-stack";
+inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kCompositionOutputNodeSchemaVersion = 1;
 
+inline constexpr std::string_view kSolidSourceOutputPort = "image";
 inline constexpr std::string_view kTextSourceOutputPort = "image";
 inline constexpr std::string_view kLayerOutputContentInputPort = "image";
 inline constexpr std::string_view kLayerOutputOutputPort = "image";
@@ -28,9 +36,7 @@ inline constexpr std::string_view kLayerStackOutputPort = "image";
 inline constexpr std::string_view kCompositionOutputInputPort = "image";
 inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 
-inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
-inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
-inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opacity";
+inline constexpr std::string_view kSolidColorParameterRole = "color";
 inline constexpr std::string_view kTextParameterRole = "text";
 inline constexpr std::string_view kPositionParameterRole = "position";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
@@ -39,6 +45,7 @@ struct NodeRecord {
     NodeId id;
     std::string typeId;
     std::vector<ParameterBinding> parameters;
+    std::uint32_t schemaVersion;
 
     friend bool operator==(const NodeRecord&, const NodeRecord&) = default;
 };

@@ -8,33 +8,38 @@ namespace bloom::document::detail {
 
 struct DocumentIdentity final {};
 
-struct DocumentState {
-    explicit DocumentState(Project projectValue) : project(std::move(projectValue)) {
-        for (const auto& composition : project.compositions()) {
-            ids.reserveExisting(composition.id());
-            for (const auto& parameter : composition.parameters().records()) {
-                ids.reserveExisting(parameter.id);
-                if (const auto* animation = std::get_if<AnimationCurveSource>(&parameter.source)) {
-                    ids.reserveExisting(animation->curveId);
-                } else if (const auto* driver =
-                               std::get_if<DriverBindingSource>(&parameter.source)) {
-                    ids.reserveExisting(driver->driverId);
-                }
-            }
-            for (const auto& node : composition.graph().nodes()) {
-                ids.reserveExisting(node.id);
-            }
-            for (const auto& edge : composition.graph().edges()) {
-                ids.reserveExisting(edge.id);
-            }
-            for (const auto& boundary : composition.graph().layerOutputs()) {
-                ids.reserveExisting(boundary.layerId);
-            }
-            for (const auto& entry : composition.graph().layerStack().entries()) {
-                ids.reserveExisting(entry.slotId);
-                ids.reserveExisting(entry.layerId);
+// Central inventory for allocator-backed IDs in durable project truth. When a new durable
+// collection or allocator namespace is added, extend this walk and the publication inventory test.
+static void reserveProjectIds(IdAllocator& ids, const Project& project) noexcept {
+    for (const auto& composition : project.compositions()) {
+        ids.reserveExisting(composition.id());
+        for (const auto& parameter : composition.parameters().records()) {
+            ids.reserveExisting(parameter.id);
+            if (const auto* animation = std::get_if<AnimationCurveSource>(&parameter.source)) {
+                ids.reserveExisting(animation->curveId);
+            } else if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source)) {
+                ids.reserveExisting(driver->driverId);
             }
         }
+        for (const auto& node : composition.graph().nodes()) {
+            ids.reserveExisting(node.id);
+        }
+        for (const auto& edge : composition.graph().edges()) {
+            ids.reserveExisting(edge.id);
+        }
+        for (const auto& boundary : composition.graph().layerOutputs()) {
+            ids.reserveExisting(boundary.layerId);
+        }
+        for (const auto& entry : composition.graph().layerStack().entries()) {
+            ids.reserveExisting(entry.slotId);
+            ids.reserveExisting(entry.layerId);
+        }
+    }
+}
+
+struct DocumentState {
+    explicit DocumentState(Project projectValue) : project(std::move(projectValue)) {
+        reserveProjectIds(ids, project);
     }
 
     Project project;
@@ -160,6 +165,8 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
         return overflowResult();
     }
 
+    draftValue.state_->ids.mergeHighWater(state_->ids);
+    detail::reserveProjectIds(draftValue.state_->ids, draftValue.state_->project);
     state_ = std::make_shared<detail::DocumentState>(std::move(*draftValue.state_));
     draftValue.state_.reset();
     revision_ = *publishedRevision;
@@ -198,7 +205,10 @@ CommitResult Document::restore(const Revision expectedRevision,
         return overflowResult();
     }
 
-    state_ = std::make_shared<detail::DocumentState>(*historicalSnapshot.state_);
+    auto restoredState = std::make_shared<detail::DocumentState>(*historicalSnapshot.state_);
+    restoredState->ids.mergeHighWater(state_->ids);
+    detail::reserveProjectIds(restoredState->ids, restoredState->project);
+    state_ = std::move(restoredState);
     revision_ = *publishedRevision;
     return {CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
 }

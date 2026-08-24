@@ -1,7 +1,9 @@
 #pragma once
 
 #include <bloom/commands/operation.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 
@@ -21,6 +23,34 @@ inline constexpr std::string_view kAddTextLayerPositionParameterOutput = "positi
 inline constexpr std::string_view kAddTextLayerOpacityParameterOutput = "opacityParameter";
 inline constexpr std::string_view kAddTextLayerTextToLayerEdgeOutput = "textToLayerEdge";
 inline constexpr std::string_view kAddTextLayerLayerToStackEdgeOutput = "layerToStackEdge";
+
+inline constexpr std::string_view kAddSolidLayerLayerOutput = "layer";
+inline constexpr std::string_view kAddSolidLayerSlotOutput = "slot";
+inline constexpr std::string_view kAddSolidLayerSolidNodeOutput = "solidNode";
+inline constexpr std::string_view kAddSolidLayerLayerOutputNodeOutput = "layerOutputNode";
+inline constexpr std::string_view kAddSolidLayerColorParameterOutput = "colorParameter";
+inline constexpr std::string_view kAddSolidLayerPositionParameterOutput = "positionParameter";
+inline constexpr std::string_view kAddSolidLayerOpacityParameterOutput = "opacityParameter";
+inline constexpr std::string_view kAddSolidLayerSolidToLayerEdgeOutput = "solidToLayerEdge";
+inline constexpr std::string_view kAddSolidLayerLayerToStackEdgeOutput = "layerToStackEdge";
+
+class AddSolidLayer final : public Operation {
+  public:
+    AddSolidLayer(document::CompositionId compositionId, std::string name, core::Color4d color,
+                  document::Vec2d position, double opacity = 1.0)
+        : compositionId_(compositionId), name_(std::move(name)), color_(color), position_(position),
+          opacity_(opacity) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    std::string name_;
+    core::Color4d color_;
+    document::Vec2d position_;
+    double opacity_ = 1.0;
+};
 
 class AddTextLayer final : public Operation {
   public:
@@ -75,6 +105,19 @@ class SetCompositionDuration final : public Operation {
   private:
     document::CompositionId compositionId_;
     core::RationalTime duration_;
+};
+
+class SetCompositionFormat final : public Operation {
+  public:
+    SetCompositionFormat(document::CompositionId compositionId, document::CompositionFormat format)
+        : compositionId_(compositionId), format_(format) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::CompositionFormat format_;
 };
 
 class SetParameterSource final : public Operation {

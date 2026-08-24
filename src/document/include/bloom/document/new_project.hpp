@@ -14,6 +14,6 @@ struct NewProject {
 };
 
 [[nodiscard]] NewProject makeNewProject(std::string projectName, std::string compositionName,
-                                        core::RationalTime duration);
+                                        core::RationalTime duration, CompositionFormat format = {});
 
 } // namespace bloom::document
