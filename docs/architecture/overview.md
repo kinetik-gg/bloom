@@ -112,11 +112,12 @@ Platform/GPU capability -> project semantics
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
 | `src/platform` | narrow filesystem, system, and packaging services with OS parity |
+| `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |
 
-Only `apps/bloom` and `src/ui` exist in the first scaffold. Other boundaries, including `src/host`
-and `modules`, should be created when the first vertical proof needs their behavior rather than as
-empty speculative libraries.
+Only `apps/bloom` and `src/ui` exist in the first scaffold. Other boundaries, including `src/host`,
+`src/scripting`, and `modules`, should be created when the first vertical proof needs their behavior
+rather than as empty speculative libraries.
 
 ## Module Composition
 

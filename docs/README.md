@@ -23,6 +23,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
    [`architecture/task-system.md`](architecture/task-system.md),
    [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
+   [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md), and
    [`architecture/platform-support.md`](architecture/platform-support.md) — execution and platform
    contracts and extension boundaries.

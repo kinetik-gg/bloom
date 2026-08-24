@@ -64,6 +64,21 @@ A native editor-panel extension that directly uses Qt may require the exact Bloo
 Qt minor version, and platform ABI. It is a separate compatibility tier from a stable data or
 service extension API and must be labeled honestly.
 
+### Python Add-ons
+
+Python is the primary future third-party extension language. Standard wheels and entry points
+discover add-ons, while Bloom-owned registries receive their versioned editor, command, schema,
+task, asset, adapter, and node contributions. Ordinary add-ons use host-rendered schema UI and may
+run out of process. Full PySide widgets are a trusted, exact-version tier and do not create a stable
+Qt ABI promise.
+
+Wheels, source archives, local folders, and Git URLs all enter one staged package pipeline. The
+canonical source root contains `pyproject.toml` and `bloom-addon.toml`; discovery never imports code,
+and a Git revision is recorded as a resolved commit before install.
+
+The complete language, lifecycle, packaging, UI, security, and missing-data contract is in
+[`scripting-and-addons.md`](scripting-and-addons.md).
+
 ### Isolated Modules
 
 Untrusted, crash-prone, or independently versioned integrations may run out of process. Isolation

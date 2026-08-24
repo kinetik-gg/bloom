@@ -77,7 +77,9 @@ headless tests.
 - editorial sequences and advanced timeline tools
 - audio playback and processing
 - grading workspace
-- scripting and native addons
+- embedded Python, the public add-on SDK, add-on management, custom PySide UI, and native add-ons;
+  current foundation APIs must still follow the boundaries in
+  [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md)
 - OpenFX hosting
 - broad interchange and video delivery
 

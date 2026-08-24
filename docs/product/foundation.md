@@ -33,6 +33,8 @@ remain part of the broader direction but are not commitments for the first imple
 - Build Bloom as a modular monolith whose optional pipelines can contribute coherent editor,
   document, command, evaluation, render, interchange, and task capabilities without fragmenting
   ordinary in-tree code behind unnecessary abstractions.
+- Use Python as Bloom's public artist, pipeline, headless, and add-on language through versioned
+  read, command, task, and contribution boundaries. Keep deterministic evaluation native.
 - Keep repository documentation as Bloom's canonical current documentation.
 - Adopt architectural decisions deliberately through repository documentation and tested behavior.
 - Keep the application local-first and capable of headless document and render testing.
@@ -118,6 +120,7 @@ should normally wait.
 - [`../ux/visual-language.md`](../ux/visual-language.md)
 - [`../architecture/task-system.md`](../architecture/task-system.md)
 - [`../architecture/layer-graph-model.md`](../architecture/layer-graph-model.md)
+- [`../architecture/scripting-and-addons.md`](../architecture/scripting-and-addons.md)
 - [`../architecture/module-system.md`](../architecture/module-system.md)
 - [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
 - [`../architecture/platform-support.md`](../architecture/platform-support.md)
