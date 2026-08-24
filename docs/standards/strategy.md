@@ -161,6 +161,11 @@ It may reference or embed standard payloads where that improves portability, but
 project semantics needed for deterministic evaluation, commands, animation, and future migration.
 Standard import/export remains an explicit boundary with a capability report.
 
+The native format uses a constrained ZIP document container and strict RFC 8259 JSON rather than
+inventing new low-level container or text encodings. Its accepted contract, versioning, migration,
+and preservation rules are defined in
+[`../architecture/project-format.md`](../architecture/project-format.md).
+
 [ocio]: https://opencolorio.org/
 [ocio-config]: https://opencolorio.readthedocs.io/en/latest/guides/authoring/overview.html
 [aces]: https://docs.acescentral.com/background/overview/

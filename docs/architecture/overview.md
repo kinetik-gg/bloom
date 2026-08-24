@@ -115,9 +115,10 @@ Platform/GPU capability -> project semantics
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |
 
-Only `apps/bloom` and `src/ui` exist in the first scaffold. Other boundaries, including `src/host`,
-`src/scripting`, and `modules`, should be created when the first vertical proof needs their behavior
-rather than as empty speculative libraries.
+`src/core`, `src/document`, `src/commands`, `src/ui`, and `apps/bloom` now form the first interactive
+vertical slice. Other boundaries, including `src/project`, `src/host`, `src/scripting`, and
+`modules`, should be created when the first proof needs their behavior rather than as empty
+speculative libraries.
 
 ## Module Composition
 
@@ -188,8 +189,10 @@ The complete contract and game-engine pipeline fitness test are defined in
   active scaffold.
 - The node editor uses Bloom-owned `QGraphicsScene`/`QGraphicsView` presentation over immutable
   document snapshots; external node frameworks do not own graph, persistence, or undo semantics.
+- `.bloom` uses a constrained ZIP container with strict deterministic JSON, explicit schema
+  versions, unknown-data preservation, and atomic task-system save/open behavior; see
+  [`project-format.md`](project-format.md).
 - Canonical in-memory pixel representation and CPU image library.
-- Serialization/container technology for `.bloom`.
 - Dependency management strategy for Qt and ASWF libraries.
 
 The modular-monolith structure and optional pipeline model are accepted. The exact public SDK and

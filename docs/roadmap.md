@@ -60,7 +60,8 @@ layer and graph truth.
 
 ## M4 — Project Round Trip And Output
 
-- Define the first `.bloom` schema and container.
+- Implement the accepted [`.bloom` schema and container](architecture/project-format.md), including
+  deterministic JSON, resource limits, and migration fixtures.
 - Record stable namespaced module/type IDs and preserve unavailable optional-module data.
 - Implement validation, atomic save, open, and version reporting.
 - Import still images and an initial image-sequence representation.
