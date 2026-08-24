@@ -5,6 +5,8 @@ target_sources(
     PRIVATE
         canonical_base64.cpp
         canonical_decimal.cpp
+        canonical_json_string.cpp
+        canonical_json_string_detail.hpp
         project_io_memory.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -12,6 +14,7 @@ target_sources(
         FILES
             include/bloom/project/canonical_base64.hpp
             include/bloom/project/canonical_decimal.hpp
+            include/bloom/project/canonical_json_string.hpp
             include/bloom/project/project_io_memory.hpp
 )
 
@@ -21,6 +24,19 @@ bloom_enable_warnings(bloom_project)
 
 if(BUILD_TESTING)
     include(BloomTesting)
+    add_executable(bloom_project_canonical_json_string_test tests/canonical_json_string_tests.cpp)
+    target_include_directories(
+        bloom_project_canonical_json_string_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_canonical_json_string_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_canonical_json_string_test)
+    bloom_add_test(
+        NAME bloom.project.canonical_json_string
+        COMMAND bloom_project_canonical_json_string_test
+        LABELS unit project persistence text
+    )
+
     add_executable(bloom_project_canonical_base64_test tests/canonical_base64_tests.cpp)
     target_link_libraries(bloom_project_canonical_base64_test PRIVATE bloom_project)
     bloom_enable_warnings(bloom_project_canonical_base64_test)
