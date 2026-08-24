@@ -38,5 +38,6 @@ Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
 ## License
 
-The project license is an open decision. This repository does not claim a license until a license
-file is intentionally added.
+Bloom is licensed under the [Apache License, Version 2.0](LICENSE). Third-party dependencies and
+assets retain their own licenses; release packages include the corresponding notices and source
+information required by the components they ship.

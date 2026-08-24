@@ -35,6 +35,8 @@ remain part of the broader direction but are not commitments for the first imple
   ordinary in-tree code behind unnecessary abstractions.
 - Use Python as Bloom's public artist, pipeline, headless, and add-on language through versioned
   read, command, task, and contribution boundaries. Keep deterministic evaluation native.
+- License original Bloom source and documentation under Apache-2.0. Ship community builds with
+  self-contained, dynamically linked LGPLv3 Qt and complete third-party compliance records.
 - Keep repository documentation as Bloom's canonical current documentation.
 - Adopt architectural decisions deliberately through repository documentation and tested behavior.
 - Keep the application local-first and capable of headless document and render testing.
@@ -110,7 +112,6 @@ should normally wait.
   editor and compositor.
 - The exact relationship between sequence clips, compositions, and nested compositions.
 - Which source type should anchor the first proof: still image, solid, or text.
-- The project license.
 
 ## Related Contracts
 

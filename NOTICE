@@ -1,0 +1,8 @@
+Bloom
+Copyright 2026 Bloom contributors
+
+Bloom is licensed under the Apache License, Version 2.0.
+
+Third-party components remain under their respective licenses. Source checkouts do not redistribute
+Qt. Bloom release packages must include the notices, license texts, source offer or corresponding
+source, and installation information required by the exact Qt and third-party components they ship.
