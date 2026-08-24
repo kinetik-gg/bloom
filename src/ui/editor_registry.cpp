@@ -1,7 +1,7 @@
 #include <bloom/ui/editor_registry.hpp>
 
-#include <QLabel>
-#include <QWidget>
+#include <bloom/ui/composition_editors.hpp>
+#include <bloom/ui/node_editor.hpp>
 
 #include <algorithm>
 #include <utility>
@@ -25,26 +25,23 @@ bool EditorRegistry::registerEditor(EditorDescriptor descriptor) {
 
 const std::vector<EditorDescriptor>& EditorRegistry::editors() const noexcept { return editors_; }
 
-bool registerFoundationEditors(EditorRegistry& registry) {
-    const auto addPlaceholder = [&registry](std::string id, QString name, QString description) {
+bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session) {
+    const auto addEditor = [&registry](std::string id, QString name, EditorFactory factory) {
         return registry.registerEditor(
-            {.id = std::move(id),
-             .displayName = std::move(name),
-             .create = [description = std::move(description)](QWidget* parent) {
-                 auto* label = new QLabel(description, parent);
-                 label->setAlignment(Qt::AlignCenter);
-                 label->setObjectName("editorPlaceholder");
-                 return label;
-             }});
+            {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
 
-    return addPlaceholder("bloom.viewer", "Compositor",
-                          "Viewer\n\nProject frame output appears here") &&
-           addPlaceholder("bloom.nodes", "Nodes",
-                          "Node graph\n\nCanonical composition graph appears here") &&
-           addPlaceholder("bloom.timeline", "Timeline", "Layers, animation, and current time") &&
-           addPlaceholder("bloom.media", "Media", "Assets and compositions") &&
-           addPlaceholder("bloom.properties", "Properties", "Selection-driven parameters");
+    return addEditor("bloom.viewer", "Compositor",
+                     [&session](QWidget* parent) { return new ViewerEditor(session, parent); }) &&
+           addEditor(
+               "bloom.nodes", "Nodes",
+               [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&
+           addEditor("bloom.timeline", "Timeline",
+                     [&session](QWidget* parent) { return new TimelineEditor(session, parent); }) &&
+           addEditor("bloom.media", "Media",
+                     [&session](QWidget* parent) { return new MediaEditor(session, parent); }) &&
+           addEditor("bloom.properties", "Properties",
+                     [&session](QWidget* parent) { return new PropertiesEditor(session, parent); });
 }
 
 } // namespace bloom::ui

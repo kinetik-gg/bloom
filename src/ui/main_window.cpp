@@ -1,5 +1,6 @@
 #include <bloom/ui/main_window.hpp>
 
+#include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/workspace_host.hpp>
@@ -8,6 +9,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QColor>
+#include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPalette>
@@ -23,8 +25,9 @@ constexpr auto windowGeometryKey = "window/main/geometry";
 
 namespace bloom::ui {
 
-MainWindow::MainWindow(const EditorRegistry& editorRegistry, QWidget* parent)
-    : QMainWindow(parent) {
+MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
+                       QWidget* parent)
+    : QMainWindow(parent), compositionSession_(compositionSession) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -33,6 +36,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, QWidget* parent)
     createWorkspaceSwitcher();
     createEditorLayout(editorRegistry);
     createWorkspaceActions();
+    updateEditActions();
     applyFoundationTheme();
 }
 
@@ -59,10 +63,33 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
 
 void MainWindow::createMenus() {
     menuBar()->addMenu("&File");
-    menuBar()->addMenu("&Edit");
+    auto* editMenu = menuBar()->addMenu("&Edit");
+    undoAction_ = editMenu->addAction("Undo");
+    undoAction_->setObjectName("undoAction");
+    undoAction_->setShortcut(QKeySequence::Undo);
+    undoAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(undoAction_, &QAction::triggered, &compositionSession_, &CompositionSession::undo);
+
+    redoAction_ = editMenu->addAction("Redo");
+    redoAction_->setObjectName("redoAction");
+    redoAction_->setShortcut(QKeySequence::Redo);
+    redoAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(redoAction_, &QAction::triggered, &compositionSession_, &CompositionSession::redo);
+    connect(&compositionSession_, &CompositionSession::historyChanged, this,
+            &MainWindow::updateEditActions);
+
     menuBar()->addMenu("&View");
     windowMenu_ = menuBar()->addMenu("&Window");
     menuBar()->addMenu("&Help");
+}
+
+void MainWindow::updateEditActions() {
+    const QString undoLabel = compositionSession_.undoLabel();
+    const QString redoLabel = compositionSession_.redoLabel();
+    undoAction_->setEnabled(compositionSession_.canUndo());
+    redoAction_->setEnabled(compositionSession_.canRedo());
+    undoAction_->setText(undoLabel.isEmpty() ? tr("Undo") : tr("Undo %1").arg(undoLabel));
+    redoAction_->setText(redoLabel.isEmpty() ? tr("Redo") : tr("Redo %1").arg(redoLabel));
 }
 
 void MainWindow::createWorkspaceSwitcher() {

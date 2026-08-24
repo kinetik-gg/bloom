@@ -1,3 +1,8 @@
+#include <bloom/commands/command_stack.hpp>
+#include <bloom/core/rational_time.hpp>
+#include <bloom/document/document.hpp>
+#include <bloom/document/new_project.hpp>
+#include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -22,6 +27,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -77,7 +83,19 @@ bool isBinaryLayoutNode(const QJsonObject& node) {
 }
 
 int testRegistry(EditorRegistry& registry) {
-    if (!require(bloom::ui::registerFoundationEditors(registry), 1)) {
+    const auto addTestEditor = [&registry](std::string id, QString name) {
+        return registry.registerEditor(
+            {.id = std::move(id), .displayName = std::move(name), .create = [](QWidget* parent) {
+                 auto* label = new QLabel("Workspace test editor", parent);
+                 label->setObjectName("editorPlaceholder");
+                 return label;
+             }});
+    };
+    const bool registered =
+        addTestEditor("bloom.viewer", "Compositor") && addTestEditor("bloom.nodes", "Nodes") &&
+        addTestEditor("bloom.timeline", "Timeline") && addTestEditor("bloom.media", "Media") &&
+        addTestEditor("bloom.properties", "Properties");
+    if (!require(registered, 1)) {
         return 1;
     }
     if (!require(registry.editors().size() == 5, 2)) {
@@ -391,8 +409,9 @@ int testMaximizeAndPersistence(const EditorRegistry& registry) {
     return 0;
 }
 
-int testMainWindow(const EditorRegistry& registry) {
-    bloom::ui::MainWindow window(registry);
+int testMainWindow(const EditorRegistry& registry,
+                   bloom::ui::CompositionSession& compositionSession) {
+    bloom::ui::MainWindow window(registry, compositionSession);
     if (!require(window.windowTitle() == "Bloom" && window.workspaceHost() != nullptr, 40)) {
         return 40;
     }
@@ -407,10 +426,17 @@ int testMainWindow(const EditorRegistry& registry) {
     auto* closeAction = window.findChild<QAction*>("closeAreaAction");
     auto* maximizeAction = window.findChild<QAction*>("maximizeAreaAction");
     auto* resetAction = window.findChild<QAction*>("resetCompositingLayoutAction");
+    auto* undoAction = window.findChild<QAction*>("undoAction");
+    auto* redoAction = window.findChild<QAction*>("redoAction");
     if (!require(splitAction != nullptr && closeAction != nullptr && maximizeAction != nullptr &&
-                     resetAction != nullptr,
+                     resetAction != nullptr && undoAction != nullptr && redoAction != nullptr,
                  43)) {
         return 43;
+    }
+    if (!require(!undoAction->isEnabled() && !redoAction->isEnabled() &&
+                     !undoAction->shortcut().isEmpty() && !redoAction->shortcut().isEmpty(),
+                 60)) {
+        return 60;
     }
     if (!require(closeAction->shortcut().isEmpty() && maximizeAction->shortcut().isEmpty(), 44)) {
         return 44;
@@ -478,5 +504,12 @@ int main(int argc, char* argv[]) {
     if (const int result = testMaximizeAndPersistence(registry); result != 0) {
         return result;
     }
-    return testMainWindow(registry);
+
+    auto newProject = bloom::document::makeNewProject("Window Test", "Composition 1",
+                                                      bloom::core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    bloom::document::Document document(std::move(newProject.project));
+    bloom::commands::CommandStack commandStack(document);
+    bloom::ui::CompositionSession compositionSession(document, commandStack, compositionId);
+    return testMainWindow(registry, compositionSession);
 }

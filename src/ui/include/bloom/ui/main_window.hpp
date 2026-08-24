@@ -8,13 +8,15 @@ class QSettings;
 
 namespace bloom::ui {
 
+class CompositionSession;
 class EditorRegistry;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
 class MainWindow final : public QMainWindow {
   public:
-    explicit MainWindow(const EditorRegistry& editorRegistry, QWidget* parent = nullptr);
+    MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
+               QWidget* parent = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -26,11 +28,15 @@ class MainWindow final : public QMainWindow {
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void createWorkspaceActions();
     void resetCompositingLayout();
+    void updateEditActions();
     void updateWorkspaceActions();
     void applyFoundationTheme();
 
+    CompositionSession& compositionSession_;
     QMenu* windowMenu_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
+    QAction* undoAction_ = nullptr;
+    QAction* redoAction_ = nullptr;
     QAction* splitLeftRightAction_ = nullptr;
     QAction* splitTopBottomAction_ = nullptr;
     QAction* closeAreaAction_ = nullptr;
