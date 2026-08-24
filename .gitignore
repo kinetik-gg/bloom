@@ -1,0 +1,14 @@
+/build/
+/.cache/
+/CMakeUserPresets.json
+/.idea/
+/.vscode/
+/.vs/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.user
+*.suo
+*.vcxproj.user
+*.autosave
+compile_commands.json
