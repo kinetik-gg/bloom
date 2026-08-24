@@ -68,8 +68,9 @@ Encoding rules are explicit:
 - Parameter sources carry a discriminator such as `constant`, `animation-curve`, or `driver`.
 - Edge destinations distinguish `node-input` from `layer-stack-input`.
 - Object members have a fixed writer order.
-- Nodes, edges, parameters, boundaries, and parameter bindings are written in stable ID or key
-  order.
+- Nodes, edges, parameters, animation curves, boundaries, and parameter bindings are written in
+  stable ID or key order. Keys inside a curve are written in exact rational-time order, which is
+  also strictly increasing; `KeyframeId` breaks no ties because equal key times are invalid.
 - Layer Stack entries retain semantic authoring order and are never sorted.
 - Finite floating-point values use the shortest correctly rounded decimal representation that
   round-trips to the same binary value.
@@ -86,13 +87,31 @@ Deterministic `document.json` bytes are a v1 test requirement. ZIP member order,
 attributes, and compression method are normalized as implementation policy, but exact whole-archive
 byte equality is not a compatibility promise until fixtures prove it across all supported hosts.
 
+### Animation Records
+
+Animation is durable document truth rather than a timeline cache. A parameter source contains an
+`animation-curve` discriminator and a decimal-string `AnimationCurveId`. Its owning composition
+declares the
+strongly typed curve record and keys. Each key contains a decimal-string `KeyframeId`, normalized
+rational time, typed finite value, and outgoing `hold` or `linear` interpolation.
+
+Curve and key declarations participate in project-global allocator watermarks. The decoder rejects
+missing curves, incompatible value kinds, duplicate references under the version 1 single-owner
+rule, orphan curves, empty curves, duplicate exact times, unsorted times, out-of-range opacity, and
+unsupported animation on a schema that declares it constant-only. Current time, selected keys,
+playback state, and unfinished interaction overrides are session state and are never serialized.
+
+The exact JSON object-member shapes remain a Batch 5 schema-freeze deliverable; they must encode the
+accepted model in [`animation-and-time.md`](animation-and-time.md) without inventing a second time
+or interpolation representation.
+
 ## Durable ID Scope And Remapping
 
 Durable object IDs are project-global within each typed namespace. Every `NodeId` in one project is
-unique across all compositions, as is every `EdgeId`, `LayerId`, `LayerSlotId`, `ParameterId`, and
-future durable record ID within its own type. Equal numeric values in different typed namespaces are
-not collisions. Different projects may reuse numeric values; an in-memory proxy therefore also
-carries its project or session identity and generation.
+unique across all compositions, as is every `EdgeId`, `LayerId`, `LayerSlotId`, `ParameterId`,
+`AnimationCurveId`, `KeyframeId`, and future durable record ID within its own type. Equal numeric
+values in different typed namespaces are not collisions. Different projects may reuse numeric
+values; an in-memory proxy therefore also carries its project or session identity and generation.
 
 Project validation must reject cross-composition collisions before state enters initial Document
 construction or publication. A composition-local collection may still refer to the same declared

@@ -152,6 +152,15 @@ New interactive requests coalesce or supersede equivalent queued requests. For e
 through twenty times should not require evaluating nineteen frames the user no longer wants.
 Already-running work is cancelled when safe or allowed to finish without publishing stale results.
 
+The preview controller adds bounded trailing coalescing above the scheduler for high-frequency
+session changes. Current time or a direct-manipulation override advances the desired generation
+immediately, while submission uses an injectable 16 ms cadence with at most one retained active
+handle and one newest pending request per preview owner. A superseded active request is cancelled
+but remains the gate until it reaches terminal. Gesture end bypasses the cadence for the newest
+desired request, but submission still waits for that active terminal state. Scheduler coalescing,
+cancellation, and revision/generation publication checks remain mandatory backstops rather than
+alternative semantics.
+
 Tasks declare the resources they need where practical: CPU, blocking I/O, GPU device/queue, external
 process, and estimated memory. Executors use bounded queues, concurrency limits, and memory budgets.
 Submitting work must apply backpressure or discard replaceable speculative requests instead of
@@ -272,9 +281,10 @@ the implementation grows.
 ## Implemented Boundary And Next Integration
 
 The bounded executors, snapshot compiler, revision/generation-safe preview controller, Qt bridge,
-Jobs surface, and clean application quiescence are implemented. Batch 3 consumes the immutable typed
-plan through a deterministic CPU evaluator and publishes the first real pixels without weakening
-the established ownership, cancellation, color, alpha, or stale-result contracts.
+Jobs surface, clean application quiescence, and Batch 3 CPU preview path are implemented. The
+immutable typed plan is consumed by a deterministic CPU evaluator that publishes real pixels
+without weakening the established ownership, cancellation, color, alpha, or stale-result
+contracts.
 
 Distributed rendering, persistent job databases, and a general workflow engine are not required.
 The contract above is intentionally broader than the first implementation so later media and GPU

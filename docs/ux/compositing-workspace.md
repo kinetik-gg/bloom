@@ -51,6 +51,23 @@ temporary drags remain session state.
 - Direct manipulation in the viewer opens an interaction transaction, previews changes, and commits
   one undoable command when the interaction ends.
 
+## Time And Direct Manipulation
+
+Current time is exact composition-session state shared by every editor. Timeline scrubbing snaps
+the playhead to the nearest exact composition frame, with halfway ties toward the greater frame,
+but it never rewrites existing subframe keys.
+Scrubbing requests interactive previews through a bounded newest-wins cadence; old frames cannot
+publish after the desired time advances.
+
+Viewer translation starts only through the active transform tool, a valid target, and a current
+non-empty composition mapping rectangle. Batch 4 has no durable layer lock field.
+Pointer motion previews a typed session override through the canonical compiler and evaluator while
+leaving project revision and undo history unchanged. Release commits one constant edit or one exact-
+time key insertion/update. Escape, secondary-button cancellation, pointer-capture loss, a stale
+target, or a viewport/mapping change restores document truth with no command. The implementation
+contract lives in
+[`../architecture/animation-and-time.md`](../architecture/animation-and-time.md).
+
 ## Layer And Graph Relationship
 
 - A composition owns one canonical graph.

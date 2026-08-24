@@ -39,11 +39,11 @@ Bloom currently has:
 - accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
   add-ons, Apache-2.0 distribution, and the native `.bloom` container
 
-The local Batch 2 checkpoint is implemented and has been launched. Add Solid remains synchronized
+The local Batch 3 checkpoint is implemented and has been launched. Add Solid remains synchronized
 through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
-composition snapshots asynchronously, publishes only the current revision/generation, and exposes
-the work through the swappable Jobs editor. The Viewer deliberately reports plan lifecycle without
-claiming evaluated pixels. Pixel evaluation, keyframes, and project persistence remain deferred.
+composition snapshots, evaluates deterministic reference CPU pixels asynchronously, publishes only
+the current revision/generation, and exposes the work through swappable Viewer and Jobs editors.
+Animation, direct manipulation, and project persistence remain the next implementation slices.
 
 Before the next feature is called cross-platform complete, the current checkpoint and each new
 merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
@@ -272,6 +272,11 @@ outside the automated merge gate.
 
 Goal: complete the time-dependent authoring part of the first vertical proof and make the document
 ready for a stable project schema.
+
+Contract status: accepted in ADRs 0016 and 0017 and
+[`architecture/animation-and-time.md`](architecture/animation-and-time.md). Implementation proceeds
+from durable IDs and curve validation toward sampling, commands, session time, and gestures; cubic
+curves and shared animation are explicitly outside this batch.
 
 Implement in dependency order:
 

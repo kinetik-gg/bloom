@@ -122,6 +122,19 @@ non-finite result.
 These are kernels, not artist-visible node records. Artist nodes add typed ports, defaults, units,
 animation roles, UI metadata, and lowering without changing the kernel math.
 
+## Animation Sampling Version 1
+
+Animation interval selection is exact rational work, not scalar floating-point work. Runtime first
+orders and locates keys using normalized `RationalTime`, derives an exact interval factor, and rounds
+that factor once to binary64 with round-to-nearest, ties-to-even. Hold returns the left value;
+Linear applies Float64 scalar Mix version 1 to the scalar or each `Vec2d` component. Exact key times
+and endpoints return stored values or exact factors without an avoidable arithmetic round trip.
+
+The sampling semantics version is `1` and participates in compiled-plan compatibility and cache
+identity. Full curve ownership, extrapolation, commands, diagnostics, and the portable fixed-width
+rational conversion contract are defined in
+[`animation-and-time.md`](animation-and-time.md).
+
 ## CPU Image Primitive Vocabulary Version 1
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first

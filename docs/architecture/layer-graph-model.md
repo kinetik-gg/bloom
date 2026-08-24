@@ -84,6 +84,10 @@ Conceptually:
 ParameterSource = Constant | AnimationCurve | DriverBinding
 ```
 
+Animation curves are strongly typed, composition-owned declarations rather than untyped bags of
+values. The first scalar and `Vec2d` curve model, exact rational sampling, source transitions, and
+gesture boundary are defined in [`animation-and-time.md`](animation-and-time.md).
+
 Not every property is permanently shown as a socket. A layer or Properties view may present a
 curated schema while the node editor exposes the complete node schema. The following actions have
 distinct meanings:
@@ -138,9 +142,10 @@ an incidental side effect.
 ## Commands And Evaluation
 
 Persistent actions such as add/remove/reorder layer, connect ports, set a matte, set a parameter
-source, and upsert a keyframe are typed commands. Composite artist actions create one transaction
-and one meaningful undo entry. Undo restores exact IDs, records, edges, values, and order rather
-than rerunning a topology heuristic against the current graph.
+source, and insert/update/delete a typed keyframe are typed commands. Composite artist actions
+create one transaction and one meaningful undo entry. An unfinished direct manipulation uses a
+session-only compile override and commits once on release. Undo restores exact IDs, records, edges,
+values, sources, and order rather than rerunning a topology heuristic against the current graph.
 
 An immutable composition snapshot freezes nodes, stack entries and order, edges, parameter sources,
 animation, assets, required type versions, and document revision. Runtime compilation lowers layer
