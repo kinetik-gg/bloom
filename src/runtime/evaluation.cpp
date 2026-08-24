@@ -12,6 +12,7 @@ bool operator==(const EvaluationCacheIdentity& lhs, const EvaluationCacheIdentit
            lhs.colorIntent == rhs.colorIntent && lhs.provider == rhs.provider &&
            lhs.displayIntent == rhs.displayIntent &&
            lhs.evaluatorSemanticsVersion == rhs.evaluatorSemanticsVersion &&
+           lhs.animationSamplingSemanticsVersion == rhs.animationSamplingSemanticsVersion &&
            lhs.imagePrimitiveSemanticsVersion == rhs.imagePrimitiveSemanticsVersion &&
            lhs.displayMapperSemanticsVersion == rhs.displayMapperSemanticsVersion;
 }

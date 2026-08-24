@@ -71,11 +71,13 @@ template <typename Definition>
 
 [[nodiscard]] bool hasParameter(const NodeDefinition& definition, const std::size_t index,
                                 const std::string_view role, const std::string_view schemaKey,
-                                const ParameterValueKind valueKind) noexcept {
+                                const ParameterValueKind valueKind,
+                                const bool supportsAnimation = false) noexcept {
     return definition.parameters.size() > index && definition.parameters[index].role == role &&
            definition.parameters[index].schemaKey == schemaKey &&
            definition.parameters[index].valueKind == valueKind &&
-           definition.parameters[index].required;
+           definition.parameters[index].required &&
+           definition.parameters[index].supportsAnimation == supportsAnimation;
 }
 
 [[nodiscard]] bool hasCanonicalKey(const NodeDefinition& definition, const std::string_view typeId,
@@ -98,9 +100,9 @@ template <typename Definition>
                hasImageOutput(definition, kLayerOutputOutputPort) &&
                definition.parameters.size() == 2 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
-                            ParameterValueKind::Vec2d) &&
+                            ParameterValueKind::Vec2d, true) &&
                hasParameter(definition, 1, kOpacityParameterRole, kOpacityParameterSchemaKey,
-                            ParameterValueKind::Float64) &&
+                            ParameterValueKind::Float64, true) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
@@ -151,9 +153,9 @@ template <typename Definition>
             {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, true}},
             {{std::string(kLayerOutputOutputPort), SocketValueKind::Image}},
             {{std::string(kPositionParameterRole), std::string(kPositionParameterSchemaKey),
-              ParameterValueKind::Vec2d, true},
+              ParameterValueKind::Vec2d, true, true},
              {std::string(kOpacityParameterRole), std::string(kOpacityParameterSchemaKey),
-              ParameterValueKind::Float64, true}},
+              ParameterValueKind::Float64, true, true}},
             std::nullopt};
 }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <new>
 #include <numeric>
@@ -11,6 +12,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,8 +31,13 @@ namespace detail {
 
 [[nodiscard]] EvaluationSubject subjectFor(const OperationIndex index,
                                            const CompiledOperation& operation) {
-    EvaluationSubject subject{
-        .operation = index, .nodeId = std::nullopt, .layerId = std::nullopt, .field = {}};
+    EvaluationSubject subject{.operation = index,
+                              .nodeId = std::nullopt,
+                              .layerId = std::nullopt,
+                              .parameterId = std::nullopt,
+                              .animationCurveId = std::nullopt,
+                              .keyframeId = std::nullopt,
+                              .field = {}};
     std::visit(
         Overloaded{
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
@@ -130,6 +137,26 @@ proxyPixelAspect(const document::CompositionFormat& format,
     return diagnostic(code, std::move(summary), std::move(detail), std::move(subject));
 }
 
+template <typename Value>
+[[nodiscard]] EvaluationDiagnostic animationDiagnostic(const AnimationSamplingError error,
+                                                       const document::AnimationCurveId curveId,
+                                                       const AnimationSampleResult<Value>& sample) {
+    auto code = EvaluationDiagnosticCode::InvalidPlan;
+    std::string summary = "Animation curve cannot be sampled";
+    if (error == AnimationSamplingError::UnsupportedFloatingPointEnvironment) {
+        code = EvaluationDiagnosticCode::UnsupportedFloatingPointEnvironment;
+        summary = "Animation sampling environment is unsupported";
+    } else if (error == AnimationSamplingError::NonFiniteResult) {
+        code = EvaluationDiagnosticCode::InvalidParameter;
+        summary = "Animation interpolation produced a non-finite value";
+    }
+    EvaluationSubject subject;
+    subject.animationCurveId = curveId;
+    subject.keyframeId = sample.segmentStart;
+    subject.field = "animationCurve";
+    return diagnostic(code, std::move(summary), {}, std::move(subject));
+}
+
 [[nodiscard]] bool isImageProducing(const CompiledOperation& operation) noexcept {
     return !std::holds_alternative<CompiledCompositionOutput>(operation);
 }
@@ -148,6 +175,31 @@ proxyPixelAspect(const document::CompositionFormat& format,
                         "Layer Output has an invalid image input",
                         "The input must name an earlier Solid operation.",
                         subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                    return false;
+                }
+                if (!layer.position.id.isValid() || !layer.opacity.id.isValid()) {
+                    failure = diagnostic(
+                        EvaluationDiagnosticCode::InvalidPlan,
+                        "Layer Output has an invalid parameter identity", {},
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                    return false;
+                }
+                if (const auto* curve = std::get_if<Vec2CurveIndex>(&layer.position.source);
+                    curve != nullptr && curve->value() >= plan.vec2Curves.size()) {
+                    failure = diagnostic(
+                        EvaluationDiagnosticCode::InvalidPlan,
+                        "Layer position references an invalid animation curve", {},
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                    failure.subject.parameterId = layer.position.id;
+                    return false;
+                }
+                if (const auto* curve = std::get_if<ScalarCurveIndex>(&layer.opacity.source);
+                    curve != nullptr && curve->value() >= plan.scalarCurves.size()) {
+                    failure = diagnostic(
+                        EvaluationDiagnosticCode::InvalidPlan,
+                        "Layer opacity references an invalid animation curve", {},
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                    failure.subject.parameterId = layer.opacity.id;
                     return false;
                 }
                 return true;
@@ -188,6 +240,83 @@ proxyPixelAspect(const document::CompositionFormat& format,
         operation);
 }
 
+template <typename Curve>
+[[nodiscard]] bool hasCanonicalCurveIds(const std::vector<Curve>& curves) noexcept {
+    return std::adjacent_find(curves.begin(), curves.end(),
+                              [](const Curve& left, const Curve& right) {
+                                  return !left.id.isValid() || !right.id.isValid() ||
+                                         left.id >= right.id;
+                              }) == curves.end() &&
+           (curves.empty() || curves.front().id.isValid());
+}
+
+[[nodiscard]] static bool
+hasDisjointCurveIds(const std::vector<CompiledScalarCurve>& scalarCurves,
+                    const std::vector<CompiledVec2Curve>& vec2Curves) noexcept {
+    auto scalar = scalarCurves.begin();
+    auto vec2 = vec2Curves.begin();
+    while (scalar != scalarCurves.end() && vec2 != vec2Curves.end()) {
+        if (scalar->id == vec2->id) {
+            return false;
+        }
+        if (scalar->id < vec2->id) {
+            ++scalar;
+        } else {
+            ++vec2;
+        }
+    }
+    return true;
+}
+
+template <typename Value> struct ResolvedParameter final {
+    Value value;
+    document::ParameterId parameterId;
+    std::optional<document::AnimationCurveId> animationCurveId;
+    std::optional<document::KeyframeId> keyframeId;
+};
+
+[[nodiscard]] static std::optional<ResolvedParameter<document::Vec2d>>
+resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositionPlan& plan,
+                 const ResolvedEvaluation& resolved) noexcept {
+    if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source)) {
+        return ResolvedParameter<document::Vec2d>{*constant, parameter.id, std::nullopt,
+                                                  std::nullopt};
+    }
+    const auto index = std::get<Vec2CurveIndex>(parameter.source).value();
+    if (index >= resolved.vec2CurveValues.size() || index >= plan.vec2Curves.size()) {
+        return std::nullopt;
+    }
+    const auto& sample = resolved.vec2CurveValues[index];
+    return ResolvedParameter<document::Vec2d>{sample.value, parameter.id, plan.vec2Curves[index].id,
+                                              sample.segmentStart};
+}
+
+[[nodiscard]] static std::optional<ResolvedParameter<double>>
+resolveParameter(const CompiledScalarParameter& parameter, const CompiledCompositionPlan& plan,
+                 const ResolvedEvaluation& resolved) noexcept {
+    if (const auto* constant = std::get_if<double>(&parameter.source)) {
+        return ResolvedParameter<double>{*constant, parameter.id, std::nullopt, std::nullopt};
+    }
+    const auto index = std::get<ScalarCurveIndex>(parameter.source).value();
+    if (index >= resolved.scalarCurveValues.size() || index >= plan.scalarCurves.size()) {
+        return std::nullopt;
+    }
+    const auto& sample = resolved.scalarCurveValues[index];
+    return ResolvedParameter<double>{sample.value, parameter.id, plan.scalarCurves[index].id,
+                                     sample.segmentStart};
+}
+
+template <typename Value>
+[[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
+                                                 const ResolvedParameter<Value>& parameter,
+                                                 std::string field) {
+    subject.parameterId = parameter.parameterId;
+    subject.animationCurveId = parameter.animationCurveId;
+    subject.keyframeId = parameter.keyframeId;
+    subject.field = std::move(field);
+    return subject;
+}
+
 [[nodiscard]] PreflightOutcome preflight(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                          const EvaluationRequest& request,
                                          const CancellationToken& cancellation,
@@ -195,6 +324,12 @@ proxyPixelAspect(const document::CompositionFormat& format,
     if (plan == nullptr) {
         return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                                                     "Evaluation has no compiled plan"));
+    }
+    if (plan->planSemanticsVersion != kCompiledCompositionPlanSemanticsVersion ||
+        plan->animationSamplingSemanticsVersion != kAnimationSamplingSemanticsVersion) {
+        return PreflightOutcome::failure(diagnostic(
+            EvaluationDiagnosticCode::InvalidPlan, "Compiled plan semantics are unsupported",
+            "Recompile the document snapshot with the current runtime semantics."));
     }
     if (request.quality != EvaluationQuality::Reference ||
         request.colorIntent != EvaluationColorIntent::ReferenceLinearSrgb) {
@@ -310,6 +445,222 @@ proxyPixelAspect(const document::CompositionFormat& format,
                                   .total = operationCount});
     }
 
+    if (!hasCanonicalCurveIds(plan->scalarCurves) || !hasCanonicalCurveIds(plan->vec2Curves) ||
+        !hasDisjointCurveIds(plan->scalarCurves, plan->vec2Curves)) {
+        return PreflightOutcome::failure(diagnostic(
+            EvaluationDiagnosticCode::InvalidPlan, "Animation curve tables are not canonical",
+            "Curve identities must be valid, globally unique, and strictly ordered."));
+    }
+
+    std::vector<std::uint8_t> scalarCurveReferences(plan->scalarCurves.size(), 0);
+    std::vector<std::uint8_t> vec2CurveReferences(plan->vec2Curves.size(), 0);
+    std::vector<document::ParameterId> scalarCurveOwners(plan->scalarCurves.size());
+    std::vector<document::ParameterId> vec2CurveOwners(plan->vec2Curves.size());
+    std::unordered_set<document::ParameterId> parameterIds;
+    std::optional<EvaluationDiagnostic> parameterFailure;
+    const auto registerParameter = [&](const document::ParameterId parameterId,
+                                       const EvaluationSubject& operationSubject) {
+        if (!parameterId.isValid() || !parameterIds.insert(parameterId).second) {
+            auto subject = operationSubject;
+            subject.parameterId = parameterId;
+            subject.field = "parameter";
+            parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                          "Compiled parameter identity is not canonical",
+                                          "Parameter identities must be valid and globally unique.",
+                                          std::move(subject));
+            return false;
+        }
+        return true;
+    };
+    for (std::size_t index = 0; index < plan->operations.size() && !parameterFailure.has_value();
+         ++index) {
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        const auto operationSubject =
+            subjectFor(OperationIndex::fromRaw(index), plan->operations[index]);
+        std::visit(
+            Overloaded{
+                [&](const CompiledSolid& solid) {
+                    static_cast<void>(registerParameter(solid.colorParameterId, operationSubject));
+                },
+                [&](const CompiledLayerOutput& layer) {
+                    if (!registerParameter(layer.position.id, operationSubject) ||
+                        !registerParameter(layer.opacity.id, operationSubject)) {
+                        return;
+                    }
+                    if (const auto* constant =
+                            std::get_if<document::Vec2d>(&layer.position.source)) {
+                        if (!std::isfinite(constant->x) || !std::isfinite(constant->y)) {
+                            auto subject = operationSubject;
+                            subject.parameterId = layer.position.id;
+                            subject.field = "position";
+                            parameterFailure =
+                                diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                           "Layer position is not finite", {}, std::move(subject));
+                            return;
+                        }
+                    } else {
+                        const auto curveIndex =
+                            std::get<Vec2CurveIndex>(layer.position.source).value();
+                        auto& references = vec2CurveReferences[curveIndex];
+                        if (references != 0) {
+                            auto subject = operationSubject;
+                            subject.parameterId = layer.position.id;
+                            subject.animationCurveId = plan->vec2Curves[curveIndex].id;
+                            subject.field = "position";
+                            parameterFailure =
+                                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                           "Animation curve has multiple parameter owners", {},
+                                           std::move(subject));
+                            return;
+                        }
+                        references = 1;
+                        vec2CurveOwners[curveIndex] = layer.position.id;
+                    }
+                    if (const auto* constant = std::get_if<double>(&layer.opacity.source)) {
+                        if (!std::isfinite(*constant) || *constant < 0.0 || *constant > 1.0) {
+                            auto subject = operationSubject;
+                            subject.parameterId = layer.opacity.id;
+                            subject.field = "opacity";
+                            parameterFailure = diagnostic(
+                                EvaluationDiagnosticCode::InvalidParameter,
+                                "Layer opacity is outside its unit domain", {}, std::move(subject));
+                            return;
+                        }
+                    } else {
+                        const auto curveIndex =
+                            std::get<ScalarCurveIndex>(layer.opacity.source).value();
+                        auto& references = scalarCurveReferences[curveIndex];
+                        if (references != 0) {
+                            auto subject = operationSubject;
+                            subject.parameterId = layer.opacity.id;
+                            subject.animationCurveId = plan->scalarCurves[curveIndex].id;
+                            subject.field = "opacity";
+                            parameterFailure =
+                                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                           "Animation curve has multiple parameter owners", {},
+                                           std::move(subject));
+                            return;
+                        }
+                        references = 1;
+                        scalarCurveOwners[curveIndex] = layer.opacity.id;
+                    }
+                },
+                [](const CompiledLayerStack&) {},
+                [](const CompiledCompositionOutput&) {},
+            },
+            plan->operations[index]);
+    }
+    if (parameterFailure.has_value()) {
+        return PreflightOutcome::failure(std::move(*parameterFailure));
+    }
+    for (std::size_t index = 0; index < scalarCurveReferences.size(); ++index) {
+        if (scalarCurveReferences[index] == 0) {
+            EvaluationSubject subject;
+            subject.animationCurveId = plan->scalarCurves[index].id;
+            subject.field = "animationCurve";
+            return PreflightOutcome::failure(diagnostic(
+                EvaluationDiagnosticCode::InvalidPlan,
+                "Compiled plan contains an unreferenced animation curve", {}, std::move(subject)));
+        }
+    }
+    for (std::size_t index = 0; index < vec2CurveReferences.size(); ++index) {
+        if (vec2CurveReferences[index] == 0) {
+            EvaluationSubject subject;
+            subject.animationCurveId = plan->vec2Curves[index].id;
+            subject.field = "animationCurve";
+            return PreflightOutcome::failure(diagnostic(
+                EvaluationDiagnosticCode::InvalidPlan,
+                "Compiled plan contains an unreferenced animation curve", {}, std::move(subject)));
+        }
+    }
+
+    std::vector<ResolvedCurveSample<double>> scalarCurveValues;
+    scalarCurveValues.reserve(plan->scalarCurves.size());
+    std::unordered_set<document::KeyframeId> keyframeIds;
+    for (std::size_t curveIndex = 0; curveIndex < plan->scalarCurves.size(); ++curveIndex) {
+        const auto& curve = plan->scalarCurves[curveIndex];
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        for (const auto& keyframe : curve.keyframes) {
+            if (cancellation.isCancellationRequested()) {
+                return PreflightOutcome::cancellation();
+            }
+            if (!keyframe.id.isValid() || !keyframeIds.insert(keyframe.id).second) {
+                EvaluationSubject subject;
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = "animationCurve.keyframes";
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidPlan,
+                    "Animation keyframe identity is not canonical",
+                    "Keyframe identities must be valid and globally unique.", std::move(subject)));
+            }
+            if (!std::isfinite(keyframe.value) || keyframe.value < 0.0 || keyframe.value > 1.0) {
+                EvaluationSubject subject;
+                subject.parameterId = scalarCurveOwners[curveIndex];
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = "opacity";
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidParameter,
+                    "Animated opacity key is outside its unit domain", {}, std::move(subject)));
+            }
+        }
+        const auto sample = sampleAnimationCurve(curve, request.time, cancellation);
+        if (sample.error == AnimationSamplingError::Cancelled) {
+            return PreflightOutcome::cancellation();
+        }
+        if (!sample || !sample.value.has_value() || !sample.segmentStart.has_value()) {
+            return PreflightOutcome::failure(animationDiagnostic(sample.error, curve.id, sample));
+        }
+        scalarCurveValues.push_back({*sample.value, *sample.segmentStart});
+    }
+
+    std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;
+    vec2CurveValues.reserve(plan->vec2Curves.size());
+    for (std::size_t curveIndex = 0; curveIndex < plan->vec2Curves.size(); ++curveIndex) {
+        const auto& curve = plan->vec2Curves[curveIndex];
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        for (const auto& keyframe : curve.keyframes) {
+            if (cancellation.isCancellationRequested()) {
+                return PreflightOutcome::cancellation();
+            }
+            if (!keyframe.id.isValid() || !keyframeIds.insert(keyframe.id).second) {
+                EvaluationSubject subject;
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = "animationCurve.keyframes";
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidPlan,
+                    "Animation keyframe identity is not canonical",
+                    "Keyframe identities must be valid and globally unique.", std::move(subject)));
+            }
+            if (!std::isfinite(keyframe.value.x) || !std::isfinite(keyframe.value.y)) {
+                EvaluationSubject subject;
+                subject.parameterId = vec2CurveOwners[curveIndex];
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = "position";
+                return PreflightOutcome::failure(
+                    diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                               "Animated position key is not finite", {}, std::move(subject)));
+            }
+        }
+        const auto sample = sampleAnimationCurve(curve, request.time, cancellation);
+        if (sample.error == AnimationSamplingError::Cancelled) {
+            return PreflightOutcome::cancellation();
+        }
+        if (!sample || !sample.value.has_value() || !sample.segmentStart.has_value()) {
+            return PreflightOutcome::failure(animationDiagnostic(sample.error, curve.id, sample));
+        }
+        vec2CurveValues.push_back({*sample.value, *sample.segmentStart});
+    }
+
     const auto imageBytes = descriptorResult.value()->layout().pixelStorageBytes;
     const auto displayBytes = displayDescriptorResult.value()->layout().pixelStorageBytes;
     auto remaining = consumers;
@@ -359,7 +710,9 @@ proxyPixelAspect(const document::CompositionFormat& format,
                            .verticalScale = verticalScale,
                            .imageBytes = imageBytes,
                            .displayBytes = displayBytes,
-                           .remainingConsumers = std::move(consumers)});
+                           .remainingConsumers = std::move(consumers),
+                           .scalarCurveValues = std::move(scalarCurveValues),
+                           .vec2CurveValues = std::move(vec2CurveValues)});
 }
 
 [[nodiscard]] EvaluationResult unexpectedAllocationFailure() {
@@ -453,14 +806,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         produced.emplace(std::move(*frozen.value()));
                     },
                     [&](const CompiledLayerOutput& layer) {
+                        const auto position =
+                            detail::resolveParameter(layer.position, *plan, resolved);
+                        const auto opacity =
+                            detail::resolveParameter(layer.opacity, *plan, resolved);
+                        if (!position.has_value() || !opacity.has_value()) {
+                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                          "Layer parameter could not be resolved",
+                                                          {}, operationSubject);
+                            return;
+                        }
                         const auto fullCenterX = static_cast<double>(plan->format.width()) / 2.0;
                         const auto fullCenterY = static_cast<double>(plan->format.height()) / 2.0;
                         const double translationX =
-                            (layer.position.x - fullCenterX) * resolved.horizontalScale;
+                            (position->value.x - fullCenterX) * resolved.horizontalScale;
                         const double translationY =
-                            (layer.position.y - fullCenterY) * resolved.verticalScale;
+                            (position->value.y - fullCenterY) * resolved.verticalScale;
+                        if (!std::isfinite(translationX) || !std::isfinite(translationY)) {
+                            operationFailure = diagnostic(
+                                EvaluationDiagnosticCode::InvalidParameter,
+                                "Layer position produces a non-finite translation", {},
+                                detail::parameterSubject(operationSubject, *position, "position"));
+                            return;
+                        }
                         const auto parameters = render::TranslationOpacity::create(
-                            translationX, translationY, layer.opacity);
+                            translationX, translationY, opacity->value);
                         if (!parameters) {
                             operationFailure =
                                 imageDiagnostic(*parameters.error(), operationSubject,
@@ -668,6 +1038,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 *displayBuffer.error(), {}, "Display buffer could not be published"));
         }
 
+        const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion;
         EvaluationCacheIdentity identity{
             .plan = std::move(plan),
             .time = request.time,
@@ -678,6 +1049,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .provider = EvaluationProvider::CpuReference,
             .displayIntent = EvaluationDisplayIntent::ReferenceLinearSrgbToSrgb,
             .evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion,
+            .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
             .displayMapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion,
         };

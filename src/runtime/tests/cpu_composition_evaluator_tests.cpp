@@ -50,6 +50,8 @@ constexpr auto kOpacityA = document::ParameterId::fromRaw(42);
 constexpr auto kColorB = document::ParameterId::fromRaw(43);
 constexpr auto kPositionB = document::ParameterId::fromRaw(44);
 constexpr auto kOpacityB = document::ParameterId::fromRaw(45);
+constexpr auto kOpacityCurve = document::AnimationCurveId::fromRaw(50);
+constexpr auto kPositionCurve = document::AnimationCurveId::fromRaw(51);
 
 class Expectations final {
   public:
@@ -83,9 +85,10 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
              const document::CompositionFormat compositionFormat = format()) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, kColorA, color});
-    operations.emplace_back(runtime::CompiledLayerOutput{kLayerNodeA, kLayerA,
-                                                         runtime::OperationIndex::fromRaw(0),
-                                                         kPositionA, position, kOpacityA, opacity});
+    operations.emplace_back(
+        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                     runtime::CompiledVec2Parameter{kPositionA, position},
+                                     runtime::CompiledScalarParameter{kOpacityA, opacity}});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
@@ -101,14 +104,16 @@ twoSolidPlan(const bool redOnTop = true) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}});
-    operations.emplace_back(
-        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
-                                     kPositionA, document::Vec2d{2.0, 1.0}, kOpacityA, 1.0});
+    operations.emplace_back(runtime::CompiledLayerOutput{
+        kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+        runtime::CompiledVec2Parameter{kPositionA, document::Vec2d{2.0, 1.0}},
+        runtime::CompiledScalarParameter{kOpacityA, 1.0}});
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}});
-    operations.emplace_back(
-        runtime::CompiledLayerOutput{kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
-                                     kPositionB, document::Vec2d{2.0, 1.0}, kOpacityB, 1.0});
+    operations.emplace_back(runtime::CompiledLayerOutput{
+        kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
+        runtime::CompiledVec2Parameter{kPositionB, document::Vec2d{2.0, 1.0}},
+        runtime::CompiledScalarParameter{kOpacityB, 1.0}});
     const runtime::CompiledLayerStackEntry red{kSlotA, kLayerA,
                                                runtime::OperationIndex::fromRaw(1)};
     const runtime::CompiledLayerStackEntry blue{kSlotB, kLayerB,
@@ -132,6 +137,29 @@ twoSolidPlan(const bool redOnTop = true) {
         runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
                                          format(), std::move(operations),
                                          runtime::OperationIndex::fromRaw(1)});
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> animatedLayerPlan() {
+    auto plan = std::make_shared<runtime::CompiledCompositionPlan>(*oneSolidPlan());
+    auto& layer = std::get<runtime::CompiledLayerOutput>(plan->operations[1]);
+    layer.position.source = runtime::Vec2CurveIndex::fromRaw(0);
+    layer.opacity.source = runtime::ScalarCurveIndex::fromRaw(0);
+    plan->scalarCurves.push_back(
+        {kOpacityCurve,
+         {{document::KeyframeId::fromRaw(60), core::RationalTime::fromInteger(0), 1.0,
+           runtime::CompiledKeyframeInterpolation::Linear},
+          {document::KeyframeId::fromRaw(61), core::RationalTime::fromInteger(1), 0.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    plan->vec2Curves.push_back({kPositionCurve,
+                                {{document::KeyframeId::fromRaw(62),
+                                  core::RationalTime::fromInteger(0),
+                                  {2.0, 1.0},
+                                  runtime::CompiledKeyframeInterpolation::Linear},
+                                 {document::KeyframeId::fromRaw(63),
+                                  core::RationalTime::fromInteger(1),
+                                  {3.0, 1.0},
+                                  runtime::CompiledKeyframeInterpolation::Linear}}});
+    return plan;
 }
 
 [[nodiscard]] runtime::EvaluationRequest
@@ -185,6 +213,108 @@ void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
     expectations.expect(interiorPixel != nullptr && interiorPixel->red() == 1.0F &&
                             interiorPixel->alpha() == 1.0F,
                         "fractional translation preserves fully covered interior pixels");
+}
+
+void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = animatedLayerPlan();
+    auto request = requestFor(*plan);
+    const auto halfway = core::RationalTime::create(1, 2);
+    if (!halfway.has_value()) {
+        expectations.expect(false, "halfway animation time is representable");
+        return;
+    }
+    request.time = *halfway;
+    const auto result = evaluator.evaluate(plan, request, {});
+    render::Rgba32f sample = render::Rgba32f::transparent();
+    const auto* edge = pixel(result, 0, 0, sample);
+    expectations.expect(result.status() == runtime::EvaluationStatus::Evaluated &&
+                            edge != nullptr && near(edge->red(), 0.25F) &&
+                            near(edge->alpha(), 0.25F),
+                        "exact request time drives typed position and opacity curves");
+    expectations.expect(result.frame() != nullptr &&
+                            result.frame()->identity().animationSamplingSemanticsVersion ==
+                                runtime::kAnimationSamplingSemanticsVersion,
+                        "animation sampling semantics participate in the published cache identity");
+
+    auto invalidIndex = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    std::get<runtime::CompiledLayerOutput>(invalidIndex->operations[1]).opacity.source =
+        runtime::ScalarCurveIndex::fromRaw(1);
+    const auto invalid = evaluator.evaluate(invalidIndex, requestFor(*invalidIndex), {});
+    expectations.expect(
+        invalid.status() == runtime::EvaluationStatus::Failed && !invalid.diagnostics().empty() &&
+            invalid.diagnostics().front().code == runtime::EvaluationDiagnosticCode::InvalidPlan &&
+            invalid.diagnostics().front().subject.parameterId == kOpacityA,
+        "out-of-range animation references fail preflight with typed parameter identity");
+
+    auto duplicateId = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    duplicateId->vec2Curves.front().id = kOpacityCurve;
+    const auto duplicate = evaluator.evaluate(duplicateId, requestFor(*duplicateId), {});
+    expectations.expect(duplicate.status() == runtime::EvaluationStatus::Failed &&
+                            !duplicate.diagnostics().empty() &&
+                            duplicate.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::InvalidPlan,
+                        "curve identities are globally unique across typed plan tables");
+
+    auto duplicateKey = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    duplicateKey->vec2Curves.front().keyframes.front().id =
+        duplicateKey->scalarCurves.front().keyframes.front().id;
+    const auto duplicateKeyResult = evaluator.evaluate(duplicateKey, requestFor(*duplicateKey), {});
+    expectations.expect(duplicateKeyResult.status() == runtime::EvaluationStatus::Failed &&
+                            !duplicateKeyResult.diagnostics().empty() &&
+                            duplicateKeyResult.diagnostics().front().subject.animationCurveId ==
+                                kPositionCurve &&
+                            duplicateKeyResult.diagnostics().front().subject.keyframeId ==
+                                duplicateKey->vec2Curves.front().keyframes.front().id,
+                        "keyframe identities are validated globally before animation sampling");
+
+    auto unusedCurve = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    unusedCurve->scalarCurves.push_back(
+        {document::AnimationCurveId::fromRaw(52),
+         {{document::KeyframeId::fromRaw(64), core::RationalTime::fromInteger(0), 0.5,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto unused = evaluator.evaluate(unusedCurve, requestFor(*unusedCurve), {});
+    expectations.expect(unused.status() == runtime::EvaluationStatus::Failed &&
+                            unused.diagnostics().front().subject.animationCurveId ==
+                                document::AnimationCurveId::fromRaw(52),
+                        "compiled plans reject unreferenced curve-table entries");
+
+    auto sharedCurve = std::make_shared<runtime::CompiledCompositionPlan>(*twoSolidPlan());
+    sharedCurve->scalarCurves.push_back(
+        {kOpacityCurve,
+         {{document::KeyframeId::fromRaw(60), core::RationalTime::fromInteger(0), 1.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    std::get<runtime::CompiledLayerOutput>(sharedCurve->operations[1]).opacity.source =
+        runtime::ScalarCurveIndex::fromRaw(0);
+    std::get<runtime::CompiledLayerOutput>(sharedCurve->operations[3]).opacity.source =
+        runtime::ScalarCurveIndex::fromRaw(0);
+    const auto shared = evaluator.evaluate(sharedCurve, requestFor(*sharedCurve), {});
+    expectations.expect(shared.status() == runtime::EvaluationStatus::Failed &&
+                            shared.diagnostics().front().subject.animationCurveId == kOpacityCurve,
+                        "version-one plans reject curves shared by multiple parameters");
+
+    auto duplicateParameter = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    auto& duplicateParameterLayer =
+        std::get<runtime::CompiledLayerOutput>(duplicateParameter->operations[1]);
+    duplicateParameterLayer.opacity.id = duplicateParameterLayer.position.id;
+    const auto duplicateParameterResult =
+        evaluator.evaluate(duplicateParameter, requestFor(*duplicateParameter), {});
+    expectations.expect(duplicateParameterResult.status() == runtime::EvaluationStatus::Failed &&
+                            duplicateParameterResult.diagnostics().front().subject.parameterId ==
+                                kPositionA,
+                        "compiled plans preserve globally unique parameter identities");
+
+    auto invalidOpacity = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    invalidOpacity->scalarCurves.front().keyframes.front().value = 1.5;
+    const auto invalidOpacityResult =
+        evaluator.evaluate(invalidOpacity, requestFor(*invalidOpacity), {});
+    expectations.expect(
+        invalidOpacityResult.status() == runtime::EvaluationStatus::Failed &&
+            invalidOpacityResult.diagnostics().front().subject.parameterId == kOpacityA &&
+            invalidOpacityResult.diagnostics().front().subject.animationCurveId == kOpacityCurve &&
+            invalidOpacityResult.diagnostics().front().subject.keyframeId ==
+                invalidOpacity->scalarCurves.front().keyframes.front().id,
+        "animated opacity domain failures retain parameter, curve, and key identity");
 }
 
 void testClippingAndOpacityEndpoints(Expectations& expectations) {
@@ -404,6 +534,15 @@ void testStructuredFailuresAndProgress(Expectations& expectations) {
                                 runtime::EvaluationDiagnosticCode::InvalidPlan,
                         "out-of-range plan references fail without unsafe indexing");
 
+    auto incompatiblePlan = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    ++incompatiblePlan->animationSamplingSemanticsVersion;
+    const auto incompatible =
+        evaluator.evaluate(incompatiblePlan, requestFor(*incompatiblePlan), {});
+    expectations.expect(incompatible.status() == runtime::EvaluationStatus::Failed &&
+                            incompatible.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::InvalidPlan,
+                        "incompatible animation plan semantics require recompilation");
+
     std::vector<runtime::EvaluationProgress> progress;
     const auto result = evaluator.evaluate(
         plan, requestFor(*plan), {},
@@ -552,6 +691,7 @@ int main() {
     Expectations expectations;
     try {
         testAbsoluteCenterAndFractionalTranslation(expectations);
+        testAnimatedParametersAreSampledOncePerRequest(expectations);
         testClippingAndOpacityEndpoints(expectations);
         testStackOrderingOpacityAndDisplay(expectations);
         testEmptyStackIsTransparent(expectations);

@@ -1,13 +1,12 @@
 #pragma once
 
+#include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <cstdint>
 #include <optional>
 
 namespace bloom::runtime {
-
-inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 1;
 
 enum class AnimationSamplingError : std::uint8_t {
     None,
@@ -16,6 +15,7 @@ enum class AnimationSamplingError : std::uint8_t {
     UnsupportedInterpolation,
     InvalidInterval,
     NonFiniteResult,
+    Cancelled,
 };
 
 template <typename Value> struct AnimationSampleResult final {
@@ -30,8 +30,14 @@ template <typename Value> struct AnimationSampleResult final {
 
 [[nodiscard]] AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
                                                                  core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<double>
+sampleAnimationCurve(const CompiledScalarCurve& curve, core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept;
 
 [[nodiscard]] AnimationSampleResult<document::Vec2d>
 sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<document::Vec2d>
+sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept;
 
 } // namespace bloom::runtime

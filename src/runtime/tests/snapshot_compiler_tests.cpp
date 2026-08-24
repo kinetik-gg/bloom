@@ -5,6 +5,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -302,7 +303,10 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                         "plan is independent of document insertion and hash order");
     expectations.expect(
         first.plan->sourceRevision == document::Revision{} && first.plan->projectId == kProjectId &&
-            first.plan->compositionId == kCompositionId && first.plan->format == *format,
+            first.plan->compositionId == kCompositionId && first.plan->format == *format &&
+            first.plan->planSemanticsVersion == runtime::kCompiledCompositionPlanSemanticsVersion &&
+            first.plan->animationSamplingSemanticsVersion ==
+                runtime::kAnimationSamplingSemanticsVersion,
         "revision, identity, and exact composition format carry through");
     expectations.expect(first.plan->operations.size() == 6 &&
                             first.plan->output == runtime::OperationIndex::fromRaw(5),
@@ -313,14 +317,21 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     const auto* stack = std::get_if<runtime::CompiledLayerStack>(&first.plan->operations[4]);
     const auto* output =
         std::get_if<runtime::CompiledCompositionOutput>(&first.plan->operations[5]);
+    const auto* firstPosition = firstLayer == nullptr
+                                    ? nullptr
+                                    : std::get_if<document::Vec2d>(&firstLayer->position.source);
+    const auto* firstOpacity =
+        firstLayer == nullptr ? nullptr : std::get_if<double>(&firstLayer->opacity.source);
     expectations.expect(solid != nullptr && solid->sourceNodeId == kFirstSolidNode &&
                             solid->colorParameterId == kFirstColor &&
                             solid->color == core::Color4d{1.5, 0.25, 0.5, 0.75},
                         "solid preserves straight HDR authoring color and typed identity");
     expectations.expect(firstLayer != nullptr && firstLayer->input.value() == 0 &&
                             firstLayer->layerId == kFirstLayer &&
-                            firstLayer->position == document::Vec2d{120.0, 80.0} &&
-                            firstLayer->opacity == 0.8,
+                            firstLayer->position.id == kFirstPosition && firstPosition != nullptr &&
+                            *firstPosition == document::Vec2d{120.0, 80.0} &&
+                            firstLayer->opacity.id == kFirstOpacity && firstOpacity != nullptr &&
+                            *firstOpacity == 0.8,
                         "Layer Output preserves typed input and static properties");
     expectations.expect(stack != nullptr && stack->entries.size() == 2 &&
                             stack->entries[0] ==
@@ -536,22 +547,82 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
     auto animated = makeProject(singleLayerOptions());
     auto* animatedComposition = animated.findComposition(kCompositionId);
     require(animatedComposition != nullptr, "animation fixture composition must exist");
+    const auto animatedFormat = document::CompositionFormat::create(4, 2);
+    require(animatedFormat.has_value(), "animation evaluation format must be valid");
+    animatedComposition->setFormat(*animatedFormat);
     auto* parameters = &animatedComposition->parameters();
     constexpr auto curveId = document::AnimationCurveId::fromRaw(100);
+    constexpr auto positionCurveId = document::AnimationCurveId::fromRaw(103);
     require(animatedComposition->animationCurves().insert(document::ScalarAnimationCurve{
                 curveId,
-                {{document::KeyframeId::fromRaw(101), core::RationalTime::fromInteger(0), 0.8}},
+                {{document::KeyframeId::fromRaw(101), core::RationalTime::fromInteger(0), 0.2,
+                  document::KeyframeInterpolation::Hold},
+                 {document::KeyframeId::fromRaw(102), core::RationalTime::fromInteger(1), 0.8,
+                  document::KeyframeInterpolation::Linear}},
             }),
             "typed scalar curve must be publishable");
+    require(animatedComposition->animationCurves().insert(document::Vec2AnimationCurve{
+                positionCurveId,
+                {{document::KeyframeId::fromRaw(104),
+                  core::RationalTime::fromInteger(0),
+                  {2.0, 1.0},
+                  document::KeyframeInterpolation::Linear},
+                 {document::KeyframeId::fromRaw(105),
+                  core::RationalTime::fromInteger(1),
+                  {3.0, 1.0},
+                  document::KeyframeInterpolation::Linear}},
+            }),
+            "typed Vec2 curve must be publishable");
     require(parameters->setSource(kFirstOpacity, document::AnimationCurveSource{curveId}),
             "typed curve reference must be publishable");
+    require(parameters->setSource(kFirstPosition, document::AnimationCurveSource{positionCurveId}),
+            "typed position curve reference must be publishable");
     require(animated.validate().ok(), "curve source fixture must remain valid document truth");
     const auto result = compile(std::move(animated), registry);
-    expectations.expect(
-        result.status == runtime::SnapshotCompileStatus::Unsupported &&
-            hasDiagnostic(result, runtime::CompileDiagnosticCode::UnsupportedParameterSource,
-                          kFirstLayerNode),
-        "a valid curve source remains unsupported until runtime lowering consumes typed curves");
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan &&
+                            result.diagnostics.empty(),
+                        "a supported typed animation curve lowers into the runtime plan");
+    if (result.plan) {
+        const auto* layer = std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations[1]);
+        const auto* curveIndex =
+            layer == nullptr ? nullptr
+                             : std::get_if<runtime::ScalarCurveIndex>(&layer->opacity.source);
+        const auto* positionCurveIndex =
+            layer == nullptr ? nullptr
+                             : std::get_if<runtime::Vec2CurveIndex>(&layer->position.source);
+        expectations.expect(
+            result.plan->scalarCurves.size() == 1 && result.plan->vec2Curves.size() == 1 &&
+                result.plan->scalarCurves.front() ==
+                    runtime::CompiledScalarCurve{
+                        curveId,
+                        {{document::KeyframeId::fromRaw(101), core::RationalTime::fromInteger(0),
+                          0.2, runtime::CompiledKeyframeInterpolation::Hold},
+                         {document::KeyframeId::fromRaw(102), core::RationalTime::fromInteger(1),
+                          0.8, runtime::CompiledKeyframeInterpolation::Linear}}} &&
+                layer != nullptr && layer->opacity.id == kFirstOpacity && curveIndex != nullptr &&
+                curveIndex->value() == 0 && layer->position.id == kFirstPosition &&
+                positionCurveIndex != nullptr && positionCurveIndex->value() == 0 &&
+                result.plan->vec2Curves.front().id == positionCurveId &&
+                result.plan->vec2Curves.front().keyframes.size() == 2,
+            "compiled curve tables and parameter references preserve canonical typed identity");
+
+        const auto halfway = core::RationalTime::create(1, 2);
+        require(halfway.has_value(), "animation evaluation time must be valid");
+        const runtime::CpuCompositionEvaluator evaluator;
+        const auto evaluated =
+            evaluator.evaluate(result.plan,
+                               {.time = *halfway,
+                                .output = result.plan->output,
+                                .resolution = runtime::CompositionFormatResolution{},
+                                .quality = runtime::EvaluationQuality::Reference,
+                                .colorIntent = runtime::EvaluationColorIntent::ReferenceLinearSrgb,
+                                .pixelStorageByteLimit = 1U << 20U},
+                               runtime::CancellationToken{});
+        expectations.expect(evaluated.status() == runtime::EvaluationStatus::Evaluated &&
+                                evaluated.frame() != nullptr &&
+                                evaluated.frame()->identity().plan == result.plan,
+                            "compiler output evaluates animated position and opacity end to end");
+    }
     expectations.expect(runtime::compileDiagnosticCodeId(
                             runtime::CompileDiagnosticCode::UnsupportedParameterSource) ==
                             "bloom.runtime.compile.unsupported-parameter-source",

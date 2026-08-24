@@ -121,6 +121,14 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         registry.find(document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion);
     expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Unsupported,
                         "Text is explicit unsupported capability, not an unknown node");
+    const auto* layer =
+        registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
+    expectations.expect(layer != nullptr && layer->parameters.size() == 2 &&
+                            layer->parameters[0].supportsAnimation &&
+                            layer->parameters[1].supportsAnimation && solid != nullptr &&
+                            !solid->parameters.front().supportsAnimation && text != nullptr &&
+                            !text->parameters.front().supportsAnimation,
+                        "animation support is an explicit per-parameter evaluator capability");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,
                         "registration is closed after freeze");

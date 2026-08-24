@@ -3,6 +3,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/task_types.hpp>
 
@@ -73,6 +74,7 @@ struct EvaluationCacheIdentity final {
     EvaluationProvider provider = EvaluationProvider::CpuReference;
     EvaluationDisplayIntent displayIntent = EvaluationDisplayIntent::ReferenceLinearSrgbToSrgb;
     std::uint32_t evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion;
+    std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
     std::uint32_t imagePrimitiveSemanticsVersion = 0;
     std::uint32_t displayMapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion;
 
@@ -105,6 +107,9 @@ struct EvaluationSubject final {
     std::optional<OperationIndex> operation;
     std::optional<document::NodeId> nodeId;
     std::optional<document::LayerId> layerId;
+    std::optional<document::ParameterId> parameterId;
+    std::optional<document::AnimationCurveId> animationCurveId;
+    std::optional<document::KeyframeId> keyframeId;
     std::string field;
 
     friend bool operator==(const EvaluationSubject&, const EvaluationSubject&) = default;

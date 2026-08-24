@@ -47,6 +47,7 @@ struct ParameterDefinition {
     std::string schemaKey;
     ParameterValueKind valueKind = ParameterValueKind::Float64;
     bool required = true;
+    bool supportsAnimation = false;
 
     friend bool operator==(const ParameterDefinition&, const ParameterDefinition&) = default;
 };

@@ -14,6 +14,9 @@
 
 namespace bloom::runtime {
 
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 1;
+inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 1;
+
 enum class CompiledKeyframeInterpolation : std::uint8_t {
     Hold,
     Linear,
@@ -51,6 +54,53 @@ struct CompiledVec2Curve final {
     friend bool operator==(const CompiledVec2Curve&, const CompiledVec2Curve&) = default;
 };
 
+class ScalarCurveIndex final {
+  public:
+    [[nodiscard]] static constexpr ScalarCurveIndex fromRaw(const std::size_t value) noexcept {
+        return ScalarCurveIndex(value);
+    }
+
+    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
+    friend constexpr auto operator<=>(const ScalarCurveIndex&,
+                                      const ScalarCurveIndex&) noexcept = default;
+
+  private:
+    explicit constexpr ScalarCurveIndex(const std::size_t value) noexcept : value_(value) {}
+
+    std::size_t value_ = 0;
+};
+
+class Vec2CurveIndex final {
+  public:
+    [[nodiscard]] static constexpr Vec2CurveIndex fromRaw(const std::size_t value) noexcept {
+        return Vec2CurveIndex(value);
+    }
+
+    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
+    friend constexpr auto operator<=>(const Vec2CurveIndex&,
+                                      const Vec2CurveIndex&) noexcept = default;
+
+  private:
+    explicit constexpr Vec2CurveIndex(const std::size_t value) noexcept : value_(value) {}
+
+    std::size_t value_ = 0;
+};
+
+struct CompiledScalarParameter final {
+    document::ParameterId id;
+    std::variant<double, ScalarCurveIndex> source;
+
+    friend bool operator==(const CompiledScalarParameter&,
+                           const CompiledScalarParameter&) = default;
+};
+
+struct CompiledVec2Parameter final {
+    document::ParameterId id;
+    std::variant<document::Vec2d, Vec2CurveIndex> source;
+
+    friend bool operator==(const CompiledVec2Parameter&, const CompiledVec2Parameter&) = default;
+};
+
 class OperationIndex final {
   public:
     [[nodiscard]] static constexpr OperationIndex fromRaw(const std::size_t value) noexcept {
@@ -79,10 +129,8 @@ struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
     OperationIndex input;
-    document::ParameterId positionParameterId;
-    document::Vec2d position;
-    document::ParameterId opacityParameterId;
-    double opacity = 1.0;
+    CompiledVec2Parameter position;
+    CompiledScalarParameter opacity;
 
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
@@ -123,6 +171,8 @@ struct CompiledCompositionPlan {
     OperationIndex output;
     std::vector<CompiledScalarCurve> scalarCurves{};
     std::vector<CompiledVec2Curve> vec2Curves{};
+    std::uint32_t planSemanticsVersion = kCompiledCompositionPlanSemanticsVersion;
+    std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
     friend bool operator==(const CompiledCompositionPlan&,
                            const CompiledCompositionPlan&) = default;

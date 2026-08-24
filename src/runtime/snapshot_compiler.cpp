@@ -2,6 +2,7 @@
 
 #include "snapshot_compiler_support.hpp"
 
+#include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 
@@ -32,6 +33,11 @@ using FixedInputKey = std::pair<document::NodeId, std::string>;
 using LayerSlotInputKey = std::tuple<document::NodeId, document::LayerSlotId, std::string>;
 using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
                                  std::uint64_t, std::uint64_t, std::string, int>;
+
+struct CompiledCurveTables final {
+    std::vector<runtime::CompiledScalarCurve> scalar;
+    std::vector<runtime::CompiledVec2Curve> vec2;
+};
 
 [[nodiscard]] DiagnosticKey diagnosticKey(const runtime::CompileDiagnostic& diagnostic) {
     const auto value = [](const auto& id) {
@@ -565,21 +571,44 @@ class CompilePass final {
                        "The parameter record uses a different schema than the node role.");
             return;
         }
-        const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
-        if (constant == nullptr) {
+        if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+            if (!hasValueKind(constant->value, definition.valueKind)) {
+                auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
+                diagnosticSubject.parameterId = parameter->id;
+                addFailure(runtime::CompileDiagnosticCode::ParameterValueKindMismatch,
+                           std::move(diagnosticSubject), "Parameter value type does not match",
+                           "The constant value has a different type than the registered schema.");
+            }
+            return;
+        }
+
+        const auto* animation = std::get_if<document::AnimationCurveSource>(&parameter->source);
+        if (animation != nullptr && definition.supportsAnimation) {
+            const auto* curve = composition_->animationCurves().find(animation->curveId);
+            const bool kindMatches =
+                curve != nullptr &&
+                ((definition.valueKind == runtime::ParameterValueKind::Float64 &&
+                  std::holds_alternative<document::ScalarAnimationCurve>(*curve)) ||
+                 (definition.valueKind == runtime::ParameterValueKind::Vec2d &&
+                  std::holds_alternative<document::Vec2AnimationCurve>(*curve)));
+            if (!kindMatches) {
+                auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
+                diagnosticSubject.parameterId = parameter->id;
+                addFailure(runtime::CompileDiagnosticCode::ParameterValueKindMismatch,
+                           std::move(diagnosticSubject), "Animation curve type does not match",
+                           "The curve value kind differs from the registered parameter schema.");
+            }
+            return;
+        }
+
+        {
             auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
             diagnosticSubject.parameterId = parameter->id;
             addUnsupported(runtime::CompileDiagnosticCode::UnsupportedParameterSource,
                            std::move(diagnosticSubject), "Parameter source cannot be evaluated yet",
-                           "Typed animation-curve and driver outputs are deferred to Batch 4.");
-            return;
-        }
-        if (!hasValueKind(constant->value, definition.valueKind)) {
-            auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
-            diagnosticSubject.parameterId = parameter->id;
-            addFailure(runtime::CompileDiagnosticCode::ParameterValueKindMismatch,
-                       std::move(diagnosticSubject), "Parameter value type does not match",
-                       "The constant value has a different type than the registered schema.");
+                           animation != nullptr
+                               ? "This registered parameter does not support animation."
+                               : "Driver evaluation is not implemented in this semantics version.");
         }
     }
 
@@ -634,6 +663,8 @@ class CompilePass final {
     std::map<LayerSlotInputKey, const document::EdgeRecord*> layerSlotInputEdges_;
     std::map<document::NodeId, const document::LayerOutputBoundary*> layerOutputs_;
     std::unordered_map<document::NodeId, const runtime::NodeDefinition*> definitions_;
+    std::unordered_map<document::AnimationCurveId, runtime::ScalarCurveIndex> scalarCurveIndices_;
+    std::unordered_map<document::AnimationCurveId, runtime::Vec2CurveIndex> vec2CurveIndices_;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;

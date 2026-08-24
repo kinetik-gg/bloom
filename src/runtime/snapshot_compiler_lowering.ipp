@@ -60,8 +60,97 @@
     return order;
 }
 
+[[nodiscard]] std::optional<CompiledCurveTables> compileReachableCurves() {
+    std::unordered_set<document::AnimationCurveId> reachableCurveIds;
+    for (const auto* node : reachableNodes_) {
+        if (cancelled()) {
+            return std::nullopt;
+        }
+        for (const auto& binding : node->parameters) {
+            if (cancelled()) {
+                return std::nullopt;
+            }
+            const auto* parameter = findParameter(binding.parameterId);
+            const auto* source =
+                parameter == nullptr
+                    ? nullptr
+                    : std::get_if<document::AnimationCurveSource>(&parameter->source);
+            if (source != nullptr) {
+                reachableCurveIds.insert(source->curveId);
+            }
+        }
+    }
+
+    const auto interpolation = [](const document::KeyframeInterpolation mode) {
+        return mode == document::KeyframeInterpolation::Hold
+                   ? runtime::CompiledKeyframeInterpolation::Hold
+                   : runtime::CompiledKeyframeInterpolation::Linear;
+    };
+
+    CompiledCurveTables tables;
+    for (const auto& record : composition_->animationCurves().records()) {
+        if (cancelled()) {
+            return std::nullopt;
+        }
+        const auto curveId = document::animationCurveId(record);
+        if (!reachableCurveIds.contains(curveId)) {
+            continue;
+        }
+        std::visit(
+            [&](const auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    std::vector<runtime::CompiledScalarKeyframe> keyframes;
+                    keyframes.reserve(curve.keyframes.size());
+                    for (const auto& keyframe : curve.keyframes) {
+                        if (cancelled()) {
+                            return;
+                        }
+                        keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
+                                             interpolation(keyframe.outgoingInterpolation)});
+                    }
+                    if (cancelled()) {
+                        return;
+                    }
+                    scalarCurveIndices_.emplace(
+                        curve.id, runtime::ScalarCurveIndex::fromRaw(tables.scalar.size()));
+                    tables.scalar.push_back({curve.id, std::move(keyframes)});
+                } else {
+                    std::vector<runtime::CompiledVec2Keyframe> keyframes;
+                    keyframes.reserve(curve.keyframes.size());
+                    for (const auto& keyframe : curve.keyframes) {
+                        if (cancelled()) {
+                            return;
+                        }
+                        keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
+                                             interpolation(keyframe.outgoingInterpolation)});
+                    }
+                    if (cancelled()) {
+                        return;
+                    }
+                    vec2CurveIndices_.emplace(curve.id,
+                                              runtime::Vec2CurveIndex::fromRaw(tables.vec2.size()));
+                    tables.vec2.push_back({curve.id, std::move(keyframes)});
+                }
+            },
+            record);
+        if (cancelled()) {
+            return std::nullopt;
+        }
+    }
+    if (scalarCurveIndices_.size() + vec2CurveIndices_.size() != reachableCurveIds.size()) {
+        addTopologyFailure({}, "A reachable animation curve could not be lowered.");
+        return std::nullopt;
+    }
+    return tables;
+}
+
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 lower(const std::vector<document::NodeId>& order) {
+    auto curveTables = compileReachableCurves();
+    if (!curveTables.has_value()) {
+        return {};
+    }
     std::vector<runtime::CompiledOperation> operations;
     operations.reserve(order.size());
     std::unordered_map<document::NodeId, runtime::OperationIndex> indices;
@@ -94,7 +183,10 @@ lower(const std::vector<document::NodeId>& order) {
     return std::make_shared<const runtime::CompiledCompositionPlan>(
         runtime::CompiledCompositionPlan{
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
-            composition_->format(), std::move(operations), output->second});
+            composition_->format(), std::move(operations), output->second,
+            std::move(curveTables->scalar), std::move(curveTables->vec2),
+            runtime::kCompiledCompositionPlanSemanticsVersion,
+            runtime::kAnimationSamplingSemanticsVersion});
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -141,16 +233,15 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto boundary = layerOutputs_.find(node.id);
     const auto* positionBinding = findParameterBinding(node, kPositionParameterRole);
     const auto* opacityBinding = findParameterBinding(node, kOpacityParameterRole);
-    const auto* position = parameterConstant<Vec2d>(positionBinding);
-    const auto* opacity = parameterConstant<double>(opacityBinding);
+    const auto position = compiledVec2Parameter(positionBinding);
+    const auto opacity = compiledScalarParameter(opacityBinding);
     if (!input || boundary == layerOutputs_.end() || positionBinding == nullptr ||
-        opacityBinding == nullptr || position == nullptr || opacity == nullptr) {
+        opacityBinding == nullptr || !position.has_value() || !opacity.has_value()) {
         addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledLayerOutput{
-        node.id,   boundary->second->layerId,   *input,  positionBinding->parameterId,
-        *position, opacityBinding->parameterId, *opacity};
+    return runtime::CompiledLayerOutput{node.id, boundary->second->layerId, *input, *position,
+                                        *opacity};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -200,6 +291,52 @@ parameterConstant(const document::ParameterBinding* binding) const noexcept {
                                ? nullptr
                                : std::get_if<document::ConstantValueSource>(&parameter->source);
     return constant == nullptr ? nullptr : std::get_if<Value>(&constant->value);
+}
+
+[[nodiscard]] std::optional<runtime::CompiledScalarParameter>
+compiledScalarParameter(const document::ParameterBinding* binding) const noexcept {
+    if (binding == nullptr) {
+        return std::nullopt;
+    }
+    const auto* parameter = findParameter(binding->parameterId);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const auto* value = std::get_if<double>(&constant->value);
+        return value == nullptr
+                   ? std::nullopt
+                   : std::optional(runtime::CompiledScalarParameter{parameter->id, *value});
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    const auto index =
+        source == nullptr ? scalarCurveIndices_.end() : scalarCurveIndices_.find(source->curveId);
+    return index == scalarCurveIndices_.end()
+               ? std::nullopt
+               : std::optional(runtime::CompiledScalarParameter{parameter->id, index->second});
+}
+
+[[nodiscard]] std::optional<runtime::CompiledVec2Parameter>
+compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept {
+    if (binding == nullptr) {
+        return std::nullopt;
+    }
+    const auto* parameter = findParameter(binding->parameterId);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const auto* value = std::get_if<document::Vec2d>(&constant->value);
+        return value == nullptr
+                   ? std::nullopt
+                   : std::optional(runtime::CompiledVec2Parameter{parameter->id, *value});
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    const auto index =
+        source == nullptr ? vec2CurveIndices_.end() : vec2CurveIndices_.find(source->curveId);
+    return index == vec2CurveIndices_.end()
+               ? std::nullopt
+               : std::optional(runtime::CompiledVec2Parameter{parameter->id, index->second});
 }
 
 [[nodiscard]] std::optional<runtime::OperationIndex> findInputOperation(

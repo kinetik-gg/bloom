@@ -27,41 +27,42 @@ template <typename Keyframe> [[nodiscard]] bool finiteValue(const Keyframe& keyf
     }
 }
 
-template <typename Curve> [[nodiscard]] bool validCurveShape(const Curve& curve) noexcept {
-    if (!curve.id.isValid() || curve.keyframes.empty()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
-        const auto& keyframe = curve.keyframes[index];
-        if (!keyframe.id.isValid()) {
-            return false;
-        }
-        for (std::size_t prior = 0; prior < index; ++prior) {
-            if (curve.keyframes[prior].id == keyframe.id) {
-                return false;
-            }
-        }
-        if (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-template <typename Curve> [[nodiscard]] bool hasFiniteValues(const Curve& curve) noexcept {
-    return std::ranges::all_of(curve.keyframes,
-                               [](const auto& keyframe) { return finiteValue(keyframe); });
+[[nodiscard]] bool cancelled(const bloom::runtime::CancellationToken* cancellation) noexcept {
+    return cancellation != nullptr && cancellation->isCancellationRequested();
 }
 
 template <typename Curve>
-[[nodiscard]] bool hasSupportedInterpolation(const Curve& curve) noexcept {
-    return std::ranges::all_of(
-               curve.keyframes,
-               [](const auto& keyframe) {
-                   return keyframe.outgoingInterpolation == CompiledKeyframeInterpolation::Hold ||
-                          keyframe.outgoingInterpolation == CompiledKeyframeInterpolation::Linear;
-               }) &&
-           curve.keyframes.back().outgoingInterpolation == CompiledKeyframeInterpolation::Linear;
+[[nodiscard]] AnimationSamplingError
+validateForSampling(const Curve& curve,
+                    const bloom::runtime::CancellationToken* cancellation) noexcept {
+    if (!curve.id.isValid() || curve.keyframes.empty()) {
+        return AnimationSamplingError::InvalidCurve;
+    }
+    for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
+        if (cancelled(cancellation)) {
+            return AnimationSamplingError::Cancelled;
+        }
+        const auto& keyframe = curve.keyframes[index];
+        if (!keyframe.id.isValid() || !finiteValue(keyframe) ||
+            (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time))) {
+            return AnimationSamplingError::InvalidCurve;
+        }
+    }
+    if (!bloom::core::supportsReferenceFloatingPointEnvironment<double>()) {
+        return AnimationSamplingError::UnsupportedFloatingPointEnvironment;
+    }
+    for (const auto& keyframe : curve.keyframes) {
+        if (cancelled(cancellation)) {
+            return AnimationSamplingError::Cancelled;
+        }
+        if (keyframe.outgoingInterpolation != CompiledKeyframeInterpolation::Hold &&
+            keyframe.outgoingInterpolation != CompiledKeyframeInterpolation::Linear) {
+            return AnimationSamplingError::UnsupportedInterpolation;
+        }
+    }
+    return curve.keyframes.back().outgoingInterpolation == CompiledKeyframeInterpolation::Linear
+               ? AnimationSamplingError::None
+               : AnimationSamplingError::UnsupportedInterpolation;
 }
 
 [[nodiscard]] AnimationSamplingError scalarError(const ScalarEvaluationError error) noexcept {
@@ -108,27 +109,17 @@ endpoint(Value value, const bloom::document::KeyframeId keyframeId) noexcept {
     return {std::move(value), AnimationSamplingError::None, keyframeId};
 }
 
-template <typename Curve>
-[[nodiscard]] AnimationSamplingError validateForSampling(const Curve& curve) noexcept {
-    if (!validCurveShape(curve) || !hasFiniteValues(curve)) {
-        return AnimationSamplingError::InvalidCurve;
-    }
-    if (!bloom::core::supportsReferenceFloatingPointEnvironment<double>()) {
-        return AnimationSamplingError::UnsupportedFloatingPointEnvironment;
-    }
-    if (!hasSupportedInterpolation(curve)) {
-        return AnimationSamplingError::UnsupportedInterpolation;
-    }
-    return AnimationSamplingError::None;
-}
-
 } // namespace
 
 namespace bloom::runtime {
 
-AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
-                                                   const core::RationalTime time) noexcept {
-    if (const auto error = validateForSampling(curve); error != AnimationSamplingError::None) {
+namespace {
+
+AnimationSampleResult<double> sampleScalarCurve(const CompiledScalarCurve& curve,
+                                                const core::RationalTime time,
+                                                const CancellationToken* cancellation) noexcept {
+    if (const auto error = validateForSampling(curve, cancellation);
+        error != AnimationSamplingError::None) {
         return {std::nullopt, error, std::nullopt};
     }
     if (time <= curve.keyframes.front().time) {
@@ -158,8 +149,10 @@ AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& cu
 }
 
 AnimationSampleResult<document::Vec2d>
-sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime time) noexcept {
-    if (const auto error = validateForSampling(curve); error != AnimationSamplingError::None) {
+sampleVec2Curve(const CompiledVec2Curve& curve, const core::RationalTime time,
+                const CancellationToken* cancellation) noexcept {
+    if (const auto error = validateForSampling(curve, cancellation);
+        error != AnimationSamplingError::None) {
         return {std::nullopt, error, std::nullopt};
     }
     if (time <= curve.keyframes.front().time) {
@@ -194,6 +187,30 @@ sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime ti
         return {std::nullopt, y.error, leftKeyframe.id};
     }
     return {document::Vec2d{*x.value, *y.value}, AnimationSamplingError::None, leftKeyframe.id};
+}
+
+} // namespace
+
+AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
+                                                   const core::RationalTime time) noexcept {
+    return sampleScalarCurve(curve, time, nullptr);
+}
+
+AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& curve,
+                                                   const core::RationalTime time,
+                                                   const CancellationToken& cancellation) noexcept {
+    return sampleScalarCurve(curve, time, &cancellation);
+}
+
+AnimationSampleResult<document::Vec2d>
+sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime time) noexcept {
+    return sampleVec2Curve(curve, time, nullptr);
+}
+
+AnimationSampleResult<document::Vec2d>
+sampleAnimationCurve(const CompiledVec2Curve& curve, const core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept {
+    return sampleVec2Curve(curve, time, &cancellation);
 }
 
 } // namespace bloom::runtime

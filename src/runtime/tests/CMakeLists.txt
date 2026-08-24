@@ -8,7 +8,10 @@ add_executable(bloom_runtime_animation_sampling_test animation_sampling_tests.cp
 target_link_libraries(bloom_runtime_task_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_regression_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_registry_test PRIVATE bloom_runtime_compiler)
-target_link_libraries(bloom_runtime_snapshot_compiler_test PRIVATE bloom_runtime_compiler)
+target_link_libraries(
+    bloom_runtime_snapshot_compiler_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator
+)
 target_link_libraries(
     bloom_runtime_cpu_composition_evaluator_test
     PRIVATE bloom_runtime_evaluator
