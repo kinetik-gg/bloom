@@ -311,7 +311,7 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
         return invalidComposition(compositionId_);
     }
 
-    auto* parameter = composition->parameters().find(parameterId_);
+    const auto* parameter = composition->parameters().find(parameterId_);
     if (parameter == nullptr) {
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "Parameter " + std::to_string(parameterId_.value()) +

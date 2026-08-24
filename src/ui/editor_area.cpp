@@ -55,12 +55,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     contentLayout_->setContentsMargins(0, 0, 0, 0);
     contentLayout_->setSpacing(0);
 
-    auto makeHeaderButton = [header](QString text, QString toolTip, QString objectName) {
+    auto makeHeaderButton = [header](const QString& text, const QString& toolTip,
+                                     const QString& objectName) {
         auto* button = new QToolButton(header);
-        button->setText(std::move(text));
-        button->setToolTip(std::move(toolTip));
+        button->setText(text);
+        button->setToolTip(toolTip);
         button->setAccessibleName(button->toolTip());
-        button->setObjectName(std::move(objectName));
+        button->setObjectName(objectName);
         button->setAutoRaise(true);
         return button;
     };

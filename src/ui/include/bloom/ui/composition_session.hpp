@@ -70,8 +70,8 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::optional<core::Color4d>
     constantColorValue(document::ParameterId parameterId) const;
 
-    [[nodiscard]] bool addSolidLayer(QString name, core::Color4d color);
-    [[nodiscard]] bool addTextLayer(QString name, QString text);
+    [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
+    [[nodiscard]] bool addTextLayer(const QString& name, const QString& text);
     [[nodiscard]] bool setSelectedPosition(double x, double y);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
     [[nodiscard]] bool
@@ -101,10 +101,10 @@ class CompositionSession final : public QObject {
     [[nodiscard]] const document::ParameterRecord*
     parameterForNode(const document::NodeRecord& node, std::string_view role) const noexcept;
     [[nodiscard]] bool setSelectionScalarParameter(std::string_view role, double value,
-                                                   QString commandLabel);
+                                                   const QString& commandLabel);
     [[nodiscard]] bool selectionExists(const CompositionSelection& selection) const noexcept;
     void normalizeSelection();
-    void reportUnavailable(QString message);
+    void reportUnavailable(const QString& message);
 
     document::Document& document_;
     commands::CommandStack& commandStack_;

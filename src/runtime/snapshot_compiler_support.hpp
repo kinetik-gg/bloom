@@ -33,8 +33,7 @@ class CompileCheckpointObserver {
                                                     const CancellationToken& cancellation,
                                                     CompileCheckpointObserver* checkpointObserver);
 
-[[nodiscard]] inline document::NodeId
-destinationNode(const document::InputPortRef& destination) noexcept {
+[[nodiscard]] inline document::NodeId destinationNode(const document::InputPortRef& destination) {
     return std::visit(
         [](const auto& input) {
             using Input = std::decay_t<decltype(input)>;

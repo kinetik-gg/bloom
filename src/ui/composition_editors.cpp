@@ -173,10 +173,10 @@ QString selectionName(const CompositionSession& session) {
     return QStringLiteral("Nothing selected");
 }
 
-QToolButton* makeToolButton(QString text, QString accessibleName, QWidget* parent) {
+QToolButton* makeToolButton(const QString& text, const QString& accessibleName, QWidget* parent) {
     auto* button = new QToolButton(parent);
-    button->setText(std::move(text));
-    button->setAccessibleName(std::move(accessibleName));
+    button->setText(text);
+    button->setAccessibleName(accessibleName);
     button->setAutoRaise(true);
     return button;
 }

@@ -44,9 +44,8 @@ QString firstDiagnosticSummary(const std::vector<runtime::TaskDiagnostic>& diagn
     return QString::fromStdString(diagnostics.front().summary);
 }
 
-FrameFreshness
-freshnessFor(const PreparedPreviewFrameHandle& frame,
-             const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity) noexcept {
+FrameFreshness freshnessFor(const PreparedPreviewFrameHandle& frame,
+                            const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity) {
     if (frame == nullptr) {
         return FrameFreshness::None;
     }
@@ -61,7 +60,7 @@ CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     PreviewPreparationFunction preparation, CompositionPreviewSettings settings, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
-      preparation_(std::move(preparation)), settings_(std::move(settings)) {
+      preparation_(std::move(preparation)), settings_(settings) {
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -286,8 +285,8 @@ void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdent
     CompositionPreviewState rendering{
         .activity = PreviewActivity::Rendering,
         .freshness = FrameFreshness::None,
-        .desiredIdentity = std::move(desiredIdentity),
-        .taskId = std::move(taskId),
+        .desiredIdentity = desiredIdentity,
+        .taskId = taskId,
         .frame = std::move(retainedFrame),
         .diagnostics = {},
         .message = {},
@@ -419,7 +418,7 @@ void CompositionPreviewController::publish(CompositionPreviewState state) {
     emit stateChanged();
 }
 
-bool CompositionPreviewController::isCurrent(const ActiveRequest& request) const noexcept {
+bool CompositionPreviewController::isCurrent(const ActiveRequest& request) const {
     return request.desiredIdentity.requestGeneration == generation_ &&
            state_.desiredIdentity.has_value() &&
            *state_.desiredIdentity == request.desiredIdentity &&

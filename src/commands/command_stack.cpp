@@ -45,8 +45,11 @@ CommandStatus statusForCommit(document::CommitStatus status) {
 CommandResult resultForCommit(CommandAction action, std::string label,
                               const document::Snapshot& before,
                               document::CommitResult&& commitResult) {
-    auto result =
-        makeResult(action, statusForCommit(commitResult.status), before, std::move(label));
+    const auto status = commitResult.status == document::CommitStatus::Committed &&
+                                !commitResult.snapshot.has_value()
+                            ? CommandStatus::Rejected
+                            : statusForCommit(commitResult.status);
+    auto result = makeResult(action, status, before, std::move(label));
     result.validation = std::move(commitResult.validation);
     if (commitResult.status == document::CommitStatus::RevisionConflict) {
         result.expectedRevision = before.revision();
@@ -115,7 +118,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     }
 
     document::CommitResult commitResult = document_.commit(before.revision(), std::move(draft));
-    if (!commitResult.committed()) {
+    if (!commitResult.committed() || !commitResult.snapshot.has_value()) {
         return resultForCommit(CommandAction::Execute, std::string(transaction.label()), before,
                                std::move(commitResult));
     }
@@ -143,7 +146,7 @@ CommandResult CommandStack::undo() {
     }
 
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.before);
-    if (!restoreResult.committed()) {
+    if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
         return resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
     }
 
@@ -167,7 +170,7 @@ CommandResult CommandStack::redo() {
     }
 
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.after);
-    if (!restoreResult.committed()) {
+    if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
         return resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
     }
 

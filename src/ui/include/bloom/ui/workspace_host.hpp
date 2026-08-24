@@ -34,7 +34,7 @@ class WorkspaceHost final : public QFrame {
     [[nodiscard]] EditorArea* activeArea() const noexcept;
     [[nodiscard]] int areaCount() const;
     void setActiveArea(EditorArea* area);
-    void resetToSingleArea(std::string editorId = {});
+    void resetToSingleArea(std::string_view editorId = {});
 
     EditorArea* splitActiveArea(Qt::Orientation orientation);
     EditorArea* splitArea(EditorArea& area, Qt::Orientation orientation,
@@ -57,7 +57,7 @@ class WorkspaceHost final : public QFrame {
     void maximizeStateChanged(bool maximized);
 
   private:
-    EditorArea* createArea(std::string initialEditorId = {}, QString areaId = {});
+    EditorArea* createArea(std::string_view initialEditorId = {}, QString areaId = {});
     QSplitter* createSplitter(Qt::Orientation orientation) const;
     void replaceRoot(QWidget* newRoot);
     void updateAreaControls();

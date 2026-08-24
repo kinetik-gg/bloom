@@ -205,12 +205,30 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
     [[nodiscard]] bool isValid() const noexcept override { return static_cast<bool>(function_); }
 
   private:
+    [[nodiscard]] static bool addDiagnosticBestEffort(TaskContext& context,
+                                                      const TaskDiagnostic& diagnostic) noexcept {
+        try {
+            context.addDiagnostic(diagnostic);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] static bool addDiagnosticBestEffort(TaskContext& context,
+                                                      TaskDiagnostic&& diagnostic) noexcept {
+        try {
+            context.addDiagnostic(std::move(diagnostic));
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     static void copyDiagnosticsBestEffort(const TaskResult<Value>& result,
                                           TaskContext& context) noexcept {
         for (const auto& diagnostic : result.diagnostics()) {
-            try {
-                context.addDiagnostic(diagnostic);
-            } catch (...) {
+            if (!addDiagnosticBestEffort(context, diagnostic)) {
                 return;
             }
         }
@@ -219,10 +237,7 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
     [[nodiscard]] TaskState captureFailure(TaskContext& context, const char* detail) noexcept {
         try {
             TaskDiagnostic diagnostic = unhandledTaskDiagnostic(detail == nullptr ? "" : detail);
-            try {
-                context.addDiagnostic(diagnostic);
-            } catch (...) {
-            }
+            static_cast<void>(addDiagnosticBestEffort(context, diagnostic));
             pending_.emplace(TaskResult<Value>::failed(std::move(diagnostic)));
             return TaskState::Failed;
         } catch (...) {
@@ -231,10 +246,7 @@ template <TaskResultValue Value> class TypedTaskWork final : public TaskWork {
     }
 
     [[nodiscard]] TaskState captureFallback(TaskContext& context) noexcept {
-        try {
-            context.addDiagnostic(std::move(fallbackSnapshotDiagnostic_));
-        } catch (...) {
-        }
+        static_cast<void>(addDiagnosticBestEffort(context, std::move(fallbackSnapshotDiagnostic_)));
         pending_.emplace(std::move(fallbackResult_));
         return TaskState::Failed;
     }

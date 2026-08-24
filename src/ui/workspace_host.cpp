@@ -240,9 +240,9 @@ void WorkspaceHost::setActiveArea(EditorArea* area) {
     emit activeAreaChanged(activeArea_);
 }
 
-void WorkspaceHost::resetToSingleArea(std::string editorId) {
+void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
     restoreMaximizedArea();
-    auto* area = createArea(std::move(editorId));
+    auto* area = createArea(editorId);
     replaceRoot(area);
     activeArea_.clear();
     setActiveArea(area);
@@ -551,7 +551,7 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restorePersistedLayout(QSettings& se
     return restoreLayoutState(state.toByteArray());
 }
 
-EditorArea* WorkspaceHost::createArea(std::string initialEditorId, QString areaId) {
+EditorArea* WorkspaceHost::createArea(const std::string_view initialEditorId, QString areaId) {
     auto* area = new EditorArea(editorRegistry_, initialEditorId, std::move(areaId));
     connect(area, &EditorArea::activationRequested, this,
             [this](EditorArea* requestedArea) { setActiveArea(requestedArea); });

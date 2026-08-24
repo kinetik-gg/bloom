@@ -63,6 +63,7 @@ void reportProgress(const EvaluationProgressCallback& callback,
         callback(progress);
     } catch (...) {
         // Monitoring is best effort. A presentation-side allocation failure must not change pixels.
+        return;
     }
 }
 
@@ -282,7 +283,11 @@ resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositi
         return ResolvedParameter<document::Vec2d>{*constant, parameter.id, std::nullopt,
                                                   std::nullopt};
     }
-    const auto index = std::get<Vec2CurveIndex>(parameter.source).value();
+    const auto* curve = std::get_if<Vec2CurveIndex>(&parameter.source);
+    if (curve == nullptr) {
+        return std::nullopt;
+    }
+    const auto index = curve->value();
     if (index >= resolved.vec2CurveValues.size() || index >= plan.vec2Curves.size()) {
         return std::nullopt;
     }
@@ -297,7 +302,11 @@ resolveParameter(const CompiledScalarParameter& parameter, const CompiledComposi
     if (const auto* constant = std::get_if<double>(&parameter.source)) {
         return ResolvedParameter<double>{*constant, parameter.id, std::nullopt, std::nullopt};
     }
-    const auto index = std::get<ScalarCurveIndex>(parameter.source).value();
+    const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source);
+    if (curve == nullptr) {
+        return std::nullopt;
+    }
+    const auto index = curve->value();
     if (index >= resolved.scalarCurveValues.size() || index >= plan.scalarCurves.size()) {
         return std::nullopt;
     }
@@ -731,7 +740,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             return EvaluationResult::cancelled();
         }
         if (!checked.resolved.has_value()) {
-            return EvaluationResult::failed(std::move(*checked.diagnostic));
+            if (checked.diagnostic.has_value()) {
+                return EvaluationResult::failed(std::move(*checked.diagnostic));
+            }
+            return EvaluationResult::failed(
+                diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                           "Evaluation preflight produced no result or diagnostic"));
         }
         auto resolved = std::move(*checked.resolved);
         std::vector<std::optional<render::Rgba32fImage>> slots(plan->operations.size());
@@ -911,11 +925,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 const auto y =
                                     window.originY() + static_cast<std::int64_t>(rowIndex);
                                 auto sourceRow = sourceView.value()->row(y);
-                                auto destinationRow = builder.value()->row(y);
-                                if (!sourceRow || !destinationRow) {
+                                if (!sourceRow) {
                                     operationFailure = imageDiagnostic(
-                                        sourceRow ? *destinationRow.error() : *sourceRow.error(),
-                                        operationSubject, "Layer Stack row could not be addressed");
+                                        *sourceRow.error(), operationSubject,
+                                        "Layer Stack source row could not be addressed");
+                                    return;
+                                }
+                                auto destinationRow = builder.value()->row(y);
+                                if (!destinationRow) {
+                                    operationFailure = imageDiagnostic(
+                                        *destinationRow.error(), operationSubject,
+                                        "Layer Stack destination row could not be addressed");
                                     return;
                                 }
                                 if (const auto rowStatus = render::sourceOverLinearRec709SceneRow(

@@ -376,7 +376,14 @@ class CompilePass final {
     }
 
     void validateCompositionOutput() {
-        const auto& endpoint = *composition_->graph().compositionOutput();
+        const auto& compositionOutput = composition_->graph().compositionOutput();
+        if (!compositionOutput.has_value()) {
+            addFailure(runtime::CompileDiagnosticCode::InvalidCompositionOutput,
+                       subject({}, "compositionOutput"), "Composition output endpoint is missing",
+                       "The graph must name one Composition Output image port.");
+            return;
+        }
+        const auto& endpoint = *compositionOutput;
         const auto* endpointNode = findNode(endpoint.nodeId);
         if (endpointNode == nullptr ||
             endpointNode->typeId != document::kCompositionOutputNodeType ||
@@ -480,16 +487,20 @@ class CompilePass final {
                 }
             }
 
-            if (!definition->second->layerSlotInput.has_value() ||
-                !definition->second->layerSlotInput->requiredPerSlot) {
+            const auto& layerSlotInput = definition->second->layerSlotInput;
+            if (!layerSlotInput.has_value()) {
+                continue;
+            }
+            const auto& slotInputDefinition = *layerSlotInput;
+            if (!slotInputDefinition.requiredPerSlot) {
                 continue;
             }
             for (const auto& entry : graph.layerStack().entries()) {
                 if (cancelled()) {
                     return;
                 }
-                if (layerSlotInputEdge(node->id, entry.slotId,
-                                       definition->second->layerSlotInput->role) == nullptr) {
+                if (layerSlotInputEdge(node->id, entry.slotId, slotInputDefinition.role) ==
+                    nullptr) {
                     auto diagnosticSubject = subject(node->id, "layerSlotInput");
                     diagnosticSubject.layerId = entry.layerId;
                     diagnosticSubject.layerSlotId = entry.slotId;

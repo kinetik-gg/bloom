@@ -41,7 +41,7 @@ void require(const bool condition, const std::string_view message) {
 [[nodiscard]] RationalTime time(const std::int64_t numerator, const std::int64_t denominator = 1) {
     const auto value = RationalTime::create(numerator, denominator);
     require(value.has_value(), "test rational must be valid");
-    return *value;
+    return value.value_or(RationalTime{});
 }
 
 [[nodiscard]] FrameTimeMapping mapping(const RationalTime duration,

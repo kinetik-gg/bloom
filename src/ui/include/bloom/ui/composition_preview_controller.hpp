@@ -19,7 +19,8 @@ namespace bloom::ui {
 class CompositionSession;
 class TaskUiBridge;
 
-inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit = 512U * 1024U * 1024U;
+inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
+    std::size_t{512} * 1024U * 1024U;
 
 struct CompositionPreviewSettings final {
     runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
@@ -104,7 +105,7 @@ class CompositionPreviewController final : public QObject {
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
-    [[nodiscard]] bool isCurrent(const ActiveRequest& request) const noexcept;
+    [[nodiscard]] bool isCurrent(const ActiveRequest& request) const;
     [[nodiscard]] bool
     liveSessionMatches(const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept;
 

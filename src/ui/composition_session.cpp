@@ -357,7 +357,7 @@ CompositionSession::constantColorValue(const document::ParameterId parameterId) 
     return value == nullptr ? std::nullopt : std::optional<core::Color4d>(*value);
 }
 
-bool CompositionSession::addSolidLayer(QString name, const core::Color4d color) {
+bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d color) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     if (current == nullptr) {
@@ -378,7 +378,7 @@ bool CompositionSession::addSolidLayer(QString name, const core::Color4d color) 
     return true;
 }
 
-bool CompositionSession::addTextLayer(QString name, QString text) {
+bool CompositionSession::addTextLayer(const QString& name, const QString& text) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     if (current == nullptr) {
@@ -400,7 +400,8 @@ bool CompositionSession::addTextLayer(QString name, QString text) {
 }
 
 bool CompositionSession::setSelectionScalarParameter(const std::string_view role,
-                                                     const double value, QString commandLabel) {
+                                                     const double value,
+                                                     const QString& commandLabel) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!std::isfinite(value)) {
         reportUnavailable(QStringLiteral("The parameter value must be finite"));
@@ -583,8 +584,8 @@ bool CompositionSession::selectionExists(const CompositionSelection& selection) 
     if (const auto* nodeId = std::get_if<document::NodeId>(&selection.primary)) {
         return current->graph().findNode(*nodeId) != nullptr;
     }
-    const auto parameterId = std::get<document::ParameterId>(selection.primary);
-    return current->parameters().find(parameterId) != nullptr;
+    const auto* parameterId = std::get_if<document::ParameterId>(&selection.primary);
+    return parameterId != nullptr && current->parameters().find(*parameterId) != nullptr;
 }
 
 void CompositionSession::normalizeSelection() {
@@ -595,8 +596,8 @@ void CompositionSession::normalizeSelection() {
     emit selectionChanged();
 }
 
-void CompositionSession::reportUnavailable(QString message) {
-    emit commandRejected(std::move(message));
+void CompositionSession::reportUnavailable(const QString& message) {
+    emit commandRejected(message);
 }
 
 } // namespace bloom::ui

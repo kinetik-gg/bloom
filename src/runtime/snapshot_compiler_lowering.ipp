@@ -178,7 +178,12 @@ lower(const std::vector<document::NodeId>& order) {
         indices.emplace(nodeId, index);
     }
 
-    const auto outputNodeId = composition_->graph().compositionOutput()->nodeId;
+    const auto& compositionOutput = composition_->graph().compositionOutput();
+    if (!compositionOutput.has_value()) {
+        addTopologyFailure({}, "Composition output disappeared before lowering.");
+        return {};
+    }
+    const auto outputNodeId = compositionOutput->nodeId;
     const auto output = indices.find(outputNodeId);
     if (output == indices.end()) {
         addTopologyFailure(outputNodeId, "Composition output was not lowered.");
@@ -251,14 +256,18 @@ lowerLayerOutput(const document::NodeRecord& node,
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition& definition,
                 const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    if (!definition.layerSlotInput.has_value()) {
+        addTopologyFailure(node.id, "Layer Stack definition has no slot-input contract.");
+        return std::nullopt;
+    }
+    const auto& layerSlotInput = *definition.layerSlotInput;
     std::vector<runtime::CompiledLayerStackEntry> entries;
     entries.reserve(composition_->graph().layerStack().entries().size());
     for (const auto& entry : composition_->graph().layerStack().entries()) {
         if (cancelled()) {
             return std::nullopt;
         }
-        const auto* edge =
-            layerSlotInputEdge(node.id, entry.slotId, definition.layerSlotInput->role);
+        const auto* edge = layerSlotInputEdge(node.id, entry.slotId, layerSlotInput.role);
         if (edge == nullptr) {
             addTopologyFailure(node.id, "Validated Layer Stack input could not be lowered.");
             return std::nullopt;
@@ -338,8 +347,7 @@ compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept 
     }
     if (request_.parameterOverride.has_value() &&
         request_.parameterOverride->parameterId == parameter->id) {
-        const auto* value =
-            std::get_if<document::Vec2d>(&request_.parameterOverride->value);
+        const auto* value = std::get_if<document::Vec2d>(&request_.parameterOverride->value);
         return value == nullptr
                    ? std::nullopt
                    : std::optional(runtime::CompiledVec2Parameter{parameter->id, *value});

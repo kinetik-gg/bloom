@@ -183,10 +183,12 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
 
     constexpr int gridStep = 32;
     painter.setPen(QPen(QColor(46, 48, 53), 1.0));
-    for (qreal x = frame.left() + gridStep; x < frame.right(); x += gridStep) {
+    for (int offset = gridStep; static_cast<qreal>(offset) < frame.width(); offset += gridStep) {
+        const qreal x = frame.left() + static_cast<qreal>(offset);
         painter.drawLine(QPointF(x, frame.top()), QPointF(x, frame.bottom()));
     }
-    for (qreal y = frame.top() + gridStep; y < frame.bottom(); y += gridStep) {
+    for (int offset = gridStep; static_cast<qreal>(offset) < frame.height(); offset += gridStep) {
+        const qreal y = frame.top() + static_cast<qreal>(offset);
         painter.drawLine(QPointF(frame.left(), y), QPointF(frame.right(), y));
     }
 
@@ -195,34 +197,38 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     bool drewPixels = false;
     if (displayedFrame != nullptr) {
         const auto viewResult = displayedFrame->displayBuffer().view();
-        if (viewResult && viewResult.value()->descriptor().has_value()) {
+        if (viewResult) {
             const auto view = *viewResult.value();
-            const auto descriptor = *view.descriptor();
-            const auto extent = descriptor.displayWindow().extent();
-            const auto& layout = descriptor.layout();
-            if (extent.width() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-                extent.height() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-                layout.rowStrideBytes <=
-                    static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
-                const auto pixels = view.pixels();
-                // displayedFrame owns the immutable bytes for this entire paint. The const-data
-                // QImage constructor borrows them, so presentation does not copy or convert a
-                // full frame on the UI thread.
-                const QImage image(
-                    reinterpret_cast<const uchar*>(pixels.data()), static_cast<int>(extent.width()),
-                    static_cast<int>(extent.height()),
-                    static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
-                if (!image.isNull()) {
-                    const QRectF displayRect =
-                        fitDisplayRect(frame, extent, descriptor.pixelAspect());
-                    drawCheckerboard(painter, displayRect);
-                    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-                    painter.drawImage(displayRect, image, QRectF(image.rect()));
-                    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                    painter.setPen(QPen(QColor(104, 107, 114), 1.0));
-                    painter.setBrush(Qt::NoBrush);
-                    painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
-                    drewPixels = true;
+            const auto descriptorResult = view.descriptor();
+            if (descriptorResult.has_value()) {
+                const auto descriptor = *descriptorResult;
+                const auto extent = descriptor.displayWindow().extent();
+                const auto& layout = descriptor.layout();
+                if (extent.width() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+                    extent.height() <=
+                        static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+                    layout.rowStrideBytes <=
+                        static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
+                    const auto pixels = view.pixels();
+                    // displayedFrame owns the immutable bytes for this entire paint. The const-data
+                    // QImage constructor borrows them, so presentation does not copy or convert a
+                    // full frame on the UI thread.
+                    const QImage image(
+                        reinterpret_cast<const uchar*>(pixels.data()),
+                        static_cast<int>(extent.width()), static_cast<int>(extent.height()),
+                        static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
+                    if (!image.isNull()) {
+                        const QRectF displayRect =
+                            fitDisplayRect(frame, extent, descriptor.pixelAspect());
+                        drawCheckerboard(painter, displayRect);
+                        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                        painter.drawImage(displayRect, image, QRectF(image.rect()));
+                        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                        painter.setPen(QPen(QColor(104, 107, 114), 1.0));
+                        painter.setBrush(Qt::NoBrush);
+                        painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
+                        drewPixels = true;
+                    }
                 }
             }
         }
