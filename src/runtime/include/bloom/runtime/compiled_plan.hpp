@@ -14,6 +14,43 @@
 
 namespace bloom::runtime {
 
+enum class CompiledKeyframeInterpolation : std::uint8_t {
+    Hold,
+    Linear,
+};
+
+struct CompiledScalarKeyframe final {
+    document::KeyframeId id;
+    core::RationalTime time;
+    double value = 0.0;
+    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+
+    friend bool operator==(const CompiledScalarKeyframe&, const CompiledScalarKeyframe&) = default;
+};
+
+struct CompiledVec2Keyframe final {
+    document::KeyframeId id;
+    core::RationalTime time;
+    document::Vec2d value;
+    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+
+    friend bool operator==(const CompiledVec2Keyframe&, const CompiledVec2Keyframe&) = default;
+};
+
+struct CompiledScalarCurve final {
+    document::AnimationCurveId id;
+    std::vector<CompiledScalarKeyframe> keyframes;
+
+    friend bool operator==(const CompiledScalarCurve&, const CompiledScalarCurve&) = default;
+};
+
+struct CompiledVec2Curve final {
+    document::AnimationCurveId id;
+    std::vector<CompiledVec2Keyframe> keyframes;
+
+    friend bool operator==(const CompiledVec2Curve&, const CompiledVec2Curve&) = default;
+};
+
 class OperationIndex final {
   public:
     [[nodiscard]] static constexpr OperationIndex fromRaw(const std::size_t value) noexcept {
@@ -84,6 +121,8 @@ struct CompiledCompositionPlan {
     document::CompositionFormat format;
     std::vector<CompiledOperation> operations;
     OperationIndex output;
+    std::vector<CompiledScalarCurve> scalarCurves{};
+    std::vector<CompiledVec2Curve> vec2Curves{};
 
     friend bool operator==(const CompiledCompositionPlan&,
                            const CompiledCompositionPlan&) = default;

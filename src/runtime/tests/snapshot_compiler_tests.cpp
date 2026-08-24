@@ -1,5 +1,6 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -533,18 +534,24 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
     registry.freeze();
 
     auto animated = makeProject(singleLayerOptions());
-    auto* parameters = &animated.findComposition(kCompositionId)->parameters();
-    require(
-        parameters->setSource(
-            kFirstColor, document::AnimationCurveSource{document::AnimationCurveId::fromRaw(100)}),
-        "typed curve reference must be publishable");
+    auto* animatedComposition = animated.findComposition(kCompositionId);
+    require(animatedComposition != nullptr, "animation fixture composition must exist");
+    auto* parameters = &animatedComposition->parameters();
+    constexpr auto curveId = document::AnimationCurveId::fromRaw(100);
+    require(animatedComposition->animationCurves().insert(document::ScalarAnimationCurve{
+                curveId,
+                {{document::KeyframeId::fromRaw(101), core::RationalTime::fromInteger(0), 0.8}},
+            }),
+            "typed scalar curve must be publishable");
+    require(parameters->setSource(kFirstOpacity, document::AnimationCurveSource{curveId}),
+            "typed curve reference must be publishable");
     require(animated.validate().ok(), "curve source fixture must remain valid document truth");
     const auto result = compile(std::move(animated), registry);
     expectations.expect(
         result.status == runtime::SnapshotCompileStatus::Unsupported &&
             hasDiagnostic(result, runtime::CompileDiagnosticCode::UnsupportedParameterSource,
-                          kFirstSolidNode),
-        "curve source stays unsupported until its Batch 4 typed output contract");
+                          kFirstLayerNode),
+        "a valid curve source remains unsupported until runtime lowering consumes typed curves");
     expectations.expect(runtime::compileDiagnosticCodeId(
                             runtime::CompileDiagnosticCode::UnsupportedParameterSource) ==
                             "bloom.runtime.compile.unsupported-parameter-source",

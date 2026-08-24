@@ -49,6 +49,7 @@ add_library(bloom_runtime_evaluator STATIC)
 target_sources(
     bloom_runtime_evaluator
     PRIVATE
+        animation_sampling.cpp
         cpu_composition_evaluator.cpp
         cpu_composition_evaluator_support.hpp
         evaluation.cpp
@@ -57,6 +58,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/prepared_preview_frame.hpp

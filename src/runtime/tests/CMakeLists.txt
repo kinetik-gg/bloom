@@ -3,6 +3,7 @@ add_executable(bloom_runtime_regression_test task_scheduler_regression_tests.cpp
 add_executable(bloom_runtime_registry_test node_definition_registry_tests.cpp)
 add_executable(bloom_runtime_snapshot_compiler_test snapshot_compiler_tests.cpp)
 add_executable(bloom_runtime_cpu_composition_evaluator_test cpu_composition_evaluator_tests.cpp)
+add_executable(bloom_runtime_animation_sampling_test animation_sampling_tests.cpp)
 
 target_link_libraries(bloom_runtime_task_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_regression_test PRIVATE bloom_runtime)
@@ -12,6 +13,7 @@ target_link_libraries(
     bloom_runtime_cpu_composition_evaluator_test
     PRIVATE bloom_runtime_evaluator
 )
+target_link_libraries(bloom_runtime_animation_sampling_test PRIVATE bloom_runtime_evaluator)
 target_include_directories(bloom_runtime_regression_test PRIVATE ..)
 target_include_directories(bloom_runtime_snapshot_compiler_test PRIVATE ..)
 bloom_enable_warnings(bloom_runtime_task_test)
@@ -19,7 +21,9 @@ bloom_enable_warnings(bloom_runtime_regression_test)
 bloom_enable_warnings(bloom_runtime_registry_test)
 bloom_enable_warnings(bloom_runtime_snapshot_compiler_test)
 bloom_enable_warnings(bloom_runtime_cpu_composition_evaluator_test)
+bloom_enable_warnings(bloom_runtime_animation_sampling_test)
 bloom_enable_strict_floating_point(bloom_runtime_cpu_composition_evaluator_test)
+bloom_enable_strict_floating_point(bloom_runtime_animation_sampling_test)
 
 include(BloomTesting)
 
@@ -55,5 +59,12 @@ bloom_add_test(
     NAME bloom.runtime.cpu_composition_evaluator
     COMMAND bloom_runtime_cpu_composition_evaluator_test
     LABELS runtime unit render
+    TIMEOUT 30
+)
+
+bloom_add_test(
+    NAME bloom.runtime.animation_sampling
+    COMMAND bloom_runtime_animation_sampling_test
+    LABELS runtime unit primitives
     TIMEOUT 30
 )
