@@ -14,6 +14,26 @@ use, cancellation, progress, diagnostics, priority, and a safe way to publish re
 The task system is an application service. It is independent of panels and outlives individual UI
 objects. Panels submit requests and observe state; they do not own worker threads.
 
+## Implemented Kernel Checkpoint
+
+The Qt-free `src/runtime` kernel currently implements:
+
+- independently bounded CPU and blocking-I/O executors with bounded worker, queue, history, and task
+  group registry configuration
+- stable task/group IDs, typed owner scopes, four semantic priorities, fair scheduling,
+  reprioritization, and transactional coalescing admission
+- cooperative task and group cancellation; queued cancellation finalizes off the caller and releases
+  queue capacity promptly, while running work observes cancellation through its token
+- structured progress, diagnostics, terminal snapshots, task-group aggregation, and typed
+  non-blocking result handles delivered through neutral mailboxes
+- admission shutdown that returns promptly, rejects new work, requests cancellation, and leaves
+  quiescent service destruction to its explicit lifecycle owner
+
+This kernel does not yet decide whether a result may update Viewer or another panel. Batch 2 owns
+the Qt bridge, Jobs model/editor, snapshot compiler, and composition-preview controller that attach
+document revision and request generation, suppress obsolete publications, and coordinate panel,
+project, and application lifetime. No current UI surface submits pixel evaluation to the kernel.
+
 ## Responsiveness Contract
 
 The Qt UI thread may:
@@ -84,6 +104,11 @@ An obsolete preview may populate a content-addressed cache when its key remains 
 not replace a newer frame in the viewer. Persistent operations such as save and export use their
 captured snapshot deliberately; later edits do not silently change the operation already in flight.
 
+Revision and generation acceptance are application-controller semantics, not scheduler policy. The
+implemented kernel transports typed results and terminal state without knowing document revisions;
+the Batch 2 preview controller must perform these publication checks on the UI side of the neutral
+mailbox boundary.
+
 ## Scheduling And Priority
 
 The initial scheduler has four semantic priority classes:
@@ -105,6 +130,10 @@ Tasks declare the resources they need where practical: CPU, blocking I/O, GPU de
 process, and estimated memory. Executors use bounded queues, concurrency limits, and memory budgets.
 Submitting work must apply backpressure or discard replaceable speculative requests instead of
 growing an unbounded queue.
+
+The implemented kernel currently distinguishes bounded CPU and blocking-I/O execution. GPU queues,
+external processes, and memory-budget admission remain owning-adapter responsibilities for later
+batches; they must preserve the same cancellation, diagnostics, and no-UI-wait contract.
 
 ## Cancellation
 
@@ -134,6 +163,9 @@ Progress is structured and rate-limited before reaching the UI. A task reports:
 Nested work aggregates through task groups. Progress is monotonic within a phase, but a phase may
 change its estimate as new work is discovered. The UI must not infer success from reaching 100%;
 only the terminal outcome is authoritative.
+
+The kernel provides structured snapshots and group aggregation. Rate-limited Qt delivery and visual
+presentation belong to the deferred Batch 2 bridge and Jobs model.
 
 Diagnostics flow through an application-level sink. Workers do not open dialogs, touch status-bar
 widgets, or emit presentation-specific strings directly. The same diagnostic can therefore serve a
@@ -184,33 +216,38 @@ late results from publishing. Application shutdown keeps processing UI events wh
 required save/export decision; it does not freeze the event loop waiting for a join. No incomplete
 project write or final output is reported as successful.
 
+The implemented `beginShutdown` boundary covers prompt admission closure and cancellation request.
+Application-owned quiescence observation, continued Qt event processing, save/export policy, and
+ordered destruction of the bridge and runtime remain integration work; a panel destructor must never
+own that drain.
+
 ## Testing And Instrumentation
 
-The task system needs deterministic tests for:
+Kernel tests cover priority and fairness, executor separation, bounded admission, coalescing,
+reprioritization, cancellation before and during work, task groups, progress, diagnostics, exception
+conversion, terminal/result coherence, bounded registries and history, and shutdown initiation.
 
-- priority, fairness, coalescing, and bounded queues
-- cancellation before start, during work, and through child tasks
+Batch 2 and later integration tests still need to cover:
+
 - stale revision and stale request-generation suppression
-- panel and project destruction while callbacks are pending
-- progress aggregation and diagnostic propagation
+- panel and project destruction while result delivery is pending
+- rate-limited Qt progress delivery and Jobs diagnostics
 - partial-output cleanup and atomic publication
 - simulated device loss and fallback policy
-- staged shutdown with active preview, save, and render tasks
+- staged application shutdown with active preview, save, and render tasks
 
 UI integration tests use deliberately slow fake operations and assert that event processing, input,
 and cancellation remain responsive. Thread sanitizers, lock-order checks, queue-depth metrics, task
 latency, cancellation latency, and UI frame/event latency become part of performance diagnosis as
 the implementation grows.
 
-## Initial Implementation Boundary
+## Implemented Boundary And Next Integration
 
-The first vertical proof needs only:
-
-- a bounded CPU executor and a bounded blocking-I/O executor
-- task groups, cancellation tokens, priority, progress, diagnostics, and terminal outcomes
-- generation/revision checks for viewer requests
-- queued result delivery to the Qt application service
-- clean project and application shutdown
+The bounded executors, task groups, cancellation, priority, progress, diagnostics, terminal
+outcomes, and neutral non-blocking result delivery are implemented in the runtime kernel. The next
+integration must add generation/revision checks for Viewer requests, queued delivery through a Qt
+application service, the Jobs surface, and clean project/application quiescence without moving
+those policies into the scheduler.
 
 Distributed rendering, persistent job databases, and a general workflow engine are not required.
 The contract above is intentionally broader than the first implementation so later media and GPU

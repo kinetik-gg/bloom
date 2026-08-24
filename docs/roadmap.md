@@ -14,16 +14,26 @@ Bloom currently has:
 - a C++20 and Qt 6 application shell with a replaceable split-tree workspace
 - a Qt-free canonical project, composition, graph, Layer Stack, parameter, and snapshot model
 - typed transactional commands with revision-safe undo and redo
+- durable composition extent, rational pixel aspect and frame rate, versioned node records, and
+  validated finite color values
+- exact undoable solid-layer authoring through the same source, Layer Output, and stable Layer Stack
+  topology used by other structured layers
+- a committed Qt-free bounded task runtime with separate CPU and blocking-I/O executors, semantic
+  priority, cancellation, task groups, coalescing, progress, diagnostics, and non-blocking results
+- committed Qt-free CPU image contracts for checked extents and layouts, premultiplied `RGBA32F`
+  storage, immutable views, color identity, and prepared packed display buffers
 - a shared composition session projected through Viewer, Timeline, Nodes, Media, and Properties
 - atomic text-layer authoring with stable node, layer, slot, edge, and parameter IDs
-- strict warnings, formatting, repository hygiene, architecture-boundary checks, and seven local
+- strict warnings, formatting, repository hygiene, architecture-boundary checks, and focused local
   tests
 - accepted contracts for non-blocking execution, CPU/GPU separation, cross-platform parity, Python
   add-ons, Apache-2.0 distribution, and the native `.bloom` container
 
-The current Viewer is a presentation placeholder. Bloom does not yet evaluate pixels, store
-keyframes, save a project, or run heavy work through a task scheduler. Those absences define the
-next batches.
+The current Viewer is still a presentation placeholder and receives no evaluated pixels. The task
+runtime and image values are foundations, not a preview pipeline: Bloom does not yet compile a
+composition snapshot, evaluate pixels, publish generation-safe results into Qt, show Jobs, store
+keyframes, or save a project. Add Solid's synchronized UI projections and the Batch 1 visual
+checkpoint remain in progress.
 
 Before the next feature is called cross-platform complete, the current checkpoint and each new
 merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
@@ -64,7 +74,12 @@ their source ownership does not overlap.
 Goal: establish the independent contracts needed by every later heavy operation without building a
 generic workflow engine or a renderer-shaped task system.
 
-Three tracks run in parallel.
+Implementation status: the 1A, 1B, and 1C foundation code is implemented and locally verified. The
+artist-visible Add Solid projection and visual checkpoint are still in progress, and the configured
+three-platform matrix remains the authority for cross-platform completion.
+
+The three tracks were developed independently so their public seams could be reviewed before preview
+integration.
 
 ### 1A — Bounded Task Runtime
 

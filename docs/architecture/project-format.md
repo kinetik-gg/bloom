@@ -86,6 +86,36 @@ Deterministic `document.json` bytes are a v1 test requirement. ZIP member order,
 attributes, and compression method are normalized as implementation policy, but exact whole-archive
 byte equality is not a compatibility promise until fixtures prove it across all supported hosts.
 
+## Durable ID Scope And Remapping
+
+Durable object IDs are project-global within each typed namespace. Every `NodeId` in one project is
+unique across all compositions, as is every `EdgeId`, `LayerId`, `LayerSlotId`, `ParameterId`, and
+future durable record ID within its own type. Equal numeric values in different typed namespaces are
+not collisions. Different projects may reuse numeric values; an in-memory proxy therefore also
+carries its project or session identity and generation.
+
+Project validation must reject cross-composition collisions before state enters initial Document
+construction or publication. A composition-local collection may still refer to the same declared
+object more than once: a Layer Stack entry refers to its Layer Output's `LayerId`, and several
+bindings may refer to one `ParameterId`. Validation counts declarations, not references.
+
+Allocator high-water state is project-global per typed namespace. The serialized value must dominate
+every decoded declaration and every ID previously issued in that namespace, including IDs whose
+objects were deleted. Undo, restore, cloning, and reopen never lower a watermark or revive an
+exhausted namespace. A decoded watermark below a declaration is invalid rather than silently
+trusted.
+
+Cloning a composition or importing authoring data allocates a new ID for every owned declaration
+and applies one complete typed old-to-new map to all known references and typed extension subjects
+before publication. It never preserves colliding numeric IDs. A true move within the same project
+may retain identity when the command explicitly preserves the object rather than copying it.
+
+Bloom never searches or rewrites opaque extension bytes for hidden IDs. An extension payload that
+contains Bloom object references must provide a deterministic, versioned remapper or a host-owned
+structured reference table; otherwise the payload contract must declare that it contains no Bloom
+IDs. Clone or import is rejected for an affected opaque record when its required remapper is
+unavailable. Silent partial remapping is not permitted.
+
 ## Versions, Migrations, And Preservation
 
 Container and document schemas use `{major, minor}` versions:
@@ -192,6 +222,8 @@ Project I/O is not complete until tests cover:
 
 - semantic round-trip and deterministic JSON ordering
 - maximum IDs and signed integers, rational normalization, exact doubles, and Unicode
+- cross-composition ID collisions, project-global watermarks, clone/import remapping, and opaque
+  extension remapper availability
 - unknown members, unavailable module records, and supported migrations
 - malformed JSON and ZIP structures, duplicate keys and entries, traversal paths, and zip bombs
 - cancellation and progress behavior outside the UI thread
