@@ -44,6 +44,29 @@ target_compile_features(bloom_runtime_compiler PUBLIC cxx_std_20)
 target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_document)
 bloom_enable_warnings(bloom_runtime_compiler)
 
+add_library(bloom_runtime_evaluator STATIC)
+
+target_sources(
+    bloom_runtime_evaluator
+    PRIVATE
+        cpu_composition_evaluator.cpp
+        cpu_composition_evaluator_support.hpp
+        evaluation.cpp
+        prepared_preview_frame.cpp
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS include
+        FILES
+            include/bloom/runtime/cpu_composition_evaluator.hpp
+            include/bloom/runtime/evaluation.hpp
+            include/bloom/runtime/prepared_preview_frame.hpp
+)
+
+target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)
+target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render)
+bloom_enable_warnings(bloom_runtime_evaluator)
+bloom_enable_strict_floating_point(bloom_runtime_evaluator)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

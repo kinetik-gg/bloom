@@ -1,0 +1,568 @@
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
+
+#include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/document/composition_settings.hpp>
+#include <bloom/render/image_types.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <source_location>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace std::chrono_literals;
+namespace core = bloom::core;
+namespace document = bloom::document;
+namespace render = bloom::render;
+namespace runtime = bloom::runtime;
+
+constexpr auto kProjectId = document::ProjectId::fromRaw(1);
+constexpr auto kCompositionId = document::CompositionId::fromRaw(2);
+constexpr auto kSolidNodeA = document::NodeId::fromRaw(10);
+constexpr auto kLayerNodeA = document::NodeId::fromRaw(11);
+constexpr auto kSolidNodeB = document::NodeId::fromRaw(12);
+constexpr auto kLayerNodeB = document::NodeId::fromRaw(13);
+constexpr auto kStackNode = document::NodeId::fromRaw(14);
+constexpr auto kOutputNode = document::NodeId::fromRaw(15);
+constexpr auto kLayerA = document::LayerId::fromRaw(20);
+constexpr auto kLayerB = document::LayerId::fromRaw(21);
+constexpr auto kSlotA = document::LayerSlotId::fromRaw(30);
+constexpr auto kSlotB = document::LayerSlotId::fromRaw(31);
+constexpr auto kColorA = document::ParameterId::fromRaw(40);
+constexpr auto kPositionA = document::ParameterId::fromRaw(41);
+constexpr auto kOpacityA = document::ParameterId::fromRaw(42);
+constexpr auto kColorB = document::ParameterId::fromRaw(43);
+constexpr auto kPositionB = document::ParameterId::fromRaw(44);
+constexpr auto kOpacityB = document::ParameterId::fromRaw(45);
+
+class Expectations final {
+  public:
+    void expect(const bool condition, const std::string& message,
+                const std::source_location location = std::source_location::current()) {
+        if (condition) {
+            return;
+        }
+        ++failures_;
+        std::cerr << location.file_name() << ':' << location.line() << ": " << message << '\n';
+    }
+
+    [[nodiscard]] int failures() const noexcept { return failures_; }
+
+  private:
+    int failures_ = 0;
+};
+
+[[nodiscard]] document::CompositionFormat format(const std::uint32_t width = 4,
+                                                 const std::uint32_t height = 2) {
+    const auto value = document::CompositionFormat::create(width, height);
+    if (!value.has_value()) {
+        throw std::logic_error("evaluation test format must be valid");
+    }
+    return *value;
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
+             const document::Vec2d position = {2.0, 1.0}, const double opacity = 1.0,
+             const document::CompositionFormat compositionFormat = format()) {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, kColorA, color});
+    operations.emplace_back(runtime::CompiledLayerOutput{kLayerNodeA, kLayerA,
+                                                         runtime::OperationIndex::fromRaw(0),
+                                                         kPositionA, position, kOpacityA, opacity});
+    operations.emplace_back(runtime::CompiledLayerStack{
+        kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
+                                         compositionFormat, std::move(operations),
+                                         runtime::OperationIndex::fromRaw(3)});
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+twoSolidPlan(const bool redOnTop = true) {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}});
+    operations.emplace_back(
+        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                     kPositionA, document::Vec2d{2.0, 1.0}, kOpacityA, 1.0});
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}});
+    operations.emplace_back(
+        runtime::CompiledLayerOutput{kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
+                                     kPositionB, document::Vec2d{2.0, 1.0}, kOpacityB, 1.0});
+    const runtime::CompiledLayerStackEntry red{kSlotA, kLayerA,
+                                               runtime::OperationIndex::fromRaw(1)};
+    const runtime::CompiledLayerStackEntry blue{kSlotB, kLayerB,
+                                                runtime::OperationIndex::fromRaw(3)};
+    operations.emplace_back(runtime::CompiledLayerStack{
+        kStackNode, redOnTop ? std::vector{red, blue} : std::vector{blue, red}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
+                                         format(), std::move(operations),
+                                         runtime::OperationIndex::fromRaw(5)});
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(runtime::CompiledLayerStack{kStackNode, {}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(0)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
+                                         format(), std::move(operations),
+                                         runtime::OperationIndex::fromRaw(1)});
+}
+
+[[nodiscard]] runtime::EvaluationRequest
+requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budget = 1U << 20U,
+           runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
+    return {.time = core::RationalTime::fromInteger(0),
+            .output = plan.output,
+            .resolution = std::move(resolution),
+            .quality = runtime::EvaluationQuality::Reference,
+            .colorIntent = runtime::EvaluationColorIntent::ReferenceLinearSrgb,
+            .pixelStorageByteLimit = budget};
+}
+
+[[nodiscard]] bool near(const float value, const float expected, const float tolerance = 1.0e-6F) {
+    return std::abs(value - expected) <= tolerance;
+}
+
+[[nodiscard]] const render::Rgba32f* pixel(const runtime::EvaluationResult& result,
+                                           const std::int64_t x, const std::int64_t y,
+                                           render::Rgba32f& storage) {
+    if (result.frame() == nullptr) {
+        return nullptr;
+    }
+    const auto read = result.frame()->processImage().read(x, y);
+    if (!read) {
+        return nullptr;
+    }
+    storage = *read.value();
+    return &storage;
+}
+
+void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto centered = oneSolidPlan();
+    const auto centeredResult = evaluator.evaluate(centered, requestFor(*centered), {});
+    render::Rgba32f sampled = render::Rgba32f::transparent();
+    const auto* centerPixel = pixel(centeredResult, 0, 0, sampled);
+    expectations.expect(centeredResult.status() == runtime::EvaluationStatus::Evaluated &&
+                            centerPixel != nullptr && centerPixel->red() == 1.0F &&
+                            centerPixel->alpha() == 1.0F,
+                        "absolute composition center is identity for a composition-sized source");
+
+    const auto shifted = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {2.5, 1.0});
+    const auto shiftedResult = evaluator.evaluate(shifted, requestFor(*shifted), {});
+    const auto* edgePixel = pixel(shiftedResult, 0, 0, sampled);
+    expectations.expect(shiftedResult.status() == runtime::EvaluationStatus::Evaluated &&
+                            edgePixel != nullptr && near(edgePixel->red(), 0.5F) &&
+                            near(edgePixel->alpha(), 0.5F),
+                        "fractional center displacement bilinearly blends transparent borders");
+    const auto* interiorPixel = pixel(shiftedResult, 1, 0, sampled);
+    expectations.expect(interiorPixel != nullptr && interiorPixel->red() == 1.0F &&
+                            interiorPixel->alpha() == 1.0F,
+                        "fractional translation preserves fully covered interior pixels");
+}
+
+void testClippingAndOpacityEndpoints(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto shifted = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {3.0, 1.0});
+    const auto shiftedResult = evaluator.evaluate(shifted, requestFor(*shifted), {});
+    render::Rgba32f sample = render::Rgba32f::transparent();
+    const auto* clipped = pixel(shiftedResult, 0, 0, sample);
+    expectations.expect(clipped != nullptr && *clipped == render::Rgba32f::transparent(),
+                        "integer translation clips outside source coverage to exact transparent");
+    const auto* covered = pixel(shiftedResult, 1, 0, sample);
+    expectations.expect(covered != nullptr && covered->red() == 1.0F && covered->alpha() == 1.0F,
+                        "integer translation uses the frozen center-coordinate displacement");
+
+    const auto invisible = oneSolidPlan({3.0, -2.0, 8.0, 1.0}, {2.0, 1.0}, 0.0);
+    const auto invisibleResult = evaluator.evaluate(invisible, requestFor(*invisible), {});
+    const auto* invisiblePixel = pixel(invisibleResult, 2, 1, sample);
+    expectations.expect(invisiblePixel != nullptr &&
+                            *invisiblePixel == render::Rgba32f::transparent(),
+                        "opacity zero canonicalizes all premultiplied components to transparent");
+
+    const auto transparentHdr = oneSolidPlan(
+        {std::numeric_limits<double>::max(), -std::numeric_limits<double>::max(), 4.0, 0.0});
+    const auto transparentResult =
+        evaluator.evaluate(transparentHdr, requestFor(*transparentHdr), {});
+    const auto* transparentPixel = pixel(transparentResult, 0, 0, sample);
+    expectations.expect(transparentPixel != nullptr &&
+                            *transparentPixel == render::Rgba32f::transparent(),
+                        "alpha-zero authoring color canonicalizes before invalid hidden RGB leaks");
+}
+
+void testStackOrderingOpacityAndDisplay(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto redTop = twoSolidPlan(true);
+    const auto blueTop = twoSolidPlan(false);
+    const auto redResult = evaluator.evaluate(redTop, requestFor(*redTop), {});
+    const auto blueResult = evaluator.evaluate(blueTop, requestFor(*blueTop), {});
+
+    render::Rgba32f redSample = render::Rgba32f::transparent();
+    render::Rgba32f blueSample = render::Rgba32f::transparent();
+    const auto* redPixel = pixel(redResult, 1, 1, redSample);
+    const auto* bluePixel = pixel(blueResult, 1, 1, blueSample);
+    expectations.expect(redPixel != nullptr && near(redPixel->red(), 0.5F) &&
+                            near(redPixel->blue(), 0.5F) && redPixel->alpha() == 1.0F,
+                        "first stack entry is topmost and folds source-over bottom to top");
+    expectations.expect(bluePixel != nullptr && bluePixel->red() == 0.0F &&
+                            bluePixel->blue() == 1.0F && bluePixel->alpha() == 1.0F &&
+                            *redPixel != *bluePixel,
+                        "reordering translucent layers is observably non-commutative");
+
+    const auto halfOpacity = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {2.0, 1.0}, 0.5);
+    const auto halfResult = evaluator.evaluate(halfOpacity, requestFor(*halfOpacity), {});
+    render::Rgba32f halfSample = render::Rgba32f::transparent();
+    const auto* halfPixel = pixel(halfResult, 0, 0, halfSample);
+    expectations.expect(halfPixel != nullptr && halfPixel->red() == 0.5F &&
+                            halfPixel->alpha() == 0.5F,
+                        "layer opacity multiplies all premultiplied components");
+    if (halfResult.frame() != nullptr) {
+        const auto displayPixels = halfResult.frame()->displayBuffer().pixels();
+        expectations.expect(!displayPixels.empty() && displayPixels.front().red == 255 &&
+                                displayPixels.front().green == 0 &&
+                                displayPixels.front().blue == 0 &&
+                                displayPixels.front().alpha == 128,
+                            "worker display mapping publishes straight packed reference sRGB");
+    }
+}
+
+void testEmptyStackIsTransparent(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = emptyStackPlan();
+    const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+    const bool processTransparent =
+        result.frame() != nullptr &&
+        std::ranges::all_of(result.frame()->processImage().pixels(), [](const auto& value) {
+            return value == render::Rgba32f::transparent();
+        });
+    const bool displayTransparent =
+        result.frame() != nullptr &&
+        std::ranges::all_of(result.frame()->displayBuffer().pixels(), [](const auto& value) {
+            return value.red == 0 && value.green == 0 && value.blue == 0 && value.alpha == 0;
+        });
+    expectations.expect(
+        result.status() == runtime::EvaluationStatus::Evaluated && processTransparent &&
+            displayTransparent,
+        "an empty layer stack publishes exact transparent process and display pixels");
+}
+
+void testProxyAndPeakBudget(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = oneSolidPlan();
+    const auto proxyExtentResult = render::ImageExtent::create(2, 2);
+    if (!proxyExtentResult) {
+        expectations.expect(false, "proxy extent fixture succeeds");
+        return;
+    }
+    const auto proxyRequest =
+        requestFor(*plan, 1U << 20U, runtime::ProxyResolution{*proxyExtentResult.value()});
+    const auto proxy = evaluator.evaluate(plan, proxyRequest, {});
+    const auto* descriptor =
+        proxy.frame() == nullptr ? nullptr : proxy.frame()->processImage().descriptor();
+    expectations.expect(descriptor != nullptr && descriptor->dataWindow().extent().width() == 2 &&
+                            descriptor->dataWindow().extent().height() == 2 &&
+                            descriptor->pixelAspect() == *core::PixelAspectRatio::create(2, 1),
+                        "proxy extent derives pixel aspect that preserves display aspect");
+
+    const auto proxyShiftedPlan = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {3.0, 1.0});
+    const auto proxyShifted =
+        evaluator.evaluate(proxyShiftedPlan,
+                           requestFor(*proxyShiftedPlan, 1U << 20U,
+                                      runtime::ProxyResolution{*proxyExtentResult.value()}),
+                           {});
+    render::Rgba32f proxyEdge = render::Rgba32f::transparent();
+    const auto* proxyEdgePixel = pixel(proxyShifted, 0, 0, proxyEdge);
+    expectations.expect(proxyEdgePixel != nullptr && near(proxyEdgePixel->red(), 0.5F) &&
+                            near(proxyEdgePixel->alpha(), 0.5F),
+                        "absolute authoring displacement is scaled independently for a proxy");
+
+    // 4x2 RGBA32F is 128 bytes. This plan peaks at two resident process images (256 bytes);
+    // the final 32-byte display buffer does not exceed that peak.
+    const auto below = evaluator.evaluate(plan, requestFor(*plan, 255), {});
+    const auto exact = evaluator.evaluate(plan, requestFor(*plan, 256), {});
+    expectations.expect(below.status() == runtime::EvaluationStatus::Failed &&
+                            !below.diagnostics().empty() &&
+                            below.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                        "preflight rejects one byte below the exact live-image peak");
+    expectations.expect(exact.status() == runtime::EvaluationStatus::Evaluated,
+                        "exact live-image peak budget succeeds");
+
+    const auto twoLayers = twoSolidPlan();
+    const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 383), {});
+    const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 384), {});
+    expectations.expect(twoBelow.status() == runtime::EvaluationStatus::Failed &&
+                            twoExact.status() == runtime::EvaluationStatus::Evaluated,
+                        "peak simulation accounts for both live layers while stacking");
+}
+
+void testIdentityAndPreparedHandoff(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto firstPlan = oneSolidPlan();
+    const auto equivalentPlan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(*firstPlan);
+    const auto divergentPlan = oneSolidPlan({0.0, 1.0, 0.0, 1.0});
+    const auto first = evaluator.evaluate(firstPlan, requestFor(*firstPlan), {});
+    const auto equivalent = evaluator.evaluate(equivalentPlan, requestFor(*equivalentPlan), {});
+    const auto divergent = evaluator.evaluate(divergentPlan, requestFor(*divergentPlan), {});
+    expectations.expect(first.frame() != nullptr && equivalent.frame() != nullptr &&
+                            first.frame()->identity() == equivalent.frame()->identity(),
+                        "cache identity uses exact plan value, not allocation address");
+    expectations.expect(first.frame() != nullptr && divergent.frame() != nullptr &&
+                            first.frame()->identity() != divergent.frame()->identity(),
+                        "same project and revision with different pixels has a different identity");
+
+    auto laterTimeRequest = requestFor(*firstPlan);
+    laterTimeRequest.time = core::RationalTime::fromInteger(1);
+    const auto laterTime = evaluator.evaluate(firstPlan, laterTimeRequest, {});
+    expectations.expect(first.frame() != nullptr && laterTime.frame() != nullptr &&
+                            first.frame()->identity() != laterTime.frame()->identity(),
+                        "exact rational time remains in conservative cache identity");
+
+    const auto largerBudget = evaluator.evaluate(firstPlan, requestFor(*firstPlan, 1U << 21U), {});
+    expectations.expect(first.frame() != nullptr && largerBudget.frame() != nullptr &&
+                            first.frame()->identity() == largerBudget.frame()->identity(),
+                        "execution memory budget is deliberately excluded from pixel identity");
+
+    const auto identityProxyExtent = render::ImageExtent::create(2, 1);
+    if (first.frame() != nullptr && identityProxyExtent) {
+        auto changedResolution = first.frame()->identity();
+        changedResolution.resolution = runtime::ProxyResolution{*identityProxyExtent.value()};
+        auto changedSemantics = first.frame()->identity();
+        ++changedSemantics.imagePrimitiveSemanticsVersion;
+        expectations.expect(first.frame()->identity() != changedResolution &&
+                                first.frame()->identity() != changedSemantics,
+                            "resolution and primitive semantics participate in cache identity");
+    }
+
+    const auto preparedOne = runtime::PreparedPreviewFrame::create(1, first.frame());
+    const auto preparedTwo = runtime::PreparedPreviewFrame::create(2, first.frame());
+    expectations.expect(preparedOne.has_value() && preparedTwo.has_value() &&
+                            preparedOne->cacheIdentity() == preparedTwo->cacheIdentity() &&
+                            preparedOne->desiredIdentity() != preparedTwo->desiredIdentity(),
+                        "publication generation changes desired identity but not cache identity");
+    expectations.expect(!runtime::PreparedPreviewFrame::create(0, first.frame()).has_value(),
+                        "zero is not a publishable preview generation");
+    const auto sharedPrepared =
+        preparedOne.has_value()
+            ? std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*preparedOne))
+            : std::shared_ptr<const runtime::PreparedPreviewFrame>{};
+    const auto preparedResult = runtime::PreviewPreparationResult::prepared(sharedPrepared);
+    expectations.expect(preparedResult.has_value() &&
+                            preparedResult->status() ==
+                                runtime::PreviewPreparationStatus::Prepared &&
+                            preparedResult->frame() != nullptr &&
+                            !runtime::PreviewPreparationResult::prepared({}).has_value() &&
+                            runtime::PreviewPreparationResult::unsupported().status() ==
+                                runtime::PreviewPreparationStatus::Unsupported,
+                        "typed preview result cannot represent Prepared without a frame");
+}
+
+void testStructuredFailuresAndProgress(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = oneSolidPlan();
+    auto invalidRequest = requestFor(*plan);
+    invalidRequest.quality = static_cast<runtime::EvaluationQuality>(99);
+    const auto unsupported = evaluator.evaluate(plan, invalidRequest, {});
+    expectations.expect(unsupported.status() == runtime::EvaluationStatus::Failed &&
+                            unsupported.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::InvalidRequest,
+                        "unknown evaluation quality fails with a structured diagnostic");
+
+    auto invalidPlan = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    std::get<runtime::CompiledLayerOutput>(invalidPlan->operations[1]).input =
+        runtime::OperationIndex::fromRaw(99);
+    const auto invalid = evaluator.evaluate(invalidPlan, requestFor(*invalidPlan), {});
+    expectations.expect(invalid.status() == runtime::EvaluationStatus::Failed &&
+                            invalid.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::InvalidPlan,
+                        "out-of-range plan references fail without unsafe indexing");
+
+    std::vector<runtime::EvaluationProgress> progress;
+    const auto result = evaluator.evaluate(
+        plan, requestFor(*plan), {},
+        [&progress](const runtime::EvaluationProgress& update) { progress.push_back(update); });
+    bool monotonic = result.status() == runtime::EvaluationStatus::Evaluated && !progress.empty();
+    for (std::size_t index = 1; index < progress.size(); ++index) {
+        if (progress[index].stage == progress[index - 1].stage &&
+            progress[index].operation == progress[index - 1].operation) {
+            monotonic = monotonic && progress[index].completed >= progress[index - 1].completed;
+        }
+    }
+    expectations.expect(monotonic, "preflight, operation, and display progress is monotonic");
+
+    const auto throwingProgress =
+        evaluator.evaluate(plan, requestFor(*plan), {}, [](const runtime::EvaluationProgress&) {
+            throw std::runtime_error("monitor failed");
+        });
+    expectations.expect(throwingProgress.status() == runtime::EvaluationStatus::Evaluated,
+                        "best-effort progress observers cannot change pixel evaluation outcome");
+
+    const auto hostileExtent = render::ImageExtent::create(
+        std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint32_t>::max());
+    if (hostileExtent) {
+        const auto overflow =
+            evaluator.evaluate(plan,
+                               requestFor(*plan, std::numeric_limits<std::size_t>::max(),
+                                          runtime::ProxyResolution{*hostileExtent.value()}),
+                               {});
+        expectations.expect(overflow.status() == runtime::EvaluationStatus::Failed &&
+                                !overflow.diagnostics().empty() &&
+                                overflow.diagnostics().front().code ==
+                                    runtime::EvaluationDiagnosticCode::ArithmeticOverflow,
+                            "hostile proxy storage overflow is a structured failure");
+    }
+
+    const auto overflowingColor = oneSolidPlan({std::numeric_limits<double>::max(), 0.0, 0.0, 1.0});
+    const auto numericFailure =
+        evaluator.evaluate(overflowingColor, requestFor(*overflowingColor), {});
+    expectations.expect(numericFailure.status() == runtime::EvaluationStatus::Failed &&
+                            !numericFailure.diagnostics().empty() &&
+                            numericFailure.diagnostics().front().code ==
+                                runtime::EvaluationDiagnosticCode::InvalidPixel,
+                        "authoring-to-process range failure identifies the responsible pixel");
+}
+
+void testRepeatability(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = twoSolidPlan();
+    const auto first = evaluator.evaluate(plan, requestFor(*plan), {});
+    const auto second = evaluator.evaluate(plan, requestFor(*plan), {});
+    const bool processEqual = first.frame() != nullptr && second.frame() != nullptr &&
+                              std::ranges::equal(first.frame()->processImage().pixels(),
+                                                 second.frame()->processImage().pixels());
+    const bool displayEqual = first.frame() != nullptr && second.frame() != nullptr &&
+                              std::ranges::equal(first.frame()->displayBuffer().pixels(),
+                                                 second.frame()->displayBuffer().pixels());
+    expectations.expect(processEqual && displayEqual &&
+                            first.frame()->identity() == second.frame()->identity(),
+                        "repeated CPU evaluation is byte-for-byte stable for process and display");
+}
+
+class CancellationGate final {
+  public:
+    void pauseAtFirstRow(const runtime::EvaluationProgress& progress) {
+        if (progress.stage != runtime::EvaluationProgressStage::Operation ||
+            progress.completed != 1) {
+            return;
+        }
+        std::unique_lock lock(mutex_);
+        if (entered_) {
+            return;
+        }
+        entered_ = true;
+        condition_.notify_all();
+        condition_.wait(lock, [this] { return released_; });
+    }
+
+    [[nodiscard]] bool waitUntilEntered() {
+        std::unique_lock lock(mutex_);
+        return condition_.wait_for(lock, 2s, [this] { return entered_; });
+    }
+
+    void release() {
+        std::lock_guard lock(mutex_);
+        released_ = true;
+        condition_.notify_all();
+    }
+
+  private:
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool entered_ = false;
+    bool released_ = false;
+};
+
+void testDeterministicScanlineCancellation(Expectations& expectations) {
+    const auto largeFormat = format(64, 64);
+    const auto plan = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {32.0, 32.0}, 1.0, largeFormat);
+    runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    CancellationGate gate;
+    std::atomic_bool evaluatorCancelled = false;
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest("Cancellation fixture", {.kind = runtime::TaskOwnerKind::Composition,
+                                                      .id = runtime::TaskOwnerId::fromRaw(1)}),
+        [plan, &evaluator, &gate, &evaluatorCancelled](runtime::TaskContext& context) {
+            const auto result =
+                evaluator.evaluate(plan, requestFor(*plan, 1U << 20U), context.cancellation(),
+                                   [&gate](const runtime::EvaluationProgress& update) {
+                                       gate.pauseAtFirstRow(update);
+                                   });
+            evaluatorCancelled.store(result.status() == runtime::EvaluationStatus::Cancelled,
+                                     std::memory_order_release);
+            return result.status() == runtime::EvaluationStatus::Cancelled
+                       ? runtime::TaskResult<void>::cancelled()
+                       : runtime::TaskResult<void>::succeeded();
+        });
+    expectations.expect(submission.accepted() && gate.waitUntilEntered(),
+                        "cancellation fixture reaches an exact scanline boundary");
+    submission.handle.cancel();
+    gate.release();
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    std::optional<runtime::TaskResult<void>> taskResult;
+    while (!taskResult.has_value() && std::chrono::steady_clock::now() < deadline) {
+        taskResult = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    expectations.expect(taskResult.has_value() &&
+                            taskResult->state() == runtime::TaskState::Cancelled &&
+                            evaluatorCancelled.load(std::memory_order_acquire),
+                        "cancellation is observed before the next scanline and publishes no frame");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    expectations.expect(scheduler.isQuiescent(), "cancellation test shuts the scheduler down");
+}
+
+} // namespace
+
+int main() {
+    Expectations expectations;
+    try {
+        testAbsoluteCenterAndFractionalTranslation(expectations);
+        testClippingAndOpacityEndpoints(expectations);
+        testStackOrderingOpacityAndDisplay(expectations);
+        testEmptyStackIsTransparent(expectations);
+        testProxyAndPeakBudget(expectations);
+        testIdentityAndPreparedHandoff(expectations);
+        testStructuredFailuresAndProgress(expectations);
+        testRepeatability(expectations);
+        testDeterministicScanlineCancellation(expectations);
+    } catch (const std::exception& error) {
+        std::cerr << "unexpected exception: " << error.what() << '\n';
+        return 1;
+    }
+    return expectations.failures() == 0 ? 0 : 1;
+}
