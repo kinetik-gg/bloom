@@ -4,6 +4,7 @@ target_sources(
     bloom_core
     PRIVATE
         rational_time.cpp
+        rational_interval.cpp
         scalar_primitives.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -13,6 +14,7 @@ target_sources(
             include/bloom/core/floating_point.hpp
             include/bloom/core/id.hpp
             include/bloom/core/pixel_aspect_ratio.hpp
+            include/bloom/core/rational_interval.hpp
             include/bloom/core/rational_time.hpp
             include/bloom/core/scalar_primitives.hpp
 )
@@ -33,6 +35,16 @@ if(BUILD_TESTING)
         NAME bloom.core.pixel_aspect_ratio
         COMMAND bloom_core_pixel_aspect_ratio_test
         LABELS unit
+    )
+
+    add_executable(bloom_core_rational_interval_test tests/rational_interval_tests.cpp)
+    target_link_libraries(bloom_core_rational_interval_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_rational_interval_test)
+    bloom_enable_strict_floating_point(bloom_core_rational_interval_test)
+    bloom_add_test(
+        NAME bloom.core.rational_interval
+        COMMAND bloom_core_rational_interval_test
+        LABELS unit primitives
     )
 
     add_executable(bloom_core_scalar_primitives_test tests/scalar_primitives_tests.cpp)
