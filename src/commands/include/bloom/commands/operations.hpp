@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
