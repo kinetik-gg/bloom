@@ -20,11 +20,11 @@ bloom_configure_quality_tools()
 
 add_subdirectory(src/core)
 add_subdirectory(src/document)
-add_subdirectory(src/host)
 add_subdirectory(src/project)
 add_subdirectory(src/render)
 add_subdirectory(src/runtime)
 add_subdirectory(src/commands)
+add_subdirectory(src/host)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
 qt_standard_project_setup()
