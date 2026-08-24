@@ -17,7 +17,6 @@ namespace bloom::render {
 enum class ImageErrorCode : std::uint8_t {
     InvalidExtent,
     InvalidWindow,
-    InvalidPixelAspect,
     ArithmeticOverflow,
     PixelStorageBudgetExceeded,
     AllocationFailure,
@@ -140,29 +139,6 @@ class ImageWindow final {
     std::int64_t originX_;
     std::int64_t originY_;
     ImageExtent extent_;
-};
-
-class PixelAspectRatio final {
-  public:
-    [[nodiscard]] static ImageResult<PixelAspectRatio> create(std::uint64_t numerator,
-                                                              std::uint64_t denominator) noexcept;
-    [[nodiscard]] static constexpr PixelAspectRatio square() noexcept {
-        return PixelAspectRatio(1, 1);
-    }
-
-    [[nodiscard]] constexpr std::uint32_t numerator() const noexcept { return numerator_; }
-    [[nodiscard]] constexpr std::uint32_t denominator() const noexcept { return denominator_; }
-
-    friend constexpr auto operator<=>(const PixelAspectRatio&,
-                                      const PixelAspectRatio&) noexcept = default;
-
-  private:
-    constexpr PixelAspectRatio(const std::uint32_t numerator,
-                               const std::uint32_t denominator) noexcept
-        : numerator_(numerator), denominator_(denominator) {}
-
-    std::uint32_t numerator_;
-    std::uint32_t denominator_;
 };
 
 struct PackedImageLayout final {

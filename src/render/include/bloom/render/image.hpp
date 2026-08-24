@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
@@ -14,11 +15,13 @@ class Rgba32fImageDescriptor final {
   public:
     [[nodiscard]] static ImageResult<Rgba32fImageDescriptor>
     create(ImageWindow dataWindow, ImageWindow displayWindow,
-           PixelAspectRatio pixelAspect) noexcept;
+           core::PixelAspectRatio pixelAspect) noexcept;
 
     [[nodiscard]] constexpr ImageWindow dataWindow() const noexcept { return dataWindow_; }
     [[nodiscard]] constexpr ImageWindow displayWindow() const noexcept { return displayWindow_; }
-    [[nodiscard]] constexpr PixelAspectRatio pixelAspect() const noexcept { return pixelAspect_; }
+    [[nodiscard]] constexpr core::PixelAspectRatio pixelAspect() const noexcept {
+        return pixelAspect_;
+    }
     [[nodiscard]] constexpr const PackedImageLayout& layout() const noexcept { return layout_; }
     [[nodiscard]] static constexpr AlphaAssociation alphaAssociation() noexcept {
         return AlphaAssociation::Premultiplied;
@@ -35,14 +38,14 @@ class Rgba32fImageDescriptor final {
 
   private:
     constexpr Rgba32fImageDescriptor(const ImageWindow dataWindow, const ImageWindow displayWindow,
-                                     const PixelAspectRatio pixelAspect,
+                                     const core::PixelAspectRatio pixelAspect,
                                      const PackedImageLayout layout) noexcept
         : dataWindow_(dataWindow), displayWindow_(displayWindow), pixelAspect_(pixelAspect),
           layout_(layout) {}
 
     ImageWindow dataWindow_;
     ImageWindow displayWindow_;
-    PixelAspectRatio pixelAspect_;
+    core::PixelAspectRatio pixelAspect_;
     PackedImageLayout layout_;
 };
 

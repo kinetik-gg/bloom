@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
@@ -15,10 +16,12 @@ namespace bloom::render {
 class ReferenceDisplayBufferDescriptor final {
   public:
     [[nodiscard]] static ImageResult<ReferenceDisplayBufferDescriptor>
-    create(ImageWindow displayWindow, PixelAspectRatio pixelAspect) noexcept;
+    create(ImageWindow displayWindow, core::PixelAspectRatio pixelAspect) noexcept;
 
     [[nodiscard]] constexpr ImageWindow displayWindow() const noexcept { return displayWindow_; }
-    [[nodiscard]] constexpr PixelAspectRatio pixelAspect() const noexcept { return pixelAspect_; }
+    [[nodiscard]] constexpr core::PixelAspectRatio pixelAspect() const noexcept {
+        return pixelAspect_;
+    }
     [[nodiscard]] constexpr const PackedImageLayout& layout() const noexcept { return layout_; }
     [[nodiscard]] static constexpr PixelPacking pixelPacking() noexcept {
         return PixelPacking::PackedRgba8;
@@ -36,12 +39,12 @@ class ReferenceDisplayBufferDescriptor final {
 
   private:
     constexpr ReferenceDisplayBufferDescriptor(const ImageWindow displayWindow,
-                                               const PixelAspectRatio pixelAspect,
+                                               const core::PixelAspectRatio pixelAspect,
                                                const PackedImageLayout layout) noexcept
         : displayWindow_(displayWindow), pixelAspect_(pixelAspect), layout_(layout) {}
 
     ImageWindow displayWindow_;
-    PixelAspectRatio pixelAspect_;
+    core::PixelAspectRatio pixelAspect_;
     PackedImageLayout layout_;
 };
 

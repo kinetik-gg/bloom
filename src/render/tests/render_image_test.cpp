@@ -1,3 +1,4 @@
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/render/image.hpp>
 
@@ -15,13 +16,13 @@
 
 namespace {
 
+using bloom::core::PixelAspectRatio;
 using bloom::render::AlphaAssociation;
 using bloom::render::ColorEncoding;
 using bloom::render::ImageErrorCode;
 using bloom::render::ImageExtent;
 using bloom::render::ImageResult;
 using bloom::render::ImageWindow;
-using bloom::render::PixelAspectRatio;
 using bloom::render::PixelPacking;
 using bloom::render::PreparedReferenceDisplayBuffer;
 using bloom::render::ReferenceDisplayBufferDescriptor;
@@ -30,6 +31,9 @@ using bloom::render::Rgba32fImage;
 using bloom::render::Rgba32fImageBuilder;
 using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::Rgba8;
+
+static_assert(std::is_same_v<decltype(std::declval<const Rgba32fImageDescriptor&>().pixelAspect()),
+                             PixelAspectRatio>);
 
 class ExpectationContext final {
   public:
@@ -91,7 +95,7 @@ template <typename T>
     if (!result) {
         throw std::logic_error("Invalid pixel aspect fixture");
     }
-    return *result.value();
+    return *result;
 }
 
 [[nodiscard]] Rgba32f pixel(const float red, const float green, const float blue,
@@ -146,10 +150,6 @@ void testGeometryAndTypedErrors(ExpectationContext& expectations) {
                             highestNonOverflowingOrigin.value()->contains(
                                 std::numeric_limits<std::int64_t>::max() - 1, 0),
                         "the exact highest non-overflowing window boundary remains representable");
-    expectations.expect(
-        hasError(PixelAspectRatio::create(0, 1), ImageErrorCode::InvalidPixelAspect),
-        "zero pixel-aspect terms are rejected with a specific error");
-
     const auto reducedAspect = aspect(8, 6);
     expectations.expect(reducedAspect.numerator() == 4 && reducedAspect.denominator() == 3,
                         "non-square pixel aspect is stored as a normalized rational");
@@ -309,14 +309,16 @@ void testFreezePublicationAndMoves(ExpectationContext& expectations) {
 }
 
 void testPreparedReferenceDisplayBuffer(ExpectationContext& expectations) {
+    const auto nonSquareAspect = aspect(4, 3);
     const auto descriptorResult =
-        ReferenceDisplayBufferDescriptor::create(window(4, -3, 2, 1), aspect(4, 3));
+        ReferenceDisplayBufferDescriptor::create(window(4, -3, 2, 1), nonSquareAspect);
     if (!descriptorResult) {
         expectations.expect(false, "reference display descriptor fixture succeeds");
         return;
     }
     const auto displayDescriptor = *descriptorResult.value();
     expectations.expect(displayDescriptor.layout().pixelStorageBytes == 2 * sizeof(Rgba8) &&
+                            displayDescriptor.pixelAspect() == nonSquareAspect &&
                             displayDescriptor.pixelPacking() == PixelPacking::PackedRgba8 &&
                             displayDescriptor.alphaAssociation() == AlphaAssociation::Straight &&
                             displayDescriptor.referenceDisplayPipelineId() ==

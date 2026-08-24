@@ -16,6 +16,7 @@ target_sources(
 )
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
+target_link_libraries(bloom_render PUBLIC bloom_core)
 bloom_enable_warnings(bloom_render)
 
 if(BUILD_TESTING)

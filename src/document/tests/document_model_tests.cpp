@@ -1,4 +1,5 @@
 #include <bloom/core/color.hpp>
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
@@ -32,6 +33,7 @@ namespace {
 inline constexpr std::uint32_t kTestSourceNodeSchemaVersion = 1;
 
 using bloom::core::Color4d;
+using bloom::core::PixelAspectRatio;
 using bloom::core::RationalTime;
 using bloom::document::AnimationCurveId;
 using bloom::document::CanonicalGraph;
@@ -57,11 +59,13 @@ using bloom::document::NodeRecord;
 using bloom::document::OutputPortRef;
 using bloom::document::ParameterId;
 using bloom::document::ParameterRecord;
-using bloom::document::PixelAspectRatio;
 using bloom::document::Project;
 using bloom::document::ProjectId;
 using bloom::document::ValidationCode;
 using bloom::document::Vec2d;
+
+static_assert(std::is_same_v<decltype(std::declval<const CompositionFormat&>().pixelAspect()),
+                             PixelAspectRatio>);
 
 class ExpectationContext final {
   public:

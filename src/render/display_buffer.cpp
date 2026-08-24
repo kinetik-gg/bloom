@@ -8,7 +8,7 @@ namespace bloom::render {
 
 ImageResult<ReferenceDisplayBufferDescriptor>
 ReferenceDisplayBufferDescriptor::create(const ImageWindow displayWindow,
-                                         const PixelAspectRatio pixelAspect) noexcept {
+                                         const core::PixelAspectRatio pixelAspect) noexcept {
     const auto layoutResult = checkedRgba8Layout(displayWindow.extent());
     if (!layoutResult) {
         return ImageResult<ReferenceDisplayBufferDescriptor>::failure(*layoutResult.error());

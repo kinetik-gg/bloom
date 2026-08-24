@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <limits>
-#include <numeric>
 
 namespace {
 
@@ -70,25 +69,6 @@ ImageResult<ImageWindow> ImageWindow::create(const std::int64_t originX, const s
             ImageError::codeOnly(ImageErrorCode::ArithmeticOverflow));
     }
     return ImageResult<ImageWindow>::success(ImageWindow(originX, originY, extent));
-}
-
-ImageResult<PixelAspectRatio> PixelAspectRatio::create(const std::uint64_t numerator,
-                                                       const std::uint64_t denominator) noexcept {
-    if (numerator == 0 || denominator == 0) {
-        return ImageResult<PixelAspectRatio>::failure(
-            ImageError::codeOnly(ImageErrorCode::InvalidPixelAspect));
-    }
-    const auto divisor = std::gcd(numerator, denominator);
-    const auto reducedNumerator = numerator / divisor;
-    const auto reducedDenominator = denominator / divisor;
-    constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
-    if (reducedNumerator > maximum || reducedDenominator > maximum) {
-        return ImageResult<PixelAspectRatio>::failure(
-            ImageError::codeOnly(ImageErrorCode::InvalidPixelAspect));
-    }
-    return ImageResult<PixelAspectRatio>::success(
-        PixelAspectRatio(static_cast<std::uint32_t>(reducedNumerator),
-                         static_cast<std::uint32_t>(reducedDenominator)));
 }
 
 ImageResult<Rgba32f> Rgba32f::fromPremultiplied(const float red, const float green,

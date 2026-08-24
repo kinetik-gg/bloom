@@ -1,40 +1,12 @@
 #pragma once
 
+#include <bloom/core/pixel_aspect_ratio.hpp>
+
 #include <cstdint>
 #include <numeric>
 #include <optional>
 
 namespace bloom::document {
-
-class PixelAspectRatio final {
-  public:
-    [[nodiscard]] static constexpr PixelAspectRatio square() noexcept {
-        return PixelAspectRatio(1, 1);
-    }
-
-    [[nodiscard]] static constexpr std::optional<PixelAspectRatio>
-    create(const std::uint32_t numerator, const std::uint32_t denominator) noexcept {
-        if (numerator == 0 || denominator == 0) {
-            return std::nullopt;
-        }
-        const auto divisor = std::gcd(numerator, denominator);
-        return PixelAspectRatio(numerator / divisor, denominator / divisor);
-    }
-
-    [[nodiscard]] constexpr std::uint32_t numerator() const noexcept { return numerator_; }
-    [[nodiscard]] constexpr std::uint32_t denominator() const noexcept { return denominator_; }
-
-    friend constexpr bool operator==(const PixelAspectRatio&,
-                                     const PixelAspectRatio&) noexcept = default;
-
-  private:
-    constexpr PixelAspectRatio(const std::uint32_t numerator,
-                               const std::uint32_t denominator) noexcept
-        : numerator_(numerator), denominator_(denominator) {}
-
-    std::uint32_t numerator_ = 1;
-    std::uint32_t denominator_ = 1;
-};
 
 class FrameRate final {
   public:
@@ -75,7 +47,7 @@ class CompositionFormat final {
 
     [[nodiscard]] static constexpr std::optional<CompositionFormat>
     create(const std::uint32_t width, const std::uint32_t height,
-           const PixelAspectRatio pixelAspect = PixelAspectRatio::square(),
+           const core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square(),
            const FrameRate frameRate = FrameRate::framesPerSecond24()) noexcept {
         if (!isValidExtent(width, height)) {
             return std::nullopt;
@@ -85,7 +57,9 @@ class CompositionFormat final {
 
     [[nodiscard]] constexpr std::uint32_t width() const noexcept { return width_; }
     [[nodiscard]] constexpr std::uint32_t height() const noexcept { return height_; }
-    [[nodiscard]] constexpr PixelAspectRatio pixelAspect() const noexcept { return pixelAspect_; }
+    [[nodiscard]] constexpr core::PixelAspectRatio pixelAspect() const noexcept {
+        return pixelAspect_;
+    }
     [[nodiscard]] constexpr FrameRate frameRate() const noexcept { return frameRate_; }
 
     friend constexpr bool operator==(const CompositionFormat&,
@@ -101,13 +75,13 @@ class CompositionFormat final {
     }
 
     constexpr CompositionFormat(const std::uint32_t width, const std::uint32_t height,
-                                const PixelAspectRatio pixelAspect,
+                                const core::PixelAspectRatio pixelAspect,
                                 const FrameRate frameRate) noexcept
         : width_(width), height_(height), pixelAspect_(pixelAspect), frameRate_(frameRate) {}
 
     std::uint32_t width_ = kDefaultWidth;
     std::uint32_t height_ = kDefaultHeight;
-    PixelAspectRatio pixelAspect_ = PixelAspectRatio::square();
+    core::PixelAspectRatio pixelAspect_ = core::PixelAspectRatio::square();
     FrameRate frameRate_ = FrameRate::framesPerSecond24();
 };
 

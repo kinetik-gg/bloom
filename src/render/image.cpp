@@ -37,7 +37,7 @@ namespace bloom::render {
 
 ImageResult<Rgba32fImageDescriptor>
 Rgba32fImageDescriptor::create(const ImageWindow dataWindow, const ImageWindow displayWindow,
-                               const PixelAspectRatio pixelAspect) noexcept {
+                               const core::PixelAspectRatio pixelAspect) noexcept {
     const auto layoutResult = checkedRgba32fLayout(dataWindow.extent());
     if (!layoutResult) {
         return ImageResult<Rgba32fImageDescriptor>::failure(*layoutResult.error());

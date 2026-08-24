@@ -1,5 +1,7 @@
 #include "command_test_support.hpp"
 
+#include <bloom/core/pixel_aspect_ratio.hpp>
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -223,7 +225,7 @@ void testCompositionFormatCommand(TestContext& test) {
     const auto frameRate = document::FrameRate::create(24'000, 1'001);
     requireFixture(frameRate.has_value(), "custom frame rate fixture must be valid");
     const auto format = document::CompositionFormat::create(
-        3'840, 2'160, document::PixelAspectRatio::square(), *frameRate);
+        3'840, 2'160, core::PixelAspectRatio::square(), *frameRate);
     requireFixture(format.has_value(), "custom format fixture must be valid");
 
     Transaction change("Change composition format", original.revision());
