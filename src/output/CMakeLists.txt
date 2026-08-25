@@ -3,11 +3,13 @@ add_library(bloom_output STATIC)
 target_sources(
     bloom_output
     PRIVATE
+        output_facet_descriptor.cpp
         process_frame_semantic_identity.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/output/output_facet_descriptor.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
 )
 
@@ -33,5 +35,20 @@ if(BUILD_TESTING)
         NAME bloom.output.process_frame_semantic_identity
         COMMAND bloom_output_process_frame_semantic_identity_test
         LABELS unit output identity render
+    )
+
+    add_executable(
+        bloom_output_facet_descriptor_test
+        tests/output_facet_descriptor_tests.cpp
+    )
+    target_link_libraries(
+        bloom_output_facet_descriptor_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_facet_descriptor_test)
+    bloom_add_test(
+        NAME bloom.output.facet_descriptor
+        COMMAND bloom_output_facet_descriptor_test
+        LABELS unit output serialization
     )
 endif()
