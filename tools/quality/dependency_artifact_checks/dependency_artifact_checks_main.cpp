@@ -25,6 +25,13 @@ int main(const int argumentCount, char** arguments) {
             bloom::quality::dependencies::checkRepository(repositoryRoot(argumentCount, arguments));
         std::cout << "Synthetic dependency contract check passed (lock " << result.lockVector
                   << ", prefix " << result.prefixVector << ")\n";
+        if (result.productionLockPresent) {
+            std::cout << "Production dependency lock validated (identity "
+                      << result.productionLockIdentity << ")\n";
+        } else {
+            std::cout << "Production dependency lock absent; Unicode 15.1 bootstrap allowlist "
+                         "verified\n";
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Dependency artifact check failed: " << error.what() << '\n';

@@ -13,8 +13,10 @@
 
 namespace bloom::quality::dependencies {
 
-// This tooling validates only Bloom's checked-in synthetic contract fixtures. It is deliberately
-// not a production dependency-lock or installed-prefix validator.
+// This tooling validates Bloom's checked-in synthetic contract fixtures and, since the production
+// lock validator landed, the production dependency lock at dependencies/dependencies.lock.json.
+// It is still not an installed-prefix validator: production prefix-manifest validation remains out
+// of scope.
 
 enum class ArtifactKind {
     Lock,
@@ -47,6 +49,8 @@ struct FixtureContext final {
 struct CheckResult final {
     std::string lockVector;
     std::string prefixVector;
+    bool productionLockPresent{false};
+    std::string productionLockIdentity;
 };
 
 [[nodiscard]] auto limitsFor(ArtifactKind kind) noexcept -> ArtifactLimits;

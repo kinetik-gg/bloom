@@ -610,7 +610,9 @@ int main(const int argumentCount, char** arguments) {
         testPrefixFilesystemAndRoles(fixture, expectations);
         const auto boundaryFailures =
             bloom::quality::dependencies::tests::runBoundaryTests(fixture.root);
-        return expectations.failures() + boundaryFailures == 0 ? 0 : 1;
+        const auto productionFailures =
+            bloom::quality::dependencies::tests::runProductionLockTests(fixture.root);
+        return expectations.failures() + boundaryFailures + productionFailures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "fatal dependency checker self-test error: " << error.what() << '\n';
         return 2;
