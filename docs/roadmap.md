@@ -52,7 +52,8 @@ Bloom currently has:
 - inclusive allocator high-water preservation across every durable namespace and project-global
   opaque extension envelopes with typed subjects and explicit reference policies
 - a bounded application-wide publication coordinator and synchronous Qt-free `ProjectSession`
-  ownership with immutable snapshots, command history, clean revision, and dirty state
+  ownership with immutable snapshots, command history, clean revision, dirty state, runtime session
+  IDs, checked intent generations, sealed path authority, and ordered savepoint callbacks
 - a portable, allocation-free process-pixel digest and Process-Frame Semantic Identity version 1
   codec whose canonical bytes exclude execution-provider provenance
 
@@ -341,9 +342,10 @@ requirement coverage, durable allocator/extension state, publication ordering, b
 allocation, a Linux staged-artifact foundation with mandatory close/reopen verification, standalone
 color-setting values/content revisions, and synchronous project-session ownership are implemented.
 Complete document JSON/ZIP I/O, unknown-member overlay, format-specific semantic verification,
-cross-platform filesystem publication, async session intent,
+cross-platform filesystem publication, async session task orchestration and atomic content install,
 Project-owned color identity, the qualified built-in asset, and all concrete dependency profiles
-remain pending; no dependency is qualified merely because the intake mechanism is accepted. See
+remain pending; the core session ID, generation, path-authority, and savepoint-acceptance seams are
+implemented. No dependency is qualified merely because the intake mechanism is accepted. See
 [`architecture/project-format.md`](architecture/project-format.md),
 [`architecture/project-session.md`](architecture/project-session.md), and
 [`architecture/dependency-intake.md`](architecture/dependency-intake.md).
@@ -434,8 +436,9 @@ Goal: save/reopen without changing project truth or blocking the UI.
 
 Contract status: persistence and Qt-free `ProjectSession` behavior are frozen in
 [`architecture/project-format.md`](architecture/project-format.md) and
-[`architecture/project-session.md`](architecture/project-session.md); implementation remains
-pending.
+[`architecture/project-session.md`](architecture/project-session.md). Synchronous ownership,
+runtime identity/generation admission, and ordered savepoint acceptance are implemented; project
+container I/O and asynchronous application orchestration remain pending.
 
 Land in reviewable increments:
 
