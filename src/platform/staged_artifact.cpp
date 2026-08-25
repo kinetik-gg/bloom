@@ -77,18 +77,41 @@ StagedArtifactLease::write(const std::span<const std::byte> bytes) noexcept {
     return state_->write(bytes);
 }
 
-StagedArtifactOperationResult StagedArtifactLease::seal() noexcept {
+StagedArtifactOperationResult StagedArtifactLease::finishWriting() noexcept {
     if (state_ == nullptr) {
         return {.error = StagedArtifactError::StageNotWritable};
     }
-    return state_->seal();
+    return state_->finishWriting();
+}
+
+StagedArtifactVerificationReadResult
+StagedArtifactLease::readForVerification(const std::uint64_t offset,
+                                         const std::span<std::byte> destination) noexcept {
+    if (state_ == nullptr) {
+        return {.error = StagedArtifactError::StageNotVerifying};
+    }
+    return state_->readForVerification(offset, destination);
+}
+
+StagedArtifactOperationResult StagedArtifactLease::acceptVerification() noexcept {
+    if (state_ == nullptr) {
+        return {.error = StagedArtifactError::StageNotVerifying};
+    }
+    return state_->acceptVerification();
+}
+
+StagedArtifactOperationResult StagedArtifactLease::rejectVerification() noexcept {
+    if (state_ == nullptr) {
+        return {.error = StagedArtifactError::StageNotVerifying};
+    }
+    return state_->rejectVerification();
 }
 
 StagedArtifactPublicationResult
 StagedArtifactLease::publish(const PublicationDisposition disposition) noexcept {
     if (state_ == nullptr) {
         return {.outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
-                .error = StagedArtifactError::StageNotSealed};
+                .error = StagedArtifactError::StageVerificationNotAccepted};
     }
     return state_->publish(disposition);
 }

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -230,14 +231,15 @@ void testCreateAndReplacePublication(Expectations& expectations) {
                             stageIsPrivate,
                         "staging creates one private regular file beside the target");
     expectations.expect(lease.write(bytes("new ")) && lease.write(bytes("artifact")) &&
-                            lease.stageBytes() == 12 && lease.seal(),
-                        "incremental writes are bounded and the staged file is flushed");
+                            lease.stageBytes() == 12 && lease.finishWriting() &&
+                            lease.acceptVerification(),
+                        "incremental writes finish and accepted bytes are flushed");
     const auto publication = lease.publish(PublicationDisposition::Proceed);
     expectations.expect(publication.outcome == StagedArtifactPublicationOutcome::Published &&
                             publication.error == StagedArtifactError::None &&
                             publication.targetWasPublished() &&
                             readFile(targetPath) == "new artifact",
-                        "atomic create publishes the sealed bytes with parent durability");
+                        "atomic create publishes accepted bytes with parent durability");
     const auto repeatedPublication = lease.publish(PublicationDisposition::Cancelled);
     expectations.expect(repeatedPublication.outcome == publication.outcome &&
                             repeatedPublication.error == publication.error,
@@ -255,9 +257,10 @@ void testCreateAndReplacePublication(Expectations& expectations) {
     auto replacementStage = coordinator->stage(std::move(replacement).takeTarget());
     auto replacementLease = std::move(replacementStage).takeLease();
     const auto replaced = replacementLease.write(bytes("replacement"));
-    const auto sealed = replacementLease.seal();
+    const auto finished = replacementLease.finishWriting();
+    const auto accepted = replacementLease.acceptVerification();
     const auto replacedResult = replacementLease.publish(PublicationDisposition::Proceed);
-    expectations.expect(replaced && sealed &&
+    expectations.expect(replaced && finished && accepted &&
                             replacedResult.outcome == StagedArtifactPublicationOutcome::Published &&
                             readFile(targetPath) == "replacement",
                         "atomic replacement updates an existing regular target");
@@ -312,8 +315,9 @@ void testExternalMutationBeforePublication(Expectations& expectations) {
     auto preflight = coordinator->preflight(makeRequest(targetPath));
     auto stage = coordinator->stage(std::move(preflight).takeTarget());
     auto lease = std::move(stage).takeLease();
-    expectations.expect(lease.write(bytes("new")) && lease.seal(),
-                        "the conflict fixture seals a replacement");
+    expectations.expect(lease.write(bytes("new")) && lease.finishWriting() &&
+                            lease.acceptVerification(),
+                        "the conflict fixture verifies a replacement");
     expectations.expect(writeFile(targetPath, "external"),
                         "the target changes after staging and before publication");
     const auto result = lease.publish(PublicationDisposition::Proceed);
@@ -325,28 +329,154 @@ void testExternalMutationBeforePublication(Expectations& expectations) {
         "complete fingerprint revalidation preserves an externally changed target");
 }
 
+void testVerificationReadsAndAcceptance(Expectations& expectations) {
+    TempDirectory directory;
+    auto coordinator = makeCoordinator(expectations);
+    if (!directory.isValid() || !coordinator.has_value()) {
+        return;
+    }
+    const auto targetPath = directory.path() / "binary";
+    auto preflight = coordinator->preflight(makeRequest(targetPath));
+    auto stage = coordinator->stage(std::move(preflight).takeTarget());
+    auto lease = std::move(stage).takeLease();
+    constexpr std::array payload = {std::byte{0x00}, std::byte{0x11}, std::byte{0x7F},
+                                    std::byte{0x80}, std::byte{0xFE}, std::byte{0xFF}};
+    expectations.expect(static_cast<bool>(lease.write(payload)),
+                        "the verification fixture writes binary bytes");
+
+    const auto premature = lease.publish(PublicationDisposition::Proceed);
+    expectations.expect(premature.outcome ==
+                                StagedArtifactPublicationOutcome::FailedBeforePublication &&
+                            premature.error == StagedArtifactError::StageVerificationNotAccepted &&
+                            directoryEntries(directory.path()).size() == 1,
+                        "proceed cannot consume bytes before semantic verification is accepted");
+
+    expectations.expect(static_cast<bool>(lease.finishWriting()),
+                        "finishing closes and reopens the exact stage for verification");
+    const auto unaccepted = lease.publish(PublicationDisposition::Proceed);
+    const auto lateWrite = lease.write(bytes("x"));
+    expectations.expect(
+        unaccepted.error == StagedArtifactError::StageVerificationNotAccepted && !lateWrite &&
+            lateWrite.error == StagedArtifactError::StageNotWritable,
+        "publication stays blocked and the writer cannot be reused during verification");
+
+    std::array<std::byte, 3> middle{};
+    const auto middleRead = lease.readForVerification(1, middle);
+    expectations.expect(middleRead && middleRead.bytesRead == middle.size() &&
+                            middleRead.stageBytes == payload.size() && !middleRead.endOfFile &&
+                            middle == std::array{std::byte{0x11}, std::byte{0x7F}, std::byte{0x80}},
+                        "bounded random access returns exact binary bytes before EOF");
+
+    std::array<std::byte, 5> tail{};
+    tail.fill(std::byte{0x55});
+    const auto tailRead = lease.readForVerification(3, tail);
+    expectations.expect(tailRead && tailRead.bytesRead == 3 && tailRead.endOfFile &&
+                            tail[0] == std::byte{0x80} && tail[1] == std::byte{0xFE} &&
+                            tail[2] == std::byte{0xFF} && tail[3] == std::byte{0x55} &&
+                            tail[4] == std::byte{0x55},
+                        "a verification read reports its partial count and preserves tail bytes");
+
+    std::array<std::byte, 1> one{};
+    const auto exactEnd = lease.readForVerification(payload.size(), one);
+    const auto beyondEnd =
+        lease.readForVerification(std::numeric_limits<std::uint64_t>::max(), one);
+    const auto emptyRead = lease.readForVerification(0, std::span<std::byte>{});
+    expectations.expect(exactEnd && exactEnd.bytesRead == 0 && exactEnd.endOfFile && beyondEnd &&
+                            beyondEnd.bytesRead == 0 && beyondEnd.endOfFile && emptyRead &&
+                            emptyRead.bytesRead == 0 && !emptyRead.endOfFile,
+                        "EOF and maximal offsets are zero-byte successes without offset wrap");
+
+    const auto accepted = lease.acceptVerification();
+    const auto acceptedReplay = lease.acceptVerification();
+    const auto readAfterAccept = lease.readForVerification(0, one);
+    expectations.expect(accepted && acceptedReplay && !readAfterAccept &&
+                            readAfterAccept.error == StagedArtifactError::StageNotVerifying,
+                        "verification acceptance flushes once and has a stable successful replay");
+    const auto publication = lease.publish(PublicationDisposition::Proceed);
+    const auto contents = readFile(targetPath);
+    expectations.expect(publication.targetWasPublished() && contents.size() == payload.size() &&
+                            std::equal(payload.begin(), payload.end(),
+                                       reinterpret_cast<const std::byte*>(contents.data())),
+                        "only accepted binary bytes reach the target");
+
+    const auto emptyTargetPath = directory.path() / "empty";
+    auto emptyPreflight = coordinator->preflight(makeRequest(emptyTargetPath));
+    auto emptyStage = coordinator->stage(std::move(emptyPreflight).takeTarget());
+    auto emptyLease = std::move(emptyStage).takeLease();
+    std::array<std::byte, 1> emptyBuffer{std::byte{0x55}};
+    const auto emptyFinished = emptyLease.finishWriting();
+    const auto emptyEof = emptyLease.readForVerification(0, emptyBuffer);
+    const auto emptyAccepted = emptyLease.acceptVerification();
+    const auto emptyPublication = emptyLease.publish(PublicationDisposition::Proceed);
+    const auto emptyPublicationReplay = emptyLease.publish(PublicationDisposition::Cancelled);
+    expectations.expect(emptyFinished && emptyEof && emptyEof.bytesRead == 0 &&
+                            emptyEof.stageBytes == 0 && emptyEof.endOfFile && emptyAccepted &&
+                            emptyPublication.targetWasPublished() &&
+                            emptyPublicationReplay.outcome == emptyPublication.outcome &&
+                            emptyPublicationReplay.error == emptyPublication.error &&
+                            std::filesystem::file_size(emptyTargetPath) == 0,
+                        "an empty stage reports ordinary EOF and can still be accepted exactly");
+}
+
+void testVerificationRejectionAndTerminalReplay(Expectations& expectations) {
+    TempDirectory directory;
+    auto coordinator = makeCoordinator(expectations);
+    if (!directory.isValid() || !coordinator.has_value()) {
+        return;
+    }
+    const auto targetPath = directory.path() / "rejected";
+    auto preflight = coordinator->preflight(makeRequest(targetPath));
+    auto stage = coordinator->stage(std::move(preflight).takeTarget());
+    auto lease = std::move(stage).takeLease();
+    expectations.expect(lease.write(bytes("invalid format")) && lease.finishWriting(),
+                        "the rejection fixture enters semantic verification");
+    const auto rejected = lease.rejectVerification();
+    const auto rejectedReplay = lease.rejectVerification();
+    const auto publication = lease.publish(PublicationDisposition::Proceed);
+    const auto publicationReplay = lease.publish(PublicationDisposition::Cancelled);
+    expectations.expect(rejected && rejectedReplay && lease.isValid() &&
+                            directoryEntries(directory.path()).empty() &&
+                            !std::filesystem::exists(targetPath),
+                        "semantic rejection cleans immediately while the lease remains alive");
+    expectations.expect(
+        publication.outcome == StagedArtifactPublicationOutcome::FailedBeforePublication &&
+            publication.error == StagedArtifactError::StageVerificationRejected &&
+            publicationReplay.outcome == publication.outcome &&
+            publicationReplay.error == publication.error,
+        "a rejected lease replays its typed terminal result for every publication attempt");
+}
+
 void testDispositionAndLimits(Expectations& expectations) {
     for (const auto disposition :
          {PublicationDisposition::Cancelled, PublicationDisposition::Superseded}) {
-        TempDirectory directory;
-        auto coordinator = makeCoordinator(expectations);
-        if (!directory.isValid() || !coordinator.has_value()) {
-            continue;
+        for (const bool enterVerification : {false, true}) {
+            TempDirectory directory;
+            auto coordinator = makeCoordinator(expectations);
+            if (!directory.isValid() || !coordinator.has_value()) {
+                continue;
+            }
+            const auto targetPath = directory.path() / "output";
+            auto preflight = coordinator->preflight(makeRequest(targetPath));
+            auto stage = coordinator->stage(std::move(preflight).takeTarget());
+            auto lease = std::move(stage).takeLease();
+            const auto write = lease.write(bytes("discarded"));
+            const auto finished = enterVerification
+                                      ? lease.finishWriting()
+                                      : bloom::platform::StagedArtifactOperationResult{};
+            expectations.expect(write && finished,
+                                "a disposition fixture reaches its requested live phase");
+            const auto result = lease.publish(disposition);
+            const auto replay = lease.publish(PublicationDisposition::Proceed);
+            const auto expected = disposition == PublicationDisposition::Cancelled
+                                      ? StagedArtifactPublicationOutcome::CancelledBeforePublication
+                                      : StagedArtifactPublicationOutcome::Superseded;
+            expectations.expect(
+                result.outcome == expected && replay.outcome == result.outcome &&
+                    replay.error == result.error && !result.targetWasPublished() &&
+                    !std::filesystem::exists(targetPath) &&
+                    directoryEntries(directory.path()).empty(),
+                "cancellation and supersession clean from writable and verification phases");
         }
-        const auto targetPath = directory.path() / "output";
-        auto preflight = coordinator->preflight(makeRequest(targetPath));
-        auto stage = coordinator->stage(std::move(preflight).takeTarget());
-        auto lease = std::move(stage).takeLease();
-        expectations.expect(static_cast<bool>(lease.write(bytes("discarded"))),
-                            "a disposition fixture writes staging data");
-        const auto result = lease.publish(disposition);
-        const auto expected = disposition == PublicationDisposition::Cancelled
-                                  ? StagedArtifactPublicationOutcome::CancelledBeforePublication
-                                  : StagedArtifactPublicationOutcome::Superseded;
-        expectations.expect(result.outcome == expected && !result.targetWasPublished() &&
-                                !std::filesystem::exists(targetPath) &&
-                                directoryEntries(directory.path()).empty(),
-                            "cancellation and supersession clean staging before publication");
     }
 
     TempDirectory directory;
@@ -361,10 +491,12 @@ void testDispositionAndLimits(Expectations& expectations) {
     auto stage = coordinator->stage(std::move(preflight).takeTarget());
     auto lease = std::move(stage).takeLease();
     const auto write = lease.write(bytes("four"));
+    const auto replay = lease.publish(PublicationDisposition::Proceed);
     expectations.expect(!write && write.error == StagedArtifactError::ArtifactSizeLimit &&
-                            write.stageBytes == 0 && !std::filesystem::exists(targetPath) &&
+                            replay.error == write.error && write.stageBytes == 0 &&
+                            !std::filesystem::exists(targetPath) &&
                             directoryEntries(directory.path()).empty(),
-                        "artifact growth failure removes its private stage immediately");
+                        "artifact growth failure cleans and remains a stable terminal error");
 }
 
 [[nodiscard]] bloom::platform::StagedArtifactPublicationResult
@@ -393,27 +525,54 @@ runPublicationFault(Expectations& expectations, const StagedArtifactFaultPoint f
                 .error = stage.error()};
     }
     auto lease = std::move(stage).takeLease();
+    const auto terminalFailure = [&directory, &expectations, &lease,
+                                  &targetPath](const StagedArtifactError error) {
+        const auto first = lease.publish(PublicationDisposition::Proceed);
+        const auto replay = lease.publish(PublicationDisposition::Cancelled);
+        expectations.expect(first.outcome ==
+                                    StagedArtifactPublicationOutcome::FailedBeforePublication &&
+                                first.error == error && replay.outcome == first.outcome &&
+                                replay.error == first.error &&
+                                directoryEntries(directory.path()) ==
+                                    std::vector<std::filesystem::path>{targetPath},
+                            "a terminal operation fault replays through publication");
+        return first;
+    };
     const auto write = lease.write(bytes("new"));
     if (!write) {
         finalBytes = readFile(targetPath);
-        return {.outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
-                .error = write.error};
+        return terminalFailure(write.error);
     }
-    const auto seal = lease.seal();
-    if (!seal) {
+    const auto finished = lease.finishWriting();
+    if (!finished) {
         finalBytes = readFile(targetPath);
-        return {.outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
-                .error = seal.error};
+        return terminalFailure(finished.error);
+    }
+    std::array<std::byte, 1> verificationByte{};
+    const auto read = lease.readForVerification(0, verificationByte);
+    if (!read) {
+        finalBytes = readFile(targetPath);
+        return terminalFailure(read.error);
+    }
+    const auto accepted = lease.acceptVerification();
+    if (!accepted) {
+        finalBytes = readFile(targetPath);
+        return terminalFailure(accepted.error);
     }
     const auto result = lease.publish(PublicationDisposition::Proceed);
     finalBytes = readFile(targetPath);
+    expectations.expect(directoryEntries(directory.path()) ==
+                            std::vector<std::filesystem::path>{targetPath},
+                        "publication faults never leave a staging name behind");
     return result;
 }
 
 void testDeterministicFaultOrdering(Expectations& expectations) {
     for (const auto fault :
          {StagedArtifactFaultPoint::TargetInspection, StagedArtifactFaultPoint::StageCreation,
-          StagedArtifactFaultPoint::StageWrite, StagedArtifactFaultPoint::StageFlush,
+          StagedArtifactFaultPoint::StageWrite, StagedArtifactFaultPoint::StageWriterClose,
+          StagedArtifactFaultPoint::StageReopen, StagedArtifactFaultPoint::StageVerificationRead,
+          StagedArtifactFaultPoint::StageVerificationAccept, StagedArtifactFaultPoint::StageFlush,
           StagedArtifactFaultPoint::IdentityRevalidation,
           StagedArtifactFaultPoint::AtomicPublication}) {
         std::string finalBytes;
@@ -446,8 +605,9 @@ void testParentAndStageIdentityRevalidation(Expectations& expectations) {
     auto preflight = coordinator->preflight(makeRequest(parent / "target"));
     auto stage = coordinator->stage(std::move(preflight).takeTarget());
     auto lease = std::move(stage).takeLease();
-    expectations.expect(lease.write(bytes("new")) && lease.seal(),
-                        "the parent-identity fixture seals its stage");
+    expectations.expect(lease.write(bytes("new")) && lease.finishWriting() &&
+                            lease.acceptVerification(),
+                        "the parent-identity fixture verifies its stage");
     std::filesystem::rename(parent, movedParent);
     std::filesystem::create_directory(parent);
     const auto publication = lease.publish(PublicationDisposition::Proceed);
@@ -470,9 +630,10 @@ void testParentAndStageIdentityRevalidation(Expectations& expectations) {
         if (entries.size() == 1) {
             std::filesystem::remove(entries.front());
             static_cast<void>(writeFile(entries.front(), "attacker"));
-            const auto seal = secondLease.seal();
-            expectations.expect(!seal && seal.error == StagedArtifactError::StageIdentityMismatch,
-                                "a replaced staging leaf fails identity revalidation");
+            const auto finished = secondLease.finishWriting();
+            expectations.expect(!finished &&
+                                    finished.error == StagedArtifactError::StageIdentityMismatch,
+                                "a writer-close/reopen replacement fails identity revalidation");
         }
     }
     const auto remaining = directoryEntries(parent);
@@ -484,6 +645,69 @@ void testParentAndStageIdentityRevalidation(Expectations& expectations) {
         return;
     }
     std::filesystem::remove(remaining.front());
+
+    auto verificationPreflight =
+        coordinator->preflight(makeRequest(parent / "verification-target"));
+    auto verificationStage = coordinator->stage(std::move(verificationPreflight).takeTarget());
+    {
+        auto verificationLease = std::move(verificationStage).takeLease();
+        expectations.expect(verificationLease.write(bytes("verified inode")) &&
+                                verificationLease.finishWriting(),
+                            "the replacement fixture reopens its stage for verification");
+        const auto stageEntries = directoryEntries(parent);
+        if (stageEntries.size() != 1) {
+            expectations.expect(false, "the verification replacement fixture finds its stage");
+            return;
+        }
+        std::filesystem::remove(stageEntries.front());
+        static_cast<void>(writeFile(stageEntries.front(), "replacement inode"));
+        const auto accepted = verificationLease.acceptVerification();
+        expectations.expect(
+            !accepted && accepted.error == StagedArtifactError::StageIdentityMismatch,
+            "acceptance rejects a stage leaf replaced after the verification reopen");
+    }
+    const auto verificationReplacement = directoryEntries(parent);
+    expectations.expect(
+        verificationReplacement.size() == 1 &&
+            readFile(verificationReplacement.front()) == "replacement inode" &&
+            coordinator->snapshot().cleanupFailureCount == 2,
+        "failed acceptance preserves a foreign replacement and records cleanup evidence");
+    if (verificationReplacement.size() != 1) {
+        return;
+    }
+    std::filesystem::remove(verificationReplacement.front());
+
+    auto acceptedPreflight = coordinator->preflight(makeRequest(parent / "accepted-target"));
+    auto acceptedStage = coordinator->stage(std::move(acceptedPreflight).takeTarget());
+    {
+        auto acceptedLease = std::move(acceptedStage).takeLease();
+        expectations.expect(acceptedLease.write(bytes("accepted inode")) &&
+                                acceptedLease.finishWriting() && acceptedLease.acceptVerification(),
+                            "the accepted replacement fixture accepts its exact inode");
+        const auto stageEntries = directoryEntries(parent);
+        if (stageEntries.size() != 1) {
+            expectations.expect(false, "the accepted replacement fixture finds its stage");
+            return;
+        }
+        std::filesystem::remove(stageEntries.front());
+        static_cast<void>(writeFile(stageEntries.front(), "post-accept replacement"));
+        const auto acceptedPublication = acceptedLease.publish(PublicationDisposition::Proceed);
+        expectations.expect(acceptedPublication.outcome ==
+                                    StagedArtifactPublicationOutcome::FailedBeforePublication &&
+                                acceptedPublication.error ==
+                                    StagedArtifactError::StageIdentityMismatch,
+                            "publication revalidates the accepted inode immediately before rename");
+    }
+    const auto acceptedReplacement = directoryEntries(parent);
+    expectations.expect(acceptedReplacement.size() == 1 &&
+                            readFile(acceptedReplacement.front()) == "post-accept replacement" &&
+                            coordinator->snapshot().cleanupFailureCount == 3,
+                        "publication failure preserves a post-accept foreign replacement");
+    if (acceptedReplacement.size() != 1) {
+        return;
+    }
+    std::filesystem::remove(acceptedReplacement.front());
+
     auto hardLinkPreflight = coordinator->preflight(makeRequest(parent / "hard-link-target"));
     auto hardLinkStage = coordinator->stage(std::move(hardLinkPreflight).takeTarget());
     {
@@ -497,14 +721,15 @@ void testParentAndStageIdentityRevalidation(Expectations& expectations) {
         std::error_code hardLinkError;
         std::filesystem::create_hard_link(stageEntries.front(), linkedPath, hardLinkError);
         expectations.expect(!hardLinkError, "the fixture adds an unexpected stage hard link");
-        const auto seal = hardLinkLease.seal();
-        expectations.expect(!seal && seal.error == StagedArtifactError::StageIdentityMismatch,
+        const auto finished = hardLinkLease.finishWriting();
+        expectations.expect(!finished &&
+                                finished.error == StagedArtifactError::StageIdentityMismatch,
                             "an unexpected hard link invalidates stage ownership");
     }
     const auto linkedPath = parent / "foreign-hard-link";
     expectations.expect(
         std::filesystem::exists(linkedPath) && directoryEntries(parent).size() == 1 &&
-            coordinator->snapshot().cleanupFailureCount == 2,
+            coordinator->snapshot().cleanupFailureCount == 4,
         "cleanup removes only Bloom's stage name and reports the retained hard link");
 }
 
@@ -516,6 +741,8 @@ int main() {
     testCreateAndReplacePublication(expectations);
     testTargetChecksAndExpectedState(expectations);
     testExternalMutationBeforePublication(expectations);
+    testVerificationReadsAndAcceptance(expectations);
+    testVerificationRejectionAndTerminalReplay(expectations);
     testDispositionAndLimits(expectations);
     testDeterministicFaultOrdering(expectations);
     testParentAndStageIdentityRevalidation(expectations);

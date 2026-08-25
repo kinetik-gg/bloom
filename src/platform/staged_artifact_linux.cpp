@@ -2,6 +2,7 @@
 
 #include <bloom/core/sha256.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstddef>
@@ -49,6 +50,14 @@ class FileDescriptor final {
 
     [[nodiscard]] int get() const noexcept { return value_; }
     [[nodiscard]] bool isValid() const noexcept { return value_ >= 0; }
+
+    [[nodiscard]] bool closeChecked() noexcept {
+        if (value_ < 0) {
+            return true;
+        }
+        const auto value = std::exchange(value_, -1);
+        return ::close(value) == 0;
+    }
 
     void reset() noexcept {
         if (value_ >= 0) {
@@ -370,7 +379,10 @@ class LinuxLease final : public StagedArtifactLeaseState {
 
     [[nodiscard]] StagedArtifactOperationResult
     write(const std::span<const std::byte> bytes) noexcept override {
-        if (!writable_ || terminal_) {
+        if (phase_ == LeasePhase::Terminal) {
+            return terminalOperationResult(StagedArtifactError::StageNotWritable);
+        }
+        if (phase_ != LeasePhase::Writable) {
             return {.error = StagedArtifactError::StageNotWritable, .stageBytes = stageBytes_};
         }
         if (bytes.size() > target_.shared->config.artifactByteLimit - stageBytes_) {
@@ -399,9 +411,108 @@ class LinuxLease final : public StagedArtifactLeaseState {
         return {.stageBytes = stageBytes_};
     }
 
-    [[nodiscard]] StagedArtifactOperationResult seal() noexcept override {
-        if (!writable_ || terminal_) {
+    [[nodiscard]] StagedArtifactOperationResult finishWriting() noexcept override {
+        if (phase_ == LeasePhase::Terminal) {
+            return terminalOperationResult(StagedArtifactError::StageNotWritable);
+        }
+        if (phase_ != LeasePhase::Writable) {
             return {.error = StagedArtifactError::StageNotWritable, .stageBytes = stageBytes_};
+        }
+
+        const bool injectedCloseFailure =
+            target_.shared->shouldFail(StagedArtifactFaultPoint::StageWriterClose);
+        const bool closeSucceeded = descriptor_.closeChecked();
+        if (injectedCloseFailure) {
+            return failOperation(StagedArtifactError::FaultInjected);
+        }
+        if (!closeSucceeded) {
+            return failOperation(StagedArtifactError::StageWriterCloseFailed);
+        }
+        if (target_.shared->shouldFail(StagedArtifactFaultPoint::StageReopen)) {
+            return failOperation(StagedArtifactError::FaultInjected);
+        }
+
+        FileDescriptor reopened(::openat(target_.parentDescriptor.get(), stageName_.c_str(),
+                                         O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+        if (!reopened.isValid()) {
+            const bool identityEvidence = errno == ENOENT || errno == ELOOP || errno == ENOTDIR;
+            return failOperation(identityEvidence ? StagedArtifactError::StageIdentityMismatch
+                                                  : StagedArtifactError::StageReopenFailed);
+        }
+        descriptor_ = std::move(reopened);
+        if (!revalidateStage()) {
+            return failOperation(StagedArtifactError::StageIdentityMismatch);
+        }
+        phase_ = LeasePhase::Verifying;
+        return {.stageBytes = stageBytes_};
+    }
+
+    [[nodiscard]] StagedArtifactVerificationReadResult
+    readForVerification(const std::uint64_t offset,
+                        const std::span<std::byte> destination) noexcept override {
+        if (phase_ == LeasePhase::Terminal) {
+            return terminalReadResult(StagedArtifactError::StageNotVerifying);
+        }
+        if (phase_ != LeasePhase::Verifying) {
+            return {.error = StagedArtifactError::StageNotVerifying, .stageBytes = stageBytes_};
+        }
+        if (target_.shared->shouldFail(StagedArtifactFaultPoint::StageVerificationRead)) {
+            return failRead(StagedArtifactError::FaultInjected);
+        }
+        if (offset >= stageBytes_) {
+            return {.stageBytes = stageBytes_, .endOfFile = true};
+        }
+
+        constexpr auto maximumOffset =
+            static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (offset > maximumOffset) {
+            return failRead(StagedArtifactError::StageVerificationReadOffsetOutOfRange);
+        }
+
+        const auto available = stageBytes_ - offset;
+        const std::uint64_t requested = destination.size();
+        const auto desired = std::min(available, requested);
+        std::uint64_t total = 0;
+        std::size_t destinationOffset = 0;
+        while (total < desired) {
+            const auto remaining = desired - total;
+            const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
+                remaining, static_cast<std::uint64_t>(std::numeric_limits<ssize_t>::max())));
+            const auto nativeOffset = offset + total;
+            if (nativeOffset > maximumOffset) {
+                return failRead(StagedArtifactError::StageVerificationReadOffsetOutOfRange, total);
+            }
+            const auto count = ::pread(descriptor_.get(), destination.data() + destinationOffset,
+                                       chunk, static_cast<off_t>(nativeOffset));
+            if (count < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return failRead(StagedArtifactError::StageVerificationReadFailed, total);
+            }
+            if (count == 0) {
+                return failRead(StagedArtifactError::StageVerificationReadFailed, total);
+            }
+            total += static_cast<std::uint64_t>(count);
+            destinationOffset += static_cast<std::size_t>(count);
+        }
+        return {.bytesRead = total,
+                .stageBytes = stageBytes_,
+                .endOfFile = offset + total >= stageBytes_};
+    }
+
+    [[nodiscard]] StagedArtifactOperationResult acceptVerification() noexcept override {
+        if (phase_ == LeasePhase::Terminal) {
+            return terminalOperationResult(StagedArtifactError::StageNotVerifying);
+        }
+        if (phase_ == LeasePhase::Accepted) {
+            return {.stageBytes = stageBytes_};
+        }
+        if (phase_ != LeasePhase::Verifying) {
+            return {.error = StagedArtifactError::StageNotVerifying, .stageBytes = stageBytes_};
+        }
+        if (target_.shared->shouldFail(StagedArtifactFaultPoint::StageVerificationAccept)) {
+            return failOperation(StagedArtifactError::FaultInjected);
         }
         if (!revalidateStage()) {
             return failOperation(StagedArtifactError::StageIdentityMismatch);
@@ -409,11 +520,33 @@ class LinuxLease final : public StagedArtifactLeaseState {
         if (target_.shared->shouldFail(StagedArtifactFaultPoint::StageFlush)) {
             return failOperation(StagedArtifactError::FaultInjected);
         }
-        if (::fsync(descriptor_.get()) != 0 || !revalidateStage()) {
+        if (::fsync(descriptor_.get()) != 0) {
             return failOperation(StagedArtifactError::StageFlushFailed);
         }
-        writable_ = false;
-        sealed_ = true;
+        if (!revalidateStage()) {
+            return failOperation(StagedArtifactError::StageIdentityMismatch);
+        }
+        phase_ = LeasePhase::Accepted;
+        return {.stageBytes = stageBytes_};
+    }
+
+    [[nodiscard]] StagedArtifactOperationResult rejectVerification() noexcept override {
+        if (phase_ == LeasePhase::Terminal) {
+            if (terminalOperationError_ == StagedArtifactError::StageVerificationRejected) {
+                return {.stageBytes = stageBytes_};
+            }
+            return terminalOperationResult(StagedArtifactError::StageNotVerifying);
+        }
+        if (phase_ != LeasePhase::Verifying) {
+            return {.error = StagedArtifactError::StageNotVerifying, .stageBytes = stageBytes_};
+        }
+        terminalOperationError_ = StagedArtifactError::StageVerificationRejected;
+        phase_ = LeasePhase::Terminal;
+        publicationResult_ = {
+            .outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
+            .error = StagedArtifactError::StageVerificationRejected,
+        };
+        cleanupStage();
         return {.stageBytes = stageBytes_};
     }
 
@@ -422,11 +555,11 @@ class LinuxLease final : public StagedArtifactLeaseState {
         if (publicationResult_.has_value()) {
             return *publicationResult_;
         }
-        if (terminal_) {
+        if (phase_ == LeasePhase::Terminal) {
             return {.outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
                     .error = terminalOperationError_ != StagedArtifactError::None
                                  ? terminalOperationError_
-                                 : StagedArtifactError::StageNotSealed};
+                                 : StagedArtifactError::StageVerificationNotAccepted};
         }
         if (disposition != PublicationDisposition::Proceed &&
             disposition != PublicationDisposition::Superseded &&
@@ -443,9 +576,9 @@ class LinuxLease final : public StagedArtifactLeaseState {
             return finishPublication(
                 {.outcome = StagedArtifactPublicationOutcome::CancelledBeforePublication});
         }
-        if (!sealed_) {
+        if (phase_ != LeasePhase::Accepted) {
             return {.outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
-                    .error = StagedArtifactError::StageNotSealed};
+                    .error = StagedArtifactError::StageVerificationNotAccepted};
         }
 
         std::lock_guard publicationLock(target_.record->publicationMutex);
@@ -512,21 +645,55 @@ class LinuxLease final : public StagedArtifactLeaseState {
     }
 
   private:
+    enum class LeasePhase : std::uint8_t {
+        Writable,
+        Verifying,
+        Accepted,
+        Terminal,
+    };
+
     [[nodiscard]] StagedArtifactOperationResult
     failOperation(const StagedArtifactError error) noexcept {
-        writable_ = false;
-        terminal_ = true;
+        phase_ = LeasePhase::Terminal;
         terminalOperationError_ = error;
+        publicationResult_ = {
+            .outcome = StagedArtifactPublicationOutcome::FailedBeforePublication,
+            .error = error,
+        };
         cleanupStage();
         return {.error = error, .stageBytes = stageBytes_};
     }
 
+    [[nodiscard]] StagedArtifactOperationResult
+    terminalOperationResult(const StagedArtifactError fallback) const noexcept {
+        return {.error = terminalOperationError_ != StagedArtifactError::None
+                             ? terminalOperationError_
+                             : fallback,
+                .stageBytes = stageBytes_};
+    }
+
+    [[nodiscard]] StagedArtifactVerificationReadResult
+    failRead(const StagedArtifactError error, const std::uint64_t bytesRead = 0) noexcept {
+        const auto failed = failOperation(error);
+        return {.error = failed.error, .bytesRead = bytesRead, .stageBytes = failed.stageBytes};
+    }
+
+    [[nodiscard]] StagedArtifactVerificationReadResult
+    terminalReadResult(const StagedArtifactError fallback) const noexcept {
+        return {.error = terminalOperationError_ != StagedArtifactError::None
+                             ? terminalOperationError_
+                             : fallback,
+                .stageBytes = stageBytes_};
+    }
+
     [[nodiscard]] StagedArtifactPublicationResult
     finishPublication(const StagedArtifactPublicationResult result) noexcept {
-        terminal_ = true;
+        phase_ = LeasePhase::Terminal;
         publicationResult_ = result;
         if (!result.targetWasPublished()) {
             cleanupStage();
+        } else {
+            descriptor_.reset();
         }
         return result;
     }
@@ -573,6 +740,7 @@ class LinuxLease final : public StagedArtifactLeaseState {
     }
 
     void cleanupStage() noexcept {
+        descriptor_.reset();
         if (!ownsStageName_) {
             return;
         }
@@ -601,9 +769,7 @@ class LinuxLease final : public StagedArtifactLeaseState {
     std::string stageName_;
     NativeFileIdentity stageIdentity_;
     std::uint64_t stageBytes_ = 0;
-    bool writable_ = true;
-    bool sealed_ = false;
-    bool terminal_ = false;
+    LeasePhase phase_ = LeasePhase::Writable;
     bool ownsStageName_ = true;
     StagedArtifactError terminalOperationError_ = StagedArtifactError::None;
     std::optional<StagedArtifactPublicationResult> publicationResult_;

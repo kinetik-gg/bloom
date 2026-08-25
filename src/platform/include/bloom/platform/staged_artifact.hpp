@@ -40,8 +40,14 @@ enum class StagedArtifactError : std::uint8_t {
     StageIdentityMismatch,
     StageWriteFailed,
     StageNotWritable,
+    StageWriterCloseFailed,
+    StageReopenFailed,
+    StageNotVerifying,
+    StageVerificationReadOffsetOutOfRange,
+    StageVerificationReadFailed,
     StageFlushFailed,
-    StageNotSealed,
+    StageVerificationNotAccepted,
+    StageVerificationRejected,
     InvalidPublicationDisposition,
     ParentIdentityMismatch,
     AtomicCreateUnsupported,
@@ -61,6 +67,10 @@ enum class StagedArtifactFaultPoint : std::uint8_t {
     TargetInspection,
     StageCreation,
     StageWrite,
+    StageWriterClose,
+    StageReopen,
+    StageVerificationRead,
+    StageVerificationAccept,
     StageFlush,
     IdentityRevalidation,
     AtomicPublication,
@@ -93,6 +103,10 @@ struct StagedArtifactFaultPlan final {
         case StagedArtifactFaultPoint::TargetInspection:
         case StagedArtifactFaultPoint::StageCreation:
         case StagedArtifactFaultPoint::StageWrite:
+        case StagedArtifactFaultPoint::StageWriterClose:
+        case StagedArtifactFaultPoint::StageReopen:
+        case StagedArtifactFaultPoint::StageVerificationRead:
+        case StagedArtifactFaultPoint::StageVerificationAccept:
         case StagedArtifactFaultPoint::StageFlush:
         case StagedArtifactFaultPoint::IdentityRevalidation:
         case StagedArtifactFaultPoint::AtomicPublication:
@@ -167,6 +181,18 @@ struct StagedArtifactCoordinatorSnapshot final {
 struct StagedArtifactOperationResult final {
     StagedArtifactError error = StagedArtifactError::None;
     std::uint64_t stageBytes = 0;
+
+    [[nodiscard]] constexpr bool succeeded() const noexcept {
+        return error == StagedArtifactError::None;
+    }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept { return succeeded(); }
+};
+
+struct StagedArtifactVerificationReadResult final {
+    StagedArtifactError error = StagedArtifactError::None;
+    std::uint64_t bytesRead = 0;
+    std::uint64_t stageBytes = 0;
+    bool endOfFile = false;
 
     [[nodiscard]] constexpr bool succeeded() const noexcept {
         return error == StagedArtifactError::None;
@@ -256,7 +282,11 @@ class StagedArtifactLease final {
     [[nodiscard]] core::ArtifactTargetKey targetKey() const noexcept;
     [[nodiscard]] std::uint64_t stageBytes() const noexcept;
     [[nodiscard]] StagedArtifactOperationResult write(std::span<const std::byte> bytes) noexcept;
-    [[nodiscard]] StagedArtifactOperationResult seal() noexcept;
+    [[nodiscard]] StagedArtifactOperationResult finishWriting() noexcept;
+    [[nodiscard]] StagedArtifactVerificationReadResult
+    readForVerification(std::uint64_t offset, std::span<std::byte> destination) noexcept;
+    [[nodiscard]] StagedArtifactOperationResult acceptVerification() noexcept;
+    [[nodiscard]] StagedArtifactOperationResult rejectVerification() noexcept;
     [[nodiscard]] StagedArtifactPublicationResult
     publish(PublicationDisposition disposition) noexcept;
 

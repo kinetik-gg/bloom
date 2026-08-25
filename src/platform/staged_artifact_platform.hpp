@@ -28,7 +28,11 @@ struct StagedArtifactLeaseState {
     [[nodiscard]] virtual std::uint64_t stageBytes() const noexcept = 0;
     [[nodiscard]] virtual StagedArtifactOperationResult
     write(std::span<const std::byte> bytes) noexcept = 0;
-    [[nodiscard]] virtual StagedArtifactOperationResult seal() noexcept = 0;
+    [[nodiscard]] virtual StagedArtifactOperationResult finishWriting() noexcept = 0;
+    [[nodiscard]] virtual StagedArtifactVerificationReadResult
+    readForVerification(std::uint64_t offset, std::span<std::byte> destination) noexcept = 0;
+    [[nodiscard]] virtual StagedArtifactOperationResult acceptVerification() noexcept = 0;
+    [[nodiscard]] virtual StagedArtifactOperationResult rejectVerification() noexcept = 0;
     [[nodiscard]] virtual StagedArtifactPublicationResult
     publish(PublicationDisposition disposition) noexcept = 0;
 };
