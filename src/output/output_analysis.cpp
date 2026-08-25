@@ -1,6 +1,7 @@
 #include <bloom/output/output_analysis.hpp>
 
-#include <bit>
+#include "output_analysis_numeric.hpp"
+
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -182,10 +183,7 @@ parseWindow(const std::string_view descriptor) noexcept {
     return WindowDescriptorParts{height, originX, originY, width};
 }
 
-struct PixelAspectParts final {
-    std::uint32_t numerator;
-    std::uint32_t denominator;
-};
+using PixelAspectParts = bloom::output::detail::OutputAnalysisPositiveRational32V1;
 
 [[nodiscard]] std::optional<std::uint32_t> parseUnsigned32(const std::string_view value) noexcept {
     std::uint32_t parsed = 0;
@@ -203,12 +201,7 @@ struct PixelAspectParts final {
                : std::nullopt;
 }
 
-struct NumericWindow final {
-    std::uint32_t height;
-    std::int64_t originX;
-    std::int64_t originY;
-    std::uint32_t width;
-};
+using NumericWindow = bloom::output::detail::OutputAnalysisNumericWindowV1;
 
 [[nodiscard]] std::optional<NumericWindow>
 numericWindow(const WindowDescriptorParts& parts) noexcept {
@@ -220,21 +213,6 @@ numericWindow(const WindowDescriptorParts& parts) noexcept {
         return std::nullopt;
     }
     return NumericWindow{*height, *originX, *originY, *width};
-}
-
-[[nodiscard]] constexpr bool inclusiveAxisFitsSigned32(const std::int64_t origin,
-                                                       const std::uint32_t extent) noexcept {
-    constexpr auto minimum = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
-    constexpr auto maximum = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
-    if (extent == 0 || origin < minimum || origin > maximum) {
-        return false;
-    }
-    return static_cast<std::uint64_t>(extent - 1U) <= static_cast<std::uint64_t>(maximum - origin);
-}
-
-[[nodiscard]] constexpr bool inclusiveWindowFitsSigned32(const NumericWindow& window) noexcept {
-    return inclusiveAxisFitsSigned32(window.originX, window.width) &&
-           inclusiveAxisFitsSigned32(window.originY, window.height);
 }
 
 [[nodiscard]] constexpr std::optional<std::uint64_t>
@@ -330,75 +308,6 @@ parseBinary32Bits(const std::string_view descriptor) noexcept {
         bits = (bits << 4U) | lowerHexValue(digit);
     }
     return bits;
-}
-
-struct RoundedBinary32 final {
-    std::uint32_t bits;
-    bool exact;
-};
-
-// Pixel-aspect terms are positive uint32 values, so their ratio is always a normal binary32. This
-// integer long-division implementation is independent of host floating-point mode.
-[[nodiscard]] std::optional<RoundedBinary32>
-roundPositiveRationalToBinary32(const PixelAspectParts value) noexcept {
-    if (value.numerator == 0 || value.denominator == 0) {
-        return std::nullopt;
-    }
-
-    int exponent = 0;
-    if (value.numerator >= value.denominator) {
-        const auto integral = value.numerator / value.denominator;
-        exponent = std::bit_width(integral) - 1;
-    } else {
-        std::uint64_t scaledNumerator = value.numerator;
-        while (scaledNumerator < value.denominator) {
-            scaledNumerator <<= 1U;
-            --exponent;
-        }
-    }
-
-    const int scale = 23 - exponent;
-    std::uint64_t quotient = 0;
-    std::uint64_t remainder = 0;
-    std::uint64_t divisor = value.denominator;
-    if (scale >= 0) {
-        quotient = value.numerator / divisor;
-        remainder = value.numerator % divisor;
-        for (int bit = 0; bit < scale; ++bit) {
-            quotient <<= 1U;
-            remainder <<= 1U;
-            if (remainder >= divisor) {
-                ++quotient;
-                remainder -= divisor;
-            }
-        }
-    } else {
-        const auto rightShift = static_cast<unsigned int>(-scale);
-        if (rightShift >= 32U ||
-            divisor > (std::numeric_limits<std::uint64_t>::max() >> rightShift)) {
-            return std::nullopt;
-        }
-        divisor <<= rightShift;
-        quotient = value.numerator / divisor;
-        remainder = value.numerator % divisor;
-    }
-
-    const bool exact = remainder == 0;
-    const auto twiceRemainder = remainder * 2U;
-    if (twiceRemainder > divisor || (twiceRemainder == divisor && (quotient & 1U) != 0)) {
-        ++quotient;
-    }
-    if (quotient == (std::uint64_t{1} << 24U)) {
-        quotient >>= 1U;
-        ++exponent;
-    }
-    if (exponent < -126 || exponent > 127 || quotient < (std::uint64_t{1} << 23U) ||
-        quotient >= (std::uint64_t{1} << 24U)) {
-        return std::nullopt;
-    }
-    const auto biasedExponent = static_cast<std::uint32_t>(exponent + 127);
-    const auto fraction = static_cast<std::uint32_t>(quotient - (std::uint64_t{1} << 23U));
-    return RoundedBinary32{(biasedExponent << 23U) | fraction, exact};
 }
 
 [[nodiscard]] bool isLowerHexRevision(const std::string_view descriptor) noexcept {
@@ -504,9 +413,11 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             if (facet.sourceDescriptor != facet.targetDescriptor) {
                 return VocabularyValidation::RelationshipMismatch;
             }
-            const auto requiredCode = inclusiveWindowFitsSigned32(*sourceNumericWindow)
-                                          ? OutputFacetStableCodeV1::None
-                                          : OutputFacetStableCodeV1::WindowOutOfRange;
+            const auto requiredCode =
+                bloom::output::detail::outputAnalysisInclusiveWindowFitsSigned32V1(
+                    *sourceNumericWindow)
+                    ? OutputFacetStableCodeV1::None
+                    : OutputFacetStableCodeV1::WindowOutOfRange;
             return facet.stableCode == requiredCode ? VocabularyValidation::Valid
                                                     : VocabularyValidation::RelationshipMismatch;
         }
@@ -517,9 +428,9 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             targetWindow->originY != "0") {
             return VocabularyValidation::RelationshipMismatch;
         }
-        constexpr std::uint32_t pngMaximumDimension = 2'147'483'647U;
         OutputFacetStableCodeV1 requiredCode = OutputFacetStableCodeV1::None;
-        if (*pixelHeight > pngMaximumDimension || *pixelWidth > pngMaximumDimension) {
+        if (*pixelHeight > bloom::output::detail::kOutputAnalysisPngMaximumDimensionV1 ||
+            *pixelWidth > bloom::output::detail::kOutputAnalysisPngMaximumDimensionV1) {
             requiredCode = OutputFacetStableCodeV1::WindowOutOfRange;
         } else if (facet.sourceDescriptor != facet.targetDescriptor) {
             requiredCode = facet.facet == OutputFacetIdV1::DataWindow
@@ -544,7 +455,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                        : VocabularyValidation::RelationshipMismatch;
         }
         const auto targetBits = parseBinary32Bits(facet.targetDescriptor);
-        const auto rounded = roundPositiveRationalToBinary32(*source);
+        const auto rounded =
+            bloom::output::detail::roundOutputAnalysisPositiveRationalToBinary32V1(*source);
         if (!targetBits || !rounded || *targetBits != rounded->bits) {
             return VocabularyValidation::RelationshipMismatch;
         }

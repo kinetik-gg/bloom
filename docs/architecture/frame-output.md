@@ -3,10 +3,10 @@
 Status: accepted
 
 Implementation status: the allocation-free Process Pixel Stream and Process-Frame Semantic
-Identity version 1 codecs, validation, portable golden vectors, and the closed facet-descriptor
-grammar are implemented. The cancellable owning semantic-identity preparer, OutputAnalysis report
-construction/validation and digesting, preset preparation, PNG/OpenEXR adapters, staged-format
-verification, and end-to-end publication remain pending.
+Identity version 1 codecs, cancellable owning semantic-identity preparer, closed facet-descriptor
+grammar and validator, preset-specific owning OutputAnalysis analyzer/report, streaming analysis
+digest, and portable golden vectors are implemented. Preset preparation, PNG/OpenEXR adapters,
+staged-format verification, and end-to-end publication remain pending.
 
 Updated: 2026-08-25
 
@@ -118,8 +118,9 @@ profile only when conformance proves the exact same process bits. Their provider
 compiler, dependency-lock digest, and qualified-prefix digest form separate
 `ProcessExecutionProvenance`, retained for diagnostics and local cache partitioning but excluded
 from the portable semantic identity. Request generation, cancellation, priority, byte budgets,
-task owner, pointer identity, and cache residency enter neither record. Until this codec and its
-pixel-stream verification are implemented, no output analysis is approvable.
+task owner, pointer identity, and cache residency enter neither record. Unless semantic-identity
+preparation and pixel-stream verification succeed for the captured frame, no output analysis is
+approvable.
 
 The version 1 public application API does not expose synchronous process-pixel hashing or a public
 canonical-identity writer. A CPU worker stage receives one
@@ -891,9 +892,9 @@ The first artist-visible checkpoint is a Jobs entry that renders one frame, pres
 preservation report before approval, progresses without blocking interaction, and opens only a
 verified atomically published PNG or EXR.
 
-This document is an accepted implementation contract. Output adapters, semantic-identity codecs,
-verification, the publication coordinator, and qualified PNG/OpenEXR dependency profiles remain
-pending Batches 5–7 implementation.
+This document is an accepted implementation contract. Output adapters, preset conversion,
+staged-format verification, the publication coordinator, and qualified PNG/OpenEXR dependency
+profiles remain pending Batches 5–7 implementation.
 
 Primary references:
 

@@ -56,6 +56,8 @@ Bloom currently has:
   IDs, checked intent generations, sealed path authority, and ordered savepoint callbacks
 - a portable, allocation-free process-pixel digest and Process-Frame Semantic Identity version 1
   codec whose canonical bytes exclude execution-provider provenance
+- a cancellable frame-bound semantic-identity preparer plus preset-specific immutable PNG/EXR
+  preservation reports and stable OutputAnalysis digest golden vectors
 
 The local Batch 3 checkpoint is implemented and has been launched. Add Solid remains synchronized
 through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
@@ -490,8 +492,9 @@ PNG/flat-EXR publication contracts are accepted implementation contracts in
 [`architecture/color-management.md`](architecture/color-management.md) and
 [`architecture/frame-output.md`](architecture/frame-output.md). Dependency implementations and
 qualification remain pending. The portable Process Pixel Stream and Process-Frame Semantic Identity
-version 1 codecs and golden vectors are implemented; analysis, preset conversion, file adapters,
-and semantic verification remain pending.
+version 1 codecs, owning preparer, preset-specific preservation analyzer/report, analysis digest,
+and golden vectors are implemented; preset conversion, file adapters, and semantic verification
+remain pending.
 
 Implement:
 

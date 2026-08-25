@@ -4,15 +4,18 @@ target_sources(
     bloom_output
     PRIVATE
         output_analysis.cpp
+        output_analysis_analyzer.cpp
         output_analysis_contract.cpp
         output_analysis_digest.cpp
         output_facet_descriptor.cpp
+        output_analysis_numeric.cpp
         process_frame_semantic_identity.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/output/output_analysis.hpp
+            include/bloom/output/output_analysis_analyzer.hpp
             include/bloom/output/output_analysis_digest.hpp
             include/bloom/output/output_facet_descriptor.hpp
             include/bloom/output/output_limits.hpp
@@ -71,6 +74,26 @@ if(BUILD_TESTING)
         NAME bloom.output.analysis
         COMMAND bloom_output_analysis_test
         LABELS unit output serialization
+    )
+
+    add_executable(
+        bloom_output_analysis_analyzer_test
+        tests/output_analysis_analyzer_edge_tests.cpp
+        tests/output_analysis_analyzer_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_analysis_analyzer_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_analysis_analyzer_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_analysis_analyzer_test)
+    bloom_add_test(
+        NAME bloom.output.analysis_analyzer
+        COMMAND bloom_output_analysis_analyzer_test
+        LABELS unit output identity serialization
     )
 
     add_executable(
