@@ -12,6 +12,8 @@ target_sources(
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
+        strict_json_preflight.cpp
+        strict_json_preflight.hpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -62,6 +64,22 @@ if(BUILD_TESTING)
         NAME bloom.project.canonical_json_writer
         COMMAND bloom_project_canonical_json_writer_test
         LABELS unit project persistence text
+    )
+
+    add_executable(
+        bloom_project_strict_json_preflight_test
+        tests/strict_json_preflight_tests.cpp
+    )
+    target_include_directories(
+        bloom_project_strict_json_preflight_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_strict_json_preflight_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_strict_json_preflight_test)
+    bloom_add_test(
+        NAME bloom.project.strict_json_preflight
+        COMMAND bloom_project_strict_json_preflight_test
+        LABELS unit project persistence security
     )
 
     add_executable(bloom_project_manifest_requirements_test tests/manifest_requirements_tests.cpp)
