@@ -79,6 +79,7 @@ validateForSampling(const Curve& curve,
     case ScalarEvaluationError::DivideByZero:
     case ScalarEvaluationError::InvalidInterval:
     case ScalarEvaluationError::DegenerateRange:
+    case ScalarEvaluationError::OutsideDomain:
         return AnimationSamplingError::InvalidCurve;
     }
     return AnimationSamplingError::InvalidCurve;

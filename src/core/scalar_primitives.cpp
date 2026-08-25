@@ -43,6 +43,40 @@ constexpr std::array kSignatures{
         5},
     ScalarPrimitiveSignature{
         ScalarPrimitive::Mix, "bloom.core.scalar.mix", {"start", "end", "factor", "", ""}, 3},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Absolute, "bloom.core.scalar.absolute", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Negate, "bloom.core.scalar.negate", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Sign, "bloom.core.scalar.sign", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Reciprocal, "bloom.core.scalar.reciprocal", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::SquareRoot, "bloom.core.scalar.square-root", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Floor, "bloom.core.scalar.floor", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Ceiling, "bloom.core.scalar.ceiling", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Round, "bloom.core.scalar.round", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Truncate, "bloom.core.scalar.truncate", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Fraction, "bloom.core.scalar.fraction", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{ScalarPrimitive::Modulo,
+                             "bloom.core.scalar.modulo",
+                             {"dividend", "divisor", "", "", ""},
+                             2},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Step, "bloom.core.scalar.step", {"edge", "value", "", "", ""}, 2},
+    ScalarPrimitiveSignature{ScalarPrimitive::Smoothstep,
+                             "bloom.core.scalar.smoothstep",
+                             {"lowerEdge", "upperEdge", "value", "", ""},
+                             3},
+    ScalarPrimitiveSignature{ScalarPrimitive::Smootherstep,
+                             "bloom.core.scalar.smootherstep",
+                             {"lowerEdge", "upperEdge", "value", "", ""},
+                             3},
 };
 
 template <bloom::core::primitives::PrimitiveFloat T> struct Evaluation final {
@@ -136,6 +170,24 @@ template <bloom::core::primitives::PrimitiveFloat T>
 }
 
 template <bloom::core::primitives::PrimitiveFloat T>
+[[nodiscard]] Evaluation<T> smoothFactor(const T lowerEdge, const T upperEdge,
+                                         const T value) noexcept {
+    if (lowerEdge == upperEdge) {
+        return failure<T>(ScalarEvaluationError::DegenerateRange);
+    }
+    if (lowerEdge > upperEdge) {
+        return failure<T>(ScalarEvaluationError::InvalidInterval);
+    }
+    if (value <= lowerEdge) {
+        return {T{0}, ScalarEvaluationError::None};
+    }
+    if (value >= upperEdge) {
+        return {T{1}, ScalarEvaluationError::None};
+    }
+    return remapFactor(value, lowerEdge, upperEdge);
+}
+
+template <bloom::core::primitives::PrimitiveFloat T>
 [[nodiscard]] Evaluation<T> evaluate(const ScalarPrimitive primitive,
                                      const std::span<const T> inputs) noexcept {
     const auto* signature = bloom::core::primitives::scalarPrimitiveSignature(primitive);
@@ -187,6 +239,62 @@ template <bloom::core::primitives::PrimitiveFloat T>
     }
     case ScalarPrimitive::Mix:
         return interpolate(inputs[0], inputs[1], inputs[2]);
+    case ScalarPrimitive::Absolute:
+        return finiteResult(std::abs(inputs[0]));
+    case ScalarPrimitive::Negate:
+        return finiteResult(-inputs[0]);
+    case ScalarPrimitive::Sign:
+        if (inputs[0] == T{0}) {
+            return {inputs[0], ScalarEvaluationError::None};
+        }
+        return {std::copysign(T{1}, inputs[0]), ScalarEvaluationError::None};
+    case ScalarPrimitive::Reciprocal:
+        if (inputs[0] == T{0}) {
+            return failure<T>(ScalarEvaluationError::DivideByZero);
+        }
+        return finiteResult(T{1} / inputs[0]);
+    case ScalarPrimitive::SquareRoot:
+        if (inputs[0] < T{0}) {
+            return failure<T>(ScalarEvaluationError::OutsideDomain);
+        }
+        return finiteResult(std::sqrt(inputs[0]));
+    case ScalarPrimitive::Floor:
+        return finiteResult(std::floor(inputs[0]));
+    case ScalarPrimitive::Ceiling:
+        return finiteResult(std::ceil(inputs[0]));
+    case ScalarPrimitive::Round:
+        return finiteResult(std::nearbyint(inputs[0]));
+    case ScalarPrimitive::Truncate:
+        return finiteResult(std::trunc(inputs[0]));
+    case ScalarPrimitive::Fraction: {
+        T integerPart = T{0};
+        return finiteResult(std::modf(inputs[0], &integerPart));
+    }
+    case ScalarPrimitive::Modulo:
+        if (inputs[1] == T{0}) {
+            return failure<T>(ScalarEvaluationError::DivideByZero);
+        }
+        return finiteResult(std::fmod(inputs[0], inputs[1]));
+    case ScalarPrimitive::Step:
+        return {inputs[1] < inputs[0] ? T{0} : T{1}, ScalarEvaluationError::None};
+    case ScalarPrimitive::Smoothstep: {
+        const auto factor = smoothFactor(inputs[0], inputs[1], inputs[2]);
+        if (factor.error != ScalarEvaluationError::None) {
+            return factor;
+        }
+        const auto squared = factor.value * factor.value;
+        return finiteResult(squared * (T{3} - (T{2} * factor.value)));
+    }
+    case ScalarPrimitive::Smootherstep: {
+        const auto factor = smoothFactor(inputs[0], inputs[1], inputs[2]);
+        if (factor.error != ScalarEvaluationError::None) {
+            return factor;
+        }
+        const auto squared = factor.value * factor.value;
+        const auto cubed = squared * factor.value;
+        const auto polynomial = (factor.value * ((factor.value * T{6}) - T{15})) + T{10};
+        return finiteResult(cubed * polynomial);
+    }
     case ScalarPrimitive::Invalid:
         return failure<T>(ScalarEvaluationError::UnknownPrimitive);
     }

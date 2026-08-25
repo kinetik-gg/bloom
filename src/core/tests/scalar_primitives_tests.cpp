@@ -2,6 +2,7 @@
 #include <bloom/core/scalar_primitives.hpp>
 
 #include <array>
+#include <bit>
 #include <cfenv>
 #include <cmath>
 #include <concepts>
@@ -64,6 +65,12 @@ static_assert(ExposesValueFromLvalue<ScalarResult<double>>);
 static_assert(ExposesValueFromConstLvalue<ScalarResult<double>>);
 static_assert(!ExposesValueFromRvalue<ScalarResult<double>>);
 static_assert(!ExposesValueFromConstRvalue<ScalarResult<double>>);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Add) == 0);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Mix) == 9);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Absolute) == 10);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Smootherstep) == 23);
+static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::NonFiniteResult) == 8);
+static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::OutsideDomain) == 9);
 
 class Expectations final {
   public:
@@ -122,6 +129,12 @@ template <typename T>
     return !result && !result.hasValue() && result.value() == nullptr && result.error() == expected;
 }
 
+template <typename Bits, typename T>
+[[nodiscard]] bool hasBitPattern(const ScalarResult<T>& result, const Bits expected) noexcept {
+    static_assert(sizeof(Bits) == sizeof(T));
+    return result && result.value() != nullptr && std::bit_cast<Bits>(*result.value()) == expected;
+}
+
 template <typename T, std::size_t Size>
 [[nodiscard]] ScalarResult<T> evaluate(const ScalarPrimitive primitive,
                                        const std::array<T, Size>& inputs) noexcept {
@@ -131,9 +144,10 @@ template <typename T, std::size_t Size>
 void testSignatures(Expectations& expectations) {
     using namespace bloom::core::primitives;
     const auto signatures = scalarPrimitiveSignatures();
-    expectations.expect(kScalarPrimitiveSemanticsVersion == 1,
-                        "the first scalar semantics revision is explicit");
-    expectations.expect(signatures.size() == 10, "the first tranche has exactly ten operations");
+    expectations.expect(kScalarPrimitiveSemanticsVersion == 2,
+                        "the extended scalar semantics revision is explicit");
+    expectations.expect(signatures.size() == 24,
+                        "the first two tranches have exactly twenty-four operations");
 
     constexpr std::array expected{
         ScalarPrimitiveSignature{
@@ -173,6 +187,44 @@ void testSignatures(Expectations& expectations) {
             5},
         ScalarPrimitiveSignature{
             ScalarPrimitive::Mix, "bloom.core.scalar.mix", {"start", "end", "factor", "", ""}, 3},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Absolute, "bloom.core.scalar.absolute", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Negate, "bloom.core.scalar.negate", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Sign, "bloom.core.scalar.sign", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::Reciprocal,
+                                 "bloom.core.scalar.reciprocal",
+                                 {"value", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::SquareRoot,
+                                 "bloom.core.scalar.square-root",
+                                 {"value", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Floor, "bloom.core.scalar.floor", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Ceiling, "bloom.core.scalar.ceiling", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Round, "bloom.core.scalar.round", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Truncate, "bloom.core.scalar.truncate", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Fraction, "bloom.core.scalar.fraction", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::Modulo,
+                                 "bloom.core.scalar.modulo",
+                                 {"dividend", "divisor", "", "", ""},
+                                 2},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Step, "bloom.core.scalar.step", {"edge", "value", "", "", ""}, 2},
+        ScalarPrimitiveSignature{ScalarPrimitive::Smoothstep,
+                                 "bloom.core.scalar.smoothstep",
+                                 {"lowerEdge", "upperEdge", "value", "", ""},
+                                 3},
+        ScalarPrimitiveSignature{ScalarPrimitive::Smootherstep,
+                                 "bloom.core.scalar.smootherstep",
+                                 {"lowerEdge", "upperEdge", "value", "", ""},
+                                 3},
     };
 
     std::unordered_set<std::string_view> ids;
@@ -193,11 +245,11 @@ void testSignatures(Expectations& expectations) {
     }
 
     expectations.expect(scalarPrimitiveSignature(ScalarPrimitive::Invalid) == nullptr,
-                        "invalid primitive values have no signature");
+                        "the closed invalid primitive sentinel has no signature");
     constexpr std::array inputs{1.0F, 2.0F};
     expectations.expect(hasError(evaluate(ScalarPrimitive::Invalid, inputs),
                                  ScalarEvaluationError::UnknownPrimitive),
-                        "invalid primitive evaluation has a distinct error");
+                        "the invalid primitive sentinel fails closed with a distinct error");
 }
 
 template <typename T> void testNormalOperations(Expectations& expectations) {
@@ -229,6 +281,40 @@ template <typename T> void testNormalOperations(Expectations& expectations) {
     expectations.expect(
         hasValue(evaluate(ScalarPrimitive::Mix, std::array<T, 3>{10, 20, T{0.25}}), T{12.5}),
         "mix produces the exact result");
+    expectations.expect(hasValue(evaluate(ScalarPrimitive::Absolute, std::array<T, 1>{-3}), T{3}),
+                        "absolute produces the positive magnitude");
+    expectations.expect(hasValue(evaluate(ScalarPrimitive::Negate, std::array<T, 1>{3}), T{-3}),
+                        "negate reverses the sign");
+    expectations.expect(hasValue(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{-3}), T{-1}) &&
+                            hasValue(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{3}), T{1}),
+                        "sign produces a unit value away from zero");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Reciprocal, std::array<T, 1>{4}), T{0.25}),
+        "reciprocal divides one by its input");
+    expectations.expect(hasValue(evaluate(ScalarPrimitive::SquareRoot, std::array<T, 1>{9}), T{3}),
+                        "square root produces the principal non-negative root");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Floor, std::array<T, 1>{T{2.75}}), T{2}) &&
+            hasValue(evaluate(ScalarPrimitive::Ceiling, std::array<T, 1>{T{2.25}}), T{3}) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{2.25}}), T{2}) &&
+            hasValue(evaluate(ScalarPrimitive::Truncate, std::array<T, 1>{T{-2.75}}), T{-2}),
+        "rounding primitives produce their declared integral values");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Fraction, std::array<T, 1>{T{-2.75}}), T{-0.75}),
+        "fraction returns the signed fractional part");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Modulo, std::array<T, 2>{T{-7}, T{3}}), T{-1}),
+        "modulo returns the truncating remainder with the dividend sign");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Step, std::array<T, 2>{T{2}, T{1}}), T{0}) &&
+            hasValue(evaluate(ScalarPrimitive::Step, std::array<T, 2>{T{2}, T{2}}), T{1}),
+        "step is zero below its edge and one at or above it");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Smoothstep, std::array<T, 3>{T{0}, T{1}, T{0.5}}),
+                 T{0.5}) &&
+            hasValue(evaluate(ScalarPrimitive::Smootherstep, std::array<T, 3>{T{0}, T{1}, T{0.5}}),
+                     T{0.5}),
+        "smooth interpolation kernels have an exact midpoint");
 }
 
 template <typename T> void testFusedMultiplyAdd(Expectations& expectations);
@@ -364,6 +450,20 @@ template <typename T> void testNonFiniteInputs(Expectations& expectations) {
         Case{ScalarPrimitive::Clamp, {T{1}, T{0}, T{2}, T{0}, T{0}}, 3},
         Case{ScalarPrimitive::Remap, {T{1}, T{0}, T{2}, T{3}, T{4}}, 5},
         Case{ScalarPrimitive::Mix, {T{1}, T{2}, T{0.5}, T{0}, T{0}}, 3},
+        Case{ScalarPrimitive::Absolute, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Negate, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Sign, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Reciprocal, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::SquareRoot, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Floor, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Ceiling, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Round, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Truncate, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Fraction, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Modulo, {T{1}, T{2}, T{0}, T{0}, T{0}}, 2},
+        Case{ScalarPrimitive::Step, {T{1}, T{2}, T{0}, T{0}, T{0}}, 2},
+        Case{ScalarPrimitive::Smoothstep, {T{0}, T{1}, T{0.5}, T{0}, T{0}}, 3},
+        Case{ScalarPrimitive::Smootherstep, {T{0}, T{1}, T{0.5}, T{0}, T{0}}, 3},
     };
     constexpr std::array nonFinite{std::numeric_limits<T>::quiet_NaN(),
                                    std::numeric_limits<T>::infinity(),
@@ -384,6 +484,17 @@ template <typename T> void testNonFiniteInputs(Expectations& expectations) {
 }
 
 template <typename T> void testErrorsAndPrecedence(Expectations& expectations) {
+    constexpr std::array<T, 6> finiteInputs{T{1}, T{2}, T{3}, T{4}, T{5}, T{6}};
+    for (const auto& signature : bloom::core::primitives::scalarPrimitiveSignatures()) {
+        const auto tooManyInputs = std::span<const T>(finiteInputs)
+                                       .first(static_cast<std::size_t>(signature.inputCount) + 1U);
+        expectations.expect(hasError(evaluateScalar(signature.primitive, std::span<const T>{}),
+                                     ScalarEvaluationError::InvalidArity) &&
+                                hasError(evaluateScalar(signature.primitive, tooManyInputs),
+                                         ScalarEvaluationError::InvalidArity),
+                            "every primitive rejects both too few and too many operands");
+    }
+
     expectations.expect(hasError(evaluate(ScalarPrimitive::Divide, std::array<T, 2>{1, T{0}}),
                                  ScalarEvaluationError::DivideByZero) &&
                             hasError(evaluate(ScalarPrimitive::Divide, std::array<T, 2>{1, -T{0}}),
@@ -436,6 +547,12 @@ template <typename T> void testFloatingPointEnvironment(Expectations& expectatio
                      ScalarEvaluationError::UnsupportedFloatingPointEnvironment),
             "floating-point environment validation takes precedence over domain errors");
         expectations.expect(
+            hasError(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{1.5}}),
+                     ScalarEvaluationError::UnsupportedFloatingPointEnvironment) &&
+                hasError(evaluate(ScalarPrimitive::SquareRoot, std::array<T, 1>{T{-1}}),
+                         ScalarEvaluationError::UnsupportedFloatingPointEnvironment),
+            "new rounding and domain primitives reject an unsupported environment first");
+        expectations.expect(
             hasError(evaluate(ScalarPrimitive::Divide,
                               std::array<T, 2>{std::numeric_limits<T>::quiet_NaN(), T{0}}),
                      ScalarEvaluationError::NonFiniteInput),
@@ -482,6 +599,212 @@ template <typename T> void testSignedZeroAndSubnormal(Expectations& expectations
                         "the CPU reference preserves finite subnormal values");
 }
 
+template <typename T>
+[[nodiscard]] bool hasSignedZero(const ScalarResult<T>& result, const bool negative) noexcept {
+    return result && result.value() != nullptr && *result.value() == T{0} &&
+           std::signbit(*result.value()) == negative;
+}
+
+template <typename T> void testUnarySignsAndDomains(Expectations& expectations) {
+    const auto negativeZero = -T{0};
+    expectations.expect(
+        hasSignedZero(evaluate(ScalarPrimitive::Absolute, std::array<T, 1>{negativeZero}), false) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Negate, std::array<T, 1>{T{0}}), true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Negate, std::array<T, 1>{negativeZero}),
+                          false) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{negativeZero}), true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{T{0}}), false),
+        "absolute, negate, and sign freeze both signed-zero representations");
+
+    const auto subnormal = std::numeric_limits<T>::denorm_min();
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Absolute, std::array<T, 1>{-subnormal}), subnormal) &&
+            hasValue(evaluate(ScalarPrimitive::Negate, std::array<T, 1>{subnormal}), -subnormal) &&
+            hasValue(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{subnormal}), T{1}) &&
+            hasValue(evaluate(ScalarPrimitive::Sign, std::array<T, 1>{-subnormal}), T{-1}),
+        "unary sign operations preserve or classify subnormals without flushing them");
+
+    const auto maximum = std::numeric_limits<T>::max();
+    const auto maximumReciprocal = evaluate(ScalarPrimitive::Reciprocal, std::array<T, 1>{maximum});
+    expectations.expect(maximumReciprocal && maximumReciprocal.value() != nullptr &&
+                            *maximumReciprocal.value() > T{0} &&
+                            *maximumReciprocal.value() < std::numeric_limits<T>::min(),
+                        "reciprocal preserves the representable subnormal result of the maximum");
+    expectations.expect(
+        hasError(evaluate(ScalarPrimitive::Reciprocal, std::array<T, 1>{subnormal}),
+                 ScalarEvaluationError::NonFiniteResult),
+        "reciprocal reports overflow from the smallest subnormal as a non-finite result");
+    expectations.expect(
+        hasError(evaluate(ScalarPrimitive::Reciprocal, std::array<T, 1>{T{0}}),
+                 ScalarEvaluationError::DivideByZero) &&
+            hasError(evaluate(ScalarPrimitive::Reciprocal, std::array<T, 1>{negativeZero}),
+                     ScalarEvaluationError::DivideByZero),
+        "reciprocal rejects both signed zeros");
+
+    const auto negativeZeroRoot =
+        evaluate(ScalarPrimitive::SquareRoot, std::array<T, 1>{negativeZero});
+    const auto subnormalRoot = evaluate(ScalarPrimitive::SquareRoot, std::array<T, 1>{subnormal});
+    expectations.expect(hasSignedZero(negativeZeroRoot, true) && subnormalRoot &&
+                            subnormalRoot.value() != nullptr &&
+                            *subnormalRoot.value() == std::sqrt(subnormal),
+                        "square root preserves negative zero and accepts positive subnormals");
+    expectations.expect(
+        hasError(evaluate(ScalarPrimitive::SquareRoot, std::array<T, 1>{-subnormal}),
+                 ScalarEvaluationError::OutsideDomain),
+        "square root rejects every strictly negative finite value");
+}
+
+template <typename T> void testRoundingFractionAndModulo(Expectations& expectations) {
+    const auto negativeZero = -T{0};
+    expectations.expect(
+        hasSignedZero(evaluate(ScalarPrimitive::Floor, std::array<T, 1>{negativeZero}), true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Ceiling, std::array<T, 1>{negativeZero}),
+                          true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Round, std::array<T, 1>{negativeZero}), true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Truncate, std::array<T, 1>{negativeZero}),
+                          true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Fraction, std::array<T, 1>{negativeZero}),
+                          true),
+        "rounding and fraction primitives preserve an input negative zero");
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{0.5}}), T{0}) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{1.5}}), T{2}) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{2.5}}), T{2}) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{-1.5}}), T{-2}) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{-2.5}}), T{-2}),
+        "round uses round-to-nearest with halfway cases tied to an even integer");
+    expectations.expect(
+        hasSignedZero(evaluate(ScalarPrimitive::Round, std::array<T, 1>{T{-0.5}}), true),
+        "a negative halfway tie to zero retains negative zero");
+
+    const auto positiveSubnormal = std::numeric_limits<T>::denorm_min();
+    const auto negativeSubnormal = -positiveSubnormal;
+    expectations.expect(
+        hasSignedZero(evaluate(ScalarPrimitive::Floor, std::array<T, 1>{positiveSubnormal}),
+                      false) &&
+            hasValue(evaluate(ScalarPrimitive::Floor, std::array<T, 1>{negativeSubnormal}),
+                     T{-1}) &&
+            hasValue(evaluate(ScalarPrimitive::Ceiling, std::array<T, 1>{positiveSubnormal}),
+                     T{1}) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Ceiling, std::array<T, 1>{negativeSubnormal}),
+                          true) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Truncate, std::array<T, 1>{negativeSubnormal}),
+                          true),
+        "directed rounding freezes subnormal results and signed zero");
+
+    const auto negativeFraction =
+        evaluate(ScalarPrimitive::Fraction, std::array<T, 1>{negativeSubnormal});
+    expectations.expect(
+        negativeFraction && negativeFraction.value() != nullptr &&
+            *negativeFraction.value() == negativeSubnormal &&
+            hasSignedZero(evaluate(ScalarPrimitive::Fraction, std::array<T, 1>{T{-2}}), true),
+        "fraction is the signed truncation-relative part in (-1, 1)");
+
+    const auto maximum = std::numeric_limits<T>::max();
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Floor, std::array<T, 1>{maximum}), maximum) &&
+            hasValue(evaluate(ScalarPrimitive::Ceiling, std::array<T, 1>{maximum}), maximum) &&
+            hasValue(evaluate(ScalarPrimitive::Round, std::array<T, 1>{maximum}), maximum) &&
+            hasValue(evaluate(ScalarPrimitive::Truncate, std::array<T, 1>{maximum}), maximum) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Fraction, std::array<T, 1>{maximum}), false),
+        "integral extreme finite values pass through rounding without overflow");
+
+    expectations.expect(
+        hasError(evaluate(ScalarPrimitive::Modulo, std::array<T, 2>{T{1}, T{0}}),
+                 ScalarEvaluationError::DivideByZero) &&
+            hasError(evaluate(ScalarPrimitive::Modulo, std::array<T, 2>{T{1}, -T{0}}),
+                     ScalarEvaluationError::DivideByZero),
+        "modulo rejects both signed-zero divisors");
+    expectations.expect(
+        hasSignedZero(evaluate(ScalarPrimitive::Modulo, std::array<T, 2>{T{-4}, T{2}}), true) &&
+            hasValue(evaluate(ScalarPrimitive::Modulo,
+                              std::array<T, 2>{positiveSubnormal,
+                                               positiveSubnormal + positiveSubnormal}),
+                     positiveSubnormal) &&
+            hasValue(evaluate(ScalarPrimitive::Modulo, std::array<T, 2>{maximum, maximum}), T{0}),
+        "modulo preserves dividend sign, subnormals, and extreme finite operands");
+}
+
+template <typename T> void testStepAndSmoothIntervals(Expectations& expectations) {
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Step, std::array<T, 2>{T{0}, -T{0}}), T{1}) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Step, std::array<T, 2>{T{0}, T{-1}}), false),
+        "step treats signed zeros as equal, includes its edge, and returns canonical positive "
+        "zero");
+
+    for (const auto primitive : {ScalarPrimitive::Smoothstep, ScalarPrimitive::Smootherstep}) {
+        expectations.expect(
+            hasSignedZero(evaluate(primitive, std::array<T, 3>{T{-2}, T{3}, T{-4}}), false) &&
+                hasSignedZero(evaluate(primitive, std::array<T, 3>{T{-2}, T{3}, T{-2}}), false) &&
+                hasValue(evaluate(primitive, std::array<T, 3>{T{-2}, T{3}, T{3}}), T{1}) &&
+                hasValue(evaluate(primitive, std::array<T, 3>{T{-2}, T{3}, T{4}}), T{1}),
+            "smooth interpolation clamps outside and includes both interval endpoints");
+        expectations.expect(hasError(evaluate(primitive, std::array<T, 3>{T{1}, T{1}, T{1}}),
+                                     ScalarEvaluationError::DegenerateRange) &&
+                                hasError(evaluate(primitive, std::array<T, 3>{T{2}, T{1}, T{1.5}}),
+                                         ScalarEvaluationError::InvalidInterval),
+                            "smooth interpolation distinguishes equal and reversed intervals");
+    }
+
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Smoothstep, std::array<T, 3>{T{0}, T{1}, T{0.25}}),
+                 T{0.15625}) &&
+            hasValue(evaluate(ScalarPrimitive::Smootherstep, std::array<T, 3>{T{0}, T{1}, T{0.25}}),
+                     T{0.103515625}),
+        "smoothstep polynomials use their frozen unfused evaluation sequences");
+
+    const auto maximum = std::numeric_limits<T>::max();
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Smoothstep, std::array<T, 3>{-maximum, maximum, T{0}}),
+                 T{0.5}) &&
+            hasValue(
+                evaluate(ScalarPrimitive::Smootherstep, std::array<T, 3>{-maximum, maximum, T{0}}),
+                T{0.5}),
+        "smooth interpolation normalizes opposite-sign extreme finite bounds without overflow");
+}
+
+template <typename T> void testGoldenBitPatterns(Expectations& expectations);
+
+template <> void testGoldenBitPatterns<float>(Expectations& expectations) {
+    const auto squareRoot = evaluate(ScalarPrimitive::SquareRoot, std::array{2.0F});
+    const auto remainder = evaluate(ScalarPrimitive::Modulo, std::array{5.3F, 2.1F});
+    expectations.expect(hasBitPattern(squareRoot, std::uint32_t{0x3FB504F3U}),
+                        "Float32 square root has the frozen non-square result bits");
+    expectations.expect(hasBitPattern(remainder, std::uint32_t{0x3F8CCCD0U}),
+                        "Float32 modulo has the frozen nontrivial remainder bits");
+
+    const auto belowTie = evaluate(ScalarPrimitive::Round,
+                                   std::array{std::bit_cast<float>(std::uint32_t{0x401FFFFFU})});
+    const auto tie = evaluate(ScalarPrimitive::Round, std::array{2.5F});
+    const auto aboveTie = evaluate(ScalarPrimitive::Round,
+                                   std::array{std::bit_cast<float>(std::uint32_t{0x40200001U})});
+    expectations.expect(hasBitPattern(belowTie, std::uint32_t{0x40000000U}) &&
+                            hasBitPattern(tie, std::uint32_t{0x40000000U}) &&
+                            hasBitPattern(aboveTie, std::uint32_t{0x40400000U}),
+                        "Float32 rounding freezes both sides of an even halfway tie");
+}
+
+template <> void testGoldenBitPatterns<double>(Expectations& expectations) {
+    const auto squareRoot = evaluate(ScalarPrimitive::SquareRoot, std::array{2.0});
+    const auto remainder = evaluate(ScalarPrimitive::Modulo, std::array{5.3, 2.1});
+    expectations.expect(hasBitPattern(squareRoot, std::uint64_t{0x3FF6A09E667F3BCDULL}),
+                        "Float64 square root has the frozen non-square result bits");
+    expectations.expect(hasBitPattern(remainder, std::uint64_t{0x3FF1999999999998ULL}),
+                        "Float64 modulo has the frozen nontrivial remainder bits");
+
+    const auto belowTie =
+        evaluate(ScalarPrimitive::Round,
+                 std::array{std::bit_cast<double>(std::uint64_t{0x4003FFFFFFFFFFFFULL})});
+    const auto tie = evaluate(ScalarPrimitive::Round, std::array{2.5});
+    const auto aboveTie =
+        evaluate(ScalarPrimitive::Round,
+                 std::array{std::bit_cast<double>(std::uint64_t{0x4004000000000001ULL})});
+    expectations.expect(hasBitPattern(belowTie, std::uint64_t{0x4000000000000000ULL}) &&
+                            hasBitPattern(tie, std::uint64_t{0x4000000000000000ULL}) &&
+                            hasBitPattern(aboveTie, std::uint64_t{0x4008000000000000ULL}),
+                        "Float64 rounding freezes both sides of an even halfway tie");
+}
+
 template <typename T> void runTypedTests(Expectations& expectations) {
     testNormalOperations<T>(expectations);
     testFusedMultiplyAdd<T>(expectations);
@@ -492,6 +815,10 @@ template <typename T> void runTypedTests(Expectations& expectations) {
     testErrorsAndPrecedence<T>(expectations);
     testFloatingPointEnvironment<T>(expectations);
     testSignedZeroAndSubnormal<T>(expectations);
+    testUnarySignsAndDomains<T>(expectations);
+    testRoundingFractionAndModulo<T>(expectations);
+    testStepAndSmoothIntervals<T>(expectations);
+    testGoldenBitPatterns<T>(expectations);
 }
 
 } // namespace

@@ -21,10 +21,24 @@ enum class ScalarPrimitive : std::uint8_t {
     Clamp,
     Remap,
     Mix,
+    Absolute,
+    Negate,
+    Sign,
+    Reciprocal,
+    SquareRoot,
+    Floor,
+    Ceiling,
+    Round,
+    Truncate,
+    Fraction,
+    Modulo,
+    Step,
+    Smoothstep,
+    Smootherstep,
     Invalid = 0xFF,
 };
 
-inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 1;
+inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 2;
 
 struct ScalarPrimitiveSignature final {
     ScalarPrimitive primitive;
@@ -47,6 +61,7 @@ enum class ScalarEvaluationError : std::uint8_t {
     InvalidInterval,
     DegenerateRange,
     NonFiniteResult,
+    OutsideDomain,
 };
 
 template <typename T>

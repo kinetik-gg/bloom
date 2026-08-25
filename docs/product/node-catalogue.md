@@ -174,9 +174,9 @@ mask, and geometry values remain distinct even where their storage shapes resemb
 | Level | Planned nodes | Primitive families |
 | --- | --- | --- |
 | `F0` | Add, Subtract, Multiply, Divide, Multiply Add, Minimum, Maximum, Clamp, Remap, Mix | Checked Float32/Float64 scalar primitives are implemented; artist node schemas are not yet exposed |
-| `C1` | Absolute, Negate, Sign, Reciprocal, Square Root, Power, Logarithm, Exponential | Checked unary and transcendental scalar primitives |
-| `C1` | Floor, Ceiling, Round, Truncate, Fraction, Modulo, Wrap, Snap | Explicit rounding and range conventions |
-| `C1` | Step, Smoothstep, Smootherstep | Versioned interpolation primitives |
+| `C1` | Absolute, Negate, Sign, Reciprocal, Square Root, Power, Logarithm, Exponential | The first five checked scalar primitives are implemented; transcendental primitives and artist schemas remain deferred |
+| `C1` | Floor, Ceiling, Round, Truncate, Fraction, Modulo, Wrap, Snap | The first six checked scalar primitives are implemented; Wrap, Snap, and artist schemas remain deferred |
+| `C1` | Step, Smoothstep, Smootherstep | Checked interpolation primitives are implemented; artist schemas are not yet exposed |
 | `C1` | Equal, Near, Less, Greater, Compare, Select | Typed comparison and control primitives; floating tolerance is explicit |
 | `C1` | Boolean And, Or, Not, Exclusive Or | Boolean primitives, not numeric truthiness |
 | `C1` | Vector Compose/Split, Add, Scale, Dot, Cross, Length, Normalize, Distance | Checked vector primitives with dimension-specific schemas |

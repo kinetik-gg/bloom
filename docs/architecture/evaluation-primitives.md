@@ -83,10 +83,13 @@ Durable scalar authoring values bind to Float64 until a checked conversion at an
 boundary. Canonical process pixels bind to Float32. Node registry parameter matching remains exact;
 type erasure and per-pixel string lookup are forbidden inside the hot evaluator.
 
-## Scalar Primitive Vocabulary Version 1
+## Scalar Primitive Vocabulary Version 2
 
-`bloom_core` currently defines checked Float32 and Float64 primitives with these stable IDs and
-operand orders:
+`bloom_core` defines checked Float32 and Float64 primitives. Semantics version `2` is an append-only
+extension of version `1`: the original enum values, stable IDs, operand orders, formulas, and errors
+remain unchanged.
+
+The version 1 base is:
 
 | ID | Operation | Operands | Semantics |
 | --- | --- | --- | --- |
@@ -101,10 +104,34 @@ operand orders:
 | `bloom.core.scalar.remap` | Remap | `value`, `sourceMinimum`, `sourceMaximum`, `destinationMinimum`, `destinationMaximum` | reversed ranges and extrapolation allowed; equal source bounds fail |
 | `bloom.core.scalar.mix` | Mix | `start`, `end`, `factor` | exact endpoints and extrapolation; never clamps |
 
-The table has semantics version `1`. Primitive IDs identify evaluator kernels, not durable
-artist-facing node types. Adding an ID may extend the version; changing an existing operation's
-operand order, precision, formula, validation, or error behavior requires a new semantics version.
-Old compiled or cached behavior is never silently reinterpreted.
+Version 2 adds this color-agnostic tranche:
+
+| ID | Operation | Operands | Semantics |
+| --- | --- | --- | --- |
+| `bloom.core.scalar.absolute` | Absolute | `value` | non-negative magnitude; both zero signs produce `+0` |
+| `bloom.core.scalar.negate` | Negate | `value` | reverses the sign, including signed zero |
+| `bloom.core.scalar.sign` | Sign | `value` | negative values produce `-1`, positive values produce `+1`, and zero retains its sign |
+| `bloom.core.scalar.reciprocal` | Reciprocal | `value` | `1 / value`; both zero signs fail as divide-by-zero |
+| `bloom.core.scalar.square-root` | Square Root | `value` | principal square root; strict negatives fail outside the domain and `-0` produces `-0` |
+| `bloom.core.scalar.floor` | Floor | `value` | greatest integral value no greater than the input |
+| `bloom.core.scalar.ceiling` | Ceiling | `value` | least integral value no less than the input |
+| `bloom.core.scalar.round` | Round | `value` | nearest integral value; halfway cases tie to an even integer |
+| `bloom.core.scalar.truncate` | Truncate | `value` | integral value toward zero |
+| `bloom.core.scalar.fraction` | Fraction | `value` | signed truncation-relative fractional part in `(-1, 1)` |
+| `bloom.core.scalar.modulo` | Modulo | `dividend`, `divisor` | truncating remainder with the dividend sign; both zero divisor signs fail |
+| `bloom.core.scalar.step` | Step | `edge`, `value` | `0` below the edge and `1` at or above it |
+| `bloom.core.scalar.smoothstep` | Smoothstep | `lowerEdge`, `upperEdge`, `value` | clamped interval factor followed by `t * t * (3 - 2 * t)` |
+| `bloom.core.scalar.smootherstep` | Smootherstep | `lowerEdge`, `upperEdge`, `value` | clamped interval factor followed by `t * t * t * (t * (t * 6 - 15) + 10)` |
+
+Primitive IDs identify evaluator kernels, not durable artist-facing node types. Adding an ID may
+extend the version; changing an existing operation's operand order, precision, formula, validation,
+or error behavior requires a new semantics version. Old compiled or cached behavior is never
+silently reinterpreted.
+
+The version is `2` even though every version 1 operation retains its exact contract because the
+closed primitive vocabulary is itself part of compiled-plan and cache compatibility. A consumer
+that recorded version `1` must be explicitly supported as version `1` or recompiled; it cannot
+infer version `2` merely because the particular operation it uses predates the extension.
 
 Only exact `float` and `double` inputs are accepted. All operands must be finite; subnormals and
 signed zero are valid except for a zero denominator. Result or intermediate NaN/infinity is a
@@ -116,11 +143,46 @@ names a fused result may call an explicit fused primitive.
 Validation precedence is known primitive, exact arity, all-input finiteness, floating-point
 environment, operation-domain checks, then result finiteness. Failures expose no plausible numeric
 fallback. The code-level error vocabulary distinguishes unknown primitive, invalid arity,
-unsupported environment, non-finite input, divide-by-zero, invalid interval, degenerate range, and
-non-finite result.
+unsupported environment, non-finite input, divide-by-zero, invalid interval, degenerate range,
+non-finite result, and an input outside an operation's mathematical domain.
+
+Version 2 freezes these additional details:
+
+- Absolute, Negate, Sign, Floor, Ceiling, Round, Truncate, Fraction, Modulo, and Square Root retain
+  the signed-zero behavior stated in the table. In particular, rounding or fraction results that
+  approach zero from below retain `-0`. Step and the two smooth functions instead return canonical
+  `+0` or `+1` at their closed boundaries.
+- Finite subnormal inputs are accepted and are never intentionally flushed. A finite subnormal
+  result is successful. Reciprocal of a nonzero value fails only when its rounded result is
+  non-finite; therefore reciprocal of the smallest subnormal reports a non-finite result rather
+  than divide-by-zero.
+- Square Root is the principal result rounded to the bound precision under the required
+  round-to-nearest environment. `-0` is in-domain; every finite value less than zero is not.
+- Floor, Ceiling, Round, and Truncate return a floating value in the input precision, not an integer
+  conversion. Round is round-to-nearest, ties-to-even and uses the required ambient rounding mode.
+  Fraction is the signed fractional result returned by splitting at Truncate; integral negative
+  inputs therefore produce `-0`.
+- Modulo is the finite truncating remainder corresponding to a quotient rounded toward zero. Its
+  magnitude is less than the divisor magnitude, and an exact-zero result retains the dividend's
+  sign. No Euclidean non-negative adjustment is performed.
+- Step compares `value < edge`; signed zeros compare equal and therefore select `1`.
+- Smoothstep and Smootherstep require `lowerEdge < upperEdge`. Equal edges report a degenerate
+  range; reversed edges report an invalid interval. Values at or below the lower edge return exact
+  `+0`, and values at or above the upper edge return exact `+1`. Interior normalization uses the
+  robust version 1 Remap factor, including opposite-sign extreme bounds. The polynomial expressions
+  are evaluated in the parenthesized order printed in the table, with separate unfused operations;
+  the compiler may not contract them.
+
+Power, Logarithm, and Exponential remain deferred until their domain, overflow, and qualified
+transcendental-library conformance policy is frozen. Wrap is deferred until half-open endpoint and
+extreme-range reduction behavior is frozen. Snap is deferred until its anchor, signed increment,
+halfway tie, and overflow rules are frozen. Omitting these operations is preferable to exposing
+backend-dependent math under a stable ID.
 
 These are kernels, not artist-visible node records. Artist nodes add typed ports, defaults, units,
 animation roles, UI metadata, and lowering without changing the kernel math.
+Evaluation is `noexcept`, allocation-free, and has no mutable or hidden service state. It reads the
+ambient floating-point controls only to validate them before authored arithmetic.
 
 ## Animation Sampling Version 1
 
