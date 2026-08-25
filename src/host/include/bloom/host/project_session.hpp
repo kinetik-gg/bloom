@@ -3,21 +3,227 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/id.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/host/publication_coordinator.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace bloom::host {
+
+struct ProjectSessionIdTag;
+struct SessionResultAcceptanceGenerationTag;
+struct OpenIntentGenerationTag;
+struct SessionPathIntentGenerationTag;
+
+using ProjectSessionId = core::Id<ProjectSessionIdTag>;
+using SessionResultAcceptanceGeneration = core::Id<SessionResultAcceptanceGenerationTag>;
+using OpenIntentGeneration = core::Id<OpenIntentGenerationTag>;
+using SessionPathIntentGeneration = core::Id<SessionPathIntentGenerationTag>;
+
+class ProjectSession;
+class ProjectSessionTestAccess;
+
+struct ProjectSessionIdentitySourceSnapshot final {
+    ProjectSessionId lastIssuedSessionId;
+    bool identityExhausted = false;
+};
+
+class ProjectSessionIdentitySource final {
+  public:
+    ProjectSessionIdentitySource() noexcept = default;
+    ProjectSessionIdentitySource(const ProjectSessionIdentitySource&) = delete;
+    ProjectSessionIdentitySource& operator=(const ProjectSessionIdentitySource&) = delete;
+    ProjectSessionIdentitySource(ProjectSessionIdentitySource&&) = delete;
+    ProjectSessionIdentitySource& operator=(ProjectSessionIdentitySource&&) = delete;
+    ~ProjectSessionIdentitySource() = default;
+
+    [[nodiscard]] ProjectSessionIdentitySourceSnapshot snapshot() const noexcept;
+
+  private:
+    friend class ProjectSession;
+    friend class ProjectSessionTestAccess;
+
+    [[nodiscard]] std::optional<ProjectSessionId> issue() noexcept;
+    [[nodiscard]] bool setLastIssuedSessionIdForTesting(std::uint64_t value) noexcept;
+
+    mutable std::mutex mutex_;
+    std::uint64_t lastIssuedSessionId_ = 0;
+};
+
+class SessionResultAcceptanceCapture final {
+  public:
+    constexpr SessionResultAcceptanceCapture() noexcept = default;
+
+    [[nodiscard]] constexpr ProjectSessionId projectSessionId() const noexcept {
+        return projectSessionId_;
+    }
+    [[nodiscard]] constexpr SessionResultAcceptanceGeneration generation() const noexcept {
+        return generation_;
+    }
+    [[nodiscard]] constexpr bool isValid() const noexcept {
+        return projectSessionId_.isValid() && generation_.isValid();
+    }
+
+    friend constexpr bool operator==(const SessionResultAcceptanceCapture&,
+                                     const SessionResultAcceptanceCapture&) noexcept = default;
+
+  private:
+    friend class ProjectSession;
+
+    constexpr SessionResultAcceptanceCapture(
+        const ProjectSessionId projectSessionId,
+        const SessionResultAcceptanceGeneration generation) noexcept
+        : projectSessionId_(projectSessionId), generation_(generation) {}
+
+    ProjectSessionId projectSessionId_;
+    SessionResultAcceptanceGeneration generation_;
+};
+
+class OpenIntentCapture final {
+  public:
+    constexpr OpenIntentCapture() noexcept = default;
+
+    [[nodiscard]] constexpr SessionResultAcceptanceCapture resultAcceptance() const noexcept {
+        return resultAcceptance_;
+    }
+    [[nodiscard]] constexpr OpenIntentGeneration generation() const noexcept { return generation_; }
+    [[nodiscard]] constexpr bool isValid() const noexcept {
+        return resultAcceptance_.isValid() && generation_.isValid();
+    }
+
+    friend constexpr bool operator==(const OpenIntentCapture&,
+                                     const OpenIntentCapture&) noexcept = default;
+
+  private:
+    friend class ProjectSession;
+
+    constexpr OpenIntentCapture(const SessionResultAcceptanceCapture resultAcceptance,
+                                const OpenIntentGeneration generation) noexcept
+        : resultAcceptance_(resultAcceptance), generation_(generation) {}
+
+    SessionResultAcceptanceCapture resultAcceptance_;
+    OpenIntentGeneration generation_;
+};
+
+enum class SessionPathIntentKind : std::uint8_t {
+    ExistingPath,
+    ReplacementPath,
+};
+
+class SessionPathIntentCapture final {
+  public:
+    constexpr SessionPathIntentCapture() noexcept = default;
+
+    [[nodiscard]] constexpr SessionResultAcceptanceCapture resultAcceptance() const noexcept {
+        return resultAcceptance_;
+    }
+    [[nodiscard]] constexpr SessionPathIntentGeneration generation() const noexcept {
+        return generation_;
+    }
+    [[nodiscard]] constexpr SessionPathIntentKind kind() const noexcept { return kind_; }
+    [[nodiscard]] constexpr bool isValid() const noexcept {
+        return resultAcceptance_.isValid() && generation_.isValid() && isKnownKind(kind_);
+    }
+
+    friend constexpr bool operator==(const SessionPathIntentCapture&,
+                                     const SessionPathIntentCapture&) noexcept = default;
+
+  private:
+    friend class ProjectSession;
+
+    constexpr SessionPathIntentCapture(const SessionResultAcceptanceCapture resultAcceptance,
+                                       const SessionPathIntentGeneration generation,
+                                       const SessionPathIntentKind kind) noexcept
+        : resultAcceptance_(resultAcceptance), generation_(generation), kind_(kind) {}
+
+    [[nodiscard]] static constexpr bool isKnownKind(const SessionPathIntentKind kind) noexcept {
+        switch (kind) {
+        case SessionPathIntentKind::ExistingPath:
+        case SessionPathIntentKind::ReplacementPath:
+            return true;
+        }
+        return false;
+    }
+
+    SessionResultAcceptanceCapture resultAcceptance_;
+    SessionPathIntentGeneration generation_;
+    SessionPathIntentKind kind_ = SessionPathIntentKind::ExistingPath;
+};
+
+enum class OpenIntentAdmissionStatus : std::uint8_t {
+    Admitted,
+    InvalidSession,
+    RuntimeIdentityExhausted,
+};
+
+class [[nodiscard]] OpenIntentAdmissionResult final {
+  public:
+    [[nodiscard]] explicit constexpr operator bool() const noexcept {
+        return status_ == OpenIntentAdmissionStatus::Admitted && capture_.isValid();
+    }
+    [[nodiscard]] constexpr OpenIntentAdmissionStatus status() const noexcept { return status_; }
+    [[nodiscard]] constexpr OpenIntentCapture capture() const noexcept { return capture_; }
+
+  private:
+    friend class ProjectSession;
+
+    explicit constexpr OpenIntentAdmissionResult(const OpenIntentAdmissionStatus status) noexcept
+        : status_(status) {}
+    explicit constexpr OpenIntentAdmissionResult(const OpenIntentCapture capture) noexcept
+        : status_(OpenIntentAdmissionStatus::Admitted), capture_(capture) {}
+
+    OpenIntentAdmissionStatus status_ = OpenIntentAdmissionStatus::InvalidSession;
+    OpenIntentCapture capture_;
+};
+
+enum class SessionPathIntentAdvanceStatus : std::uint8_t {
+    Advanced,
+    ReadOnly,
+    InvalidSession,
+    RuntimeIdentityExhausted,
+};
+
+class [[nodiscard]] SessionPathIntentAdvanceResult final {
+  public:
+    [[nodiscard]] explicit constexpr operator bool() const noexcept {
+        return status_ == SessionPathIntentAdvanceStatus::Advanced && capture_.isValid();
+    }
+    [[nodiscard]] constexpr SessionPathIntentAdvanceStatus status() const noexcept {
+        return status_;
+    }
+    [[nodiscard]] constexpr SessionPathIntentCapture capture() const noexcept { return capture_; }
+
+  private:
+    friend class ProjectSession;
+
+    explicit constexpr SessionPathIntentAdvanceResult(
+        const SessionPathIntentAdvanceStatus status) noexcept
+        : status_(status) {}
+    explicit constexpr SessionPathIntentAdvanceResult(
+        const SessionPathIntentCapture capture) noexcept
+        : status_(SessionPathIntentAdvanceStatus::Advanced), capture_(capture) {}
+
+    SessionPathIntentAdvanceStatus status_ = SessionPathIntentAdvanceStatus::InvalidSession;
+    SessionPathIntentCapture capture_;
+};
+
+enum class SessionResultAcceptanceAdvanceStatus : std::uint8_t {
+    Advanced,
+    InvalidSession,
+    RuntimeIdentityExhausted,
+};
 
 enum class ProjectSessionContentKind : std::uint8_t {
     DecodedDocument,
@@ -63,6 +269,7 @@ enum class ProjectSessionCreateStatus : std::uint8_t {
     InvalidDecodedProject,
     InvalidDisplayPath,
     ResourceUnavailable,
+    RuntimeIdentityExhausted,
 };
 
 enum class ProjectSessionCommandStatus : std::uint8_t {
@@ -90,8 +297,11 @@ enum class ProjectSessionSavepointStatus : std::uint8_t {
     Accepted,
     ReadOnly,
     InvalidSession,
+    InvalidPublicationIntent,
+    StaleIntent,
     UnknownRevision,
     PathRequired,
+    PathAuthorityMismatch,
 };
 
 enum class DecodedProjectSnapshotStatus : std::uint8_t {
@@ -101,6 +311,11 @@ enum class DecodedProjectSnapshotStatus : std::uint8_t {
 };
 
 struct ProjectSessionStateSnapshot final {
+    ProjectSessionId projectSessionId;
+    SessionResultAcceptanceGeneration resultAcceptanceGeneration;
+    OpenIntentGeneration openIntentGeneration;
+    SessionPathIntentGeneration pathIntentGeneration;
+    PublicationIntentId newestAcceptedPublicationIntent;
     ProjectSessionContentKind contentKind = ProjectSessionContentKind::PreservedReadOnly;
     std::optional<DecodedProjectEditability> editability;
     std::optional<ProjectDisplayPath> displayPath;
@@ -144,37 +359,63 @@ class ProjectSession final {
     ProjectSession& operator=(ProjectSession&&) = delete;
     ~ProjectSession() = default;
 
-    [[nodiscard]] static ProjectSessionCreateResult createNew(NewProjectSessionRequest request);
     [[nodiscard]] static ProjectSessionCreateResult
-    createDecoded(DecodedProjectSessionRequest request);
+    createNew(ProjectSessionIdentitySource& identitySource, NewProjectSessionRequest request);
     [[nodiscard]] static ProjectSessionCreateResult
-    createPreservedReadOnly(std::filesystem::path displayPath);
+    createDecoded(ProjectSessionIdentitySource& identitySource,
+                  DecodedProjectSessionRequest request);
+    [[nodiscard]] static ProjectSessionCreateResult
+    createPreservedReadOnly(ProjectSessionIdentitySource& identitySource,
+                            std::filesystem::path displayPath);
 
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] ProjectSessionStateSnapshot stateSnapshot() const;
     [[nodiscard]] DecodedProjectSnapshotResult decodedSnapshot() const;
+    [[nodiscard]] SessionResultAcceptanceCapture captureResultAcceptance() const noexcept;
+    [[nodiscard]] SessionPathIntentCapture capturePlainSavePathIntent() const noexcept;
+    [[nodiscard]] OpenIntentAdmissionResult admitOpenIntent() noexcept;
+    [[nodiscard]] SessionPathIntentAdvanceResult advancePathIntentForSaveAs() noexcept;
+    [[nodiscard]] bool
+    matchesResultAcceptance(SessionResultAcceptanceCapture capture) const noexcept;
+    [[nodiscard]] bool isDesiredOpenIntent(OpenIntentCapture capture) const noexcept;
+    [[nodiscard]] bool matchesPathIntent(SessionPathIntentCapture capture) const noexcept;
 
     [[nodiscard]] ProjectSessionCommandResult execute(commands::Transaction transaction);
     [[nodiscard]] ProjectSessionCommandResult undo();
     [[nodiscard]] ProjectSessionCommandResult redo();
 
     // This is an acceptance seam, not persistence. A future I/O owner calls it only after a
-    // publication result has passed its session and path-intent checks.
+    // publication result has succeeded; this method owns its session and path-intent checks.
     [[nodiscard]] ProjectSessionSavepointStatus
-    acceptSavepoint(document::Revision publishedRevision,
+    acceptSavepoint(SessionPathIntentCapture intent, PublicationIntentId publicationIntent,
+                    document::Revision publishedRevision,
                     std::optional<ProjectDisplayPath> publishedPath = std::nullopt);
 
   private:
     friend class ProjectSessionCreateResult;
+    friend class ProjectSessionTestAccess;
 
-    ProjectSession(std::unique_ptr<document::Document> document,
+    ProjectSession(ProjectSessionId projectSessionId, std::unique_ptr<document::Document> document,
                    std::unique_ptr<commands::CommandStack> commandStack,
-                   DecodedProjectEditability editability,
+                   DecodedProjectEditability editability, document::Revision cleanRevision,
                    std::optional<ProjectDisplayPath> displayPath) noexcept;
-    explicit ProjectSession(ProjectDisplayPath preservedDisplayPath) noexcept;
+    ProjectSession(ProjectSessionId projectSessionId,
+                   ProjectDisplayPath preservedDisplayPath) noexcept;
 
     [[nodiscard]] ProjectSessionCommandResult unavailableCommandResult() const noexcept;
+    [[nodiscard]] SessionResultAcceptanceAdvanceStatus
+    advanceResultAcceptanceForInstalledReplacement() noexcept;
+    [[nodiscard]] bool
+    setGenerationsForTesting(SessionResultAcceptanceGeneration resultAcceptanceGeneration,
+                             OpenIntentGeneration openIntentGeneration,
+                             SessionPathIntentGeneration pathIntentGeneration) noexcept;
 
+    ProjectSessionId projectSessionId_;
+    SessionResultAcceptanceGeneration resultAcceptanceGeneration_ =
+        SessionResultAcceptanceGeneration::fromRaw(1);
+    OpenIntentGeneration openIntentGeneration_ = OpenIntentGeneration::fromRaw(1);
+    SessionPathIntentGeneration pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(1);
+    PublicationIntentId newestAcceptedPublicationIntent_;
     ProjectSessionContentKind contentKind_ = ProjectSessionContentKind::PreservedReadOnly;
     std::optional<DecodedProjectEditability> editability_;
     std::optional<ProjectDisplayPath> displayPath_;

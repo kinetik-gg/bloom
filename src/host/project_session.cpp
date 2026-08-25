@@ -3,9 +3,11 @@
 #include <bloom/document/new_project.hpp>
 
 #include <exception>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -20,9 +22,40 @@ isKnownEditability(const bloom::host::DecodedProjectEditability value) noexcept 
     return false;
 }
 
+static_assert(std::is_nothrow_move_constructible_v<bloom::host::ProjectDisplayPath>);
+static_assert(std::is_nothrow_move_constructible_v<std::optional<bloom::host::ProjectDisplayPath>>);
+static_assert(std::is_nothrow_move_constructible_v<bloom::host::ProjectSession>);
+
 } // namespace
 
 namespace bloom::host {
+
+ProjectSessionIdentitySourceSnapshot ProjectSessionIdentitySource::snapshot() const noexcept {
+    std::lock_guard lock(mutex_);
+    return {
+        .lastIssuedSessionId = ProjectSessionId::fromRaw(lastIssuedSessionId_),
+        .identityExhausted = lastIssuedSessionId_ == std::numeric_limits<std::uint64_t>::max(),
+    };
+}
+
+std::optional<ProjectSessionId> ProjectSessionIdentitySource::issue() noexcept {
+    std::lock_guard lock(mutex_);
+    if (lastIssuedSessionId_ == std::numeric_limits<std::uint64_t>::max()) {
+        return std::nullopt;
+    }
+    ++lastIssuedSessionId_;
+    return ProjectSessionId::fromRaw(lastIssuedSessionId_);
+}
+
+bool ProjectSessionIdentitySource::setLastIssuedSessionIdForTesting(
+    const std::uint64_t value) noexcept {
+    std::lock_guard lock(mutex_);
+    if (value < lastIssuedSessionId_) {
+        return false;
+    }
+    lastIssuedSessionId_ = value;
+    return true;
+}
 
 std::optional<ProjectDisplayPath> ProjectDisplayPath::create(std::filesystem::path value) noexcept {
     if (value.empty()) {
@@ -45,34 +78,53 @@ const document::Snapshot& DecodedProjectSnapshotResult::snapshot() const& {
     return *snapshot_;
 }
 
-ProjectSession::ProjectSession(std::unique_ptr<document::Document> document,
+ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
+                               std::unique_ptr<document::Document> document,
                                std::unique_ptr<commands::CommandStack> commandStack,
                                const DecodedProjectEditability editability,
+                               const document::Revision cleanRevision,
                                std::optional<ProjectDisplayPath> displayPath) noexcept
-    : contentKind_(ProjectSessionContentKind::DecodedDocument), editability_(editability),
-      displayPath_(std::move(displayPath)), cleanRevision_(document->snapshot().revision()),
-      document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {}
+    : projectSessionId_(projectSessionId), contentKind_(ProjectSessionContentKind::DecodedDocument),
+      editability_(editability), displayPath_(std::move(displayPath)),
+      cleanRevision_(cleanRevision), document_(std::move(document)),
+      commandStack_(std::move(commandStack)), valid_(true) {}
 
-ProjectSession::ProjectSession(ProjectDisplayPath preservedDisplayPath) noexcept
-    : contentKind_(ProjectSessionContentKind::PreservedReadOnly),
+ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
+                               ProjectDisplayPath preservedDisplayPath) noexcept
+    : projectSessionId_(projectSessionId),
+      contentKind_(ProjectSessionContentKind::PreservedReadOnly),
       displayPath_(std::move(preservedDisplayPath)), valid_(true) {}
 
 ProjectSession::ProjectSession(ProjectSession&& other) noexcept
-    : contentKind_(other.contentKind_), editability_(other.editability_),
+    : projectSessionId_(std::exchange(other.projectSessionId_, ProjectSessionId{})),
+      resultAcceptanceGeneration_(
+          std::exchange(other.resultAcceptanceGeneration_, SessionResultAcceptanceGeneration{})),
+      openIntentGeneration_(std::exchange(other.openIntentGeneration_, OpenIntentGeneration{})),
+      pathIntentGeneration_(
+          std::exchange(other.pathIntentGeneration_, SessionPathIntentGeneration{})),
+      newestAcceptedPublicationIntent_(
+          std::exchange(other.newestAcceptedPublicationIntent_, PublicationIntentId{})),
+      contentKind_(other.contentKind_), editability_(other.editability_),
       displayPath_(std::move(other.displayPath_)), cleanRevision_(other.cleanRevision_),
       document_(std::move(other.document_)), commandStack_(std::move(other.commandStack_)),
       valid_(std::exchange(other.valid_, false)) {}
 
-ProjectSessionCreateResult ProjectSession::createNew(NewProjectSessionRequest request) {
+ProjectSessionCreateResult ProjectSession::createNew(ProjectSessionIdentitySource& identitySource,
+                                                     NewProjectSessionRequest request) {
     try {
         auto created = document::makeNewProject(std::move(request.projectName),
                                                 std::move(request.compositionName),
                                                 request.duration, request.format);
         auto document = std::make_unique<document::Document>(std::move(created.project));
         auto commandStack = std::make_unique<commands::CommandStack>(*document);
+        const auto cleanRevision = document->snapshot().revision();
+        const auto projectSessionId = identitySource.issue();
+        if (!projectSessionId.has_value()) {
+            return ProjectSessionCreateResult(ProjectSessionCreateStatus::RuntimeIdentityExhausted);
+        }
         return ProjectSessionCreateResult(
-            ProjectSession(std::move(document), std::move(commandStack),
-                           DecodedProjectEditability::Editable, std::nullopt));
+            ProjectSession(*projectSessionId, std::move(document), std::move(commandStack),
+                           DecodedProjectEditability::Editable, cleanRevision, std::nullopt));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);
     } catch (const std::logic_error&) {
@@ -80,7 +132,9 @@ ProjectSessionCreateResult ProjectSession::createNew(NewProjectSessionRequest re
     }
 }
 
-ProjectSessionCreateResult ProjectSession::createDecoded(DecodedProjectSessionRequest request) {
+ProjectSessionCreateResult
+ProjectSession::createDecoded(ProjectSessionIdentitySource& identitySource,
+                              DecodedProjectSessionRequest request) {
     if (!isKnownEditability(request.editability)) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::InvalidDecodedProject);
     }
@@ -93,9 +147,14 @@ ProjectSessionCreateResult ProjectSession::createDecoded(DecodedProjectSessionRe
             document = std::make_unique<document::Document>(std::move(request.project));
         }
         auto commandStack = std::make_unique<commands::CommandStack>(*document);
+        const auto cleanRevision = document->snapshot().revision();
+        const auto projectSessionId = identitySource.issue();
+        if (!projectSessionId.has_value()) {
+            return ProjectSessionCreateResult(ProjectSessionCreateStatus::RuntimeIdentityExhausted);
+        }
         return ProjectSessionCreateResult(
-            ProjectSession(std::move(document), std::move(commandStack), request.editability,
-                           std::move(request.displayPath)));
+            ProjectSession(*projectSessionId, std::move(document), std::move(commandStack),
+                           request.editability, cleanRevision, std::move(request.displayPath)));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);
     } catch (const std::invalid_argument&) {
@@ -104,17 +163,24 @@ ProjectSessionCreateResult ProjectSession::createDecoded(DecodedProjectSessionRe
 }
 
 ProjectSessionCreateResult
-ProjectSession::createPreservedReadOnly(std::filesystem::path displayPath) {
+ProjectSession::createPreservedReadOnly(ProjectSessionIdentitySource& identitySource,
+                                        std::filesystem::path displayPath) {
     auto validatedPath = ProjectDisplayPath::create(std::move(displayPath));
     if (!validatedPath.has_value()) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::InvalidDisplayPath);
     }
-    return ProjectSessionCreateResult(ProjectSession(std::move(*validatedPath)));
+    const auto projectSessionId = identitySource.issue();
+    if (!projectSessionId.has_value()) {
+        return ProjectSessionCreateResult(ProjectSessionCreateStatus::RuntimeIdentityExhausted);
+    }
+    return ProjectSessionCreateResult(ProjectSession(*projectSessionId, std::move(*validatedPath)));
 }
 
 bool ProjectSession::isValid() const noexcept {
-    if (!valid_ || (!displayPath_.has_value() &&
-                    contentKind_ == ProjectSessionContentKind::PreservedReadOnly)) {
+    if (!valid_ || !projectSessionId_.isValid() || !resultAcceptanceGeneration_.isValid() ||
+        !openIntentGeneration_.isValid() || !pathIntentGeneration_.isValid() ||
+        (!displayPath_.has_value() &&
+         contentKind_ == ProjectSessionContentKind::PreservedReadOnly)) {
         return false;
     }
     if (contentKind_ == ProjectSessionContentKind::PreservedReadOnly) {
@@ -127,6 +193,11 @@ bool ProjectSession::isValid() const noexcept {
 
 ProjectSessionStateSnapshot ProjectSession::stateSnapshot() const {
     ProjectSessionStateSnapshot result{
+        .projectSessionId = projectSessionId_,
+        .resultAcceptanceGeneration = resultAcceptanceGeneration_,
+        .openIntentGeneration = openIntentGeneration_,
+        .pathIntentGeneration = pathIntentGeneration_,
+        .newestAcceptedPublicationIntent = newestAcceptedPublicationIntent_,
         .contentKind = contentKind_,
         .editability = editability_,
         .displayPath = displayPath_,
@@ -157,6 +228,99 @@ ProjectSessionStateSnapshot ProjectSession::stateSnapshot() const {
         result.redoLabel = std::string(*label);
     }
     return result;
+}
+
+SessionResultAcceptanceCapture ProjectSession::captureResultAcceptance() const noexcept {
+    if (!isValid()) {
+        return {};
+    }
+    return SessionResultAcceptanceCapture(projectSessionId_, resultAcceptanceGeneration_);
+}
+
+SessionPathIntentCapture ProjectSession::capturePlainSavePathIntent() const noexcept {
+    const auto resultAcceptance = captureResultAcceptance();
+    if (!resultAcceptance.isValid() || contentKind_ != ProjectSessionContentKind::DecodedDocument ||
+        !displayPath_.has_value()) {
+        return {};
+    }
+    return SessionPathIntentCapture(resultAcceptance, pathIntentGeneration_,
+                                    SessionPathIntentKind::ExistingPath);
+}
+
+OpenIntentAdmissionResult ProjectSession::admitOpenIntent() noexcept {
+    if (!isValid()) {
+        return OpenIntentAdmissionResult(OpenIntentAdmissionStatus::InvalidSession);
+    }
+    if (resultAcceptanceGeneration_.value() == std::numeric_limits<std::uint64_t>::max() ||
+        openIntentGeneration_.value() == std::numeric_limits<std::uint64_t>::max()) {
+        return OpenIntentAdmissionResult(OpenIntentAdmissionStatus::RuntimeIdentityExhausted);
+    }
+    openIntentGeneration_ = OpenIntentGeneration::fromRaw(openIntentGeneration_.value() + 1);
+    return OpenIntentAdmissionResult(
+        OpenIntentCapture(captureResultAcceptance(), openIntentGeneration_));
+}
+
+SessionPathIntentAdvanceResult ProjectSession::advancePathIntentForSaveAs() noexcept {
+    if (!isValid()) {
+        return SessionPathIntentAdvanceResult(SessionPathIntentAdvanceStatus::InvalidSession);
+    }
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
+        return SessionPathIntentAdvanceResult(SessionPathIntentAdvanceStatus::ReadOnly);
+    }
+    if (pathIntentGeneration_.value() == std::numeric_limits<std::uint64_t>::max()) {
+        return SessionPathIntentAdvanceResult(
+            SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted);
+    }
+    pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(pathIntentGeneration_.value() + 1);
+    return SessionPathIntentAdvanceResult(SessionPathIntentCapture(
+        captureResultAcceptance(), pathIntentGeneration_, SessionPathIntentKind::ReplacementPath));
+}
+
+bool ProjectSession::matchesResultAcceptance(
+    const SessionResultAcceptanceCapture capture) const noexcept {
+    return isValid() && capture.isValid() && capture == captureResultAcceptance();
+}
+
+bool ProjectSession::isDesiredOpenIntent(const OpenIntentCapture capture) const noexcept {
+    return isValid() && capture.isValid() &&
+           capture.resultAcceptance() == captureResultAcceptance() &&
+           capture.generation() == openIntentGeneration_;
+}
+
+bool ProjectSession::matchesPathIntent(const SessionPathIntentCapture capture) const noexcept {
+    return isValid() && capture.isValid() &&
+           capture.resultAcceptance() == captureResultAcceptance() &&
+           capture.generation() == pathIntentGeneration_;
+}
+
+SessionResultAcceptanceAdvanceStatus
+ProjectSession::advanceResultAcceptanceForInstalledReplacement() noexcept {
+    if (!isValid()) {
+        return SessionResultAcceptanceAdvanceStatus::InvalidSession;
+    }
+    if (resultAcceptanceGeneration_.value() == std::numeric_limits<std::uint64_t>::max()) {
+        return SessionResultAcceptanceAdvanceStatus::RuntimeIdentityExhausted;
+    }
+    resultAcceptanceGeneration_ =
+        SessionResultAcceptanceGeneration::fromRaw(resultAcceptanceGeneration_.value() + 1);
+    return SessionResultAcceptanceAdvanceStatus::Advanced;
+}
+
+bool ProjectSession::setGenerationsForTesting(
+    const SessionResultAcceptanceGeneration resultAcceptanceGeneration,
+    const OpenIntentGeneration openIntentGeneration,
+    const SessionPathIntentGeneration pathIntentGeneration) noexcept {
+    if (!isValid() || !resultAcceptanceGeneration.isValid() || !openIntentGeneration.isValid() ||
+        !pathIntentGeneration.isValid() ||
+        resultAcceptanceGeneration < resultAcceptanceGeneration_ ||
+        openIntentGeneration < openIntentGeneration_ ||
+        pathIntentGeneration < pathIntentGeneration_) {
+        return false;
+    }
+    resultAcceptanceGeneration_ = resultAcceptanceGeneration;
+    openIntentGeneration_ = openIntentGeneration;
+    pathIntentGeneration_ = pathIntentGeneration;
+    return true;
 }
 
 DecodedProjectSnapshotResult ProjectSession::decodedSnapshot() const {
@@ -191,27 +355,44 @@ ProjectSessionCommandResult ProjectSession::redo() {
     return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->redo()};
 }
 
-ProjectSessionSavepointStatus
-ProjectSession::acceptSavepoint(const document::Revision publishedRevision,
-                                std::optional<ProjectDisplayPath> publishedPath) {
+ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
+    const SessionPathIntentCapture intent, const PublicationIntentId publicationIntent,
+    const document::Revision publishedRevision, std::optional<ProjectDisplayPath> publishedPath) {
     if (!isValid()) {
         return ProjectSessionSavepointStatus::InvalidSession;
     }
     if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return ProjectSessionSavepointStatus::ReadOnly;
     }
+    if (!publicationIntent.isValid()) {
+        return ProjectSessionSavepointStatus::InvalidPublicationIntent;
+    }
+    if (newestAcceptedPublicationIntent_.isValid() &&
+        publicationIntent <= newestAcceptedPublicationIntent_) {
+        return ProjectSessionSavepointStatus::StaleIntent;
+    }
+    if (!matchesPathIntent(intent)) {
+        return ProjectSessionSavepointStatus::StaleIntent;
+    }
     const auto current = document_->snapshot().revision();
     if (publishedRevision > current) {
         return ProjectSessionSavepointStatus::UnknownRevision;
     }
-    if (!displayPath_.has_value() && !publishedPath.has_value()) {
+    if (intent.kind() == SessionPathIntentKind::ExistingPath && !displayPath_.has_value()) {
+        return ProjectSessionSavepointStatus::PathRequired;
+    }
+    if (intent.kind() == SessionPathIntentKind::ExistingPath && publishedPath.has_value()) {
+        return ProjectSessionSavepointStatus::PathAuthorityMismatch;
+    }
+    if (intent.kind() == SessionPathIntentKind::ReplacementPath && !publishedPath.has_value()) {
         return ProjectSessionSavepointStatus::PathRequired;
     }
 
-    if (publishedPath.has_value()) {
+    if (intent.kind() == SessionPathIntentKind::ReplacementPath) {
         displayPath_ = std::move(publishedPath);
     }
     cleanRevision_ = publishedRevision;
+    newestAcceptedPublicationIntent_ = publicationIntent;
     return ProjectSessionSavepointStatus::Accepted;
 }
 

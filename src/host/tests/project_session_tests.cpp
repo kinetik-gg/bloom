@@ -6,12 +6,41 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+
+namespace bloom::host {
+
+class ProjectSessionTestAccess final {
+  public:
+    [[nodiscard]] static bool setLastIssuedSessionId(ProjectSessionIdentitySource& source,
+                                                     const std::uint64_t value) noexcept {
+        return source.setLastIssuedSessionIdForTesting(value);
+    }
+
+    [[nodiscard]] static bool setGenerations(ProjectSession& session,
+                                             const std::uint64_t resultAcceptance,
+                                             const std::uint64_t openIntent,
+                                             const std::uint64_t pathIntent) noexcept {
+        return session.setGenerationsForTesting(
+            SessionResultAcceptanceGeneration::fromRaw(resultAcceptance),
+            OpenIntentGeneration::fromRaw(openIntent),
+            SessionPathIntentGeneration::fromRaw(pathIntent));
+    }
+
+    [[nodiscard]] static SessionResultAcceptanceAdvanceStatus
+    advanceResultAcceptance(ProjectSession& session) noexcept {
+        return session.advanceResultAcceptanceForInstalledReplacement();
+    }
+};
+
+} // namespace bloom::host
 
 namespace {
 
@@ -40,12 +69,21 @@ using bloom::host::DecodedProjectEditability;
 using bloom::host::DecodedProjectSessionRequest;
 using bloom::host::DecodedProjectSnapshotStatus;
 using bloom::host::NewProjectSessionRequest;
+using bloom::host::OpenIntentAdmissionStatus;
 using bloom::host::ProjectDisplayPath;
 using bloom::host::ProjectSession;
 using bloom::host::ProjectSessionCommandStatus;
 using bloom::host::ProjectSessionContentKind;
 using bloom::host::ProjectSessionCreateStatus;
+using bloom::host::ProjectSessionIdentitySource;
 using bloom::host::ProjectSessionSavepointStatus;
+using bloom::host::PublicationIntentId;
+using bloom::host::SessionPathIntentAdvanceStatus;
+using bloom::host::SessionPathIntentKind;
+using bloom::host::SessionResultAcceptanceAdvanceStatus;
+
+static_assert(!std::is_copy_constructible_v<ProjectSessionIdentitySource>);
+static_assert(!std::is_move_constructible_v<ProjectSessionIdentitySource>);
 
 [[nodiscard]] CommandStatus commandStatus(const bloom::host::ProjectSessionCommandResult& result) {
     if (!result.command.has_value()) {
@@ -63,13 +101,39 @@ using bloom::host::ProjectSessionSavepointStatus;
     };
 }
 
-[[nodiscard]] ProjectSession newSession(Expectations& expectations) {
-    auto result = ProjectSession::createNew(newProjectRequest());
+[[nodiscard]] ProjectSession newSession(Expectations& expectations,
+                                        ProjectSessionIdentitySource& identitySource) {
+    auto result = ProjectSession::createNew(identitySource, newProjectRequest());
     expectations.expect(static_cast<bool>(result), "the new-project fixture must be valid");
     if (!result) {
         throw std::logic_error("Could not create project-session fixture");
     }
     return std::move(result).takeSession();
+}
+
+[[nodiscard]] ProjectSession
+decodedSessionWithPath(Expectations& expectations, ProjectSessionIdentitySource& identitySource,
+                       const std::filesystem::path& displayPath = "project.bloom") {
+    auto created = bloom::document::makeNewProject("Project", "Main",
+                                                   bloom::core::RationalTime::fromInteger(10));
+    auto path = ProjectDisplayPath::create(displayPath);
+    if (!path.has_value()) {
+        throw std::logic_error("Could not create project-session path fixture");
+    }
+    auto result = ProjectSession::createDecoded(identitySource,
+                                                {.project = std::move(created.project),
+                                                 .editability = DecodedProjectEditability::Editable,
+                                                 .displayPath = std::move(path),
+                                                 .persistedAllocatorHighWater = std::nullopt});
+    expectations.expect(static_cast<bool>(result), "the decoded path fixture must be valid");
+    if (!result) {
+        throw std::logic_error("Could not create decoded project-session fixture");
+    }
+    return std::move(result).takeSession();
+}
+
+[[nodiscard]] constexpr PublicationIntentId publicationIntent(const std::uint64_t value) noexcept {
+    return PublicationIntentId::fromRaw(value);
 }
 
 [[nodiscard]] std::string projectName(const ProjectSession& session) {
@@ -95,11 +159,17 @@ using bloom::host::ProjectSessionSavepointStatus;
     return transaction;
 }
 
-void testNewProjectBaselineAndSnapshots(Expectations& expectations) {
-    auto session = newSession(expectations);
+void testNewProjectBaselineAndSnapshots(Expectations& expectations,
+                                        ProjectSessionIdentitySource& identitySource) {
+    auto session = newSession(expectations, identitySource);
     const auto state = session.stateSnapshot();
     expectations.expect(session.isValid() && state.valid,
                         "a new session owns one coherent valid state");
+    expectations.expect(
+        state.projectSessionId.isValid() && state.resultAcceptanceGeneration.value() == 1 &&
+            state.openIntentGeneration.value() == 1 && state.pathIntentGeneration.value() == 1 &&
+            !state.newestAcceptedPublicationIntent.isValid(),
+        "a new runtime session starts with one identity and three generation ones");
     expectations.expect(state.contentKind == ProjectSessionContentKind::DecodedDocument &&
                             state.editability == DecodedProjectEditability::Editable,
                         "a new project is decoded and fully editable");
@@ -117,8 +187,214 @@ void testNewProjectBaselineAndSnapshots(Expectations& expectations) {
                         "decoded snapshot access returns immutable project truth");
 }
 
-void testDirtySavepointBranching(Expectations& expectations) {
-    auto session = newSession(expectations);
+void testIdentitySourceAndExactExhaustion(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto firstResult = ProjectSession::createNew(identitySource, newProjectRequest());
+    auto decodedProject = bloom::document::makeNewProject(
+        "Decoded identity", "Main", bloom::core::RationalTime::fromInteger(5));
+    auto secondResult = ProjectSession::createDecoded(
+        identitySource, {.project = std::move(decodedProject.project),
+                         .editability = DecodedProjectEditability::Editable,
+                         .displayPath = std::nullopt,
+                         .persistedAllocatorHighWater = std::nullopt});
+    auto thirdResult =
+        ProjectSession::createPreservedReadOnly(identitySource, "preserved-identity.bloom");
+    expectations.expect(firstResult && secondResult && thirdResult,
+                        "one application identity source creates every session content kind");
+    if (!firstResult || !secondResult || !thirdResult) {
+        return;
+    }
+    auto first = std::move(firstResult).takeSession();
+    auto second = std::move(secondResult).takeSession();
+    auto third = std::move(thirdResult).takeSession();
+    const auto firstState = first.stateSnapshot();
+    const auto secondState = second.stateSnapshot();
+    const auto thirdState = third.stateSnapshot();
+    expectations.expect(
+        firstState.projectSessionId.value() == 1 && secondState.projectSessionId.value() == 2 &&
+            thirdState.projectSessionId.value() == 3 &&
+            firstState.projectSessionId != secondState.projectSessionId &&
+            secondState.projectSessionId != thirdState.projectSessionId,
+        "the explicit application source issues fresh monotonic process-local identities");
+    expectations.expect(
+        firstState.resultAcceptanceGeneration.value() == 1 &&
+            secondState.resultAcceptanceGeneration.value() == 1 &&
+            thirdState.resultAcceptanceGeneration.value() == 1 &&
+            firstState.openIntentGeneration.value() == 1 &&
+            secondState.openIntentGeneration.value() == 1 &&
+            thirdState.openIntentGeneration.value() == 1 &&
+            firstState.pathIntentGeneration.value() == 1 &&
+            secondState.pathIntentGeneration.value() == 1 &&
+            thirdState.pathIntentGeneration.value() == 1,
+        "each independently created session initializes all three generations to one");
+
+    ProjectSessionIdentitySource invalidSource;
+    auto invalidRequest = newProjectRequest();
+    invalidRequest.projectName.clear();
+    const auto invalid = ProjectSession::createNew(invalidSource, std::move(invalidRequest));
+    expectations.expect(
+        invalid.status() == ProjectSessionCreateStatus::InvalidNewProject &&
+            invalidSource.snapshot().lastIssuedSessionId.value() == 0,
+        "validation completes before identity issue and cannot consume an ID on failure");
+
+    ProjectSessionIdentitySource boundarySource;
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    expectations.expect(
+        bloom::host::ProjectSessionTestAccess::setLastIssuedSessionId(boundarySource, maximum - 1),
+        "the identity boundary fixture reaches the final issuable value");
+    auto finalResult =
+        ProjectSession::createPreservedReadOnly(boundarySource, "final-session.bloom");
+    expectations.expect(static_cast<bool>(finalResult),
+                        "the final uint64 session identity remains issuable exactly once");
+    if (!finalResult) {
+        return;
+    }
+    auto finalSession = std::move(finalResult).takeSession();
+    const auto finalState = finalSession.stateSnapshot();
+    const auto exhausted =
+        ProjectSession::createPreservedReadOnly(boundarySource, "wrapped-session.bloom");
+    const auto boundarySnapshot = boundarySource.snapshot();
+    expectations.expect(
+        finalState.projectSessionId.value() == maximum &&
+            exhausted.status() == ProjectSessionCreateStatus::RuntimeIdentityExhausted &&
+            boundarySnapshot.lastIssuedSessionId.value() == maximum &&
+            boundarySnapshot.identityExhausted,
+        "session identity exhaustion is typed and never wraps or reuses the final value");
+}
+
+void testGenerationCapturesAndSubsetPredicates(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto session = decodedSessionWithPath(expectations, identitySource);
+    const auto resultCapture = session.captureResultAcceptance();
+    const auto plainSave = session.capturePlainSavePathIntent();
+    const auto firstOpen = session.admitOpenIntent();
+    const auto firstSaveAs = session.advancePathIntentForSaveAs();
+    expectations.expect(resultCapture.isValid() && plainSave.isValid() &&
+                            plainSave.kind() == SessionPathIntentKind::ExistingPath && firstOpen &&
+                            firstSaveAs && firstOpen.capture().generation().value() == 2 &&
+                            firstSaveAs.capture().generation().value() == 2 &&
+                            firstSaveAs.capture().kind() == SessionPathIntentKind::ReplacementPath,
+                        "the first Open and Save As advance their independent generations to two");
+    expectations.expect(session.matchesResultAcceptance(resultCapture) &&
+                            session.isDesiredOpenIntent(firstOpen.capture()) &&
+                            !session.matchesPathIntent(plainSave) &&
+                            session.matchesPathIntent(firstSaveAs.capture()),
+                        "Save As invalidates only the older path-intent capture");
+    const auto stalePath = ProjectDisplayPath::create("stale-save-as.bloom");
+    const auto staleSavepoint = session.acceptSavepoint(plainSave, publicationIntent(1),
+                                                        currentRevision(session), stalePath);
+    const auto afterStaleSavepoint = session.stateSnapshot();
+    expectations.expect(
+        stalePath.has_value() && staleSavepoint == ProjectSessionSavepointStatus::StaleIntent &&
+            afterStaleSavepoint.displayPath.has_value() &&
+            afterStaleSavepoint.displayPath->value() == std::filesystem::path("project.bloom"),
+        "savepoint mutation consumes and rejects a stale session-path capture itself");
+
+    const auto currentPath = firstSaveAs.capture();
+    const auto secondOpen = session.admitOpenIntent();
+    expectations.expect(
+        secondOpen && secondOpen.capture().generation().value() == 3 &&
+            !session.isDesiredOpenIntent(firstOpen.capture()) &&
+            session.isDesiredOpenIntent(secondOpen.capture()) &&
+            session.matchesPathIntent(currentPath),
+        "a newer Open invalidates only Open intent and leaves Save acceptance valid");
+
+    auto otherSession = decodedSessionWithPath(expectations, identitySource, "other.bloom");
+    const auto otherResult = otherSession.captureResultAcceptance();
+    const auto otherOpen = otherSession.admitOpenIntent();
+    const auto otherPath = otherSession.capturePlainSavePathIntent();
+    expectations.expect(otherOpen && !session.matchesResultAcceptance(otherResult) &&
+                            !session.isDesiredOpenIntent(otherOpen.capture()) &&
+                            !session.matchesPathIntent(otherPath),
+                        "equal generation numbers from a different runtime session never match");
+
+    const auto advanced = bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(session);
+    expectations.expect(
+        advanced == SessionResultAcceptanceAdvanceStatus::Advanced &&
+            !session.matchesResultAcceptance(resultCapture) &&
+            !session.isDesiredOpenIntent(secondOpen.capture()) &&
+            !session.matchesPathIntent(currentPath),
+        "installed-content acceptance advancement invalidates every older result capture");
+}
+
+void testGenerationExhaustionBoundaries(Expectations& expectations) {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+
+    ProjectSessionIdentitySource acceptanceSource;
+    auto acceptanceSession = newSession(expectations, acceptanceSource);
+    expectations.expect(
+        bloom::host::ProjectSessionTestAccess::setGenerations(acceptanceSession, maximum - 1, 5, 7),
+        "the acceptance fixture reaches its penultimate value");
+    const auto acceptanceAdvanced =
+        bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(acceptanceSession);
+    const auto acceptanceFinal = acceptanceSession.captureResultAcceptance();
+    const auto acceptanceExhausted =
+        bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(acceptanceSession);
+    expectations.expect(
+        acceptanceAdvanced == SessionResultAcceptanceAdvanceStatus::Advanced &&
+            acceptanceFinal.generation().value() == maximum && acceptanceFinal.isValid() &&
+            acceptanceExhausted == SessionResultAcceptanceAdvanceStatus::RuntimeIdentityExhausted &&
+            acceptanceSession.captureResultAcceptance() == acceptanceFinal,
+        "result-acceptance generation issues UINT64_MAX once and then remains unchanged");
+
+    const auto beforeAcceptanceBlockedOpen = acceptanceSession.stateSnapshot();
+    const auto acceptanceBlockedOpen = acceptanceSession.admitOpenIntent();
+    const auto afterAcceptanceBlockedOpen = acceptanceSession.stateSnapshot();
+    expectations.expect(
+        acceptanceBlockedOpen.status() == OpenIntentAdmissionStatus::RuntimeIdentityExhausted &&
+            afterAcceptanceBlockedOpen.resultAcceptanceGeneration ==
+                beforeAcceptanceBlockedOpen.resultAcceptanceGeneration &&
+            afterAcceptanceBlockedOpen.openIntentGeneration ==
+                beforeAcceptanceBlockedOpen.openIntentGeneration &&
+            afterAcceptanceBlockedOpen.pathIntentGeneration ==
+                beforeAcceptanceBlockedOpen.pathIntentGeneration,
+        "Open admission with exhausted acceptance headroom atomically changes no generation");
+
+    ProjectSessionIdentitySource openSource;
+    auto openSession = newSession(expectations, openSource);
+    expectations.expect(
+        bloom::host::ProjectSessionTestAccess::setGenerations(openSession, 1, maximum - 1, 3),
+        "the Open fixture reaches its penultimate value");
+    const auto finalOpen = openSession.admitOpenIntent();
+    const auto beforeOpenExhaustion = openSession.stateSnapshot();
+    const auto exhaustedOpen = openSession.admitOpenIntent();
+    const auto afterOpenExhaustion = openSession.stateSnapshot();
+    expectations.expect(
+        finalOpen && finalOpen.capture().generation().value() == maximum &&
+            exhaustedOpen.status() == OpenIntentAdmissionStatus::RuntimeIdentityExhausted &&
+            afterOpenExhaustion.resultAcceptanceGeneration ==
+                beforeOpenExhaustion.resultAcceptanceGeneration &&
+            afterOpenExhaustion.openIntentGeneration == beforeOpenExhaustion.openIntentGeneration &&
+            afterOpenExhaustion.pathIntentGeneration == beforeOpenExhaustion.pathIntentGeneration,
+        "Open generation issues UINT64_MAX once and rejects the next admission without mutation");
+
+    ProjectSessionIdentitySource pathSource;
+    auto pathSession = decodedSessionWithPath(expectations, pathSource, "maximum-path.bloom");
+    expectations.expect(
+        bloom::host::ProjectSessionTestAccess::setGenerations(pathSession, 1, 4, maximum - 1),
+        "the path fixture reaches its penultimate value");
+    const auto finalPath = pathSession.advancePathIntentForSaveAs();
+    const auto plainAtMaximum = pathSession.capturePlainSavePathIntent();
+    const auto beforePathExhaustion = pathSession.stateSnapshot();
+    const auto exhaustedPath = pathSession.advancePathIntentForSaveAs();
+    const auto afterPathExhaustion = pathSession.stateSnapshot();
+    expectations.expect(
+        finalPath && finalPath.capture().generation().value() == maximum &&
+            finalPath.capture().kind() == SessionPathIntentKind::ReplacementPath &&
+            plainAtMaximum.isValid() &&
+            plainAtMaximum.kind() == SessionPathIntentKind::ExistingPath &&
+            pathSession.matchesPathIntent(plainAtMaximum) &&
+            exhaustedPath.status() == SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted &&
+            afterPathExhaustion.resultAcceptanceGeneration ==
+                beforePathExhaustion.resultAcceptanceGeneration &&
+            afterPathExhaustion.openIntentGeneration == beforePathExhaustion.openIntentGeneration &&
+            afterPathExhaustion.pathIntentGeneration == beforePathExhaustion.pathIntentGeneration,
+        "Save As exhausts exactly while plain Save can still capture the final path generation");
+}
+
+void testDirtySavepointBranching(Expectations& expectations,
+                                 ProjectSessionIdentitySource& identitySource) {
+    auto session = newSession(expectations, identitySource);
     const auto originalResult = session.decodedSnapshot();
     const auto& original = originalResult.snapshot();
 
@@ -132,7 +408,16 @@ void testDirtySavepointBranching(Expectations& expectations) {
     expectations.expect(original.project().name() == "Project",
                         "a previously returned document snapshot remains immutable");
 
-    const auto missingPath = session.acceptSavepoint(firstRevision);
+    const auto pathlessPlainSave = session.capturePlainSavePathIntent();
+    const auto saveAs = session.advancePathIntentForSaveAs();
+    expectations.expect(!pathlessPlainSave.isValid() && saveAs &&
+                            saveAs.capture().kind() == SessionPathIntentKind::ReplacementPath,
+                        "a pathless session can only establish its first path through Save As");
+    if (!saveAs) {
+        return;
+    }
+    const auto missingPath =
+        session.acceptSavepoint(saveAs.capture(), publicationIntent(1), firstRevision);
     const auto missingPathState = session.stateSnapshot();
     expectations.expect(
         missingPath == ProjectSessionSavepointStatus::PathRequired &&
@@ -144,8 +429,9 @@ void testDirtySavepointBranching(Expectations& expectations) {
     if (!path.has_value()) {
         return;
     }
-    expectations.expect(session.acceptSavepoint(firstRevision, path) ==
-                                ProjectSessionSavepointStatus::Accepted &&
+    expectations.expect(session.acceptSavepoint(saveAs.capture(), publicationIntent(1),
+                                                firstRevision,
+                                                path) == ProjectSessionSavepointStatus::Accepted &&
                             session.stateSnapshot().dirty == false,
                         "an accepted publication records its exact clean revision and path");
 
@@ -154,7 +440,8 @@ void testDirtySavepointBranching(Expectations& expectations) {
     const auto secondRevision = currentRevision(session);
     expectations.expect(secondRevision.value() == 2 && session.stateSnapshot().dirty == true,
                         "editing after a savepoint is dirty");
-    expectations.expect(session.acceptSavepoint(firstRevision) ==
+    expectations.expect(session.acceptSavepoint(session.capturePlainSavePathIntent(),
+                                                publicationIntent(2), firstRevision) ==
                                 ProjectSessionSavepointStatus::Accepted &&
                             session.stateSnapshot().dirty == true,
                         "a late older publication keeps the newer live document dirty");
@@ -174,7 +461,8 @@ void testDirtySavepointBranching(Expectations& expectations) {
     expectations.expect(!branched.canRedo && branched.historySize == 2 &&
                             beforeBranch.redoLabel == "Second edit",
                         "a branch discards redo while earlier state snapshots stay self-contained");
-    expectations.expect(session.acceptSavepoint(currentRevision(session)) ==
+    expectations.expect(session.acceptSavepoint(session.capturePlainSavePathIntent(),
+                                                publicationIntent(3), currentRevision(session)) ==
                                 ProjectSessionSavepointStatus::Accepted &&
                             session.stateSnapshot().dirty == false,
                         "plain-save acceptance retains the established path");
@@ -189,14 +477,108 @@ void testDirtySavepointBranching(Expectations& expectations) {
 
     const auto future = bloom::document::Revision::fromRaw(currentRevision(session).value() + 1);
     const auto beforeFuture = session.stateSnapshot();
-    expectations.expect(session.acceptSavepoint(future) ==
-                                ProjectSessionSavepointStatus::UnknownRevision &&
-                            session.stateSnapshot().cleanRevision == beforeFuture.cleanRevision,
-                        "an unobserved future revision cannot move the savepoint");
+    expectations.expect(
+        session.acceptSavepoint(session.capturePlainSavePathIntent(), publicationIntent(4),
+                                future) == ProjectSessionSavepointStatus::UnknownRevision &&
+            session.stateSnapshot().cleanRevision == beforeFuture.cleanRevision &&
+            session.stateSnapshot().newestAcceptedPublicationIntent ==
+                beforeFuture.newestAcceptedPublicationIntent,
+        "an unobserved future revision cannot move the savepoint or publication frontier");
 }
 
-void testCommandResultsAndNoChange(Expectations& expectations) {
-    auto session = newSession(expectations);
+void testSavepointPathAuthority(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto session = decodedSessionWithPath(expectations, identitySource, "existing.bloom");
+    expectations.expect(session.execute(rename("Edited", session)).changed(),
+                        "the path-authority fixture becomes dirty");
+    const auto revision = currentRevision(session);
+    const auto plainSave = session.capturePlainSavePathIntent();
+    const auto replacement = ProjectDisplayPath::create("replacement.bloom");
+    expectations.expect(plainSave.isValid() &&
+                            plainSave.kind() == SessionPathIntentKind::ExistingPath &&
+                            replacement.has_value(),
+                        "plain Save captures only existing-path authority");
+    if (!replacement.has_value()) {
+        return;
+    }
+
+    const auto beforeRejected = session.stateSnapshot();
+    expectations.expect(
+        session.acceptSavepoint(plainSave, PublicationIntentId{}, revision) ==
+                ProjectSessionSavepointStatus::InvalidPublicationIntent &&
+            session.acceptSavepoint(plainSave, publicationIntent(1), revision, replacement) ==
+                ProjectSessionSavepointStatus::PathAuthorityMismatch,
+        "invalid publication identity and plain-Save path replacement are rejected explicitly");
+    const auto afterRejected = session.stateSnapshot();
+    expectations.expect(
+        afterRejected.displayPath == beforeRejected.displayPath &&
+            afterRejected.cleanRevision == beforeRejected.cleanRevision &&
+            afterRejected.dirty == true && !afterRejected.newestAcceptedPublicationIntent.isValid(),
+        "misusing a plain token cannot change path, clean state, or publication frontier");
+
+    expectations.expect(session.acceptSavepoint(plainSave, publicationIntent(1), revision) ==
+                                ProjectSessionSavepointStatus::Accepted &&
+                            session.stateSnapshot().dirty == false &&
+                            session.stateSnapshot().newestAcceptedPublicationIntent ==
+                                publicationIntent(1),
+                        "a rejected callback does not consume its publication identity");
+
+    const auto saveAs = session.advancePathIntentForSaveAs();
+    expectations.expect(static_cast<bool>(saveAs), "the replacement-path fixture admits Save As");
+    if (!saveAs) {
+        return;
+    }
+    const auto beforeMissingReplacement = session.stateSnapshot();
+    expectations.expect(
+        session.acceptSavepoint(saveAs.capture(), publicationIntent(2), revision) ==
+                ProjectSessionSavepointStatus::PathRequired &&
+            session.stateSnapshot().newestAcceptedPublicationIntent ==
+                beforeMissingReplacement.newestAcceptedPublicationIntent &&
+            session.acceptSavepoint(saveAs.capture(), publicationIntent(2), revision,
+                                    replacement) == ProjectSessionSavepointStatus::Accepted &&
+            session.stateSnapshot().displayPath == replacement &&
+            session.stateSnapshot().newestAcceptedPublicationIntent == publicationIntent(2),
+        "Save As requires a published replacement path and advances only after acceptance");
+}
+
+void testPublicationCallbackOrdering(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto session = decodedSessionWithPath(expectations, identitySource, "ordered.bloom");
+
+    expectations.expect(session.execute(rename("R1", session, "R1")).changed(),
+                        "the first same-path publication captures revision one");
+    const auto revisionOne = currentRevision(session);
+    const auto r1PathIntent = session.capturePlainSavePathIntent();
+    expectations.expect(session.execute(rename("R2", session, "R2")).changed(),
+                        "the second same-path publication captures revision two");
+    const auto revisionTwo = currentRevision(session);
+    const auto r2PathIntent = session.capturePlainSavePathIntent();
+
+    expectations.expect(session.acceptSavepoint(r2PathIntent, publicationIntent(2), revisionTwo) ==
+                                ProjectSessionSavepointStatus::Accepted &&
+                            session.stateSnapshot().cleanRevision == revisionTwo &&
+                            session.stateSnapshot().dirty == false,
+                        "the newer same-path callback establishes the exact clean revision");
+    const auto afterR2 = session.stateSnapshot();
+    expectations.expect(
+        session.acceptSavepoint(r1PathIntent, publicationIntent(1), revisionOne) ==
+                ProjectSessionSavepointStatus::StaleIntent &&
+            session.acceptSavepoint(r1PathIntent, publicationIntent(2), revisionOne) ==
+                ProjectSessionSavepointStatus::StaleIntent,
+        "older and duplicate publication callbacks are rejected before state mutation");
+    const auto afterReverseCallbacks = session.stateSnapshot();
+    expectations.expect(
+        afterReverseCallbacks.displayPath == afterR2.displayPath &&
+            afterReverseCallbacks.currentRevision == revisionTwo &&
+            afterReverseCallbacks.cleanRevision == revisionTwo &&
+            afterReverseCallbacks.dirty == false &&
+            afterReverseCallbacks.newestAcceptedPublicationIntent == publicationIntent(2),
+        "reverse r1/r2 callbacks cannot roll back the path, clean revision, or dirty truth");
+}
+
+void testCommandResultsAndNoChange(Expectations& expectations,
+                                   ProjectSessionIdentitySource& identitySource) {
+    auto session = newSession(expectations, identitySource);
     const auto undo = session.undo();
     const auto redo = session.redo();
     expectations.expect(undo.completed() && commandStatus(undo) == CommandStatus::NothingToUndo,
@@ -223,7 +605,8 @@ void testCommandResultsAndNoChange(Expectations& expectations) {
         "a rejected transaction preserves the complete session state");
 }
 
-void testDegradedEditableAuthorization(Expectations& expectations) {
+void testDegradedEditableAuthorization(Expectations& expectations,
+                                       ProjectSessionIdentitySource& identitySource) {
     auto createdProject = bloom::document::makeNewProject(
         "Degraded", "Main", bloom::core::RationalTime::fromInteger(5));
     auto path = ProjectDisplayPath::create(std::filesystem::path("degraded.bloom"));
@@ -231,12 +614,13 @@ void testDegradedEditableAuthorization(Expectations& expectations) {
         expectations.expect(false, "the degraded fixture path is valid");
         return;
     }
-    auto result = ProjectSession::createDecoded({
-        .project = std::move(createdProject.project),
-        .editability = DecodedProjectEditability::DegradedEditable,
-        .displayPath = path,
-        .persistedAllocatorHighWater = std::nullopt,
-    });
+    auto result = ProjectSession::createDecoded(
+        identitySource, {
+                            .project = std::move(createdProject.project),
+                            .editability = DecodedProjectEditability::DegradedEditable,
+                            .displayPath = path,
+                            .persistedAllocatorHighWater = std::nullopt,
+                        });
     expectations.expect(static_cast<bool>(result), "a valid degraded document installs");
     if (!result) {
         return;
@@ -247,13 +631,15 @@ void testDegradedEditableAuthorization(Expectations& expectations) {
                         "degraded capability remains visible to callers");
     expectations.expect(session.execute(rename("Edited degraded", session)).changed(),
                         "degraded-editable documents remain authorable");
-    expectations.expect(session.acceptSavepoint(currentRevision(session)) ==
+    expectations.expect(session.acceptSavepoint(session.capturePlainSavePathIntent(),
+                                                publicationIntent(1), currentRevision(session)) ==
                             ProjectSessionSavepointStatus::Accepted,
                         "the acceptance seam can record a proven degraded save result");
 }
 
-void testPreservedReadOnlyState(Expectations& expectations) {
-    auto result = ProjectSession::createPreservedReadOnly("preserved.bloom");
+void testPreservedReadOnlyState(Expectations& expectations,
+                                ProjectSessionIdentitySource& identitySource) {
+    auto result = ProjectSession::createPreservedReadOnly(identitySource, "preserved.bloom");
     expectations.expect(static_cast<bool>(result), "a non-empty preserved path is accepted");
     if (!result) {
         return;
@@ -271,6 +657,10 @@ void testPreservedReadOnlyState(Expectations& expectations) {
     expectations.expect(session.decodedSnapshot().status() ==
                             DecodedProjectSnapshotStatus::NoDecodedDocument,
                         "decoded access fails with a typed no-document status");
+    expectations.expect(!session.capturePlainSavePathIntent().isValid() &&
+                            session.advancePathIntentForSaveAs().status() ==
+                                SessionPathIntentAdvanceStatus::ReadOnly,
+                        "preserved content cannot manufacture a native Save or Save As intent");
 
     Transaction blocked("Blocked edit");
     blocked.emplace<SetProjectName>("Must not apply");
@@ -279,52 +669,57 @@ void testPreservedReadOnlyState(Expectations& expectations) {
                             session.undo().status == ProjectSessionCommandStatus::ReadOnly &&
                             session.redo().status == ProjectSessionCommandStatus::ReadOnly,
                         "execute, undo, and redo are explicitly rejected as read-only");
-    expectations.expect(session.acceptSavepoint(bloom::document::Revision{}) ==
+    expectations.expect(session.acceptSavepoint({}, {}, bloom::document::Revision{}) ==
                             ProjectSessionSavepointStatus::ReadOnly,
                         "preserved read-only content cannot establish a native savepoint");
 }
 
-void testInvalidConstruction(Expectations& expectations) {
+void testInvalidConstruction(Expectations& expectations,
+                             ProjectSessionIdentitySource& identitySource) {
+    const auto beforeInvalid = identitySource.snapshot();
     auto emptyName = newProjectRequest();
     emptyName.projectName.clear();
-    expectations.expect(ProjectSession::createNew(std::move(emptyName)).status() ==
+    expectations.expect(ProjectSession::createNew(identitySource, std::move(emptyName)).status() ==
                             ProjectSessionCreateStatus::InvalidNewProject,
                         "an empty project name is rejected without a partial session");
 
     auto invalidDuration = newProjectRequest();
     invalidDuration.duration = {};
-    expectations.expect(ProjectSession::createNew(std::move(invalidDuration)).status() ==
-                            ProjectSessionCreateStatus::InvalidNewProject,
-                        "a nonpositive composition duration is rejected");
+    expectations.expect(
+        ProjectSession::createNew(identitySource, std::move(invalidDuration)).status() ==
+            ProjectSessionCreateStatus::InvalidNewProject,
+        "a nonpositive composition duration is rejected");
     expectations.expect(!ProjectDisplayPath::create({}).has_value() &&
-                            ProjectSession::createPreservedReadOnly({}).status() ==
+                            ProjectSession::createPreservedReadOnly(identitySource, {}).status() ==
                                 ProjectSessionCreateStatus::InvalidDisplayPath,
                         "empty display paths are rejected at both construction seams");
 
     bloom::document::Project invalidProject(bloom::document::ProjectId{}, "Invalid");
-    expectations.expect(
-        ProjectSession::createDecoded({.project = std::move(invalidProject),
-                                       .editability = DecodedProjectEditability::Editable,
-                                       .displayPath = std::nullopt,
-                                       .persistedAllocatorHighWater = std::nullopt})
-                .status() == ProjectSessionCreateStatus::InvalidDecodedProject,
-        "an invalid decoded project cannot install");
+    expectations.expect(ProjectSession::createDecoded(
+                            identitySource, {.project = std::move(invalidProject),
+                                             .editability = DecodedProjectEditability::Editable,
+                                             .displayPath = std::nullopt,
+                                             .persistedAllocatorHighWater = std::nullopt})
+                                .status() == ProjectSessionCreateStatus::InvalidDecodedProject,
+                        "an invalid decoded project cannot install");
 
     auto unknownEditability = bloom::document::makeNewProject(
         "Unknown editability", "Main", bloom::core::RationalTime::fromInteger(5));
-    expectations.expect(ProjectSession::createDecoded(
-                            {.project = std::move(unknownEditability.project),
+    expectations.expect(
+        ProjectSession::createDecoded(
+            identitySource, {.project = std::move(unknownEditability.project),
                              // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
                              .editability = static_cast<DecodedProjectEditability>(255),
                              .displayPath = std::nullopt,
                              .persistedAllocatorHighWater = std::nullopt})
-                                .status() == ProjectSessionCreateStatus::InvalidDecodedProject,
-                        "an unknown editability discriminator cannot authorize commands");
+                .status() == ProjectSessionCreateStatus::InvalidDecodedProject,
+        "an unknown editability discriminator cannot authorize commands");
 
     auto insufficientHighWater = bloom::document::makeNewProject(
         "Persisted", "Main", bloom::core::RationalTime::fromInteger(5));
     expectations.expect(
         ProjectSession::createDecoded(
+            identitySource,
             {
                 .project = std::move(insufficientHighWater.project),
                 .editability = DecodedProjectEditability::Editable,
@@ -333,12 +728,26 @@ void testInvalidConstruction(Expectations& expectations) {
             })
                 .status() == ProjectSessionCreateStatus::InvalidDecodedProject,
         "persisted allocator high-water must cover every decoded durable ID");
+    const auto afterInvalid = identitySource.snapshot();
+    expectations.expect(afterInvalid.lastIssuedSessionId == beforeInvalid.lastIssuedSessionId &&
+                            afterInvalid.identityExhausted == beforeInvalid.identityExhausted,
+                        "invalid construction never consumes a runtime session identity");
 }
 
-void testMoveAndLifetimeSafety(Expectations& expectations) {
-    auto original = newSession(expectations);
+void testMoveAndLifetimeSafety(Expectations& expectations,
+                               ProjectSessionIdentitySource& identitySource) {
+    auto original = newSession(expectations, identitySource);
     expectations.expect(original.execute(rename("Before move", original, "Owned label")).changed(),
                         "the move fixture has history");
+    const auto acceptanceCapture = original.captureResultAcceptance();
+    const auto openCapture = original.admitOpenIntent().capture();
+    const auto pathCapture = original.advancePathIntentForSaveAs().capture();
+    const auto movedPath = ProjectDisplayPath::create("moved.bloom");
+    expectations.expect(movedPath.has_value() &&
+                            original.acceptSavepoint(pathCapture, publicationIntent(9),
+                                                     currentRevision(original), movedPath) ==
+                                ProjectSessionSavepointStatus::Accepted,
+                        "the move fixture owns an accepted publication frontier");
     const auto beforeMove = original.stateSnapshot();
     auto moved = std::move(original);
     expectations.expect(
@@ -353,10 +762,34 @@ void testMoveAndLifetimeSafety(Expectations& expectations) {
                 .status == // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
             ProjectSessionCommandStatus::InvalidSession,
         "a moved-from session cannot mutate transferred ownership");
+    expectations.expect(
+        !original.captureResultAcceptance()
+                .isValid() && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+            !original.capturePlainSavePathIntent()
+                 .isValid() && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+            original.admitOpenIntent()
+                    .status() == // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+                OpenIntentAdmissionStatus::InvalidSession &&
+            original.advancePathIntentForSaveAs()
+                    .status() == // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+                SessionPathIntentAdvanceStatus::InvalidSession &&
+            !original.matchesResultAcceptance(
+                acceptanceCapture) && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+            !original.isDesiredOpenIntent(
+                openCapture) && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+            !original.matchesPathIntent(
+                pathCapture), // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+        "a moved-from session exposes only invalid captures and cannot accept prior work");
     expectations.expect(moved.isValid() && projectName(moved) == "Before move" &&
                             moved.stateSnapshot().undoLabel == "Owned label" &&
-                            beforeMove.undoLabel == "Owned label",
-                        "moving preserves document, history references, and owned snapshots");
+                            beforeMove.undoLabel == "Owned label" &&
+                            moved.stateSnapshot().projectSessionId == beforeMove.projectSessionId &&
+                            moved.stateSnapshot().newestAcceptedPublicationIntent ==
+                                beforeMove.newestAcceptedPublicationIntent &&
+                            moved.matchesResultAcceptance(acceptanceCapture) &&
+                            moved.isDesiredOpenIntent(openCapture) &&
+                            moved.matchesPathIntent(pathCapture),
+                        "moving preserves identity, generations, history, and captured authority");
     expectations.expect(moved.undo().changed() && projectName(moved) == "Project",
                         "the moved command stack remains bound to its heap-owned document");
 }
@@ -365,14 +798,20 @@ void testMoveAndLifetimeSafety(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
+    ProjectSessionIdentitySource identitySource;
     try {
-        testNewProjectBaselineAndSnapshots(expectations);
-        testDirtySavepointBranching(expectations);
-        testCommandResultsAndNoChange(expectations);
-        testDegradedEditableAuthorization(expectations);
-        testPreservedReadOnlyState(expectations);
-        testInvalidConstruction(expectations);
-        testMoveAndLifetimeSafety(expectations);
+        testIdentitySourceAndExactExhaustion(expectations);
+        testGenerationCapturesAndSubsetPredicates(expectations);
+        testGenerationExhaustionBoundaries(expectations);
+        testNewProjectBaselineAndSnapshots(expectations, identitySource);
+        testDirtySavepointBranching(expectations, identitySource);
+        testSavepointPathAuthority(expectations);
+        testPublicationCallbackOrdering(expectations);
+        testCommandResultsAndNoChange(expectations, identitySource);
+        testDegradedEditableAuthorization(expectations, identitySource);
+        testPreservedReadOnlyState(expectations, identitySource);
+        testInvalidConstruction(expectations, identitySource);
+        testMoveAndLifetimeSafety(expectations, identitySource);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected fixture exception: " << error.what() << '\n';
         return 1;
