@@ -196,7 +196,7 @@ code from this closed version 1 vocabulary:
 | display window | `png.equal-window-required`, `window.out-of-range` |
 | pixel aspect | `png.square-pixel-required`, `exr.par-rounded-binary32`, `pixel-aspect.unsupported` |
 | compression | `compression.unavailable`, `compression.unsupported` |
-| metadata | `metadata.omitted`, `metadata.unsupported` |
+| metadata | `metadata.unsupported` |
 | external dependencies | `png.ocio-external-reference`, `dependency.missing`, `adapter.unavailable`, `resource.limit-exceeded` |
 
 Codes are valid only for their listed facet; another code or a future code requires a new analysis
@@ -208,7 +208,6 @@ permission are derived from preset and code; callers cannot choose them:
 | empty code | `Exact` | both | `1` |
 | `png.display-transform-clamp-quantize`, `png.float32-to-uint8`, `png.lin-rec709-scene-to-srgb`, `png.premultiplied-to-straight` | `Approximated` | PNG | `1` |
 | `exr.par-rounded-binary32` | `Approximated` | EXR | `1` |
-| `metadata.omitted` | `Omitted` | both | `1` |
 | `png.ocio-external-reference` | `ExternalReference` | PNG | `1` |
 | `process-frame.missing`, `compression.unavailable`, `dependency.missing`, `adapter.unavailable`, `resource.limit-exceeded` | `Missing` | both | `0` |
 | `ocio.missing`, `ocio.changed`, `ocio.invalid`, `ocio.resource-missing`, `ocio.version-unsupported` | `Missing` | PNG | `0` |
@@ -217,9 +216,10 @@ permission are derived from preset and code; callers cannot choose them:
 
 The five `ocio.*` codes map one-to-one from the corresponding typed color-resolution failures.
 An unknown code/state/preset/permission tuple is structurally invalid, not merely non-approvable.
-`Equivalent` has no valid tuple in version 1. Approval is forbidden when any permission bit is
-zero, regardless of caller policy; a headless policy can approve only the exact digest of a report
-whose eleven derived permission bits are all `1`.
+`Equivalent` and `Omitted` have no valid tuple in version 1; the process frame owns no optional
+artist/application metadata to omit. Approval is forbidden when any permission bit is zero,
+regardless of caller policy; a headless policy can approve only the exact digest of a report whose
+eleven derived permission bits are all `1`.
 
 Source and target descriptors use one canonical ASCII grammar. A descriptor is empty only when the
 preset's facet schema declares that side absent. Otherwise it is semicolon-separated `key=value`
@@ -292,6 +292,9 @@ exact zero. The channel descriptor expresses semantic `R,G,B,A` order; EXR's phy
 `profile=id:none` describes optional artist/application metadata; mandatory PNG signaling and EXR
 header/color attributes remain part of their color and output-profile contracts.
 `kind=id:none` means no unresolved output-time dependency, not an absence of evaluation lineage.
+`process-frame.missing` means the requested, validated process image descriptor remains known but
+its immutable pixel payload or semantic identity is unavailable; it never licenses invented source
+dimensions or descriptors.
 
 PNG target descriptors in the same facet order are exactly:
 
@@ -350,8 +353,8 @@ Nominal analysis is derived exactly as follows:
 | color | `Approximated`, `png.lin-rec709-scene-to-srgb` when the processor is ready | `Exact` |
 | alpha association | `Approximated`, `png.premultiplied-to-straight` | `Exact` |
 | channels | `Exact` | `Exact` |
-| data window | `Exact` iff source equals the PNG target; otherwise `Unsupported`, `png.origin-window-required` | `Exact` iff the inclusive bounds fit signed 32-bit; otherwise `Unsupported`, `window.out-of-range` |
-| display window | `Exact` iff source equals the PNG target; otherwise `Unsupported`, `png.equal-window-required` | same EXR bounds rule as data window |
+| data window | `Unsupported`, `window.out-of-range` if `W` or `H` exceeds `2147483647`; otherwise `Exact` iff source equals the PNG target, else `Unsupported`, `png.origin-window-required` | `Exact` iff the inclusive bounds fit signed 32-bit; otherwise `Unsupported`, `window.out-of-range` |
+| display window | same PNG extent limit; otherwise `Exact` iff source equals the PNG target, else `Unsupported`, `png.equal-window-required` | same EXR bounds rule as data window |
 | pixel aspect | `Exact` iff `1/1`; otherwise `Unsupported`, `png.square-pixel-required` | `Exact` or permitted `Approximated`, `exr.par-rounded-binary32` |
 | compression | `Exact` | `Exact` |
 | metadata | `Exact` | `Exact` |
@@ -380,7 +383,8 @@ The same typed report powers the render dialog, Jobs surface, logs, scripting, a
 
 `PngRgba8SrgbV1` is deliberately narrow:
 
-- one non-interlaced RGBA image with unsigned 8-bit channels in `R`, `G`, `B`, `A` order;
+- one non-interlaced RGBA image whose width and height are each in `1..2147483647`, with unsigned
+  8-bit channels in `R`, `G`, `B`, `A` order;
 - straight/unassociated alpha;
 - a qualified OCIO display/output processor whose output resolves to the Color Interop ID
   `srgb_rec709_display`;
