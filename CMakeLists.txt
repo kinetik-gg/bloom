@@ -25,6 +25,7 @@ add_subdirectory(tools/quality/project_schema_checks)
 add_subdirectory(tools/quality/repository_checks)
 
 add_subdirectory(src/core)
+add_subdirectory(tools/quality/dependency_artifact_checks)
 add_subdirectory(src/platform)
 add_subdirectory(src/document)
 add_subdirectory(src/project)
@@ -34,6 +35,16 @@ add_subdirectory(src/color)
 add_subdirectory(src/output)
 add_subdirectory(src/commands)
 add_subdirectory(src/host)
+
+add_custom_target(
+    bloom-quality-check
+    DEPENDS
+        bloom-format-check
+        bloom-hygiene-check
+        bloom-architecture-check
+        bloom-project-schema-check
+        bloom-dependency-artifact-check
+)
 
 if(BLOOM_BUILD_DESKTOP)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)

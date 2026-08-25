@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:kinetik:bloom:schema:dependency-prefix-manifest:1.0",
   "title": "Bloom Dependency Prefix Manifest 1.0",
-  "$comment": "scripts/check_dependency_artifacts.py checks copied-lock equality and logical evidence in synthetic fixtures only; it does not qualify a production prefix or inspect a filesystem.",
+  "$comment": "The native bloom-dependency-artifact-check target checks copied-lock equality and logical evidence in synthetic fixtures only; it does not qualify a production prefix or inspect a filesystem.",
   "type": "object",
   "required": ["format", "schemaVersion", "lockIdentity", "profile", "unicodeProfile", "components", "capabilities", "cmakePackages", "installedFiles", "qualificationResults"],
   "properties": {
