@@ -30,6 +30,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/project-session.md`](architecture/project-session.md),
    [`architecture/color-management.md`](architecture/color-management.md),
    [`architecture/frame-output.md`](architecture/frame-output.md),
+   [`architecture/media-io.md`](architecture/media-io.md),
    [`architecture/dependency-intake.md`](architecture/dependency-intake.md),
    [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md), and

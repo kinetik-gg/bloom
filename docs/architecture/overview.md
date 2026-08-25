@@ -212,6 +212,11 @@ The complete contract and game-engine pipeline fitness test are defined in
   Project-qualified OCIO transforms remain explicit `src/color` boundaries; display processing and
   file output do not alter durable project truth. See [`color-management.md`](color-management.md)
   and [`frame-output.md`](frame-output.md).
+- Professional time-based media remains a qualified-provider pipeline rather than an FFmpeg-shaped
+  document model. Provider-neutral ingest/export semantics, isolated codec workers, hardware-surface
+  containment, reopen/QC publication, and the unresolved cross-platform ProRes authorization gap are
+  defined as working research in [`media-io.md`](media-io.md) and proposed
+  [ADR 0020](../decisions/0020-qualified-media-codec-providers.md).
 - The offline superbuild, reviewed lock, and qualified-prefix intake mechanism are accepted in
   [ADR 0019](../decisions/0019-reproducible-dependency-intake.md). Exact dependency profiles remain
   pending implementation and cross-platform qualification; see

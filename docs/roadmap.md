@@ -563,7 +563,9 @@ composition root. Parallel speed comes from stable boundaries, not conflict-heav
 ## Deferred Until The First Proof Is Stable
 
 - deterministic text shaping/rasterization and font asset management
-- still/video ingest, broad codecs, and audio
+- still/video ingest, broad codecs, and audio; the provider, isolation, qualification, and ProRes
+  constraints are researched in [`architecture/media-io.md`](architecture/media-io.md) without
+  moving implementation ahead of the first-proof gate
 - masks, mattes, effects, blend-mode breadth, adjustment layers, and nested compositions
 - full nonlinear editing, grading, and delivery workspaces
 - public Python/add-on runtime implementation and custom PySide UI
