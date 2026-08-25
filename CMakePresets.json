@@ -25,7 +25,8 @@
       "cacheVariables": {
         "BLOOM_BUILD_DESKTOP": "OFF",
         "BLOOM_ENABLE_CLANG_TIDY": "ON",
-        "BLOOM_ENABLE_TEST_CLANG_TIDY": "ON"
+        "BLOOM_ENABLE_TEST_CLANG_TIDY": "ON",
+        "BLOOM_LLVM_TOOLCHAIN_MAJOR": "22"
       }
     }
   ],
