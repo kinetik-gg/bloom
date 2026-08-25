@@ -161,6 +161,10 @@ void testExactFieldValueForms(Expectations& expectations) {
                                  Error::InvalidFloatBits, 11),
                         "floating-point bits require exact lowercase hexadecimal");
     expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::PixelAspectBinary32, "value=f32:G"),
+                                 Error::InvalidFloatBits, 10),
+                        "an invalid present Float32 digit precedes a truncated-suffix diagnostic");
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
                                      Schema::PixelAspectBinary32, "value=f64:3ff0000000000000"),
                                  Error::InvalidValueTag, 6),
                         "the EXR target pixel-aspect schema requires binary32 bits");
@@ -172,6 +176,24 @@ void testExactFieldValueForms(Expectations& expectations) {
                                                                          "method=id:zip level"),
                                  Error::InvalidIdentifier, 13),
                         "identifier bytes are restricted to the exact portable alphabet");
+
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::PixelAspectRational, "denominator=u:0;numerator=u:1"),
+                                 Error::InvalidRational, 14),
+                        "a canonical source pixel aspect requires a positive denominator");
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::PixelAspectRational, "denominator=u:1;numerator=u:0"),
+                                 Error::InvalidRational, 28),
+                        "a canonical source pixel aspect requires a positive numerator");
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::PixelAspectRational, "denominator=u:2;numerator=u:2"),
+                                 Error::NonNormalizedRational, 14),
+                        "a canonical source pixel aspect requires reduced terms");
+    expectations.expect(
+        output::validateOutputFacetDescriptorV1(Schema::PixelAspectRational,
+                                                "denominator=u:4294967294;numerator=u:4294967295")
+            .hasValue(),
+        "positive reduced pixel-aspect terms remain valid at the uint32 boundary");
 }
 
 void testGenericTaggedValueGrammar(Expectations& expectations) {
@@ -226,6 +248,17 @@ void testGenericTaggedValueGrammar(Expectations& expectations) {
     expectations.expect(!unknownTag && unknownTag.error() == Error::InvalidValueTag &&
                             unknownTag.errorOffset() == 0,
                         "unknown value tags fail at the first byte");
+
+    const auto shortInvalidFloat32 = output::validateOutputFacetDescriptorValueV1("f32:0G");
+    expectations.expect(!shortInvalidFloat32 &&
+                            shortInvalidFloat32.error() == Error::InvalidFloatBits &&
+                            shortInvalidFloat32.errorOffset() == 5,
+                        "Float32 validation reports an invalid present digit before truncation");
+    const auto shortInvalidFloat64 = output::validateOutputFacetDescriptorValueV1("f64:G");
+    expectations.expect(!shortInvalidFloat64 &&
+                            shortInvalidFloat64.error() == Error::InvalidFloatBits &&
+                            shortInvalidFloat64.errorOffset() == 4,
+                        "Float64 validation reports an invalid present digit before truncation");
 }
 
 void testChannelShapeAndLexicalIndices(Expectations& expectations) {
@@ -245,8 +278,19 @@ void testChannelShapeAndLexicalIndices(Expectations& expectations) {
                      Schema::Channels,
                      "count=u:3;name-0=utf8:52;name-2=utf8:42;role-0=id:red;role-1=id:green;"
                      "role-2=id:blue"),
-                 Error::MissingKey, 84),
-        "unique in-range channel keys must still cover every contiguous index");
+                 Error::MissingKey, 25),
+        "the first channel field following a missing contiguous index is reported");
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::Channels, "count=u:2;role-0=id:red;role-1=id:green"),
+                                 Error::MissingKey, 10),
+                        "the first role field reports a missing channel-name group");
+    expectations.expect(
+        hasError(output::validateOutputFacetDescriptorV1(
+                     Schema::Channels,
+                     "count=u:3;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;role-0=id:red;"
+                     "role-2=id:blue"),
+                 Error::MissingKey, 69),
+        "the first role field following a missing contiguous role index is reported");
     expectations.expect(
         hasError(output::validateOutputFacetDescriptorV1(
                      Schema::Channels,
@@ -263,8 +307,8 @@ void testChannelShapeAndLexicalIndices(Expectations& expectations) {
         hasError(output::validateOutputFacetDescriptorV1(
                      Schema::Channels, "count=u:12;name-0=utf8:30;name-1=utf8:31;name-2=utf8:32;"
                                        "name-10=utf8:3130"),
-                 Error::OutOfOrderKey, 56),
-        "numeric iteration order is not accepted in place of canonical ASCII key order");
+                 Error::MissingKey, 41),
+        "numeric iteration order first exposes its missing canonical lexical indices");
     expectations.expect(
         output::validateOutputFacetDescriptorV1(Schema::Channels, "count=u:0").hasValue(),
         "a zero-channel descriptor has no undeclared list fields");
@@ -288,6 +332,10 @@ void testUtf8HexBoundary(Expectations& expectations) {
                                      Schema::Channels, "count=u:1;name-0=utf8:4A;role-0=id:data"),
                                  Error::InvalidUtf8Hex, 23),
                         "utf8 bytes require lowercase hexadecimal");
+    expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
+                                     Schema::Channels, "count=u:1;name-0=utf8:G;role-0=id:data"),
+                                 Error::InvalidUtf8Hex, 22),
+                        "an invalid utf8 hex digit precedes an odd-length diagnostic");
     expectations.expect(hasError(output::validateOutputFacetDescriptorV1(
                                      Schema::Channels, "count=u:1;name-0=utf8:00;role-0=id:data"),
                                  Error::EmbeddedNul, 22),
@@ -313,6 +361,13 @@ void testInvalidSchema(Expectations& expectations) {
                                      enumWithBits<Schema>(0xFFU), "profile=id:none"),
                                  Error::InvalidSchema, 0),
                         "an unknown schema representation fails closed");
+
+    using Tag = output::OutputFacetDescriptorValueTagV1;
+    const auto invalidSuccess =
+        output::OutputFacetDescriptorValueValidation::success(enumWithBits<Tag>(0xFFU));
+    expectations.expect(!invalidSuccess && invalidSuccess.error() == Error::InvalidValueTag &&
+                            invalidSuccess.errorOffset() == 0,
+                        "the public success factory fails closed for an unknown value tag");
 }
 
 } // namespace

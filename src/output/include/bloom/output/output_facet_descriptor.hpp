@@ -72,7 +72,14 @@ class [[nodiscard]] OutputFacetDescriptorValueValidation final {
   public:
     [[nodiscard]] static constexpr OutputFacetDescriptorValueValidation
     success(const OutputFacetDescriptorValueTagV1 tag) noexcept {
-        return OutputFacetDescriptorValueValidation(OutputFacetDescriptorErrorCode::None, 0, tag);
+        const auto tagValue = static_cast<std::uint8_t>(tag);
+        const auto maximumTagValue =
+            static_cast<std::uint8_t>(OutputFacetDescriptorValueTagV1::Utf8);
+        return tagValue <= maximumTagValue ? OutputFacetDescriptorValueValidation(
+                                                 OutputFacetDescriptorErrorCode::None, 0, tag)
+                                           : OutputFacetDescriptorValueValidation(
+                                                 OutputFacetDescriptorErrorCode::InvalidValueTag, 0,
+                                                 OutputFacetDescriptorValueTagV1::Boolean);
     }
     [[nodiscard]] static constexpr OutputFacetDescriptorValueValidation
     failure(const OutputFacetDescriptorErrorCode code, const std::size_t errorOffset) noexcept {
@@ -139,8 +146,9 @@ class [[nodiscard]] OutputFacetDescriptorValidation final {
 
 // Validates the canonical OutputAnalysis facet-descriptor grammar without allocating. This checks
 // the selected closed key set, exact value tags and spellings, global unsigned-ASCII key order, and
-// the dynamic contiguous channel-key set. Non-ASCII utf8 values are strict UTF-8 but cannot be
-// accepted as Unicode 15.1 NFC until a qualified normalizer is available; they return the distinct
+// the dynamic contiguous channel-key set. PixelAspectRational additionally requires positive,
+// reduced uint32 terms. Non-ASCII utf8 values are strict UTF-8 but cannot be accepted as Unicode
+// 15.1 NFC until a qualified normalizer is available; they return the distinct
 // NormalizationUnavailable result.
 [[nodiscard]] OutputFacetDescriptorValidation
 validateOutputFacetDescriptorV1(OutputFacetDescriptorSchemaV1 schema,

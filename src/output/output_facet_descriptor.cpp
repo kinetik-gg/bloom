@@ -1,5 +1,6 @@
 #include <bloom/output/output_facet_descriptor.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -238,15 +239,15 @@ validateRationalValue(const std::string_view payload, const std::size_t payloadO
 [[nodiscard]] OutputFacetDescriptorValidation
 validateFloatBits(const std::string_view payload, const std::size_t payloadOffset,
                   const std::size_t requiredDigits) noexcept {
-    if (payload.size() != requiredDigits) {
-        return failure(OutputFacetDescriptorErrorCode::InvalidFloatBits,
-                       payloadOffset +
-                           (payload.size() < requiredDigits ? payload.size() : requiredDigits));
-    }
-    for (std::size_t index = 0; index < payload.size(); ++index) {
+    const auto presentDigits = std::min(payload.size(), requiredDigits);
+    for (std::size_t index = 0; index < presentDigits; ++index) {
         if (!isLowerHex(payload[index])) {
             return failure(OutputFacetDescriptorErrorCode::InvalidFloatBits, payloadOffset + index);
         }
+    }
+    if (payload.size() != requiredDigits) {
+        return failure(OutputFacetDescriptorErrorCode::InvalidFloatBits,
+                       payloadOffset + presentDigits);
     }
     return OutputFacetDescriptorValidation::success();
 }
@@ -267,14 +268,14 @@ validateIdentifier(const std::string_view payload, const std::size_t payloadOffs
 
 [[nodiscard]] OutputFacetDescriptorValidation
 validateUtf8Hex(const std::string_view payload, const std::size_t payloadOffset) noexcept {
-    if ((payload.size() % 2U) != 0U) {
-        return failure(OutputFacetDescriptorErrorCode::InvalidUtf8Hex,
-                       payloadOffset + payload.size());
-    }
     for (std::size_t index = 0; index < payload.size(); ++index) {
         if (!isLowerHex(payload[index])) {
             return failure(OutputFacetDescriptorErrorCode::InvalidUtf8Hex, payloadOffset + index);
         }
+    }
+    if ((payload.size() % 2U) != 0U) {
+        return failure(OutputFacetDescriptorErrorCode::InvalidUtf8Hex,
+                       payloadOffset + payload.size());
     }
 
     const auto decodedSize = payload.size() / 2U;
@@ -486,6 +487,22 @@ validateValue(const std::string_view encoded, const FieldRule& rule,
              {"numerator", ValueTag::UnsignedInteger, NumericDomain::Unsigned32}}};
 }
 
+[[nodiscard]] std::uint64_t nextLexicalIndex(const std::uint64_t current,
+                                             const std::uint64_t count) noexcept {
+    if (current == 0) {
+        return 1;
+    }
+    if (current <= (count - 1U) / 10U) {
+        return current * 10U;
+    }
+
+    auto ancestor = current;
+    while ((ancestor % 10U) == 9U || ancestor >= count - 1U) {
+        ancestor /= 10U;
+    }
+    return ancestor + 1U;
+}
+
 [[nodiscard]] constexpr std::array<FieldRule, 1> binary32PixelAspectRules() noexcept {
     return {{{"value", ValueTag::Float32}}};
 }
@@ -606,6 +623,44 @@ validateFixedSchema(const std::string_view descriptor,
 }
 
 [[nodiscard]] OutputFacetDescriptorValidation
+validateRationalPixelAspect(const std::string_view descriptor) noexcept {
+    if (const auto syntax = validateFixedSchema(descriptor, rationalPixelAspectRules()); !syntax) {
+        return syntax;
+    }
+
+    ParsedField denominatorField;
+    ParsedField numeratorField;
+    if (!parseField(descriptor, 0, denominatorField) ||
+        !parseField(descriptor, denominatorField.nextOffset, numeratorField)) {
+        return failure(OutputFacetDescriptorErrorCode::InternalInvariant, 0);
+    }
+
+    constexpr std::size_t unsignedTagSize = 2;
+    const auto denominator = parseUnsignedDecimal(denominatorField.value.substr(unsignedTagSize),
+                                                  std::numeric_limits<std::uint32_t>::max());
+    const auto numerator = parseUnsignedDecimal(numeratorField.value.substr(unsignedTagSize),
+                                                std::numeric_limits<std::uint32_t>::max());
+    if (denominator.error != OutputFacetDescriptorErrorCode::None ||
+        numerator.error != OutputFacetDescriptorErrorCode::None) {
+        return failure(OutputFacetDescriptorErrorCode::InternalInvariant, 0);
+    }
+
+    if (denominator.value == 0) {
+        return failure(OutputFacetDescriptorErrorCode::InvalidRational,
+                       denominatorField.valueOffset + unsignedTagSize);
+    }
+    if (numerator.value == 0) {
+        return failure(OutputFacetDescriptorErrorCode::InvalidRational,
+                       numeratorField.valueOffset + unsignedTagSize);
+    }
+    if (std::gcd(numerator.value, denominator.value) != 1) {
+        return failure(OutputFacetDescriptorErrorCode::NonNormalizedRational,
+                       denominatorField.valueOffset + unsignedTagSize);
+    }
+    return OutputFacetDescriptorValidation::success();
+}
+
+[[nodiscard]] OutputFacetDescriptorValidation
 validateChannelIndex(const std::string_view key, const std::string_view prefix,
                      const std::string_view channelCount, const std::size_t keyOffset) noexcept {
     const auto suffix = key.substr(prefix.size());
@@ -627,8 +682,11 @@ validateChannelIndex(const std::string_view key, const std::string_view prefix,
 validateChannels(const std::string_view descriptor) noexcept {
     std::string_view previousKey;
     std::string_view channelCount;
+    UnsignedDecimalResult declaredCount;
     std::uint64_t nameCount = 0;
     std::uint64_t roleCount = 0;
+    std::uint64_t expectedNameIndex = 0;
+    std::uint64_t expectedRoleIndex = 0;
     bool sawCount = false;
     std::size_t offset = 0;
 
@@ -653,6 +711,7 @@ validateChannels(const std::string_view descriptor) noexcept {
             }
             tag = ValueTag::UnsignedInteger;
             channelCount = field.value.substr(2);
+            declaredCount = parseUnsignedDecimal(channelCount);
             sawCount = true;
         } else if (field.key.starts_with("name-")) {
             if (!sawCount) {
@@ -663,14 +722,27 @@ validateChannels(const std::string_view descriptor) noexcept {
                 !index) {
                 return index;
             }
+            const auto index = parseUnsignedDecimal(field.key.substr(5));
+            if (declaredCount.error == OutputFacetDescriptorErrorCode::None &&
+                index.value != expectedNameIndex) {
+                return failure(OutputFacetDescriptorErrorCode::MissingKey, field.fieldOffset);
+            }
             if (nameCount == std::numeric_limits<std::uint64_t>::max()) {
                 return failure(OutputFacetDescriptorErrorCode::InternalInvariant,
                                field.fieldOffset);
             }
             ++nameCount;
+            if (declaredCount.error == OutputFacetDescriptorErrorCode::None &&
+                nameCount < declaredCount.value) {
+                expectedNameIndex = nextLexicalIndex(expectedNameIndex, declaredCount.value);
+            }
             tag = ValueTag::Utf8;
         } else if (field.key.starts_with("role-")) {
             if (!sawCount) {
+                return failure(OutputFacetDescriptorErrorCode::MissingKey, field.fieldOffset);
+            }
+            if (declaredCount.error == OutputFacetDescriptorErrorCode::None &&
+                nameCount != declaredCount.value) {
                 return failure(OutputFacetDescriptorErrorCode::MissingKey, field.fieldOffset);
             }
             if (const auto index =
@@ -678,11 +750,20 @@ validateChannels(const std::string_view descriptor) noexcept {
                 !index) {
                 return index;
             }
+            const auto index = parseUnsignedDecimal(field.key.substr(5));
+            if (declaredCount.error == OutputFacetDescriptorErrorCode::None &&
+                index.value != expectedRoleIndex) {
+                return failure(OutputFacetDescriptorErrorCode::MissingKey, field.fieldOffset);
+            }
             if (roleCount == std::numeric_limits<std::uint64_t>::max()) {
                 return failure(OutputFacetDescriptorErrorCode::InternalInvariant,
                                field.fieldOffset);
             }
             ++roleCount;
+            if (declaredCount.error == OutputFacetDescriptorErrorCode::None &&
+                roleCount < declaredCount.value) {
+                expectedRoleIndex = nextLexicalIndex(expectedRoleIndex, declaredCount.value);
+            }
             tag = ValueTag::Identifier;
         } else {
             return failure(OutputFacetDescriptorErrorCode::UnknownKey, field.fieldOffset);
@@ -699,8 +780,6 @@ validateChannels(const std::string_view descriptor) noexcept {
         }
     }
 
-    const auto declaredCount =
-        sawCount ? parseUnsignedDecimal(channelCount) : UnsignedDecimalResult{};
     if (!sawCount || declaredCount.error != OutputFacetDescriptorErrorCode::None ||
         nameCount != declaredCount.value || roleCount != declaredCount.value) {
         return failure(OutputFacetDescriptorErrorCode::MissingKey, descriptor.size());
@@ -748,7 +827,7 @@ validateOutputFacetDescriptorV1(const OutputFacetDescriptorSchemaV1 schema,
     case OutputFacetDescriptorSchemaV1::Window:
         return validateFixedSchema(descriptor, windowRules());
     case OutputFacetDescriptorSchemaV1::PixelAspectRational:
-        return validateFixedSchema(descriptor, rationalPixelAspectRules());
+        return validateRationalPixelAspect(descriptor);
     case OutputFacetDescriptorSchemaV1::PixelAspectBinary32:
         return validateFixedSchema(descriptor, binary32PixelAspectRules());
     case OutputFacetDescriptorSchemaV1::Compression:
