@@ -5,9 +5,9 @@ Status: accepted
 Implementation status: synchronous Qt-free ownership, editable/degraded/preserved-read-only state,
 immutable document access, command forwarding, clean revision, dirty state, application-owned
 runtime session identity, checked Open/path generations, sealed Save/Save-As path authority, and
-publication-intent-ordered savepoint acceptance are implemented. Asynchronous Open/Save, atomic
-content installation, round-trip state, unsaved continuations, and complete result handling remain
-pending.
+generation-scoped publication-intent-ordered savepoint acceptance are implemented. Save-As path
+authority is exclusive and supports typed abandonment. Asynchronous Open/Save, atomic content
+installation, round-trip state, unsaved continuations, and complete result handling remain pending.
 
 Updated: 2026-08-25
 
@@ -80,8 +80,9 @@ one. Every advance is checked before changing state, and an issued value is neve
 - if `OpenIntentGeneration` cannot advance, a new Open is rejected before it cancels or supersedes
   the currently desired Open; and
 - if `SessionPathIntentGeneration` cannot advance, a chosen Save As target is rejected before
-  staging and its publication admission is abandoned. Plain Save to the existing path may continue
-  to capture the final path generation.
+  staging and its publication admission is abandoned. When existing-path authority was current,
+  Plain Save may continue to capture the final path generation; a current replacement phase stays
+  exclusive.
 
 Exhaustion is process-lifetime state. Restarting Bloom creates a new runtime session; no recovery
 path resets a live counter or aliases an older generation.
@@ -188,6 +189,16 @@ file chooser; it does not change the active path until publication succeeds and 
 still matches that path intent. Therefore a late plain Save to the previous active path cannot
 change clean/path state after a newer Save As becomes the accepted path intent.
 
+Path authority has exactly one current phase. `ExistingPath` permits Plain Save only when a real
+active path exists. Successfully advancing Save As enters `ReplacementPath`; while that phase is
+current, Plain Save cannot capture the same generation. A newer Save As advances again and
+supersedes the older replacement capture. Accepting the current replacement installs its path and
+returns to `ExistingPath`. Cancellation or pre-publication failure uses typed abandonment: only the
+still-current replacement capture may return to `ExistingPath`, and it changes no path, clean
+revision, or publication frontier. A late completion or repeated abandonment is stale. Installing
+replacement session content also cancels a pending replacement phase; it never fabricates a path
+for a pathless session.
+
 Editable and degraded-editable projects may save only when Project I/O proves that every retained
 unknown member and opaque extension record will survive. A preserved-read-only project cannot run
 native Save or Save As; Save Copy stages, validates, and atomically publishes an asynchronous
@@ -262,6 +273,14 @@ only when the originating `ProjectSessionId`, `SessionResultAcceptanceGeneration
 all still match. Save Copy and frame export never propose `ProjectSession` path/dirty changes. These
 checks do not decide whether publication succeeded; they decide only whether that truthful result
 may update current session state.
+
+The newest accepted publication-intent frontier is scoped to the current
+`SessionResultAcceptanceGeneration` and path-intent generation/phase, not to the entire session.
+Successfully advancing either acceptance authority resets that frontier; a failed exhaustion check
+changes nothing. This permits a lower publication ID that resolves later to a genuinely newer Save
+As generation to update that new path, while every callback captured from the older generation
+remains stale regardless of its ID. Within one unchanged authority scope, only strictly increasing
+publication IDs may update session state.
 
 | Outcome | File meaning | Session effect when accepted |
 | --- | --- | --- |
@@ -363,6 +382,10 @@ current time remain UI/session concerns. They consume project-session state but 
 - Save revision `r1`, edit to `r2`, and reverse-completing same-target saves retain valid ordering
   and exact dirty state
 - Save As A then Save As B cannot let A steal the active path
+- pending Save As excludes Plain Save capture; current abandonment restores only the authority
+  phase, while stale abandonment and late publication remain inert
+- a lower publication ID resolved into a newer path generation may be accepted after a higher ID
+  from the older generation; the reverse callback cannot cross that generation boundary
 - session replacement invalidates only `SessionResultAcceptanceGeneration`; an admitted late save
   can publish truthfully without changing path, clean revision, warning, diagnostics, or recents
 - a project Save and frame export targeting the same canonical path share one application-wide
