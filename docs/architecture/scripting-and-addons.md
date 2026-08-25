@@ -183,6 +183,12 @@ pybind11 is selected for its first-class embedding API, RAII, CMake integration,
 maturity. `_bloom` ships with one exact interpreter and does not need to be a general stable-ABI
 wheel. Rebuild it on intentional Python-minor upgrades.
 
+Checked-in Python is product scripting code, not repository infrastructure. `.py` and `.pyi` files
+are limited to `src/scripting/python/` for the bundled facade and bootstrap, to
+`tests/fixtures/scripting/` for inert scripting and add-on fixtures, and to `examples/scripting/`
+for artist-facing examples. Build logic, CI, quality gates, schema tooling, and code generation use
+native C++ or CMake rather than Python. The repository hygiene gate enforces these roots.
+
 Nanobind may be reconsidered for separately distributed native modules where its limited-API
 support matters, but embedding is explicitly outside its current project scope. Boost.Python does
 not provide a practical advantage for a new C++20 host.

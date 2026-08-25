@@ -60,7 +60,7 @@ function(bloom_configure_quality_tools)
 
         set(
             BLOOM_CLANG_TIDY_COMMAND
-            "${BLOOM_CLANG_TIDY_EXECUTABLE};--checks=${BLOOM_CLANG_TIDY_CHECKS};--warnings-as-errors=*;--header-filter=^${PROJECT_SOURCE_DIR}/(apps|src|tests)/"
+            "${BLOOM_CLANG_TIDY_EXECUTABLE};--checks=${BLOOM_CLANG_TIDY_CHECKS};--warnings-as-errors=*;--header-filter=^${PROJECT_SOURCE_DIR}/(apps|src|tests|tools)/"
         )
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             # clang-tidy parses the real compiler command. Remove GCC-only diagnostics and
