@@ -34,12 +34,24 @@ surface inside the application process.
   profile/level, chroma, depth, range, alpha, field mode, rate/dimension limits, audio layout,
   color/HDR/timecode/metadata support, software/hardware implementation, surface transport,
   platform, provider/build identity, and fixture digest are never inferred from a codec name.
+- Close version 1 operation roles to Probe, DemuxIndex, VideoDecode, AudioDecode, VideoEncode,
+  AudioEncode, Mux, ReopenDecode, StructuralQc, and RecipientQc. Close purposes to Preview, Proxy,
+  Conform, Export, and Delivery. An unlisted role or purpose is unavailable, never implied by
+  another role.
+- Represent selection and claims with separate immutable `MediaCapabilityKeyV1`,
+  `ProviderExecutionKeyV1`, `QualificationEvidenceV1`, and `PipelineQualificationV1` records.
+  Component qualification is not transitive: the exact ordered demux/decode/convert or
+  convert/encode/mux/reopen/QC pipeline must pass its own fixtures.
 - Qualify ingest, preview, export, and named delivery profiles independently. Hardware and software
   implementations also qualify independently. Missing tuple fields are unavailable, not wildcards.
 - Run general-purpose container and codec providers in supervised, resource-limited
   `bloom-media-worker` processes. Use a versioned bounded provider-neutral protocol and host-side
   revalidation. The same boundary may contain optional commercial providers without exposing their
   SDK types or ABI through Bloom.
+- Admit exactly one provider generation and dependency/licensing trust domain per worker process.
+  Bloom may reuse a common launcher and protocol, but it does not load every provider into one
+  mega-worker. Package identity, dependencies, sandbox permissions, limits, and capabilities are
+  bound by the worker handshake.
 - Keep the worker protocol internal initially. Do not promise a stable native codec plug-in SDK
   until signing/trust, packaging, lifecycle, compatibility fixtures, and external support policy are
   accepted.
@@ -50,10 +62,22 @@ surface inside the application process.
 - Treat hardware decode and encode as acceleration providers, not authoring or preset semantics.
   Runtime capability and actual selected hardware implementation are both recorded. Final output
   never silently changes provider, precision, color, alpha, rate control, or quality.
+- Record one closed determinism class per qualified pipeline: byte-exact, decoded-semantic exact,
+  decoded-semantic under an immutable tolerance-profile digest, or no determinism claim. The last is
+  limited to Development or an expressly limited Preview path. Lossy or hardware output never
+  acquires a stronger class merely because encoding succeeded.
 - Make every time-based export follow: immutable snapshot and preset; preservation report and exact
   approval; bounded render/convert/encode/mux; private staging; close and reopen; structural,
   decoded-semantic, metadata, and required independent QC; then atomic publication. An encoder never
   writes the final target directly.
+- Produce bounded immutable `MediaQcEvidenceV1` for every staged artifact, binding its digest and
+  size, approval and preset, ordered execution chain, comparison profile, reopen reader, complete
+  check results and coverage, independent-reader status, external QC identity, and terminal result.
+  Same-provider reopen is verification but not independent QC; an exit status alone cannot pass.
+- Capture the provider generation and exact pipeline before an attempt begins. Provider,
+  software/hardware path, precision, chroma/range, color, alpha, rate control, metadata, and QC
+  policy are never substituted mid-attempt. Preview may start a new visible qualified generation;
+  conform or output requires a new analyzed attempt and output approval does not transfer.
 - Use a minimal, dynamically linked, LGPL-compatible FFmpeg build only if its exact dependency graph
   passes intake. Do not enable GPL or `nonfree` components in an Apache-2.0 community package. The
   worker boundary does not remove FFmpeg source, notice, reverse-engineering, relinking, patent, or
@@ -69,14 +93,22 @@ surface inside the application process.
   establish local/OEM integration, profiles and alpha, MOV/MXF behavior, offline deployment,
   redistribution, support, and Bloom's authorization scope.
 - Until an Apple-authorized and Bloom-qualified encoder exists on a platform, strict ProRes delivery
-  is unavailable there. Offer a verified image-sequence plus BWF/BW64 audio handoff as an explicitly
-  different fallback, never as equivalent ProRes output.
+  returns typed `codec.prores.strict-provider-unavailable` there and never selects an
+  FFmpeg-derived implementation. Offer a verified image-sequence plus BWF/BW64 audio handoff as an
+  explicitly different analyzed preset, never as equivalent ProRes output or a substituted
+  execution of the failed request.
 - Keep conventional ProRes 422 Proxy/LT/422/HQ/4444/4444 XQ, optional 4444/4444 XQ alpha, and ProRes
   RAW/RAW HQ as distinct capability/preset families. MOV, RDD 44 MXF, and IMF mappings also qualify
   separately.
 - Require counsel review for each shipped FFmpeg configuration, codec patent/trademark exposure,
   OS SDK use, commercial provider agreement, territory, and distribution model. Technical
   conformance does not answer those legal questions.
+- Once the roadmap's first-proof gate admits media implementation and before provider intake, land
+  only the dependency-free Qt-free `src/media` contract kernel: bounded descriptors and the four
+  identity/evidence records; determinism and QC evidence values; exact provider-generation
+  selection; fake providers and hostile fixtures; bounded worker framing over a fake transport; and
+  a canonical image-sequence manifest. These foundations make no real codec-support claim and do
+  not move media work ahead of the accepted deferral.
 
 The detailed descriptors, pipelines, qualification matrix, test strategy, priorities, and vendor
 questions live in [`../architecture/media-io.md`](../architecture/media-io.md).
@@ -94,6 +126,12 @@ questions live in [`../architecture/media-io.md`](../architecture/media-io.md).
   later QC.
 - Initial CPU copies cost throughput and memory. Zero-copy paths are added deliberately after
   correctness and measured transfer costs, rather than by leaking native surfaces into the model.
+- Vulkan Video is a candidate for the operations and devices it enumerates, not a universal media
+  backend or a ProRes solution. Windows, Linux, and macOS retain different native surface transports
+  behind the same qualified external-surface lease and CPU reference behavior.
+- Byte reproducibility, decoded-semantic conformance, Bloom technical qualification, external
+  authorization, redistribution permission, and recipient acceptance remain visibly separate
+  claims.
 - Release engineering must build, sandbox, package, inventory, update, and test provider processes
   and their complete dependency graphs.
 - Strict ProRes parity may remain asymmetric until Apple or an authorized vendor supplies workable
@@ -138,18 +176,22 @@ QC remain mandatory.
 
 This ADR can become accepted when:
 
-1. provider-neutral probe, stream, frame/audio, capability, provenance, and qualification schemas
-   have closed version 1 vocabularies and resource limits;
-2. the worker protocol proves crash/hang/cancellation/shutdown containment on all three targets;
-3. one fake and one real provider pass deterministic probe, seek, decode, malformed-input, and
+1. provider-neutral probe, stream, frame/audio, capability, execution, evidence, pipeline, QC, and
+   provenance schemas have closed version 1 roles, purposes, determinism classes, vocabularies, and
+   resource limits;
+2. the exact-match registry and fake providers prove non-transitive qualification, typed
+   unavailability, authority separation, and no mid-attempt substitution;
+3. the worker protocol proves one-provider-trust-domain isolation plus
+   crash/hang/cancellation/shutdown containment on all three targets;
+4. one fake and one real provider pass deterministic probe, seek, decode, malformed-input, and
    source-change fixtures without provider types crossing the boundary;
-4. one time-based export proves bounded back-pressure, preservation approval, encode/mux, close,
+5. one time-based export proves bounded back-pressure, preservation approval, encode/mux, close,
    reopen/semantic verification, QC evidence, and atomic publication;
-5. FFmpeg's exact proposed configuration and distribution package pass dependency, LGPL, patent,
+6. FFmpeg's exact proposed configuration and distribution package pass dependency, LGPL, patent,
    security, and SBOM review, or FFmpeg is removed from the decision;
-6. the Apple and vendor questions listed in the architecture document have written dispositions
+7. the Apple and vendor questions listed in the architecture document have written dispositions
    before any authorized/strict ProRes capability is advertised; and
-7. cross-platform capability UI and headless reports distinguish unavailable, preview, conform,
+8. cross-platform capability UI and headless reports distinguish unavailable, preview, conform,
    export, delivery, and attributed external authorization without ambiguity.
 
 ## Primary References
@@ -163,6 +205,9 @@ This ADR can become accepted when:
 - [VideoToolbox actual hardware-encoder property](https://developer.apple.com/documentation/videotoolbox/kvtcompressionpropertykey_usinghardwareacceleratedvideoencoder)
 - [SMPTE RDD 36:2022](https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf)
 - [SMPTE RDD 44:2022](https://pub.smpte.org/pub/rdd44/rdd44-2022.pdf)
+- [SMPTE ST 2086:2018](https://pub.smpte.org/pub/st2086/st2086-2018.pdf)
+- [SMPTE ST 2094-1:2016](https://pub.smpte.org/pub/st2094-1/st2094-1-2016.pdf)
+- [CTA-861.3-A HDR static metadata](https://www.cta.tech/standards/cta-8613-a/)
 - [FFmpeg ProRes encoders](https://www.ffmpeg.org/ffmpeg-codecs.html#ProRes)
 - [FFmpeg license and legal considerations](https://ffmpeg.org/legal.html)
 - [MainConcept ProRes Decoder SDK](https://www.mainconcept.com/prores)
@@ -170,3 +215,6 @@ This ADR can become accepted when:
 - [nablet mediaEngine 3.0 ProRes release claim](https://support.nablet.com/hc/en-us/articles/24011027768340-mediaEngine-v3-0-Release-Notes)
 - [Microsoft Media Foundation supported formats](https://learn.microsoft.com/en-us/windows/win32/medfound/supported-media-formats-in-media-foundation)
 - [Vulkan Video coding](https://docs.vulkan.org/spec/latest/chapters/videocoding.html)
+- [Vulkan external memory and synchronization](https://docs.vulkan.org/guide/latest/extensions/external.html)
+- [MoltenVK runtime feature list](https://github.com/KhronosGroup/MoltenVK/blob/main/Docs/MoltenVK_Runtime_UserGuide.md)
+- [Core Video Metal texture cache](https://developer.apple.com/documentation/CoreVideo/cvmetaltexturecache-q3j)

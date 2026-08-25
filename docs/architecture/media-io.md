@@ -151,6 +151,15 @@ ITU-T H.273 is the source vocabulary for coding-independent video signal code po
 numeric code is not the same as resolving a project OCIO color interpretation. SMPTE ST 12 timecode
 is a label carried alongside rational media time, never Bloom's arithmetic timebase.
 
+Closed delivery presets additionally name the exact metadata standards they preserve or emit.
+Initial vocabularies include SMPTE ST 2086 mastering-display metadata, CTA-861.3 HDR static-metadata
+values where a declared delivery mapping uses them, and the applicable SMPTE ST 2094 dynamic-
+metadata application. A parsed value retains its original code points or bounded payload and its
+source namespace, track, and element location; a provider cannot collapse absent, contradictory,
+malformed, and unsupported metadata into one default. A proprietary dynamic-HDR system, metadata
+generator, or validator is a separately licensed and qualified capability, never implied by
+carrying an H.273 transfer characteristic or a generic side-data blob.
+
 Contradictory container and elementary-stream declarations remain separate evidence until a versioned
 interpretation rule or artist override resolves them. Missing information stays missing. A filename,
 extension, decoder default, or “most common” television convention cannot silently become project
@@ -301,13 +310,67 @@ SDK until lifecycle, compatibility fixtures, signing/trust, packaging, update, a
 exist. Commercial or separately distributed providers may use the same boundary without making
 their SDK types or source part of Bloom.
 
-### Capability Tuple
+Each admitted worker process loads exactly one provider generation and one dependency/licensing
+trust domain. A common launcher and protocol implementation may be reused, and one provider package
+may internally combine a demuxer, codec, and muxer, but Bloom does not load every available provider
+into one mega-worker. The executable/package identity, dependency namespace, sandbox permissions,
+resource limits, and capability declaration are bound together by the handshake. Combining
+individually qualified components inside one process still requires qualification of that exact
+ordered pipeline.
 
-Selection matches all fields that can change meaning or acceptance: operation direction; container
-profile; codec/profile/level; bit depth; range; chroma and location; alpha; field mode; dimensions
-and rate limits; audio format/layout; color/HDR/timecode/metadata features; software or exact
-hardware implementation; CPU or external memory type; loss/reordering behavior; provider version;
-fixture-set digest; platform; and license/authorization scope.
+### Closed Roles And Purposes
+
+Version 1 closes operation roles to `Probe`, `DemuxIndex`, `VideoDecode`, `AudioDecode`,
+`VideoEncode`, `AudioEncode`, `Mux`, `ReopenDecode`, `StructuralQc`, and `RecipientQc`. It closes
+purposes to `Preview`, `Proxy`, `Conform`, `Export`, and `Delivery`. A provider declares every role
+and purpose it implements; an unlisted value is unavailable. `VideoDecode` does not imply
+`DemuxIndex`, `ReopenDecode`, or any purpose other than the one qualified.
+
+Preview and Proxy may admit explicitly visible latency or quality tradeoffs. Conform requires
+frame-accurate full-resolution ingest. Export proves Bloom's staged artifact contract. Delivery
+adds a named recipient specification and required independent QC. These purposes are semantic
+claims, not scheduler priorities.
+
+### Capability, Execution, Evidence, And Pipeline Records
+
+Provider selection and reporting use four immutable records rather than one overloaded support
+flag:
+
+- `MediaCapabilityKeyV1` describes one provider-neutral role and purpose plus the exact container
+  mapping, codec/profile/level/tier, sample entry, bit depth, range, chroma and location, alpha,
+  field mode, dimensions and rate limits, audio format/layout, color/HDR/timecode/metadata features,
+  timing/reordering behavior, and CPU-plane or external-surface semantics;
+- `ProviderExecutionKeyV1` identifies the provider/build/dependency lock, protocol, platform and
+  architecture, software or exact hardware implementation, OS SDK/driver/device scope, memory
+  transport, synchronization mode, resource-limit profile, and non-secret entitlement mode and
+  availability state;
+- `QualificationEvidenceV1` binds Bloom's fixture-set digest, qualification result, review date,
+  optional review deadline, and any separately attributed authority record. Technical evidence and
+  external authorization are different fields and neither is inferred from the other; and
+- `PipelineQualificationV1` binds ordered capability, execution, and evidence identities to one
+  purpose, preset or ingest profile, fixture-set digest, conversion versions, determinism class,
+  reopen policy, and QC profile.
+
+Selection matches every field that can change meaning or acceptance. A missing field is unavailable,
+not a wildcard. Individually qualified demux, codec, conversion, mux, and reader components do not
+compose into a qualified pipeline unless the exact ordered `PipelineQualificationV1` passed its own
+fixtures. This prevents provider defaults or a compatible-looking sample entry from silently
+changing a qualified claim.
+
+The closed `MediaDeterminismV1` classes are:
+
+- `ByteExact` — the complete admitted output bytes are reproducible for the frozen execution key;
+- `DecodedSemanticExact` — bytes may differ, but the frozen reference decode domain compares
+  exactly;
+- `DecodedSemanticTolerance` — comparison uses one immutable versioned tolerance-profile digest;
+  and
+- `NoDeterminismClaim` — usable only for Development or an expressly limited Preview path.
+
+Lossy encoding normally uses `DecodedSemanticTolerance`. Hardware availability, driver choice, or a
+successful encode call cannot upgrade a determinism class. Tolerances are selected before execution
+and cannot be widened after observing a failure.
+
+### Qualification And Authority
 
 Qualification is per tuple and per direction. A hardware decoder does not inherit a software
 decoder's result. Decode qualification does not grant encode qualification. MOV qualification does
@@ -323,6 +386,31 @@ Bloom qualification and external authority are orthogonal:
 - an optional attributed authority record names who authorized or certified precisely what. Bloom
   never manufactures that last claim.
 
+No provider discussed in this working research is qualified merely by being listed. Vendor product
+statements and platform API documentation establish candidates and questions, not Bloom capability
+records. License, patent, trademark, redistribution, certification, and recipient acceptance remain
+external gates even when technical fixtures pass.
+
+### Provider Selection, Failure, And Substitution
+
+An ingest or output attempt captures one provider generation and exact
+`PipelineQualificationV1` before work starts. Once any product from that attempt can be published or
+approved, Bloom never substitutes a provider, software/hardware path, profile, precision, range,
+chroma, color transform, alpha rule, rate-control mode, metadata policy, or QC policy inside the
+attempt. A crash, device loss, revoked entitlement, resource exhaustion, or failed verification
+terminates that attempt without partial publication.
+
+Preview may start a new visible generation with another `PreviewQualified` CPU or proxy path.
+Conform, Export, and Delivery require a new analyzed attempt; output approval never transfers to a
+different pipeline or execution generation. Resource pressure never silently resizes, changes
+rate, drops streams, or lowers output quality.
+
+When no Apple-authorized and Bloom-qualified pipeline matches a strict conventional ProRes preset,
+selection returns typed `codec.prores.strict-provider-unavailable` with the missing direction,
+container mapping, profile, platform, and authority scope. It does not select an FFmpeg-derived
+implementation. A verified image-sequence plus BWF/BW64 handoff is a separately named preset and
+request with its own analysis and approval, not a fallback execution of the ProRes attempt.
+
 ## Hardware Acceleration And Zero-Copy
 
 VideoToolbox, Media Foundation/D3D11, VA-API, Intel VPL, NVIDIA Video Codec SDK, and AMD AMF expose
@@ -331,6 +419,14 @@ and API availability does not prove support for a requested codec/profile/pixel 
 The current public capability lists for Windows Media Foundation/D3D12 Video, NVIDIA NVENC/NVDEC,
 Intel VPL, AMD AMF, Vulkan Video, and libva do not supply a cross-platform ProRes implementation.
 They are candidates for codecs they actually enumerate, not a way to close the ProRes gap.
+
+Vulkan Video currently standardizes selected H.264, H.265, AV1, and VP9 operations, subject to
+physical-device capability queries; it does not standardize ProRes. MoltenVK exposes Metal and
+IOSurface interop through Metal-object/external-memory extensions but does not currently expose the
+Vulkan Video queue. Therefore Bloom may share one provider-neutral lease and Vulkan compute
+conversion contract, but video coding and native surface transport remain qualified per platform:
+Win32 external memory and synchronization on Windows, file-descriptor/DMA-BUF mechanisms on Linux,
+and Metal/IOSurface mechanisms on macOS. No native handle or API name enters project semantics.
 
 The first correct path is:
 
@@ -462,6 +558,18 @@ These are engineering gates, not legal advice. Counsel and the named licensors r
 
 Each provider profile pins source/build/configuration, platform SDK, compiler/ABI, enabled codecs,
 hardware/driver scope, worker protocol, fixture-set digest, and all external qualification evidence.
+
+Every staged media artifact produces one bounded immutable `MediaQcEvidenceV1`. It binds the
+artifact SHA-256 and byte size; approved preset and preservation-report digests; ordered pipeline,
+provider, dependency, conversion, and execution identities; determinism or tolerance-profile
+identity; reopen-reader identity; structural, decoded-video, audio, timing, color/HDR, timecode, and
+metadata results; complete-versus-sampled coverage; independent or same-provider reader status; any
+recipient QC tool/profile/version and attributed authority evidence; and the terminal result. A
+same-provider reopen is valuable verification but is never labeled independent QC. An exit status,
+codec tag, or unstructured log cannot populate a passing record, and a partial record cannot be
+published as success. When an Export or Delivery profile requires full coverage, sampled or missing
+coverage blocks success rather than weakening the profile after execution.
+
 Tests include:
 
 - exact probe vectors for container/track order, unknown metadata, contradictory signaling, edit
@@ -561,6 +669,31 @@ fixture qualification is accepted.
 No batch creates a broad “supports FFmpeg” claim. Each closes a small provider/profile matrix and
 keeps unsupported tuples visible.
 
+### Dependency-Free Contract Slices
+
+Once the roadmap's first-proof gate admits media implementation, and before any codec or container
+dependency is admitted, Bloom can land the following C++20, Qt-free `src/media` slices:
+
+1. bounded immutable descriptor values, `MediaCapabilityKeyV1`, `ProviderExecutionKeyV1`,
+   `QualificationEvidenceV1`, `PipelineQualificationV1`, `MediaDeterminismV1`, limits, validators,
+   stable diagnostics, canonical encodings, and SHA-256 identities;
+2. an immutable provider-generation registry with exact matching, deterministic selection,
+   structured missing-capability reasons, and no wildcard or transitive qualification;
+3. fake providers and hostile fixtures proving role/purpose separation, software/hardware
+   independence, authority expiry, pipeline composition, and frozen substitution rules;
+4. bounded versioned worker-message framing and state machines over an in-memory fake transport,
+   covering cancellation, stale generations, malformed messages, crash, hang, and shutdown without
+   promising a public plug-in SDK;
+5. a canonical image-sequence manifest for ordered members, duplicate/gap diagnostics, rational
+   time, interpretation, source fingerprints, and explicit gap policy; and
+6. `MediaQcEvidenceV1` construction and validation, including rejection of partial, self-described
+   independent, or mismatched artifact/preset evidence.
+
+These slices create no codec-support claim and introduce no third-party binary. Real process launch,
+sandbox adapters, demuxers, codecs, muxers, native GPU surfaces, and commercial SDKs follow the
+dependency-intake and qualification gates. This sequence does not move media implementation ahead
+of the current first-proof deferral.
+
 ## Decisions Still Requiring External Authority
 
 Before strict ProRes work is scheduled, obtain written answers for:
@@ -631,6 +764,12 @@ documentation, and vendor product statements. Versioned candidates must be reche
   [EBU Tech 3285 BWF](https://tech.ebu.ch/publications/tech3285), and
   [ITU-R BS.2088-2 BW64](https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.2088-2-202511-I%21%21TOC-HTM-E.htm)
   are the starting container/audio contracts for their declared subsets.
+- [SMPTE ST 2086:2018](https://pub.smpte.org/pub/st2086/st2086-2018.pdf) defines mastering-display
+  color-volume metadata; [SMPTE ST 2094-1:2016](https://pub.smpte.org/pub/st2094-1/st2094-1-2016.pdf)
+  defines the common dynamic-metadata framework; and
+  [CTA-861.3-A](https://www.cta.tech/standards/cta-8613-a/) defines HDR static-metadata extensions
+  for the interface mappings in its scope. Each delivery container and bitstream still needs its own
+  declared carriage rules.
 - [ITU-T H.273](https://www.itu.int/rec/T-REC-H.273) defines coding-independent video signal code
   points. [SMPTE's timecode overview](https://www.smpte.org/blog/understanding-standards-time-code)
   identifies the ST 12 family and its rate/drop-frame scope.
@@ -642,6 +781,14 @@ documentation, and vendor product statements. Versioned candidates must be reche
   [NVIDIA Video Codec SDK](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/index.html),
   and [AMD AMF](https://gpuopen.com/advanced-media-framework/). AMD explicitly states that AMF does
   not sublicense codec-standard IP rights, reinforcing the separate legal gate.
+- [Vulkan Video](https://docs.vulkan.org/spec/latest/chapters/videocoding.html) defines the current
+  codec-operation framework; [Vulkan external memory and synchronization](https://docs.vulkan.org/guide/latest/extensions/external.html)
+  defines platform handle and synchronization families. The current
+  [MoltenVK runtime feature list](https://github.com/KhronosGroup/MoltenVK/blob/main/Docs/MoltenVK_Runtime_UserGuide.md)
+  includes Metal external-memory/object interop but not the Vulkan Video queue, while
+  [Core Video's Metal texture cache](https://developer.apple.com/documentation/CoreVideo/cvmetaltexturecache-q3j)
+  exposes the native Apple image-buffer-to-Metal candidate path. All remain runtime-qualified
+  implementation mechanisms rather than portable media semantics.
 - The currently reviewed
   [Windows Media Foundation format list](https://learn.microsoft.com/en-us/windows/win32/medfound/supported-media-formats-in-media-foundation),
   [D3D12 Video codec enum](https://learn.microsoft.com/en-us/windows/win32/api/d3d12video/ne-d3d12video-d3d12_video_encoder_codec),
