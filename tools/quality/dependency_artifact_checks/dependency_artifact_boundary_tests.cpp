@@ -79,12 +79,19 @@ void testPublicSurface(const std::filesystem::path& root, Expectations& expectat
         root / "tools/quality/dependency_artifact_checks/dependency_artifact_checks.hpp",
         std::size_t{64} * 1024U);
     expectations.expect(
-        header.find("not a production dependency-lock or installed-prefix validator") !=
-            std::string::npos,
-        "tooling API states its synthetic-only trust boundary");
+        header.find("validates Bloom's checked-in synthetic contract fixtures") !=
+                std::string::npos &&
+            header.find("still not an installed-prefix validator") != std::string::npos,
+        "tooling API states its production-lock scope and prefix-validation boundary");
     expectations.expect(header.find("lockIdentity(") == std::string::npos &&
                             header.find("prefixIdentity(") == std::string::npos,
                         "tooling API exposes no trusted production identity capability");
+    const auto productionHeader =
+        readBounded(root / "tools/quality/dependency_artifact_checks/production_lock_checks.hpp",
+                    std::size_t{64} * 1024U);
+    expectations.expect(
+        productionHeader.find("ASCII-STRICT v1 TIGHTENING") != std::string::npos,
+        "production lock validator documents the deliberate ASCII-strict v1 tightening");
 }
 
 } // namespace

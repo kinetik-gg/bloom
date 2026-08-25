@@ -91,5 +91,6 @@ class TemporaryDirectory final {
 };
 
 [[nodiscard]] auto runBoundaryTests(const std::filesystem::path& repositoryRoot) -> int;
+[[nodiscard]] auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int;
 
 } // namespace bloom::quality::dependencies::tests

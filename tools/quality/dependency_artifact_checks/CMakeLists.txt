@@ -10,6 +10,8 @@ add_library(
     dependency_artifact_schema.cpp
     dependency_lock_fixture.cpp
     dependency_prefix_fixture.cpp
+    production_lock_checks.cpp
+    production_lock_checks.hpp
 )
 target_link_libraries(bloom_dependency_artifact_checks PUBLIC bloom_quality_json PRIVATE bloom_core)
 target_compile_features(bloom_dependency_artifact_checks PUBLIC cxx_std_20)
@@ -28,6 +30,7 @@ if(BUILD_TESTING)
         bloom_dependency_artifact_checks_test
         dependency_artifact_boundary_tests.cpp
         dependency_artifact_checks_tests.cpp
+        production_lock_checks_tests.cpp
         dependency_artifact_checks_test_support.hpp
     )
     target_link_libraries(

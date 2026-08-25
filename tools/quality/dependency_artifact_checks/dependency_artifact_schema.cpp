@@ -1,5 +1,7 @@
 #include "dependency_artifact_checks_internal.hpp"
 
+#include "production_lock_checks.hpp"
+
 #include <array>
 
 #include <functional>
@@ -40,8 +42,11 @@ auto checkRepository(const Path& inputRoot) -> CheckResult {
                     limitsFor(ArtifactKind::Prefix).maximumBytes);
     const auto prefix = parseCanonicalFixture(prefixEncoded, ArtifactKind::Prefix);
     validatePrefixFixture(prefix, lock, lockEncoded, context);
+    const auto production = validateProductionLock(root);
     return {.lockVector = identityVector("bloom.dependencies.lock.v1", lockEncoded),
-            .prefixVector = identityVector("bloom.dependencies.prefix.v1", prefixEncoded)};
+            .prefixVector = identityVector("bloom.dependencies.prefix.v1", prefixEncoded),
+            .productionLockPresent = production.present,
+            .productionLockIdentity = production.identity};
 }
 void validateSchemaArtifact(const Value& value, const ArtifactKind kind) {
     constexpr std::string_view draft = "https://json-schema.org/draft/2020-12/schema";
