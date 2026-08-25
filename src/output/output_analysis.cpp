@@ -237,6 +237,59 @@ numericWindow(const WindowDescriptorParts& parts) noexcept {
            inclusiveAxisFitsSigned32(window.originY, window.height);
 }
 
+[[nodiscard]] constexpr std::optional<std::uint64_t>
+checkedMultiply(const std::uint64_t left, const std::uint64_t right) noexcept {
+    if (right != 0 && left > std::numeric_limits<std::uint64_t>::max() / right) {
+        return std::nullopt;
+    }
+    return left * right;
+}
+
+[[nodiscard]] std::optional<bool>
+exceedsHardResourceLimits(const bloom::output::OutputAnalysisReportV1View report) noexcept {
+    const auto& pixelFacet = report.facets[0];
+    const auto sourcePixels = parsePixels(pixelFacet.sourceDescriptor, "binary32");
+    const std::string_view targetSample =
+        report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8" : "binary32";
+    const auto targetPixels = parsePixels(pixelFacet.targetDescriptor, targetSample);
+    const auto sourceDataWindow = parseWindow(report.facets[5].sourceDescriptor);
+    const auto targetDataWindow = parseWindow(report.facets[5].targetDescriptor);
+    const auto sourceDisplayWindow = parseWindow(report.facets[6].sourceDescriptor);
+    const auto targetDisplayWindow = parseWindow(report.facets[6].targetDescriptor);
+    if (!sourcePixels || !targetPixels || !sourceDataWindow || !targetDataWindow ||
+        !sourceDisplayWindow || !targetDisplayWindow) {
+        return std::nullopt;
+    }
+
+    const auto sourceHeight = parseUnsigned32(sourcePixels->height);
+    const auto sourceWidth = parseUnsigned32(sourcePixels->width);
+    const auto targetHeight = parseUnsigned32(targetPixels->height);
+    const auto targetWidth = parseUnsigned32(targetPixels->width);
+    const auto sourceData = numericWindow(*sourceDataWindow);
+    const auto targetData = numericWindow(*targetDataWindow);
+    const auto sourceDisplay = numericWindow(*sourceDisplayWindow);
+    const auto targetDisplay = numericWindow(*targetDisplayWindow);
+    if (!sourceHeight || !sourceWidth || !targetHeight || !targetWidth || !sourceData ||
+        !targetData || !sourceDisplay || !targetDisplay) {
+        return std::nullopt;
+    }
+
+    const auto pixelCount = checkedMultiply(*sourceWidth, *sourceHeight);
+    if (!pixelCount) {
+        return true;
+    }
+    constexpr auto maximumDimension = bloom::output::kOutputAnalysisMaximumDimensionV1;
+    const auto windowExceeds = [](const NumericWindow& window) noexcept {
+        return window.width > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
+               window.height > bloom::output::kOutputAnalysisMaximumDimensionV1;
+    };
+    return *sourceWidth > maximumDimension || *sourceHeight > maximumDimension ||
+           *targetWidth > maximumDimension || *targetHeight > maximumDimension ||
+           *pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
+           windowExceeds(*sourceData) || windowExceeds(*targetData) ||
+           windowExceeds(*sourceDisplay) || windowExceeds(*targetDisplay);
+}
+
 [[nodiscard]] std::optional<PixelAspectParts>
 parsePixelAspect(const std::string_view descriptor) noexcept {
     constexpr std::string_view denominatorPrefix = "denominator=u:";
@@ -628,7 +681,22 @@ validateOutputAnalysisReportV1(const OutputAnalysisReportV1View report) noexcept
         }
     }
 
-    return OutputAnalysisReportValidationV1::success(report, permissionBits);
+    const auto resourceLimitExceeded = exceedsHardResourceLimits(report);
+    if (!resourceLimitExceeded) {
+        return OutputAnalysisReportValidationV1::failure(
+            issue(OutputAnalysisReportErrorCodeV1::InternalInvariant,
+                  static_cast<std::size_t>(OutputFacetIdV1::ExternalDependencies) - 1U));
+    }
+    const auto resourceCodePresent =
+        report.facets[static_cast<std::size_t>(OutputFacetIdV1::ExternalDependencies) - 1U]
+            .stableCode == OutputFacetStableCodeV1::ResourceLimitExceeded;
+    if (resourceCodePresent != *resourceLimitExceeded) {
+        return OutputAnalysisReportValidationV1::failure(
+            issue(OutputAnalysisReportErrorCodeV1::DescriptorRelationshipMismatch,
+                  static_cast<std::size_t>(OutputFacetIdV1::ExternalDependencies) - 1U));
+    }
+
+    return OutputAnalysisReportValidationV1::success(permissionBits);
 }
 
 } // namespace bloom::output

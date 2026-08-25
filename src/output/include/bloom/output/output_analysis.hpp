@@ -15,6 +15,8 @@ inline constexpr std::uint16_t kOutputAnalysisSerializationVersionV1 = 1;
 inline constexpr std::uint32_t kOutputPresetVersionV1 = 1;
 inline constexpr std::size_t kOutputAnalysisFacetCountV1 = 11;
 inline constexpr std::uint16_t kOutputAnalysisAllFacetsPermittedV1 = 0x07FFU;
+inline constexpr std::uint32_t kOutputAnalysisMaximumDimensionV1 = 32'768U;
+inline constexpr std::uint64_t kOutputAnalysisMaximumPixelCountV1 = 67'108'864U;
 
 enum class OutputPresetV1 : std::uint8_t {
     PngRgba8SrgbV1 = 1,
@@ -184,49 +186,25 @@ struct OutputAnalysisReportIssueV1 final {
     std::size_t descriptorErrorOffset = 0;
 };
 
-// This is a non-owning validation token. Its descriptor views remain valid only while the caller's
-// report storage remains alive and unchanged. Construction is restricted to the validator so a
-// future digest API cannot accidentally accept an unchecked raw report.
-class ValidatedOutputAnalysisReportV1 final {
-  public:
-    [[nodiscard]] constexpr OutputPresetV1 preset() const noexcept { return report_.preset; }
-    [[nodiscard]] constexpr std::span<const OutputFacetAssessmentV1View> facets() const noexcept {
-        return report_.facets;
-    }
-    [[nodiscard]] constexpr OutputAnalysisPermissionMaskV1 permissionMask() const noexcept {
-        return permissionMask_;
-    }
-    [[nodiscard]] constexpr bool approvable() const noexcept {
-        return permissionMask_.allPermitted();
-    }
-
-  private:
-    constexpr ValidatedOutputAnalysisReportV1(
-        const OutputAnalysisReportV1View report,
-        const OutputAnalysisPermissionMaskV1 permissionMask) noexcept
-        : report_(report), permissionMask_(permissionMask) {}
-
-    OutputAnalysisReportV1View report_;
-    OutputAnalysisPermissionMaskV1 permissionMask_;
-
-    friend class OutputAnalysisReportValidationV1;
-};
-
 class [[nodiscard]] OutputAnalysisReportValidationV1 final {
   public:
-    [[nodiscard]] constexpr bool hasValue() const noexcept { return value_.has_value(); }
+    [[nodiscard]] constexpr bool hasValue() const noexcept { return permissionMask_.has_value(); }
     [[nodiscard]] constexpr explicit operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr const ValidatedOutputAnalysisReportV1* value() const& noexcept {
-        return value_ ? &*value_ : nullptr;
+    [[nodiscard]] constexpr std::optional<OutputAnalysisPermissionMaskV1>
+    permissionMask() const& noexcept {
+        return permissionMask_;
     }
-    [[nodiscard]] const ValidatedOutputAnalysisReportV1* value() const&& = delete;
+    [[nodiscard]] std::optional<OutputAnalysisPermissionMaskV1> permissionMask() const&& = delete;
+    [[nodiscard]] constexpr bool approvable() const& noexcept {
+        return permissionMask_ && permissionMask_->allPermitted();
+    }
+    [[nodiscard]] bool approvable() const&& = delete;
     [[nodiscard]] constexpr OutputAnalysisReportIssueV1 issue() const noexcept { return issue_; }
 
   private:
     [[nodiscard]] static constexpr OutputAnalysisReportValidationV1
-    success(const OutputAnalysisReportV1View report, const std::uint16_t permissionBits) noexcept {
-        return OutputAnalysisReportValidationV1(ValidatedOutputAnalysisReportV1(
-            report, OutputAnalysisPermissionMaskV1(permissionBits)));
+    success(const std::uint16_t permissionBits) noexcept {
+        return OutputAnalysisReportValidationV1(OutputAnalysisPermissionMaskV1(permissionBits));
     }
     [[nodiscard]] static constexpr OutputAnalysisReportValidationV1
     failure(OutputAnalysisReportIssueV1 issue) noexcept {
@@ -237,13 +215,15 @@ class [[nodiscard]] OutputAnalysisReportValidationV1 final {
     }
 
     explicit constexpr OutputAnalysisReportValidationV1(
-        const ValidatedOutputAnalysisReportV1 value) noexcept
-        : value_(value) {}
+        const OutputAnalysisPermissionMaskV1 permissionMask) noexcept
+        : permissionMask_(permissionMask) {}
     explicit constexpr OutputAnalysisReportValidationV1(
         const OutputAnalysisReportIssueV1 issue) noexcept
         : issue_(issue) {}
 
-    std::optional<ValidatedOutputAnalysisReportV1> value_;
+    // Keep only facts derived during validation. In particular, this result never retains a report
+    // span or any descriptor string_view into caller-owned storage.
+    std::optional<OutputAnalysisPermissionMaskV1> permissionMask_;
     OutputAnalysisReportIssueV1 issue_{};
 
     friend OutputAnalysisReportValidationV1
@@ -254,12 +234,12 @@ class [[nodiscard]] OutputAnalysisReportValidationV1 final {
 // permission mask is non-approvable. It validates the closed tuple vocabulary and descriptor
 // relationships internal to the report. A future digest stage must additionally bind the dynamic
 // source fields to its validated ProcessFrame and the PNG dependency fields to its validated
-// display-processor identity.
+// display-processor identity. Digest intake accepts the raw report view and synchronously repeats
+// this validation; no validation result serves as a borrowed report token.
 [[nodiscard]] OutputAnalysisReportValidationV1
 validateOutputAnalysisReportV1(OutputAnalysisReportV1View report) noexcept;
 
 static_assert(std::is_trivially_copyable_v<OutputFacetAssessmentV1View>);
 static_assert(std::is_trivially_copyable_v<OutputAnalysisReportV1View>);
-static_assert(std::is_trivially_copyable_v<ValidatedOutputAnalysisReportV1>);
 
 } // namespace bloom::output

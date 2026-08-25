@@ -1,11 +1,13 @@
 #include <bloom/output/output_analysis.hpp>
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <span>
 #include <string>
@@ -21,6 +23,27 @@ using Error = output::OutputAnalysisReportErrorCodeV1;
 using Facet = output::OutputFacetIdV1;
 using Preset = output::OutputPresetV1;
 using State = output::OutputPreservationStateV1;
+
+template <typename Result>
+concept ExposesBorrowedValue = requires(const Result& result) { result.value(); };
+
+template <typename Result>
+concept ExposesBorrowedFacets = requires(const Result& result) { result.facets(); };
+
+template <typename Result>
+concept ExposesBorrowedPreset = requires(const Result& result) { result.preset(); };
+
+template <typename Result>
+concept ExposesPermissionFromRvalue =
+    requires(Result result) { std::move(result).permissionMask(); };
+
+static_assert(!ExposesBorrowedValue<output::OutputAnalysisReportValidationV1>);
+static_assert(!ExposesBorrowedFacets<output::OutputAnalysisReportValidationV1>);
+static_assert(!ExposesBorrowedPreset<output::OutputAnalysisReportValidationV1>);
+static_assert(!ExposesPermissionFromRvalue<output::OutputAnalysisReportValidationV1>);
+static_assert(std::same_as<decltype(std::declval<const output::OutputAnalysisReportValidationV1&>()
+                                        .permissionMask()),
+                           std::optional<output::OutputAnalysisPermissionMaskV1>>);
 
 constexpr std::string_view kChannels =
     "count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;"
@@ -99,6 +122,12 @@ makePngReport() noexcept {
              {Facet::Metadata, State::Exact, Code::None, "profile=id:none", "profile=id:none"},
              {Facet::ExternalDependencies, State::ExternalReference, Code::PngOcioExternalReference,
               kNoDependencies, kOcioDependency}}};
+}
+
+void setResourceLimitExceeded(std::array<output::OutputFacetAssessmentV1View,
+                                         output::kOutputAnalysisFacetCountV1>& report) noexcept {
+    report[10].state = State::Missing;
+    report[10].stableCode = Code::ResourceLimitExceeded;
 }
 
 [[nodiscard]] output::OutputAnalysisReportValidationV1
@@ -274,27 +303,51 @@ void testStableCodeMapping(Expectations& expectations) {
 void testValidReportsAndDerivedPermissions(Expectations& expectations) {
     auto exr = makeExrReport();
     const auto validExr = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
-    expectations.expect(validExr && validExr.value() != nullptr && validExr.value()->approvable() &&
-                            validExr.value()->permissionMask().bits() ==
-                                output::kOutputAnalysisAllFacetsPermittedV1,
+    const auto exrPermissions = validExr.permissionMask();
+    expectations.expect(validExr && validExr.approvable() && exrPermissions &&
+                            exrPermissions->bits() == output::kOutputAnalysisAllFacetsPermittedV1,
                         "an all-exact EXR report validates with all derived permission bits");
 
     auto png = makePngReport();
     const auto validPng = validate(Preset::PngRgba8SrgbV1, png);
-    expectations.expect(validPng && validPng.value() != nullptr && validPng.value()->approvable() &&
-                            validPng.value()->permissionMask().bits() ==
-                                output::kOutputAnalysisAllFacetsPermittedV1,
+    const auto pngPermissions = validPng.permissionMask();
+    expectations.expect(validPng && validPng.approvable() && pngPermissions &&
+                            pngPermissions->bits() == output::kOutputAnalysisAllFacetsPermittedV1,
                         "the nominal PNG report derives all permitted conversion bits");
 
     exr[8].state = State::Missing;
     exr[8].stableCode = Code::CompressionUnavailable;
     const auto nonApprovable = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    const auto nonApprovablePermissions = nonApprovable.permissionMask();
     expectations.expect(
-        nonApprovable && nonApprovable.value() != nullptr && !nonApprovable.value()->approvable() &&
-            !nonApprovable.value()->permissionMask().permits(Facet::Compression) &&
-            nonApprovable.value()->permissionMask().permits(Facet::Metadata) &&
-            !nonApprovable.value()->permissionMask().permits(enumWithBits<Facet>(0xFFU)),
+        nonApprovable && !nonApprovable.approvable() && nonApprovablePermissions &&
+            !nonApprovablePermissions->permits(Facet::Compression) &&
+            nonApprovablePermissions->permits(Facet::Metadata) &&
+            !nonApprovablePermissions->permits(enumWithBits<Facet>(0xFFU)),
         "a valid Missing report remains inspectable but is derived as non-approvable");
+}
+
+void testValidationResultRetainsNoBorrowedStorage(Expectations& expectations) {
+    auto report = makeExrReport();
+    const auto validation = validate(Preset::FlatExrRgba32fLinRec709SceneV1, report);
+    const auto permissions = validation.permissionMask();
+
+    report[0].facet = enumWithBits<Facet>(0xFFU);
+    const auto mutatedValidation = validate(Preset::FlatExrRgba32fLinRec709SceneV1, report);
+    expectations.expect(
+        validation && validation.approvable() && permissions && permissions->allPermitted() &&
+            !mutatedValidation,
+        "a validation result retains only derived facts when report storage mutates");
+
+    const auto validationFromDestroyedStorage = [] {
+        auto temporaryReport = makeExrReport();
+        return validate(Preset::FlatExrRgba32fLinRec709SceneV1, temporaryReport);
+    }();
+    const auto temporaryPermissions = validationFromDestroyedStorage.permissionMask();
+    expectations.expect(validationFromDestroyedStorage &&
+                            validationFromDestroyedStorage.approvable() && temporaryPermissions &&
+                            temporaryPermissions->allPermitted(),
+                        "a validation result remains safe after temporary report storage dies");
 }
 
 void testClosedReportStructure(Expectations& expectations) {
@@ -432,7 +485,7 @@ void testExactPixelAspectRounding(Expectations& expectations) {
     exr[7].sourceDescriptor = "denominator=u:3;numerator=u:1";
     exr[7].targetDescriptor = "value=f32:3eaaaaab";
     const auto rounded = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
-    expectations.expect(rounded && rounded.value() != nullptr && rounded.value()->approvable(),
+    expectations.expect(rounded && rounded.approvable(),
                         "EXR pixel aspect uses deterministic round-to-nearest-even binary32 bits");
 
     exr[7].targetDescriptor = "value=f32:3eaaaaaa";
@@ -464,8 +517,7 @@ void testWindowPermissionTruth(Expectations& expectations) {
     exr[5].state = State::Unsupported;
     exr[5].stableCode = Code::WindowOutOfRange;
     const auto rejectedWindow = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
-    expectations.expect(rejectedWindow && rejectedWindow.value() != nullptr &&
-                            !rejectedWindow.value()->approvable(),
+    expectations.expect(rejectedWindow && !rejectedWindow.approvable(),
                         "EXR signed-window overflow derives the non-permitted range code");
 
     constexpr std::string_view maximumWidthPixels =
@@ -477,8 +529,13 @@ void testWindowPermissionTruth(Expectations& expectations) {
     exr[0].targetDescriptor = maximumWidthPixels;
     exr[5].sourceDescriptor = signedBoundaryWindow;
     exr[5].targetDescriptor = signedBoundaryWindow;
-    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
-                        "the full inclusive signed-32 EXR boundary remains exactly representable");
+    setResourceLimitExceeded(exr);
+    const auto signedBoundary = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    const auto signedBoundaryPermissions = signedBoundary.permissionMask();
+    expectations.expect(signedBoundary && !signedBoundary.approvable() &&
+                            signedBoundaryPermissions &&
+                            signedBoundaryPermissions->permits(Facet::DataWindow),
+                        "signed-window representability remains independent of the resource cap");
 
     auto png = makePngReport();
     constexpr std::string_view offsetDataWindow = "height=u:1;origin-x=i:1;origin-y=i:0;width=u:1";
@@ -515,9 +572,10 @@ void testWindowPermissionTruth(Expectations& expectations) {
     png[6].targetDescriptor = pngOversizeWindow;
     png[6].state = State::Unsupported;
     png[6].stableCode = Code::WindowOutOfRange;
+    setResourceLimitExceeded(png);
     const auto oversizedPng = validate(Preset::PngRgba8SrgbV1, png);
     expectations.expect(
-        oversizedPng && oversizedPng.value() != nullptr && !oversizedPng.value()->approvable(),
+        oversizedPng && !oversizedPng.approvable(),
         "PNG dimensions beyond its signed maximum require range failures on both windows");
 
     png[5].sourceDescriptor = "height=u:1;origin-x=i:1;origin-y=i:0;width=u:2147483648";
@@ -527,6 +585,113 @@ void testWindowPermissionTruth(Expectations& expectations) {
                         "PNG dimension overflow takes precedence over the origin mismatch code");
 }
 
+void testHardResourceLimitTruth(Expectations& expectations) {
+    constexpr std::string_view maximumDimensionPixels =
+        "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:32768";
+    constexpr std::string_view maximumDimensionWindow =
+        "height=u:1;origin-x=i:0;origin-y=i:0;width=u:32768";
+    auto exr = makeExrReport();
+    exr[0].sourceDescriptor = maximumDimensionPixels;
+    exr[0].targetDescriptor = maximumDimensionPixels;
+    exr[5].sourceDescriptor = maximumDimensionWindow;
+    exr[5].targetDescriptor = maximumDimensionWindow;
+    exr[6].sourceDescriptor = maximumDimensionWindow;
+    exr[6].targetDescriptor = maximumDimensionWindow;
+    const auto maximumDimension = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(maximumDimension.approvable(),
+                        "the exact 32768 dimension boundary remains approvable");
+
+    constexpr std::string_view maximumPixelCountPixels =
+        "height=u:8192;packing=id:rgba;sample-type=id:binary32;width=u:8192";
+    constexpr std::string_view maximumPixelCountWindow =
+        "height=u:8192;origin-x=i:0;origin-y=i:0;width=u:8192";
+    exr = makeExrReport();
+    exr[0].sourceDescriptor = maximumPixelCountPixels;
+    exr[0].targetDescriptor = maximumPixelCountPixels;
+    exr[5].sourceDescriptor = maximumPixelCountWindow;
+    exr[5].targetDescriptor = maximumPixelCountWindow;
+    exr[6].sourceDescriptor = maximumPixelCountWindow;
+    exr[6].targetDescriptor = maximumPixelCountWindow;
+    const auto maximumPixelCount = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(maximumPixelCount.approvable(),
+                        "the exact checked 2^26 pixel-count boundary remains approvable");
+
+    constexpr std::string_view excessiveDimensionPixels =
+        "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:32769";
+    constexpr std::string_view excessiveDimensionWindow =
+        "height=u:1;origin-x=i:0;origin-y=i:0;width=u:32769";
+    exr = makeExrReport();
+    exr[0].sourceDescriptor = excessiveDimensionPixels;
+    exr[0].targetDescriptor = excessiveDimensionPixels;
+    exr[5].sourceDescriptor = excessiveDimensionWindow;
+    exr[5].targetDescriptor = excessiveDimensionWindow;
+    exr[6].sourceDescriptor = excessiveDimensionWindow;
+    exr[6].targetDescriptor = excessiveDimensionWindow;
+    const auto missingResourceCode = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(missingResourceCode.issue().code == Error::DescriptorRelationshipMismatch &&
+                            missingResourceCode.issue().facetIndex == 10,
+                        "a descriptor above the dimension cap requires the resource-limit code");
+    exr[10].state = State::Missing;
+    exr[10].stableCode = Code::DependencyMissing;
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
+                            Error::DescriptorRelationshipMismatch,
+                        "another unavailable-dependency code cannot hide a resource-limit failure");
+    setResourceLimitExceeded(exr);
+    expectations.expect(
+        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
+        "the required resource-limit code makes an oversized report valid but blocked");
+
+    constexpr std::string_view excessivePixelCountPixels =
+        "height=u:8193;packing=id:rgba;sample-type=id:binary32;width=u:8192";
+    constexpr std::string_view excessivePixelCountWindow =
+        "height=u:8193;origin-x=i:0;origin-y=i:0;width=u:8192";
+    exr = makeExrReport();
+    exr[0].sourceDescriptor = excessivePixelCountPixels;
+    exr[0].targetDescriptor = excessivePixelCountPixels;
+    exr[5].sourceDescriptor = excessivePixelCountWindow;
+    exr[5].targetDescriptor = excessivePixelCountWindow;
+    exr[6].sourceDescriptor = excessivePixelCountWindow;
+    exr[6].targetDescriptor = excessivePixelCountWindow;
+    setResourceLimitExceeded(exr);
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
+                        "checked pixel-count overflow independently requires the resource code");
+
+    exr = makeExrReport();
+    exr[6].sourceDescriptor = excessiveDimensionWindow;
+    exr[6].targetDescriptor = excessiveDimensionWindow;
+    setResourceLimitExceeded(exr);
+    expectations.expect(
+        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
+        "an excessive display-window extent independently requires the resource code");
+
+    exr = makeExrReport();
+    setResourceLimitExceeded(exr);
+    expectations.expect(
+        validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
+            Error::DescriptorRelationshipMismatch,
+        "resource.limit-exceeded is invalid when every descriptor is within bounds");
+    exr[10].stableCode = Code::AdapterUnavailable;
+    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).hasValue(),
+                        "other unavailable dependency codes remain valid within resource bounds");
+
+    constexpr std::string_view excessivePngPixels =
+        "height=u:1;packing=id:rgba;sample-type=id:uint8;width=u:32769";
+    auto png = makePngReport();
+    png[0].sourceDescriptor = excessiveDimensionPixels;
+    png[0].targetDescriptor = excessivePngPixels;
+    png[5].sourceDescriptor = excessiveDimensionWindow;
+    png[5].targetDescriptor = excessiveDimensionWindow;
+    png[6].sourceDescriptor = excessiveDimensionWindow;
+    png[6].targetDescriptor = excessiveDimensionWindow;
+    expectations.expect(validate(Preset::PngRgba8SrgbV1, png).issue().code ==
+                            Error::DescriptorRelationshipMismatch,
+                        "an oversized PNG cannot retain its nominal external-reference code");
+    setResourceLimitExceeded(png);
+    const auto blockedPng = validate(Preset::PngRgba8SrgbV1, png);
+    expectations.expect(blockedPng && !blockedPng.approvable(),
+                        "an oversized PNG report is valid only with resource.limit-exceeded");
+}
+
 } // namespace
 
 int main() {
@@ -534,10 +699,12 @@ int main() {
     testPresetIdentityAndSchemaMatrix(expectations);
     testStableCodeMapping(expectations);
     testValidReportsAndDerivedPermissions(expectations);
+    testValidationResultRetainsNoBorrowedStorage(expectations);
     testClosedReportStructure(expectations);
     testDescriptorValidationAndBounds(expectations);
     testPresetVocabularyAndRelationships(expectations);
     testExactPixelAspectRounding(expectations);
     testWindowPermissionTruth(expectations);
+    testHardResourceLimitTruth(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

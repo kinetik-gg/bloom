@@ -360,6 +360,22 @@ Nominal analysis is derived exactly as follows:
 | metadata | `Exact` | `Exact` |
 | external dependencies | `ExternalReference`, `png.ocio-external-reference` | `Exact` |
 
+Report version 1 also derives the export hard-limit result from its canonical descriptors. The
+limit is exceeded iff any source or target pixel width or height, or any source or target data- or
+display-window extent, exceeds `32768`, or checked multiplication of the source pixel width and
+height exceeds `67108864` (`2^26`). Values exactly at either limit do not exceed it. The pixel
+relationship rules above require the target extent and the source data-window extent to match the
+source pixels, but validation still checks every named descriptor side directly and performs the
+pixel-count multiplication with overflow detection.
+
+When that derived condition is true, the external-dependencies facet must be `Missing`,
+`resource.limit-exceeded`; its nominal PNG external-reference or EXR exact tuple and every other
+unavailable-dependency code are invalid. When the condition is false, `resource.limit-exceeded` is
+invalid; the nominal tuple or another otherwise-valid unavailable-dependency code remains valid.
+This relationship is independent of format window representability. A report can therefore require
+`window.out-of-range` on a data/display facet and `resource.limit-exceeded` on external dependencies
+at the same time. Neither code substitutes for or suppresses the other.
+
 `png.equal-window-required` means specifically that the source display window differs from the PNG
 implicit target `(0,0,W,H)`. Thus equal source data/display windows at a nonzero origin do not
 silently pass.
