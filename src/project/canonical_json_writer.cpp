@@ -313,6 +313,14 @@ CanonicalJsonWriterResult CanonicalJsonWriter::integerValue(const std::uint32_t 
     return writeToken(token.view());
 }
 
+CanonicalJsonWriterResult CanonicalJsonWriter::float64Value(const double value) noexcept {
+    const auto token = formatCanonicalFloat64(value);
+    if (!token) {
+        return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::NonFiniteNumber);
+    }
+    return writeToken(token.value()->view());
+}
+
 CanonicalJsonWriterResult CanonicalJsonWriter::finish() noexcept {
     if (const auto limits = validateLimits(); !limits) {
         return limits;

@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <string_view>
 
@@ -61,6 +63,9 @@ void testGoldenLayout(Expectations& expectations) {
     expectSuccess(expectations, writer.memberName("maximum"), "an integer member begins");
     expectSuccess(expectations, writer.integerValue(UINT32_MAX),
                   "the supported integer maximum is canonical");
+    expectSuccess(expectations, writer.memberName("negativeZero"), "a Float64 member begins");
+    expectSuccess(expectations, writer.float64Value(std::bit_cast<double>(0x8000000000000000ULL)),
+                  "a finite Float64 value is written");
     expectSuccess(expectations, writer.memberName("nested"), "a nested object member begins");
     expectSuccess(expectations, writer.beginObject(), "the nested object begins");
     expectSuccess(expectations, writer.memberName("emptyObject"), "an empty object member begins");
@@ -86,6 +91,7 @@ void testGoldenLayout(Expectations& expectations) {
                                           "  \"enabled\": true,\n"
                                           "  \"nothing\": null,\n"
                                           "  \"maximum\": 4294967295,\n"
+                                          "  \"negativeZero\": -0.0,\n"
                                           "  \"nested\": {\n"
                                           "    \"emptyObject\": {},\n"
                                           "    \"items\": [\n"
@@ -102,6 +108,32 @@ void testGoldenLayout(Expectations& expectations) {
                             std::string_view(writer.written().data(), writer.written().size()) ==
                                 expected,
                         "golden bytes use caller order, two-space multiline layout, and one LF");
+}
+
+void testFloat64FailuresAreTransactional(Expectations& expectations) {
+    constexpr char sentinel = '?';
+    std::array<char, 24> output{};
+    output.fill(sentinel);
+    CanonicalJsonWriter writer(output);
+    expectSuccess(expectations, writer.beginObject(), "the Float64 failure object begins");
+    expectSuccess(expectations, writer.memberName("value"), "its pending member begins");
+    const auto beforeInvalid = writer.bytesWritten();
+    expectError(expectations, writer.float64Value(std::numeric_limits<double>::infinity()),
+                CanonicalJsonWriterError::NonFiniteNumber, "infinity is not a JSON number");
+    expectError(expectations, writer.float64Value(std::numeric_limits<double>::quiet_NaN()),
+                CanonicalJsonWriterError::NonFiniteNumber, "NaN is not a JSON number");
+    expectations.expect(writer.bytesWritten() == beforeInvalid && output[beforeInvalid] == sentinel,
+                        "non-finite Float64 rejection preserves the pending member and bytes");
+
+    const auto finite = writer.float64Value(1.7976931348623157e+308);
+    expectations.expect(!finite &&
+                            finite.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
+                            writer.bytesWritten() == beforeInvalid,
+                        "Float64 capacity failure is transactional");
+    expectSuccess(expectations, writer.float64Value(1.0),
+                  "a smaller finite Float64 can complete the member");
+    expectSuccess(expectations, writer.endObject(), "the Float64 failure object closes");
+    expectSuccess(expectations, writer.finish(), "the Float64 failure object finishes");
 }
 
 void testEmptyAndRootValues(Expectations& expectations) {
@@ -365,5 +397,6 @@ int main() {
     testResourceLimits(expectations);
     testFixedDepthBoundary(expectations);
     testInvalidLimits(expectations);
+    testFloat64FailuresAreTransactional(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -30,6 +30,7 @@ enum class CanonicalJsonWriterError : std::uint8_t {
     ValueLimitExceeded,
     ContainerLimitExceeded,
     InvalidLimits,
+    NonFiniteNumber,
 };
 
 class [[nodiscard]] CanonicalJsonWriterResult final {
@@ -84,9 +85,12 @@ class CanonicalJsonWriter final {
     [[nodiscard]] CanonicalJsonWriterResult stringValue(std::string_view value) noexcept;
     [[nodiscard]] CanonicalJsonWriterResult booleanValue(bool value) noexcept;
     [[nodiscard]] CanonicalJsonWriterResult nullValue() noexcept;
-    // The v1 canonical JSON-number domain is an unsigned 32-bit schema integer. Semantic 64-bit
-    // integers and IDs are emitted by callers as canonical decimal strings.
+    // Schema integers remain unsigned 32-bit JSON numbers. Semantic 64-bit integers and IDs are
+    // emitted by callers as canonical decimal strings.
     [[nodiscard]] CanonicalJsonWriterResult integerValue(std::uint32_t value) noexcept;
+    // Float64 values use Bloom's typed RFC 8785/ECMAScript-derived spelling. NaN and infinities are
+    // rejected without changing the output or writer state.
+    [[nodiscard]] CanonicalJsonWriterResult float64Value(double value) noexcept;
 
     // Completes the document with exactly one LF. A second call or any later write is invalid.
     [[nodiscard]] CanonicalJsonWriterResult finish() noexcept;
