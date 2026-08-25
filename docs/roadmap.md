@@ -69,9 +69,9 @@ session time, and one-active/one-newest preview gate are implemented. The 16 ms 
 timeline key projection, direct manipulation, and complete project persistence remain the next
 implementation slices.
 
-Before the next feature is called cross-platform complete, the current checkpoint and each new
-merge must pass the configured Linux, macOS, and Windows CI matrix. A local pass alone does not
-establish platform parity.
+Linux native/core validation is the current automated merge gate. It does not establish desktop or
+platform parity. Before a feature is called cross-platform complete, its relevant shared, desktop,
+adapter, and packaging suites must also pass qualified Linux, macOS, and Windows environments.
 
 ## Execution Order
 
@@ -109,8 +109,9 @@ Goal: establish the independent contracts needed by every later heavy operation 
 generic workflow engine or a renderer-shaped task system.
 
 Implementation status: the 1A, 1B, and 1C foundation code and artist-visible Add Solid projection
-are implemented and locally verified. The visual checkpoint has been launched for inspection. The
-configured three-platform matrix remains the authority for cross-platform completion.
+are implemented and locally verified. The visual checkpoint has been launched for inspection.
+Linux native CI protects shared semantics; qualified desktop CI on all three product platforms
+remains required for cross-platform completion.
 
 The three tracks were developed independently so their public seams could be reviewed before preview
 integration.
@@ -181,7 +182,9 @@ Suggested commit: `feat: define CPU image contracts`
 - Composition values reject zero, overflow, invalid rate/aspect, and hostile extents.
 - Solid creation is one exact undoable transaction with stable IDs.
 - Image math passes allocation-overflow and alpha/HDR invariants without Qt linkage.
-- Strict build, format, hygiene, architecture checks, CTest, and the three-platform matrix pass.
+- Strict build, format, hygiene, architecture checks, and CTest pass in Linux native CI. The same
+  shared semantics plus desktop/platform suites must pass all three qualified environments before
+  the batch is platform-qualified.
 
 Visual checkpoint: launched locally with Add Solid inspectable through synchronized Timeline,
 Nodes, selection, and Properties projections. The Viewer states that evaluation is not connected;
@@ -193,7 +196,7 @@ Goal: prove that real composition-derived work can execute, report progress, be 
 publish safely before image allocation increases the cost of mistakes.
 
 Implementation status: implemented and locally verified. The visual checkpoint has been launched;
-cross-platform parity still requires the configured Linux, macOS, and Windows CI matrix.
+cross-platform parity still requires qualified Linux, macOS, and Windows CI environments.
 
 Parallel work packages:
 
@@ -243,8 +246,8 @@ same non-blocking staged shutdown.
 
 Goal: render the first correct pixels through the asynchronous path.
 
-Implementation status: implemented and locally verified on Linux. The shared cross-platform CI
-matrix remains required before the batch is called platform-qualified.
+Implementation status: implemented and locally verified on Linux. Qualified shared and desktop CI
+on all three product platforms remains required before the batch is called platform-qualified.
 
 Implement:
 

@@ -19,36 +19,40 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      CC: clang
-      CXX: clang++
+      CC: clang-22
+      CXX: clang++-22
 
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - name: Install quality tools
-        run: sudo apt-get update && sudo apt-get install --yes clang clang-format clang-tidy ninja-build
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
-        with:
-          version: "6.8.3"
-          cache: true
+      - name: Install LLVM 22 quality tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build
+          llvm_key=$(mktemp)
+          trap 'rm -f "$llvm_key"' EXIT
+          curl --fail --silent --show-error --location \
+            https://apt.llvm.org/llvm-snapshot.gpg.key \
+            --output "$llvm_key"
+          primary_fingerprint=$(gpg --show-keys --with-colons "$llvm_key" | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$primary_fingerprint" = 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+          gpg --dearmor < "$llvm_key" | \
+            sudo tee /usr/share/keyrings/llvm-snapshot.gpg >/dev/null
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main' | \
+            sudo tee /etc/apt/sources.list.d/llvm-22.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes clang-22 clang-format-22 clang-tidy-22
 
       - name: Configure Clang and clang-tidy
-        run: cmake --preset dev -DBLOOM_ENABLE_CLANG_TIDY=ON
+        run: cmake --preset ci-linux-native
 
       - name: Check repository quality
-        run: cmake --build --preset dev --target bloom-quality-check --parallel
+        run: cmake --build --preset ci-linux-native --target bloom-quality-check --parallel
 
       - name: Build with clang-tidy
-        run: cmake --build --preset dev --parallel
-
-      - name: Test repository checkers
-        run: >-
-          ctest --preset dev
-          -R '^bloom\.quality\..*_self_tests$'
-          --output-on-failure
+        run: cmake --build --preset ci-linux-native --parallel
 
       - name: Test Clang build
-        run: ctest --preset dev --output-on-failure
+        run: ctest --preset ci-linux-native --output-on-failure

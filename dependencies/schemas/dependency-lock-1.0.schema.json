@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:kinetik:bloom:schema:dependency-lock:1.0",
   "title": "Bloom Dependency Lock 1.0",
-  "$comment": "scripts/check_dependency_artifacts.py checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
+  "$comment": "The native bloom-dependency-artifact-check target checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
   "type": "object",
   "required": ["format", "schemaVersion", "unicodeProfile", "profiles", "components"],
   "properties": {

@@ -16,18 +16,41 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "BUILD_TESTING": "ON"
       }
+    },
+    {
+      "name": "ci-linux-native",
+      "displayName": "Bloom Linux native CI",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/ci-linux-native",
+      "cacheVariables": {
+        "BLOOM_BUILD_DESKTOP": "OFF",
+        "BLOOM_ENABLE_CLANG_TIDY": "ON",
+        "BLOOM_ENABLE_TEST_CLANG_TIDY": "ON",
+        "BLOOM_LLVM_TOOLCHAIN_MAJOR": "22"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "dev",
       "configurePreset": "dev"
+    },
+    {
+      "name": "ci-linux-native",
+      "configurePreset": "ci-linux-native"
     }
   ],
   "testPresets": [
     {
       "name": "dev",
       "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-linux-native",
+      "configurePreset": "ci-linux-native",
       "output": {
         "outputOnFailure": true
       }

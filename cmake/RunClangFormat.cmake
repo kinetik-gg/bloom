@@ -45,6 +45,14 @@ file(
     "${BLOOM_SOURCE_DIR}/tests/*.hh"
     "${BLOOM_SOURCE_DIR}/tests/*.hpp"
     "${BLOOM_SOURCE_DIR}/tests/*.hxx"
+    "${BLOOM_SOURCE_DIR}/tools/*.c"
+    "${BLOOM_SOURCE_DIR}/tools/*.cc"
+    "${BLOOM_SOURCE_DIR}/tools/*.cpp"
+    "${BLOOM_SOURCE_DIR}/tools/*.cxx"
+    "${BLOOM_SOURCE_DIR}/tools/*.h"
+    "${BLOOM_SOURCE_DIR}/tools/*.hh"
+    "${BLOOM_SOURCE_DIR}/tools/*.hpp"
+    "${BLOOM_SOURCE_DIR}/tools/*.hxx"
 )
 list(SORT bloom_format_sources)
 

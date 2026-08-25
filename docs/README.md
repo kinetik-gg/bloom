@@ -42,7 +42,8 @@ provide research or rationale, but they are not binding until adopted here.
 ## Current Checkpoint
 
 - The deterministic CPU preview vertical slice through Batch 3 is implemented and locally verified;
-  shared platform CI remains the cross-platform qualification authority.
+  qualified shared and desktop CI on all three product platforms will remain the cross-platform
+  qualification authority. The current automated merge gate is Linux native/core only.
 - Batch 4's rational-time, animation, and interaction contracts are accepted. Durable curves,
   authoring commands, exact sampling, CPU evaluator integration, exact session time, and the
   one-active/one-newest preview-request gate are implemented. The 16 ms pointer cadence, timeline

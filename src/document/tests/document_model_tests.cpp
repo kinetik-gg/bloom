@@ -437,6 +437,9 @@ void testCompositionSettings(ExpectationContext& expectations) {
     const auto normalizedRate = FrameRate::create(48, 2);
     expectations.expect(widescreenPixels.has_value() && cinemaRate.has_value(),
                         "positive rational pixel aspects and frame rates are accepted");
+    if (!widescreenPixels.has_value() || !cinemaRate.has_value()) {
+        return;
+    }
     expectations.expect(normalizedPixels == PixelAspectRatio::square() &&
                             normalizedRate == FrameRate::framesPerSecond24(),
                         "composition ratios normalize to deterministic terms");
@@ -447,10 +450,15 @@ void testCompositionSettings(ExpectationContext& expectations) {
                         "zero rational components are rejected");
 
     const auto custom = CompositionFormat::create(3'840, 2'160, *widescreenPixels, *cinemaRate);
-    expectations.expect(
-        custom.has_value() && custom->width() == 3'840 && custom->height() == 2'160 &&
-            custom->pixelAspect() == *widescreenPixels && custom->frameRate() == *cinemaRate,
-        "custom composition format preserves normalized durable settings");
+    if (!custom.has_value()) {
+        expectations.expect(false, "custom composition format is accepted");
+        return;
+    }
+    const auto& customValue = custom.value();
+    expectations.expect(customValue.width() == 3'840 && customValue.height() == 2'160 &&
+                            customValue.pixelAspect() == *widescreenPixels &&
+                            customValue.frameRate() == *cinemaRate,
+                        "custom composition format preserves normalized durable settings");
     expectations.expect(!CompositionFormat::create(0, 1).has_value() &&
                             !CompositionFormat::create(1, 0).has_value(),
                         "zero composition extents are rejected");
@@ -519,12 +527,16 @@ void testDocumentSnapshots(ExpectationContext& expectations) {
                              "valid commit publishes a snapshot")) {
         return;
     }
-    expectations.expect(committed.snapshot->revision().value() == 1,
+    if (!committed.snapshot.has_value()) {
+        return;
+    }
+    const auto& committedSnapshot = *committed.snapshot;
+    expectations.expect(committedSnapshot.revision().value() == 1,
                         "commit publishes one monotonic revision");
     expectations.expect(original.project().name() == "Project" &&
-                            committed.snapshot->project().name() == "Changed",
+                            committedSnapshot.project().name() == "Changed",
                         "snapshots remain immutable after publication");
-    auto committedDraft = document.draft(*committed.snapshot);
+    auto committedDraft = document.draft(committedSnapshot);
     expectations.expect(committedDraft.ids().allocateNode() == id<NodeId>(17),
                         "published document state preserves allocator progress");
 
@@ -534,35 +546,42 @@ void testDocumentSnapshots(ExpectationContext& expectations) {
                             CommitStatus::RevisionConflict,
                         "stale expected revision cannot publish");
 
-    const auto restored = document.restore(committed.snapshot->revision(), original);
+    const auto restored = document.restore(committedSnapshot.revision(), original);
     if (!expectations.expect(restored.committed() && restored.snapshot.has_value(),
                              "valid restore publishes a snapshot")) {
         return;
     }
-    expectations.expect(restored.snapshot->revision().value() == 2,
+    if (!restored.snapshot.has_value()) {
+        return;
+    }
+    const auto& restoredSnapshot = *restored.snapshot;
+    expectations.expect(restoredSnapshot.revision().value() == 2,
                         "restore creates a new monotonic revision");
-    expectations.expect(restored.snapshot->project().name() == "Project",
+    expectations.expect(restoredSnapshot.project().name() == "Project",
                         "restore preserves historical records exactly");
     const auto* restoredComposition =
-        restored.snapshot->project().findComposition(id<CompositionId>(4));
+        restoredSnapshot.project().findComposition(id<CompositionId>(4));
     expectations.expect(restoredComposition != nullptr &&
                             restoredComposition->graph().nodes()[0].id == id<NodeId>(10) &&
                             restoredComposition->graph().layerOutputs()[0].layerId ==
                                 id<LayerId>(20) &&
                             restoredComposition->graph().layerOutputs()[0].name == "Foreground",
                         "restore retains exact graph, layer, and human-readable layer identity");
-    auto restoredDraft = document.draft(*restored.snapshot);
+    auto restoredDraft = document.draft(restoredSnapshot);
     expectations.expect(restoredDraft.ids().allocateNode() == id<NodeId>(17),
                         "restore retains published allocator high-water marks");
 
-    auto invalidDraft = document.draft(*restored.snapshot);
+    auto invalidDraft = document.draft(restoredSnapshot);
     const auto rejectedAllocation = invalidDraft.ids().allocateNode();
     auto* composition = invalidDraft.project().findComposition(id<CompositionId>(4));
+    if (!expectations.expect(composition != nullptr, "invalid-draft fixture finds composition")) {
+        return;
+    }
     composition->graph().findNode(id<NodeId>(10))->typeId.clear();
-    const auto invalid = document.commit(restored.snapshot->revision(), std::move(invalidDraft));
+    const auto invalid = document.commit(restoredSnapshot.revision(), std::move(invalidDraft));
     expectations.expect(invalid.status == CommitStatus::InvalidDraft && !invalid.validation.ok(),
                         "invalid draft cannot publish");
-    expectations.expect(document.snapshot().revision() == restored.snapshot->revision(),
+    expectations.expect(document.snapshot().revision() == restoredSnapshot.revision(),
                         "failed commit leaves revision and state unchanged");
     auto freshDraft = document.draft(document.snapshot());
     expectations.expect(rejectedAllocation == id<NodeId>(17) &&
@@ -618,14 +637,24 @@ void testNewProjectFactory(ExpectationContext& expectations) {
     expectations.expect(rejectedInvalidSettings,
                         "new project factory rejects incomplete project settings");
 
+    const auto customFrameRate = FrameRate::create(24'000, 1'001);
+    if (!customFrameRate.has_value()) {
+        expectations.expect(false, "custom frame rate is accepted");
+        return;
+    }
     const auto customFormat = CompositionFormat::create(4'096, 2'160, PixelAspectRatio::square(),
-                                                        *FrameRate::create(24'000, 1'001));
+                                                        customFrameRate.value());
+    if (!customFormat.has_value()) {
+        expectations.expect(false, "custom composition format is accepted");
+        return;
+    }
+    const auto& customFormatValue = customFormat.value();
     auto customProject = bloom::document::makeNewProject(
-        "Custom", "Scope", RationalTime::fromInteger(5), *customFormat);
+        "Custom", "Scope", RationalTime::fromInteger(5), customFormatValue);
     const auto* customComposition =
         customProject.project.findComposition(customProject.initialCompositionId);
     expectations.expect(customComposition != nullptr &&
-                            customComposition->format() == *customFormat,
+                            customComposition->format() == customFormatValue,
                         "new project factory preserves an explicit composition format");
 }
 
@@ -661,6 +690,9 @@ void testDocumentProvenance(ExpectationContext& expectations) {
                              "fixture advances current revision")) {
         return;
     }
+    if (!unrelatedCommit.snapshot.has_value()) {
+        return;
+    }
     expectations.expect(
         first.commit(unrelatedCommit.snapshot->revision(), std::move(firstDraft)).status ==
             CommitStatus::DraftBaseMismatch,
@@ -669,7 +701,7 @@ void testDocumentProvenance(ExpectationContext& expectations) {
 
 } // namespace
 
-int main() {
+int main() try {
     ExpectationContext expectations;
     testRationalTime(expectations);
     testIdsAndParameters(expectations);
@@ -682,4 +714,10 @@ int main() {
     testDocumentProvenance(expectations);
 
     return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
+} catch (const std::exception& error) {
+    std::cerr << "Unexpected test exception: " << error.what() << '\n';
+    return EXIT_FAILURE;
+} catch (...) {
+    std::cerr << "Unexpected non-standard test exception\n";
+    return EXIT_FAILURE;
 }

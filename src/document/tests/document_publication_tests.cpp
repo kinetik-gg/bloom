@@ -630,6 +630,9 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                              "valid caller-supplied durable IDs publish successfully")) {
         return;
     }
+    if (!committed.snapshot.has_value()) {
+        return;
+    }
 
     auto next = document.draft(*committed.snapshot);
     expectations.expect(next.ids().allocateComposition() == id<CompositionId>(101) &&

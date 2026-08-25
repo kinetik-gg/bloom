@@ -265,7 +265,7 @@ frameIdentity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& com
     return {.plan = compiledPlan,
             .time = *time,
             .output = runtime::OperationIndex::fromRaw(1),
-            .resolution = std::move(resolution),
+            .resolution = resolution,
             .quality = runtime::EvaluationQuality::Reference,
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .provider = runtime::EvaluationProvider::CpuReference,
@@ -453,7 +453,11 @@ void testProgressAndRepeatability(Expectations& expectations) {
             first.identity()->processPixelDigest() == second.identity()->processPixelDigest(),
         "repeat preparation and throwing monitoring callbacks do not change identity");
 
-    auto rvalueCopy = std::move(first);
+    // This deliberately constructs from a non-const rvalue. PreparationResult suppresses a
+    // consuming move, so construction must copy and leave the source publication coherent.
+    // NOLINTBEGIN(bugprone-use-after-move)
+    // NOLINTNEXTLINE(performance-move-const-arg)
+    const auto rvalueCopy = std::move(first);
     expectations.expect(
         first.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
             first.identity() != nullptr &&
@@ -461,6 +465,7 @@ void testProgressAndRepeatability(Expectations& expectations) {
                 output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
             rvalueCopy.identity() == first.identity(),
         "rvalue copying a publication result cannot create an incoherent moved-from result");
+    // NOLINTEND(bugprone-use-after-move)
 }
 
 void testPixelBitsAndPreflightPrecedence(Expectations& expectations) {

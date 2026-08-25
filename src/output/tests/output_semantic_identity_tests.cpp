@@ -27,6 +27,7 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <type_traits>
@@ -531,6 +532,28 @@ void testWindowAndRelationshipBoundaries(test::Expectations& expectations) {
                         "PNG resource limits are rejected during preflight before hashing begins");
 }
 
+void testThrowingProgress(test::Expectations& expectations) {
+    const auto process = test::prepareIdentity(test::evaluateTinyFrame());
+    const auto pngBound = bindPng(process, pngReport(process), displayIdentity());
+
+    std::size_t throwingCallbackCalls = 0;
+    const output::OutputSemanticIdentityV1Preparer preparer;
+    const auto preparedDespiteThrowingProgress = preparer.preparePngRgba8SrgbV1(
+        {.verifiedProduct =
+             verifiedPngForTest(pngBound, extent(1, 1), {0x00U, 0x7FU, 0x80U, 0xFFU})},
+        {}, [&throwingCallbackCalls](const output::OutputSemanticIdentityProgressV1&) {
+            ++throwingCallbackCalls;
+            throw std::runtime_error("test progress callback failure");
+        });
+    expectations.expect(
+        throwingCallbackCalls > 0 && preparedDespiteThrowingProgress.identity() != nullptr &&
+            preparedDespiteThrowingProgress.status() ==
+                output::OutputSemanticIdentityPreparationStatusV1::Prepared &&
+            test::hasDigest(&preparedDespiteThrowingProgress.identity()->digest(),
+                            kExpectedPngOutputDigest),
+        "throwing progress monitoring cannot change PNG identity preparation or its digest");
+}
+
 void testCancellationAndAllocationFailure(test::Expectations& expectations) {
     const auto frame = test::evaluateTinyFrame({0.25, 0.5, 0.75, 1.0});
     const auto process = test::prepareIdentity(frame);
@@ -544,6 +567,17 @@ void testCancellationAndAllocationFailure(test::Expectations& expectations) {
                             allocationFailure.error() ==
                                 output::OutputSemanticIdentityErrorCodeV1::AllocationFailure,
                         "publication allocation failure exposes no partial output identity");
+
+    const auto pngBound = bindPng(process, pngReport(process), displayIdentity());
+    const auto pngAllocationFailure =
+        output::detail::preparePngOutputSemanticIdentityV1WithAllocationFailure(
+            {.verifiedProduct =
+                 verifiedPngForTest(pngBound, extent(1, 1), {0x00U, 0x7FU, 0x80U, 0xFFU})},
+            {});
+    expectations.expect(pngAllocationFailure.identity() == nullptr &&
+                            pngAllocationFailure.error() ==
+                                output::OutputSemanticIdentityErrorCodeV1::AllocationFailure,
+                        "PNG publication allocation failure exposes no partial output identity");
 
     const auto largeFrame = [&] {
         const auto plan = test::planFor(64, 64, {0.25, 0.5, 0.75, 1.0});
@@ -576,14 +610,16 @@ void testCancellationAndAllocationFailure(test::Expectations& expectations) {
     bool reachedChunk = false;
     bool released = false;
     std::atomic_bool cancelled = false;
+    std::atomic_bool initiallyCancelled = false;
     std::atomic_bool published = false;
     const output::OutputSemanticIdentityV1Preparer preparer;
     auto submission = scheduler.submit<void>(
         runtime::TaskRequest(
             "Output semantic identity cancellation",
             {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)}),
-        [largeBound, largeMetadata, largeBits, &mutex, &condition, &reachedChunk, &released,
-         &cancelled, &published, &preparer](runtime::TaskContext& context) mutable {
+        [process, bound, pngBound, largeBound, largeMetadata, largeBits, &mutex, &condition,
+         &reachedChunk, &released, &cancelled, &initiallyCancelled, &published,
+         &preparer](runtime::TaskContext& context) mutable {
             const auto result = preparer.prepareFlatExrRgba32fLinRec709SceneV1(
                 {.verifiedProduct =
                      verifiedExrForTest(largeBound, largeMetadata, std::move(largeBits))},
@@ -600,13 +636,36 @@ void testCancellationAndAllocationFailure(test::Expectations& expectations) {
                     condition.notify_all();
                     condition.wait(lock, [&released] { return released; });
                 });
-            cancelled.store(result.status() ==
-                                output::OutputSemanticIdentityPreparationStatusV1::Cancelled,
+            bool initialProgressObserved = false;
+            const auto initialProgress =
+                [&initialProgressObserved](const output::OutputSemanticIdentityProgressV1&) {
+                    initialProgressObserved = true;
+                };
+            const auto initialPng = preparer.preparePngRgba8SrgbV1(
+                {.verifiedProduct =
+                     verifiedPngForTest(pngBound, extent(1, 1), std::vector<std::uint8_t>(4, 0))},
+                context.cancellation(), initialProgress);
+            const auto initialExr = preparer.prepareFlatExrRgba32fLinRec709SceneV1(
+                {.verifiedProduct = verifiedExrForTest(bound, exrMetadata(*process),
+                                                       processComponentBits(*process))},
+                context.cancellation(), initialProgress);
+            const bool initialCancellationSucceeded =
+                initialPng.status() ==
+                    output::OutputSemanticIdentityPreparationStatusV1::Cancelled &&
+                initialExr.status() ==
+                    output::OutputSemanticIdentityPreparationStatusV1::Cancelled &&
+                initialPng.identity() == nullptr && initialExr.identity() == nullptr &&
+                !initialProgressObserved;
+            initiallyCancelled.store(initialCancellationSucceeded, std::memory_order_release);
+            const bool cancellationSucceeded =
+                result.status() == output::OutputSemanticIdentityPreparationStatusV1::Cancelled &&
+                initialCancellationSucceeded;
+            cancelled.store(cancellationSucceeded, std::memory_order_release);
+            published.store(result.identity() != nullptr || initialPng.identity() != nullptr ||
+                                initialExr.identity() != nullptr,
                             std::memory_order_release);
-            published.store(result.identity() != nullptr, std::memory_order_release);
-            return result.status() == output::OutputSemanticIdentityPreparationStatusV1::Cancelled
-                       ? runtime::TaskResult<void>::cancelled()
-                       : runtime::TaskResult<void>::succeeded();
+            return cancellationSucceeded ? runtime::TaskResult<void>::cancelled()
+                                         : runtime::TaskResult<void>::succeeded();
         });
     {
         std::unique_lock lock(mutex);
@@ -627,10 +686,12 @@ void testCancellationAndAllocationFailure(test::Expectations& expectations) {
         taskResult = submission.handle.tryTakeResult();
         std::this_thread::yield();
     }
-    expectations.expect(taskResult && taskResult->state() == runtime::TaskState::Cancelled &&
-                            cancelled.load(std::memory_order_acquire) &&
-                            !published.load(std::memory_order_acquire),
-                        "cancellation publishes no partial output semantic identity");
+    expectations.expect(
+        taskResult && taskResult->state() == runtime::TaskState::Cancelled &&
+            cancelled.load(std::memory_order_acquire) &&
+            initiallyCancelled.load(std::memory_order_acquire) &&
+            !published.load(std::memory_order_acquire),
+        "chunk and initial cancellation publish no PNG or EXR identity or progress");
     scheduler.beginShutdown();
     while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
@@ -645,6 +706,7 @@ int main() {
     testBoundAnalysisAndPngGolden(expectations);
     testExrGoldenBitsAndMalformedPayload(expectations);
     testWindowAndRelationshipBoundaries(expectations);
+    testThrowingProgress(expectations);
     testCancellationAndAllocationFailure(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

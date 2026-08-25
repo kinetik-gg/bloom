@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -186,7 +187,7 @@ requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budge
            runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
     return {.time = core::RationalTime::fromInteger(0),
             .output = plan.output(),
-            .resolution = std::move(resolution),
+            .resolution = resolution,
             .quality = runtime::EvaluationQuality::Reference,
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .pixelStorageByteLimit = budget};
@@ -451,9 +452,14 @@ void testProxyAndPeakBudget(Expectations& expectations) {
     const auto proxy = evaluator.evaluate(plan, proxyRequest, {});
     const auto* descriptor =
         proxy.frame() == nullptr ? nullptr : proxy.frame()->processImage().descriptor();
+    const auto expectedProxyPixelAspect = core::PixelAspectRatio::create(2, 1);
+    if (!expectedProxyPixelAspect.has_value()) {
+        expectations.expect(false, "proxy pixel-aspect fixture succeeds");
+        return;
+    }
     expectations.expect(descriptor != nullptr && descriptor->dataWindow().extent().width() == 2 &&
                             descriptor->dataWindow().extent().height() == 2 &&
-                            descriptor->pixelAspect() == *core::PixelAspectRatio::create(2, 1),
+                            descriptor->pixelAspect() == expectedProxyPixelAspect.value(),
                         "proxy extent derives pixel aspect that preserves display aspect");
 
     const auto proxyShiftedPlan = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {3.0, 1.0});
@@ -575,7 +581,7 @@ void testIdentityAndPreparedHandoff(Expectations& expectations) {
                         "zero is not a publishable preview generation");
     const auto sharedPrepared =
         preparedOne.has_value()
-            ? std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*preparedOne))
+            ? std::make_shared<const runtime::PreparedPreviewFrame>(*preparedOne)
             : std::shared_ptr<const runtime::PreparedPreviewFrame>{};
     const auto preparedResult = runtime::PreviewPreparationResult::prepared(sharedPrepared);
     expectations.expect(preparedResult.has_value() &&
@@ -630,7 +636,8 @@ void testStructuredFailuresAndProgress(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto plan = oneSolidPlan();
     auto invalidRequest = requestFor(*plan);
-    invalidRequest.quality = static_cast<runtime::EvaluationQuality>(99);
+    invalidRequest.quality =
+        std::bit_cast<runtime::EvaluationQuality>(static_cast<std::uint8_t>(99));
     const auto unsupported = evaluator.evaluate(plan, invalidRequest, {});
     expectations.expect(unsupported.status() == runtime::EvaluationStatus::Failed &&
                             unsupported.diagnostics().front().code ==

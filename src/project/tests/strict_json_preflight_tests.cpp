@@ -33,12 +33,6 @@ void operator delete(void* const storage) noexcept { std::free(storage); }
 
 void operator delete[](void* const storage) noexcept { ::operator delete(storage); }
 
-void operator delete(void* const storage, const std::size_t) noexcept { std::free(storage); }
-
-void operator delete[](void* const storage, const std::size_t) noexcept {
-    ::operator delete(storage);
-}
-
 namespace {
 
 using bloom::project::detail::kStrictJsonCheckpointCadenceBytes;
