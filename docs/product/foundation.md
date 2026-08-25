@@ -6,9 +6,9 @@ Updated: 2026-08-25
 
 ## Product Identity
 
-Bloom is a native, local-first application for motion, compositing, and editing. Its defining
-interaction is that viewer, layers, nodes, media, and properties are synchronized views over shared
-project state.
+Bloom is a motion graphics and visual effects workspace for carrying an idea from first keyframe to
+final frame. Its defining promise is that creative iteration remains immediate while project state,
+image intent, and production handoffs remain explicit and trustworthy.
 
 The initial product wedge is compositing and motion. Editorial, grading, scripting, and delivery
 remain part of the broader direction but are not commitments for the first implementation proof.

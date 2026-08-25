@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(
     Bloom
     VERSION 0.1.0
-    DESCRIPTION "Native motion, compositing, and editing software"
+    DESCRIPTION "Artist-focused motion graphics and visual effects software"
     LANGUAGES CXX
 )
 
