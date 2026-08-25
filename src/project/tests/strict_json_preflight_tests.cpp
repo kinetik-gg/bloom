@@ -199,6 +199,26 @@ void testGoldenGrammarAndBoundary(Expectations& expectations) {
                 "a UTF-8 BOM is rejected before grammar scanning");
 }
 
+void testRootDelimitingAttackSurfaces(Expectations& expectations) {
+    expectError(expectations, "null {}", StrictJsonPreflightError::TrailingData, 5,
+                "a container after the root scalar is trailing data");
+    expectError(expectations, "null{}", StrictJsonPreflightError::InvalidSyntax, 4,
+                "a literal demands a delimiter byte before any following container");
+    expectError(expectations, "[0]0", StrictJsonPreflightError::TrailingData, 3,
+                "a number glued after the root array is trailing data");
+    expectError(expectations, "{}{}", StrictJsonPreflightError::TrailingData, 2,
+                "a second root container is trailing data");
+    expectError(expectations, "null,", StrictJsonPreflightError::TrailingData, 4,
+                "a comma after the root scalar is trailing data");
+    expectSuccess(expectations, "[0] \n\t ", 2, 2,
+                  "trailing RFC 8259 whitespace after a container root is absorbed");
+
+    std::string trailingNullByte{"null"};
+    trailingNullByte.push_back(static_cast<char>(0x00U));
+    expectError(expectations, trailingNullByte, StrictJsonPreflightError::InvalidSyntax, 4,
+                "a NUL byte after the root literal is a delimiter failure, not termination");
+}
+
 void testNumberGrammar(Expectations& expectations) {
     constexpr std::array valid{
         "0", "-0", "1", "-1", "0.0", "1.25", "1e0", "1E+2", "-1.2e-3",
@@ -230,6 +250,23 @@ void testNumberGrammar(Expectations& expectations) {
 
     expectSuccess(expectations, "1e999999999999999999999999999999", 1, 1,
                   "syntax preflight does not claim finite typed-number conversion");
+}
+
+void testExtendedNumberGrammarAttacks(Expectations& expectations) {
+    expectError(expectations, "Infinity", StrictJsonPreflightError::InvalidSyntax, 0,
+                "an Infinity literal is not a recognized JSON value start");
+    expectError(expectations, "NaN", StrictJsonPreflightError::InvalidSyntax, 0,
+                "a NaN literal is not a recognized JSON value start");
+    expectError(expectations, "-Infinity", StrictJsonPreflightError::InvalidNumber, 1,
+                "a signed Infinity spelling reports its non-digit after the sign");
+    expectError(expectations, "-.", StrictJsonPreflightError::InvalidNumber, 1,
+                "a sign followed by a decimal point has no integer digit");
+    expectError(expectations, "0x10", StrictJsonPreflightError::InvalidNumber, 1,
+                "a hexadecimal spelling reports its non-delimiter suffix");
+    expectError(expectations, "1.2.3", StrictJsonPreflightError::InvalidNumber, 3,
+                "a second decimal point reports the stray byte");
+    expectError(expectations, "1e-", StrictJsonPreflightError::InvalidNumber, 3,
+                "an exponent sign without digits at EOF reports EOF");
 }
 
 void testStringsAndUnicode(Expectations& expectations) {
@@ -342,6 +379,69 @@ void testStringsAndUnicode(Expectations& expectations) {
                 "an invalid non-ASCII root byte is classified as malformed UTF-8");
 }
 
+void testAdversarialUtf8AndBomVariants(Expectations& expectations) {
+    std::string truncatedTwoByte{"\""};
+    truncatedTwoByte.push_back(static_cast<char>(0xC2U));
+    expectError(expectations, truncatedTwoByte, StrictJsonPreflightError::InvalidUtf8,
+                truncatedTwoByte.size(), "a truncated two-byte scalar at EOF reports EOF");
+
+    std::string truncatedFourByte{"\""};
+    truncatedFourByte.push_back(static_cast<char>(0xF0U));
+    truncatedFourByte.push_back(static_cast<char>(0x9FU));
+    truncatedFourByte.push_back(static_cast<char>(0x8CU));
+    expectError(expectations, truncatedFourByte, StrictJsonPreflightError::InvalidUtf8,
+                truncatedFourByte.size(), "a truncated four-byte scalar at EOF reports EOF");
+
+    std::string forbiddenC1Lead{"\""};
+    forbiddenC1Lead.push_back(static_cast<char>(0xC1U));
+    forbiddenC1Lead.push_back(static_cast<char>(0x8FU));
+    forbiddenC1Lead.push_back('"');
+    expectError(expectations, forbiddenC1Lead, StrictJsonPreflightError::InvalidUtf8, 1,
+                "a C1 lead byte outside the two-byte range is rejected immediately");
+
+    std::string forbiddenFeLead{"\""};
+    forbiddenFeLead.push_back(static_cast<char>(0xFEU));
+    forbiddenFeLead.push_back('"');
+    expectError(expectations, forbiddenFeLead, StrictJsonPreflightError::InvalidUtf8, 1,
+                "an FE lead byte outside every sequence shape is rejected immediately");
+
+    const std::string bomAfterWhitespace{" \xEF\xBB\xBF"};
+    expectError(expectations, bomAfterWhitespace, StrictJsonPreflightError::InvalidSyntax, 1,
+                "a BOM after leading whitespace is ordinary syntax garbage at the value position");
+
+    std::string partialBom;
+    partialBom.push_back(static_cast<char>(0xEFU));
+    partialBom.push_back(static_cast<char>(0xBBU));
+    expectError(expectations, partialBom, StrictJsonPreflightError::InvalidUtf8, partialBom.size(),
+                "a truncated BOM prefix at the root reports malformed UTF-8 at EOF");
+
+    std::string nearBom;
+    nearBom.push_back(static_cast<char>(0xEFU));
+    nearBom.push_back(static_cast<char>(0xBBU));
+    nearBom.push_back(static_cast<char>(0xBEU));
+    expectError(expectations, nearBom, StrictJsonPreflightError::InvalidSyntax, 0,
+                "a BOM-adjacent scalar that is not a BOM is plain syntax garbage at the root");
+}
+
+void testEscapeSequenceAttacks(Expectations& expectations) {
+    expectError(expectations, R"("a\U0041b")", StrictJsonPreflightError::InvalidEscape, 3,
+                "an uppercase escape introducer reports its escape code byte");
+    expectError(expectations, R"("ab\u12)", StrictJsonPreflightError::InvalidEscape, 7,
+                "a unicode escape with fewer than four hex digits at EOF reports EOF");
+    expectError(expectations, R"("\u123")", StrictJsonPreflightError::InvalidEscape, 6,
+                "a closing quote consumed as a hex-digit slot reports its byte");
+    expectError(expectations, R"("\uD83D\")", StrictJsonPreflightError::InvalidUnicodeScalar, 8,
+                "a high surrogate followed by a non-u escape reports that byte");
+    expectError(expectations, R"("\uD83D\uD83D")", StrictJsonPreflightError::InvalidUnicodeScalar,
+                7, "a second high surrogate cannot complete the pair");
+    expectSuccess(expectations, R"("\uD800\uDC00")", 1, 1,
+                  "the lowest escaped surrogate pair decodes to U+10000");
+    expectSuccess(expectations, R"("\uDBFF\uDFFF")", 1, 1,
+                  "the highest escaped surrogate pair decodes to U+10FFFF");
+    expectSuccess(expectations, R"("\ud83d\ude00")", 1, 1,
+                  "lowercase hexadecimal escape digits are accepted");
+}
+
 void testResourceBoundaries(Expectations& expectations) {
     auto limits = strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues);
     limits.maximumDepth = 4;
@@ -403,6 +503,86 @@ void testResourceBoundaries(Expectations& expectations) {
                   "empty member names and values need no decoded-string budget", limits);
     expectError(expectations, R"({"a":null})", StrictJsonPreflightError::DecodedStringLimitExceeded,
                 2, "member names obey the same absolute decoded-string preflight", limits);
+}
+
+void testAlternatingDepthBomb(Expectations& expectations) {
+    constexpr std::string_view arrayWrapper = R"({"a":[)";
+    const auto buildAlternating = [](const std::string_view wrapper,
+                                     const std::uint32_t wrapperCount) {
+        std::string built{"["};
+        for (std::uint32_t level = 0; level < wrapperCount; ++level) {
+            built.append(wrapper);
+        }
+        built.push_back('0');
+        for (std::uint32_t level = 0; level < wrapperCount; ++level) {
+            built.append("]}");
+        }
+        built.push_back(']');
+        return built;
+    };
+
+    expectSuccess(expectations, buildAlternating(arrayWrapper, kStrictJsonMaximumDepth / 2U - 1U),
+                  kStrictJsonMaximumDepth, kStrictJsonMaximumDepth,
+                  "deeply alternating array and object nesting meets the absolute depth boundary");
+    expectError(expectations, buildAlternating(arrayWrapper, kStrictJsonMaximumDepth / 2U),
+                StrictJsonPreflightError::DepthLimitExceeded,
+                (kStrictJsonMaximumDepth / 2U) * arrayWrapper.size(),
+                "one further alternating container breaches the absolute depth boundary");
+
+    constexpr std::string_view memberWrapper = R"({"a":)";
+    std::string objectNesting;
+    for (std::uint32_t level = 0; level < kStrictJsonMaximumDepth - 1U; ++level) {
+        objectNesting.append(memberWrapper);
+    }
+    objectNesting.append("{}");
+    objectNesting.append(kStrictJsonMaximumDepth - 1U, '}');
+    expectSuccess(expectations, objectNesting, kStrictJsonMaximumDepth, kStrictJsonMaximumDepth,
+                  "object-only nesting also meets the absolute depth boundary");
+
+    std::string overObjects;
+    for (std::uint32_t level = 0; level < kStrictJsonMaximumDepth; ++level) {
+        overObjects.append(memberWrapper);
+    }
+    overObjects.append("{}");
+    overObjects.append(kStrictJsonMaximumDepth, '}');
+    expectError(expectations, overObjects, StrictJsonPreflightError::DepthLimitExceeded,
+                memberWrapper.size() * kStrictJsonMaximumDepth,
+                "object-only nesting one level beyond the boundary reports the breaching brace");
+}
+
+void testInvalidLimitsBoundaryCombinations(Expectations& expectations) {
+    const StrictJsonPreflightLimits hardMax{
+        .maximumInputBytes = kStrictJsonDocumentMaximumInputBytes,
+        .maximumValues = kStrictJsonMaximumValues,
+        .maximumContainerEntries = kStrictJsonMaximumContainerEntries,
+        .maximumDepth = kStrictJsonMaximumDepth,
+        .maximumDecodedStringBytes = kStrictJsonMaximumDecodedStringBytes};
+    expectSuccess(expectations, R"({"a":[0,-1]})", 4, 3,
+                  "every limit simultaneously at its hard maximum remains valid", hardMax);
+
+    auto zeroDepth = strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues);
+    zeroDepth.maximumDepth = 0;
+    expectError(expectations, "null", StrictJsonPreflightError::DepthLimitExceeded, 0,
+                "a zero depth ceiling rejects the root scalar", zeroDepth);
+    expectError(expectations, "{}", StrictJsonPreflightError::DepthLimitExceeded, 0,
+                "a zero depth ceiling rejects the root container", zeroDepth);
+
+    auto oneValue = strictJsonDocumentPreflightLimits(kStrictJsonMaximumContainerEntries);
+    oneValue.maximumValues = 1;
+    expectError(expectations, "[[]]", StrictJsonPreflightError::ValueLimitExceeded, 1,
+                "the shared value budget wins before container-entry accounting", oneValue);
+
+    auto zeroCeiling = strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues);
+    zeroCeiling.maximumInputBytes = 0;
+    expectError(expectations, "", StrictJsonPreflightError::EmptyInput, 0,
+                "an empty entry meets a zero input ceiling exactly and reports emptiness",
+                zeroCeiling);
+
+    const std::string bomDocument{"\xEF\xBB\xBF{}"};
+    auto bomSized = strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues);
+    bomSized.maximumInputBytes = 2;
+    expectError(expectations, bomDocument, StrictJsonPreflightError::InputTooLarge, 2,
+                "the input-size ceiling is enforced before BOM classification", bomSized);
 }
 
 struct CheckpointLog final {
@@ -511,6 +691,81 @@ void testCheckpointsAndCancellation(Expectations& expectations) {
                         "a prepared input scan performs no ordinary heap allocation");
 }
 
+void testCheckpointMonotonicityUnderAdversarialInput(Expectations& expectations) {
+    constexpr std::size_t lateOffset = 3 * kStrictJsonCheckpointCadenceBytes;
+    std::string longString{"\""};
+    longString.append(200'000, 'a');
+    longString += '"';
+    CheckpointLog lateCancellation;
+    lateCancellation.cancelAtOffset = lateOffset;
+    const auto cancelled =
+        scan(longString, strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues),
+             StrictJsonCheckpoint{.context = &lateCancellation, .function = recordCheckpoint});
+    expectations.expect(
+        !cancelled && cancelled.error == StrictJsonPreflightError::Cancelled &&
+            cancelled.errorOffset == lateOffset && lateCancellation.count == 4 &&
+            lateCancellation.offsets[0] == 0 &&
+            lateCancellation.offsets[1] == kStrictJsonCheckpointCadenceBytes &&
+            lateCancellation.offsets[2] == 2 * kStrictJsonCheckpointCadenceBytes &&
+            lateCancellation.offsets[3] == 3 * kStrictJsonCheckpointCadenceBytes,
+        "a late mid-token cancellation lands on the exact third cadence checkpoint");
+
+    std::string whitespacePrefix(200'000, ' ');
+    whitespacePrefix += "null";
+    CheckpointLog whitespaceCancellation;
+    whitespaceCancellation.cancelAtOffset = 2 * kStrictJsonCheckpointCadenceBytes;
+    const auto whitespaceResult = scan(
+        whitespacePrefix, strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues),
+        StrictJsonCheckpoint{.context = &whitespaceCancellation, .function = recordCheckpoint});
+    expectations.expect(!whitespaceResult &&
+                            whitespaceResult.error == StrictJsonPreflightError::Cancelled &&
+                            whitespaceResult.errorOffset == 2 * kStrictJsonCheckpointCadenceBytes &&
+                            whitespaceCancellation.count == 3,
+                        "pre-root cancellation interrupts long whitespace at the exact cadence");
+
+    const auto monotonicUntilCancel = [](const CheckpointLog& log) {
+        bool monotonic = log.count >= 2;
+        for (std::size_t index = 1; monotonic && index < log.count; ++index) {
+            monotonic = log.offsets[index] > log.offsets[index - 1];
+        }
+        return monotonic;
+    };
+    expectations.expect(
+        monotonicUntilCancel(lateCancellation) && monotonicUntilCancel(whitespaceCancellation),
+        "reported consumed bytes increase strictly monotonically up to cancellation");
+
+    std::string straddlingString{"\""};
+    straddlingString.append(kStrictJsonCheckpointCadenceBytes - 2U, 'a');
+    straddlingString.push_back(static_cast<char>(0xF0U));
+    straddlingString.push_back(static_cast<char>(0x9FU));
+    straddlingString.push_back(static_cast<char>(0x8CU));
+    straddlingString.push_back(static_cast<char>(0xB8U));
+    straddlingString += '"';
+    CheckpointLog straddleLog;
+    const auto straddled =
+        scan(straddlingString, strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues),
+             StrictJsonCheckpoint{.context = &straddleLog, .function = recordCheckpoint});
+    expectations.expect(straddled && straddled.valueCount == 1 &&
+                            straddled.maximumObservedDepth == 1 && straddleLog.count >= 3 &&
+                            straddleLog.offsets[straddleLog.count - 1] == straddlingString.size(),
+                        "a four-byte scalar straddling a cadence boundary survives checkpointing");
+
+    std::string invalidContinuation{"\""};
+    invalidContinuation.append(70'000, 'a');
+    invalidContinuation.push_back(static_cast<char>(0x80U));
+    invalidContinuation += '"';
+    CheckpointLog continuationLog;
+    const auto continuation =
+        scan(invalidContinuation, strictJsonDocumentPreflightLimits(kStrictJsonMaximumValues),
+             StrictJsonCheckpoint{.context = &continuationLog, .function = recordCheckpoint});
+    expectations.expect(
+        !continuation && continuation.error == StrictJsonPreflightError::InvalidUtf8 &&
+            continuation.errorOffset == 70'001 && continuationLog.count >= 2 &&
+            continuationLog.offsets.front() == 0 &&
+            continuationLog.offsets[continuationLog.count - 1] < invalidContinuation.size(),
+        "an invalid continuation beyond several checkpoints keeps its exact classification");
+}
+
 void testDeterministicMutationCorpus(Expectations& expectations) {
     constexpr std::string_view seed =
         R"({"text":"A\uD83D\uDE00","array":[0,-0.5e+2,true,false,null,{}]})";
@@ -565,10 +820,17 @@ int main() {
     Expectations expectations;
     testLimitFactoriesAndValidation(expectations);
     testGoldenGrammarAndBoundary(expectations);
+    testRootDelimitingAttackSurfaces(expectations);
     testNumberGrammar(expectations);
+    testExtendedNumberGrammarAttacks(expectations);
     testStringsAndUnicode(expectations);
+    testAdversarialUtf8AndBomVariants(expectations);
+    testEscapeSequenceAttacks(expectations);
     testResourceBoundaries(expectations);
+    testAlternatingDepthBomb(expectations);
+    testInvalidLimitsBoundaryCombinations(expectations);
     testCheckpointsAndCancellation(expectations);
+    testCheckpointMonotonicityUnderAdversarialInput(expectations);
     testDeterministicMutationCorpus(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
