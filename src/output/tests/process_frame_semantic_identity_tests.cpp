@@ -1,25 +1,36 @@
 #include <bloom/core/sha256.hpp>
+#include <bloom/output/output_limits.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
-#include <bloom/render/cpu_image_primitives.hpp>
+#include <bloom/render/image.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <span>
 #include <string_view>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+using namespace std::chrono_literals;
 
 namespace core = bloom::core;
 namespace document = bloom::document;
@@ -27,12 +38,71 @@ namespace output = bloom::output;
 namespace render = bloom::render;
 namespace runtime = bloom::runtime;
 
+using Identity = output::ProcessFrameSemanticIdentityV1;
+using PreparationResult = output::ProcessFrameSemanticIdentityV1PreparationResult;
+
+template <typename Product>
+concept ReadsCanonicalBytesFromConstLvalue =
+    requires(const Product& product) { product.canonicalBytes(); };
+
+template <typename Product>
+concept ReadsCanonicalBytesFromRvalue =
+    requires(Product product) { std::move(product).canonicalBytes(); };
+
+template <typename Product>
+concept ReadsFrameFromConstLvalue = requires(const Product& product) { product.processFrame(); };
+
+template <typename Product>
+concept ReadsFrameFromRvalue = requires(Product product) { std::move(product).processFrame(); };
+
+template <typename Product>
+concept ReadsPixelDigestFromConstLvalue =
+    requires(const Product& product) { product.processPixelDigest(); };
+
+template <typename Product>
+concept ReadsPixelDigestFromRvalue =
+    requires(Product product) { std::move(product).processPixelDigest(); };
+
+template <typename Result>
+concept ReadsIdentityFromConstLvalue = requires(const Result& result) { result.identity(); };
+
+template <typename Result>
+concept ReadsIdentityFromRvalue = requires(Result result) { std::move(result).identity(); };
+
+template <typename Preparer>
+concept ChainsIdentityFromTemporaryResult = requires(const Preparer& preparer) {
+    preparer.prepare(std::shared_ptr<const runtime::ProcessFrame>{}, runtime::CancellationToken{})
+        .identity();
+};
+
+static_assert(!std::is_default_constructible_v<Identity>);
+static_assert(!std::is_copy_constructible_v<Identity>);
+static_assert(!std::is_copy_assignable_v<Identity>);
+static_assert(!std::is_move_constructible_v<Identity>);
+static_assert(!std::is_move_assignable_v<Identity>);
+static_assert(ReadsCanonicalBytesFromConstLvalue<Identity>);
+static_assert(!ReadsCanonicalBytesFromRvalue<Identity>);
+static_assert(ReadsFrameFromConstLvalue<Identity>);
+static_assert(!ReadsFrameFromRvalue<Identity>);
+static_assert(ReadsPixelDigestFromConstLvalue<Identity>);
+static_assert(!ReadsPixelDigestFromRvalue<Identity>);
+static_assert(ReadsIdentityFromConstLvalue<PreparationResult>);
+static_assert(!ReadsIdentityFromRvalue<PreparationResult>);
+static_assert(!ChainsIdentityFromTemporaryResult<output::ProcessFrameSemanticIdentityV1Preparer>);
+
 constexpr auto kProjectId = document::ProjectId::fromRaw(0x0102030405060708ULL);
 constexpr auto kCompositionId = document::CompositionId::fromRaw(0x1112131415161718ULL);
 constexpr auto kOutputNodeId = document::NodeId::fromRaw(0x3132333435363738ULL);
 constexpr auto kInputNodeId = document::NodeId::fromRaw(0x4142434445464748ULL);
 constexpr auto kColorParameterId = document::ParameterId::fromRaw(0x5152535455565758ULL);
 constexpr auto kSourceRevision = document::Revision::fromRaw(0x2122232425262728ULL);
+
+constexpr auto kShellLayerNodeId = document::NodeId::fromRaw(0x61);
+constexpr auto kShellLayerId = document::LayerId::fromRaw(0x62);
+constexpr auto kShellStackNodeId = document::NodeId::fromRaw(0x63);
+constexpr auto kShellSlotId = document::LayerSlotId::fromRaw(0x64);
+constexpr auto kShellPositionParameterId = document::ParameterId::fromRaw(0x65);
+constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x66);
 
 constexpr std::string_view kCompositionPixelDigest =
     "db7f7d3db2e78643177715f34b8dcca6fd50399509094b9da0a9873016ba5ac9";
@@ -89,12 +159,12 @@ class Expectations final {
 
 [[nodiscard]] bool matchesHex(const std::span<const std::byte> bytes,
                               const std::string_view expected) {
-    if (expected.size() != bytes.size() * 2) {
+    if (expected.size() != bytes.size() * 2U) {
         return false;
     }
     for (std::size_t index = 0; index < bytes.size(); ++index) {
-        const auto value = static_cast<std::uint8_t>((hexDigit(expected[index * 2]) << 4U) |
-                                                     hexDigit(expected[index * 2 + 1]));
+        const auto value = static_cast<std::uint8_t>((hexDigit(expected[index * 2U]) << 4U) |
+                                                     hexDigit(expected[index * 2U + 1U]));
         if (bytes[index] != static_cast<std::byte>(value)) {
             return false;
         }
@@ -112,35 +182,22 @@ class Expectations final {
     return digest.has_value() && hasDigest(*digest, expected);
 }
 
-template <typename Result>
-[[nodiscard]] bool hasError(const Result& result,
-                            const output::ProcessFrameSemanticIdentityErrorCode code) {
-    return result.error() == code;
-}
-
-template <typename Enum> [[nodiscard]] Enum enumWithBits(const std::uint8_t bits) noexcept {
-    static_assert(sizeof(Enum) == sizeof(bits));
-    Enum value{};
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
 [[nodiscard]] render::Rgba32f pixel(const float red, const float green, const float blue,
                                     const float alpha) {
-    const auto result = render::Rgba32f::fromPremultiplied(red, green, blue, alpha);
-    if (!result) {
+    const auto value = render::Rgba32f::fromPremultiplied(red, green, blue, alpha);
+    if (!value) {
         std::abort();
     }
-    return *result.value();
+    return *value.value();
 }
 
 [[nodiscard]] render::ImageWindow window(const std::int64_t originX, const std::int64_t originY,
                                          const std::uint32_t width, const std::uint32_t height) {
-    const auto result = render::ImageWindow::create(originX, originY, width, height);
-    if (!result) {
+    const auto value = render::ImageWindow::create(originX, originY, width, height);
+    if (!value) {
         std::abort();
     }
-    return *result.value();
+    return *value.value();
 }
 
 [[nodiscard]] render::Rgba32fImage image(const render::ImageWindow dataWindow,
@@ -175,9 +232,10 @@ template <typename Enum> [[nodiscard]] Enum enumWithBits(const std::uint8_t bits
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
-plan(const core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square()) {
-    const auto format = document::CompositionFormat::create(2, 2, pixelAspect);
-    if (!format.has_value()) {
+plan(const std::uint32_t width = 2, const std::uint32_t height = 2,
+     const core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square()) {
+    const auto format = document::CompositionFormat::create(width, height, pixelAspect);
+    if (!format) {
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
@@ -197,49 +255,38 @@ plan(const core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square()
                                                    .animationSamplingSemanticsVersion = 8});
 }
 
-[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
-publishPlan(runtime::CompiledCompositionPlanDefinition definition) {
-    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
-}
-
 [[nodiscard]] runtime::ProcessFrameIdentity
-identity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& compiledPlan,
-         runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
+frameIdentity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& compiledPlan,
+              runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
     const auto time = core::RationalTime::create(-6, 8);
-    if (!time.has_value()) {
+    if (!time) {
         std::abort();
     }
-    return runtime::ProcessFrameIdentity{
-        .plan = compiledPlan,
-        .time = *time,
-        .output = runtime::OperationIndex::fromRaw(1),
-        .resolution = resolution,
-        .quality = runtime::EvaluationQuality::Reference,
-        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-        .provider = runtime::EvaluationProvider::CpuReference,
-        .evaluatorSemanticsVersion = 9,
-        .animationSamplingSemanticsVersion = 8,
-        .imagePrimitiveSemanticsVersion = 10,
-    };
+    return {.plan = compiledPlan,
+            .time = *time,
+            .output = runtime::OperationIndex::fromRaw(1),
+            .resolution = std::move(resolution),
+            .quality = runtime::EvaluationQuality::Reference,
+            .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+            .provider = runtime::EvaluationProvider::CpuReference,
+            .evaluatorSemanticsVersion = 9,
+            .animationSamplingSemanticsVersion = 8,
+            .imagePrimitiveSemanticsVersion = 10};
 }
 
 struct Fixture final {
-    runtime::ProcessFrameIdentity frameIdentity;
+    runtime::ProcessFrameIdentity identity;
     render::Rgba32fImage processImage;
 };
 
 [[nodiscard]] Fixture compositionFixture() {
     const auto pixelAspect = core::PixelAspectRatio::create(4, 3);
-    if (!pixelAspect.has_value()) {
+    if (!pixelAspect) {
         std::abort();
     }
-    const std::array pixels{
-        pixel(-0.0F, 0.0F, -1.5F, 1.0F),
-        pixel(2.0F, 0.5F, 0.25F, 0.5F),
-        pixel(-3.25F, 4.5F, -0.125F, 0.75F),
-        render::Rgba32f::transparent(),
-    };
-    return {identity(plan(*pixelAspect)),
+    const std::array pixels{pixel(-0.0F, 0.0F, -1.5F, 1.0F), pixel(2.0F, 0.5F, 0.25F, 0.5F),
+                            pixel(-3.25F, 4.5F, -0.125F, 0.75F), render::Rgba32f::transparent()};
+    return {frameIdentity(plan(2, 2, *pixelAspect)),
             image(window(-2, 5, 2, 2), window(-10, -20, 2, 2), *pixelAspect, pixels)};
 }
 
@@ -247,298 +294,389 @@ struct Fixture final {
     const auto formatAspect = core::PixelAspectRatio::create(4, 3);
     const auto proxyAspect = core::PixelAspectRatio::create(4, 9);
     const auto proxyExtent = render::ImageExtent::create(3, 1);
-    if (!formatAspect.has_value() || !proxyAspect.has_value() || !proxyExtent) {
+    if (!formatAspect || !proxyAspect || !proxyExtent) {
         std::abort();
     }
-    const std::array pixels{
-        pixel(1.0F, 2.0F, 3.0F, 1.0F),
-        pixel(-0.0F, 0.0F, 0.5F, 0.5F),
-        pixel(8.0F, -4.0F, 2.0F, 1.0F),
-    };
-    return {identity(plan(*formatAspect), runtime::ProxyResolution{*proxyExtent.value()}),
-            image(window(100, -200, 3, 1), window(-100, 200, 3, 1), *proxyAspect, pixels)};
+    const std::array pixels{pixel(1.0F, 2.0F, 3.0F, 1.0F), pixel(-0.0F, 0.0F, 0.5F, 0.5F),
+                            pixel(8.0F, -4.0F, 2.0F, 1.0F)};
+    return {
+        frameIdentity(plan(2, 2, *formatAspect), runtime::ProxyResolution{*proxyExtent.value()}),
+        image(window(100, -200, 3, 1), window(-100, 200, 3, 1), *proxyAspect, pixels)};
 }
 
-void testCompositionGoldenVector(Expectations& expectations) {
-    auto fixture = compositionFixture();
-    const auto validation =
-        output::validateProcessFrameSemanticIdentityV1(fixture.frameIdentity, fixture.processImage);
-    expectations.expect(validation &&
-                            validation.requiredBytes() ==
-                                output::kCompositionProcessFrameSemanticIdentityV1Bytes &&
-                            hasDigest(validation.processPixelDigest(), kCompositionPixelDigest),
-                        "composition validation returns the exact size and pixel digest");
-
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes> bytes{};
-    const auto written = output::writeProcessFrameSemanticIdentityV1(fixture.frameIdentity,
-                                                                     fixture.processImage, bytes);
-    expectations.expect(written && written.writtenBytes() == bytes.size() &&
-                            hasDigest(written.processPixelDigest(), kCompositionPixelDigest),
-                        "composition identity writes the complete record");
-    expectations.expect(matchesHex(bytes, kCompositionIdentityHex),
-                        "composition identity matches the independent hardcoded byte vector");
-    expectations.expect(hasDigest(core::Sha256Hasher::hash(bytes), kCompositionIdentityDigest),
-                        "composition identity matches the independent hardcoded record digest");
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+shellPlan(const std::uint32_t width, const std::uint32_t height) {
+    const auto format = document::CompositionFormat::create(width, height);
+    if (!format) {
+        std::abort();
+    }
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(
+        runtime::CompiledSolid{kInputNodeId, kColorParameterId, {0.0, 0.0, 0.0, 0.0}});
+    operations.emplace_back(runtime::CompiledLayerOutput{
+        kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
+        runtime::CompiledVec2Parameter{
+            kShellPositionParameterId,
+            document::Vec2d{static_cast<double>(width) / 2.0, static_cast<double>(height) / 2.0}},
+        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}});
+    operations.emplace_back(runtime::CompiledLayerStack{
+        kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlanDefinition{.sourceRevision = kSourceRevision,
+                                                   .projectId = kProjectId,
+                                                   .compositionId = kCompositionId,
+                                                   .format = *format,
+                                                   .operations = std::move(operations),
+                                                   .output = runtime::OperationIndex::fromRaw(3)});
 }
 
-void testProxyGoldenVector(Expectations& expectations) {
-    auto fixture = proxyFixture();
-    std::array<std::byte, output::kProxyProcessFrameSemanticIdentityV1Bytes> bytes{};
-    const auto written = output::writeProcessFrameSemanticIdentityV1(fixture.frameIdentity,
-                                                                     fixture.processImage, bytes);
-    expectations.expect(written && written.requiredBytes() == bytes.size() &&
-                            hasDigest(written.processPixelDigest(), kProxyPixelDigest),
-                        "proxy identity writes the proxy discriminator, extent, and digest");
-    expectations.expect(matchesHex(bytes, kProxyIdentityHex),
-                        "proxy identity matches the independent hardcoded byte vector");
-    expectations.expect(hasDigest(core::Sha256Hasher::hash(bytes), kProxyIdentityDigest),
-                        "proxy identity matches the independent hardcoded record digest");
+[[nodiscard]] std::shared_ptr<const runtime::ProcessFrame>
+evaluateShell(const std::uint32_t width, const std::uint32_t height) {
+    const auto compiledPlan = shellPlan(width, height);
+    const runtime::EvaluationRequest request{
+        .time = core::RationalTime::fromInteger(0),
+        .output = compiledPlan->output(),
+        .resolution = runtime::CompositionFormatResolution{},
+        .quality = runtime::EvaluationQuality::Reference,
+        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+        .pixelStorageByteLimit = static_cast<std::size_t>(width) * height * 64U};
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto result = evaluator.evaluate(compiledPlan, request, {});
+    if (result.status() != runtime::EvaluationStatus::Evaluated || result.frame() == nullptr) {
+        std::abort();
+    }
+    return result.frame();
 }
 
-void testPixelBitsOriginAndOrder(Expectations& expectations) {
-    auto fixture = compositionFixture();
-    const auto original = output::hashProcessPixelStreamV1(fixture.processImage);
-    expectations.expect(original && hasDigest(original.digest(), kCompositionPixelDigest),
-                        "component bits stream in RGBA order, including signed zero and HDR");
+[[nodiscard]] std::shared_ptr<const runtime::ProcessFrame> publishFixture(Fixture fixture) {
+    auto published = std::const_pointer_cast<runtime::ProcessFrame>(evaluateShell(1, 1));
+    auto& identity = const_cast<runtime::ProcessFrameIdentity&>(published->identity());
+    auto& processImage = const_cast<render::Rgba32fImage&>(published->processImage());
+    identity = std::move(fixture.identity);
+    processImage = std::move(fixture.processImage);
+    return published;
+}
 
-    const auto pixelAspect = fixture.processImage.descriptor()->pixelAspect();
+[[nodiscard]] PreparationResult
+prepare(const std::shared_ptr<const runtime::ProcessFrame>& frame,
+        const output::ProcessFrameSemanticIdentityProgressCallback& progress = {}) {
+    const output::ProcessFrameSemanticIdentityV1Preparer preparer;
+    return preparer.prepare(frame, {}, progress);
+}
+
+[[nodiscard]] std::shared_ptr<const Identity>
+preparedIdentity(const std::shared_ptr<const runtime::ProcessFrame>& frame) {
+    const auto result = prepare(frame);
+    if (result.status() != output::ProcessFrameSemanticIdentityPreparationStatus::Prepared ||
+        result.identity() == nullptr) {
+        std::abort();
+    }
+    return result.identity();
+}
+
+void testGoldenVectorsAndLifetime(Expectations& expectations) {
+    auto compositionFrame = publishFixture(compositionFixture());
+    const auto* exactFrame = compositionFrame.get();
+    auto compositionResult = prepare(compositionFrame);
+    expectations.expect(compositionResult.status() ==
+                                output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
+                            compositionResult.error() ==
+                                output::ProcessFrameSemanticIdentityErrorCode::None &&
+                            compositionResult.identity() != nullptr,
+                        "composition preparation publishes one successful immutable product");
+    if (compositionResult.identity() != nullptr) {
+        const auto& identity = *compositionResult.identity();
+        expectations.expect(
+            identity.processFrame().get() == exactFrame &&
+                identity.canonicalBytes().size() ==
+                    output::kCompositionProcessFrameSemanticIdentityV1Bytes &&
+                hasDigest(identity.processPixelDigest(), kCompositionPixelDigest),
+            "composition product binds the exact frame, byte count, and pixel digest");
+        expectations.expect(matchesHex(identity.canonicalBytes(), kCompositionIdentityHex),
+                            "composition product matches the independent canonical byte vector");
+        expectations.expect(hasDigest(core::Sha256Hasher::hash(identity.canonicalBytes()),
+                                      kCompositionIdentityDigest),
+                            "composition product matches the independent record digest");
+    }
+
+    auto retained = compositionResult.identity();
+    compositionFrame.reset();
+    compositionResult = prepare(nullptr);
+    expectations.expect(retained != nullptr && retained->processFrame().get() == exactFrame,
+                        "the product owns the exact process frame after all caller ownership ends");
+
+    const auto proxyResult = prepare(publishFixture(proxyFixture()));
+    expectations.expect(
+        proxyResult.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
+            proxyResult.identity() != nullptr &&
+            proxyResult.identity()->canonicalBytes().size() ==
+                output::kProxyProcessFrameSemanticIdentityV1Bytes &&
+            hasDigest(proxyResult.identity()->processPixelDigest(), kProxyPixelDigest) &&
+            matchesHex(proxyResult.identity()->canonicalBytes(), kProxyIdentityHex) &&
+            hasDigest(core::Sha256Hasher::hash(proxyResult.identity()->canonicalBytes()),
+                      kProxyIdentityDigest),
+        "proxy product matches independent size, pixel, byte, and record-digest vectors");
+}
+
+void testProgressAndRepeatability(Expectations& expectations) {
+    const auto frame = publishFixture(compositionFixture());
+    std::vector<output::ProcessFrameSemanticIdentityProgress> progress;
+    auto first = prepare(frame, [&progress](const auto update) { progress.push_back(update); });
+    const auto second = prepare(frame, [](const auto&) { throw 7; });
+    bool monotonic = !progress.empty();
+    for (std::size_t index = 1; index < progress.size(); ++index) {
+        const auto previousStage = static_cast<std::uint8_t>(progress[index - 1].stage);
+        const auto stage = static_cast<std::uint8_t>(progress[index].stage);
+        monotonic = monotonic && stage >= previousStage &&
+                    progress[index].completed <= progress[index].total;
+        if (stage == previousStage) {
+            monotonic = monotonic && progress[index].completed >= progress[index - 1].completed &&
+                        progress[index].total == progress[index - 1].total;
+        }
+    }
+    expectations.expect(
+        first.identity() != nullptr && second.identity() != nullptr && progress.size() == 7U &&
+            progress.front() ==
+                output::ProcessFrameSemanticIdentityProgress{
+                    output::ProcessFrameSemanticIdentityProgressStage::Preflight, 0, 1} &&
+            progress.back() ==
+                output::ProcessFrameSemanticIdentityProgress{
+                    output::ProcessFrameSemanticIdentityProgressStage::Encoding, 1, 1} &&
+            monotonic,
+        "progress is monotonic across exact preflight, row hashing, and encoding stages");
+    expectations.expect(
+        first.identity() != nullptr && second.identity() != nullptr &&
+            std::ranges::equal(first.identity()->canonicalBytes(),
+                               second.identity()->canonicalBytes()) &&
+            first.identity()->processPixelDigest() == second.identity()->processPixelDigest(),
+        "repeat preparation and throwing monitoring callbacks do not change identity");
+
+    auto rvalueCopy = std::move(first);
+    expectations.expect(
+        first.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
+            first.identity() != nullptr &&
+            rvalueCopy.status() ==
+                output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
+            rvalueCopy.identity() == first.identity(),
+        "rvalue copying a publication result cannot create an incoherent moved-from result");
+}
+
+void testPixelBitsAndPreflightPrecedence(Expectations& expectations) {
+    auto originalFixture = compositionFixture();
+    const auto aspect = originalFixture.processImage.descriptor()->pixelAspect();
     std::array reversed{render::Rgba32f::transparent(), render::Rgba32f::transparent(),
                         render::Rgba32f::transparent(), render::Rgba32f::transparent()};
-    std::ranges::reverse_copy(fixture.processImage.pixels(), reversed.begin());
-    auto reordered = image(window(-2, 5, 2, 2), window(-10, -20, 2, 2), pixelAspect, reversed);
-    const auto reorderedDigest = output::hashProcessPixelStreamV1(reordered);
-    expectations.expect(reorderedDigest && reorderedDigest.digest() != original.digest(),
-                        "changing increasing-Y/X pixel order changes the stream digest");
+    std::ranges::reverse_copy(originalFixture.processImage.pixels(), reversed.begin());
+    auto reorderedFixture = compositionFixture();
+    reorderedFixture.processImage =
+        image(window(-2, 5, 2, 2), window(-10, -20, 2, 2), aspect, reversed);
+    const auto original = preparedIdentity(publishFixture(std::move(originalFixture)));
+    const auto reordered = preparedIdentity(publishFixture(std::move(reorderedFixture)));
+    expectations.expect(original->processPixelDigest() != reordered->processPixelDigest(),
+                        "changing increasing-Y/X pixel order changes the bounded pixel digest");
 
-    auto translated = image(window(std::numeric_limits<std::int64_t>::min(), -1, 2, 2),
-                            window(std::numeric_limits<std::int64_t>::max() - 2, -20, 2, 2),
-                            pixelAspect, fixture.processImage.pixels());
-    const auto translatedDigest = output::hashProcessPixelStreamV1(translated);
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes>
-        translatedIdentity{};
-    const auto translatedWrite = output::writeProcessFrameSemanticIdentityV1(
-        fixture.frameIdentity, translated, translatedIdentity);
-    expectations.expect(translatedDigest && translatedDigest.digest() == original.digest(),
-                        "signed window origins do not enter the process pixel stream");
-    expectations.expect(translatedWrite && matchesHex(std::span(translatedIdentity).first(34),
-                                                      kCompositionIdentityHex.substr(0, 68)),
-                        "hostile signed origins remain encodable without changing the domain");
+    const std::array positivePixels{pixel(0.0F, 0.0F, 0.0F, 1.0F)};
+    const std::array negativePixels{pixel(-0.0F, 0.0F, 0.0F, 1.0F)};
+    const auto onePixelPlan = plan(1, 1);
+    auto positive = preparedIdentity(publishFixture(
+        {frameIdentity(onePixelPlan), image(window(0, 0, 1, 1), window(0, 0, 1, 1),
+                                            core::PixelAspectRatio::square(), positivePixels)}));
+    auto negative = preparedIdentity(publishFixture(
+        {frameIdentity(onePixelPlan), image(window(0, 0, 1, 1), window(0, 0, 1, 1),
+                                            core::PixelAspectRatio::square(), negativePixels)}));
+    expectations.expect(positive->processPixelDigest() != negative->processPixelDigest(),
+                        "positive and negative binary32 zero remain distinct process bits");
 
-    const std::array positiveZero{pixel(0.0F, 0.0F, 0.0F, 1.0F)};
-    const std::array negativeZero{pixel(-0.0F, 0.0F, 0.0F, 1.0F)};
-    auto positiveImage = image(window(0, 0, 1, 1), window(0, 0, 1, 1),
-                               core::PixelAspectRatio::square(), positiveZero);
-    auto negativeImage = image(window(0, 0, 1, 1), window(0, 0, 1, 1),
-                               core::PixelAspectRatio::square(), negativeZero);
-    const auto positiveDigest = output::hashProcessPixelStreamV1(positiveImage);
-    const auto negativeDigest = output::hashProcessPixelStreamV1(negativeImage);
-    expectations.expect(positiveDigest && negativeDigest &&
-                            positiveDigest.digest() != negativeDigest.digest(),
-                        "positive and negative binary32 zero remain distinct stream bits");
+    auto negativeTransparentRgb = std::const_pointer_cast<runtime::ProcessFrame>(publishFixture(
+        {frameIdentity(onePixelPlan),
+         image(window(0, 0, 1, 1), window(0, 0, 1, 1), core::PixelAspectRatio::square(),
+               std::array{render::Rgba32f::transparent()})}));
+    auto negativeTransparentRgbPixels = negativeTransparentRgb->processImage().pixels();
+    const_cast<render::Rgba32f&>(negativeTransparentRgbPixels.front()) =
+        std::bit_cast<render::Rgba32f>(std::array<float, 4>{-0.0F, 0.0F, 0.0F, 0.0F});
+    expectations.expect(
+        prepare(negativeTransparentRgb).error() ==
+            output::ProcessFrameSemanticIdentityErrorCode::InvalidPixel,
+        "transparent RGB signed zero is rejected instead of claiming canonical positive zero");
+
+    auto negativeTransparentAlpha = std::const_pointer_cast<runtime::ProcessFrame>(publishFixture(
+        {frameIdentity(onePixelPlan),
+         image(window(0, 0, 1, 1), window(0, 0, 1, 1), core::PixelAspectRatio::square(),
+               std::array{render::Rgba32f::transparent()})}));
+    auto negativeTransparentAlphaPixels = negativeTransparentAlpha->processImage().pixels();
+    const_cast<render::Rgba32f&>(negativeTransparentAlphaPixels.front()) =
+        std::bit_cast<render::Rgba32f>(std::array<float, 4>{0.0F, 0.0F, 0.0F, -0.0F});
+    expectations.expect(
+        prepare(negativeTransparentAlpha).error() ==
+            output::ProcessFrameSemanticIdentityErrorCode::InvalidPixel,
+        "negative-zero alpha is rejected from the canonical transparent representation");
+
+    auto invalidFrame =
+        std::const_pointer_cast<runtime::ProcessFrame>(publishFixture(compositionFixture()));
+    auto& invalidIdentity = const_cast<runtime::ProcessFrameIdentity&>(invalidFrame->identity());
+    invalidIdentity.plan.reset();
+    auto pixels = invalidFrame->processImage().pixels();
+    const auto invalidPixel = std::bit_cast<render::Rgba32f>(
+        std::array<float, 4>{std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F, 1.0F});
+    const_cast<render::Rgba32f&>(pixels.front()) = invalidPixel;
+    const auto invalid = prepare(invalidFrame);
+    expectations.expect(
+        invalid.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Failed &&
+            invalid.identity() == nullptr &&
+            invalid.error() == output::ProcessFrameSemanticIdentityErrorCode::MissingPlan,
+        "complete cheap preflight fails before reading an invalid pixel");
 }
 
-void testTransactionalCapacity(Expectations& expectations) {
-    auto fixture = compositionFixture();
-    constexpr auto sentinel = std::byte{0xA5};
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes - 1> shortBytes{};
-    shortBytes.fill(sentinel);
-    const auto shortWrite = output::writeProcessFrameSemanticIdentityV1(
-        fixture.frameIdentity, fixture.processImage, shortBytes);
+void testBoundsMalformedAndCancelledPublication(Expectations& expectations) {
+    const auto oversizedPlan = plan(output::kOutputAnalysisMaximumDimensionV1 + 1U, 1);
+    const std::array onePixel{render::Rgba32f::transparent()};
+    auto oversized = publishFixture(
+        {frameIdentity(oversizedPlan),
+         image(window(0, 0, 1, 1), window(0, 0, output::kOutputAnalysisMaximumDimensionV1 + 1U, 1),
+               core::PixelAspectRatio::square(), onePixel)});
+    const auto limited = prepare(oversized);
     expectations.expect(
-        hasError(shortWrite, output::ProcessFrameSemanticIdentityErrorCode::InsufficientCapacity) &&
-            shortWrite.requiredBytes() == output::kCompositionProcessFrameSemanticIdentityV1Bytes &&
-            shortWrite.writtenBytes() == 0 &&
-            std::ranges::all_of(shortBytes,
-                                [sentinel](const auto value) { return value == sentinel; }),
-        "one-byte-short capacity reports the exact need and writes nothing");
+        limited.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Failed &&
+            limited.identity() == nullptr &&
+            limited.error() == output::ProcessFrameSemanticIdentityErrorCode::ResourceLimitExceeded,
+        "output bounds are rejected before pixel hashing or product allocation");
 
-    std::array<std::byte, output::kProxyProcessFrameSemanticIdentityV1Bytes + 9> roomy{};
-    roomy.fill(sentinel);
-    const auto write = output::writeProcessFrameSemanticIdentityV1(fixture.frameIdentity,
-                                                                   fixture.processImage, roomy);
+    auto movedFrame =
+        std::const_pointer_cast<runtime::ProcessFrame>(publishFixture(compositionFixture()));
+    auto& movedImage = const_cast<render::Rgba32fImage&>(movedFrame->processImage());
+    auto retainedImage = std::move(movedImage);
+    const auto malformed = prepare(movedFrame);
     expectations.expect(
-        write && std::ranges::all_of(std::span(roomy).subspan(write.writtenBytes()),
-                                     [sentinel](const auto value) { return value == sentinel; }),
-        "successful writing changes only the exact canonical record span");
+        retainedImage.isValid() &&
+            malformed.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Failed &&
+            malformed.identity() == nullptr &&
+            malformed.error() == output::ProcessFrameSemanticIdentityErrorCode::InvalidImage,
+        "a moved-from image fails coherently and publishes no partial identity");
 
-    auto invalid = fixture.frameIdentity;
-    invalid.plan.reset();
-    std::array<std::byte, output::kProxyProcessFrameSemanticIdentityV1Bytes> invalidBytes{};
-    invalidBytes.fill(sentinel);
-    const auto invalidWrite =
-        output::writeProcessFrameSemanticIdentityV1(invalid, fixture.processImage, invalidBytes);
+    const auto missing = prepare(nullptr);
     expectations.expect(
-        hasError(invalidWrite, output::ProcessFrameSemanticIdentityErrorCode::MissingPlan) &&
-            std::ranges::all_of(invalidBytes,
-                                [sentinel](const auto value) { return value == sentinel; }),
-        "invalid input is rejected before caller storage is touched");
-}
+        missing.status() == output::ProcessFrameSemanticIdentityPreparationStatus::Failed &&
+            missing.identity() == nullptr &&
+            missing.error() == output::ProcessFrameSemanticIdentityErrorCode::MissingFrame,
+        "a missing frame has an explicit failed result with no product");
 
-void testPlanAndImageConsistency(Expectations& expectations) {
-    auto fixture = compositionFixture();
-
-    auto missingPlan = fixture.frameIdentity;
-    missingPlan.plan.reset();
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(missingPlan, fixture.processImage),
-                 output::ProcessFrameSemanticIdentityErrorCode::MissingPlan),
-        "a missing compiled plan is rejected");
-
-    auto invalidIdDefinition = fixture.frameIdentity.plan->copyDefinition();
-    invalidIdDefinition.projectId = {};
-    const auto invalidIdPlan = publishPlan(std::move(invalidIdDefinition));
-    auto invalidId = fixture.frameIdentity;
-    invalidId.plan = invalidIdPlan;
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(invalidId, fixture.processImage),
-                 output::ProcessFrameSemanticIdentityErrorCode::InvalidStableId),
-        "zero project identity is rejected");
-
-    auto invalidOutput = fixture.frameIdentity;
-    invalidOutput.output = runtime::OperationIndex::fromRaw(0);
-    expectations.expect(hasError(output::validateProcessFrameSemanticIdentityV1(
-                                     invalidOutput, fixture.processImage),
-                                 output::ProcessFrameSemanticIdentityErrorCode::InvalidOutput),
-                        "a non-terminal selected output is rejected");
-
-    auto invalidOutputNodeDefinition = fixture.frameIdentity.plan->copyDefinition();
-    auto* invalidOutputOperation = std::get_if<runtime::CompiledCompositionOutput>(
-        &invalidOutputNodeDefinition.operations.back());
-    if (invalidOutputOperation == nullptr) {
-        std::abort();
+    const auto largeFrame = evaluateShell(64, 64);
+    runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool reachedRow = false;
+    bool released = false;
+    std::atomic_bool cancelled = false;
+    std::atomic_bool published = false;
+    const output::ProcessFrameSemanticIdentityV1Preparer preparer;
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest(
+            "Semantic identity cancellation",
+            {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(1)}),
+        [largeFrame, &preparer, &mutex, &condition, &reachedRow, &released, &cancelled,
+         &published](runtime::TaskContext& context) {
+            const auto result = preparer.prepare(
+                largeFrame, context.cancellation(),
+                [&mutex, &condition, &reachedRow,
+                 &released](const output::ProcessFrameSemanticIdentityProgress& update) {
+                    if (update.stage !=
+                            output::ProcessFrameSemanticIdentityProgressStage::HashingPixels ||
+                        update.completed != 64U) {
+                        return;
+                    }
+                    std::unique_lock lock(mutex);
+                    reachedRow = true;
+                    condition.notify_all();
+                    condition.wait(lock, [&released] { return released; });
+                });
+            cancelled.store(result.status() ==
+                                output::ProcessFrameSemanticIdentityPreparationStatus::Cancelled,
+                            std::memory_order_release);
+            published.store(result.identity() != nullptr, std::memory_order_release);
+            return result.status() ==
+                           output::ProcessFrameSemanticIdentityPreparationStatus::Cancelled
+                       ? runtime::TaskResult<void>::cancelled()
+                       : runtime::TaskResult<void>::succeeded();
+        });
+    {
+        std::unique_lock lock(mutex);
+        expectations.expect(submission.accepted() &&
+                                condition.wait_for(lock, 2s, [&reachedRow] { return reachedRow; }),
+                            "cancellation fixture reaches a deterministic scanline boundary");
     }
-    invalidOutputOperation->sourceNodeId = {};
-    const auto invalidOutputNodePlan = publishPlan(std::move(invalidOutputNodeDefinition));
-    auto invalidOutputNode = fixture.frameIdentity;
-    invalidOutputNode.plan = invalidOutputNodePlan;
-    expectations.expect(hasError(output::validateProcessFrameSemanticIdentityV1(
-                                     invalidOutputNode, fixture.processImage),
-                                 output::ProcessFrameSemanticIdentityErrorCode::InvalidStableId),
-                        "a zero stable output-node identity is rejected");
-
-    auto wrongQuality = fixture.frameIdentity;
-    wrongQuality.quality = enumWithBits<runtime::EvaluationQuality>(255);
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(wrongQuality, fixture.processImage),
-                 output::ProcessFrameSemanticIdentityErrorCode::UnsupportedEvaluationQuality),
-        "an unknown evaluation quality is rejected");
-
-    auto wrongColor = fixture.frameIdentity;
-    wrongColor.colorIntent = enumWithBits<runtime::EvaluationColorIntent>(255);
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(wrongColor, fixture.processImage),
-                 output::ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent),
-        "an unknown process color intent is rejected");
-
-    const std::array pixels{render::Rgba32f::transparent(), render::Rgba32f::transparent(),
-                            render::Rgba32f::transparent(), render::Rgba32f::transparent(),
-                            render::Rgba32f::transparent(), render::Rgba32f::transparent()};
-    auto wrongExtent = image(window(0, 0, 3, 2), window(0, 0, 3, 2),
-                             fixture.processImage.descriptor()->pixelAspect(), pixels);
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(fixture.frameIdentity, wrongExtent),
-                 output::ProcessFrameSemanticIdentityErrorCode::InconsistentImage),
-        "composition resolution is bound to the process display extent");
-
-    const std::array fourPixels{render::Rgba32f::transparent(), render::Rgba32f::transparent(),
-                                render::Rgba32f::transparent(), render::Rgba32f::transparent()};
-    auto wrongAspect =
-        image(window(0, 0, 2, 2), window(0, 0, 2, 2), core::PixelAspectRatio::square(), fourPixels);
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(fixture.frameIdentity, wrongAspect),
-                 output::ProcessFrameSemanticIdentityErrorCode::InconsistentImage),
-        "composition resolution is bound to the plan pixel aspect");
-
-    const std::array croppedPixels{pixel(1.0F, 0.0F, 0.0F, 1.0F), pixel(0.0F, 1.0F, 0.0F, 1.0F)};
-    auto croppedData = image(window(-4, 7, 1, 2), window(-5, 6, 2, 2),
-                             fixture.processImage.descriptor()->pixelAspect(), croppedPixels);
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes> croppedBytes{};
-    expectations.expect(static_cast<bool>(output::writeProcessFrameSemanticIdentityV1(
-                            fixture.frameIdentity, croppedData, croppedBytes)),
-                        "independent data and display extents remain valid identity fields");
-
-    auto validMoved = compositionFixture();
-    auto owner = std::move(validMoved.processImage);
-    expectations.expect(hasError(output::validateProcessFrameSemanticIdentityV1(
-                                     validMoved.frameIdentity, validMoved.processImage),
-                                 output::ProcessFrameSemanticIdentityErrorCode::InvalidImage) &&
-                            owner.isValid(),
-                        "a moved-from process image is rejected as malformed");
+    submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+        condition.notify_all();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    std::optional<runtime::TaskResult<void>> taskResult;
+    while (!taskResult && std::chrono::steady_clock::now() < deadline) {
+        taskResult = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    expectations.expect(taskResult && taskResult->state() == runtime::TaskState::Cancelled &&
+                            cancelled.load(std::memory_order_acquire) &&
+                            !published.load(std::memory_order_acquire),
+                        "cancellation between rows publishes no partial identity product");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    expectations.expect(scheduler.isQuiescent(), "cancellation fixture shuts down cleanly");
 }
 
-void testSemanticVersionsAndProviderNeutrality(Expectations& expectations) {
-    auto fixture = compositionFixture();
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes> baseline{};
-    const auto baselineWrite = output::writeProcessFrameSemanticIdentityV1(
-        fixture.frameIdentity, fixture.processImage, baseline);
-    expectations.expect(static_cast<bool>(baselineWrite), "baseline semantic identity is valid");
-
-    auto changedPlanVersion = fixture.frameIdentity;
-    auto revisedDefinition = fixture.frameIdentity.plan->copyDefinition();
-    revisedDefinition.planSemanticsVersion = 107;
-    const auto revisedPlan = publishPlan(std::move(revisedDefinition));
-    changedPlanVersion.plan = revisedPlan;
-    std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes> revised{};
-    const auto revisedWrite = output::writeProcessFrameSemanticIdentityV1(
-        changedPlanVersion, fixture.processImage, revised);
-    expectations.expect(revisedWrite && revised != baseline,
-                        "a different nonzero plan semantic version changes canonical bytes");
-
-    auto changedEvaluator = fixture.frameIdentity;
-    changedEvaluator.evaluatorSemanticsVersion = 109;
-    const auto evaluatorWrite = output::writeProcessFrameSemanticIdentityV1(
-        changedEvaluator, fixture.processImage, revised);
-    expectations.expect(evaluatorWrite && revised != baseline,
-                        "a different nonzero evaluator semantic version changes canonical bytes");
-
-    auto changedPrimitive = fixture.frameIdentity;
-    changedPrimitive.imagePrimitiveSemanticsVersion = 110;
-    const auto primitiveWrite = output::writeProcessFrameSemanticIdentityV1(
-        changedPrimitive, fixture.processImage, revised);
-    expectations.expect(primitiveWrite && revised != baseline,
-                        "a different nonzero primitive semantic version changes canonical bytes");
-
-    auto changedAnimation = fixture.frameIdentity;
-    auto animationDefinition = fixture.frameIdentity.plan->copyDefinition();
-    animationDefinition.animationSamplingSemanticsVersion = 108;
-    const auto animationPlan = publishPlan(std::move(animationDefinition));
-    changedAnimation.plan = animationPlan;
-    changedAnimation.animationSamplingSemanticsVersion = 108;
-    const auto animationWrite = output::writeProcessFrameSemanticIdentityV1(
-        changedAnimation, fixture.processImage, revised);
-    expectations.expect(animationWrite && revised != baseline,
-                        "a consistent nonzero animation semantic version changes canonical bytes");
-
-    changedAnimation.animationSamplingSemanticsVersion = 8;
+void testClosedSemanticValidationAndProviderNeutrality(Expectations& expectations) {
+    auto invalidQuality = compositionFixture();
+    invalidQuality.identity.quality = std::bit_cast<runtime::EvaluationQuality>(std::uint8_t{0xFF});
     expectations.expect(
-        hasError(
-            output::validateProcessFrameSemanticIdentityV1(changedAnimation, fixture.processImage),
-            output::ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion),
-        "an animation semantic version inconsistent with the plan is rejected");
-    auto zeroVersion = fixture.frameIdentity;
-    zeroVersion.evaluatorSemanticsVersion = 0;
-    expectations.expect(
-        hasError(output::validateProcessFrameSemanticIdentityV1(zeroVersion, fixture.processImage),
-                 output::ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion),
-        "zero semantic versions are rejected");
+        prepare(publishFixture(std::move(invalidQuality))).error() ==
+            output::ProcessFrameSemanticIdentityErrorCode::UnsupportedEvaluationQuality,
+        "unknown evaluation-quality values fail closed during preflight");
 
-    auto differentProvider = fixture.frameIdentity;
-    differentProvider.provider = enumWithBits<runtime::EvaluationProvider>(255);
-    const auto providerWrite = output::writeProcessFrameSemanticIdentityV1(
-        differentProvider, fixture.processImage, revised);
-    expectations.expect(providerWrite && revised == baseline,
-                        "execution provider is ignored by portable semantic bytes");
+    auto invalidColor = compositionFixture();
+    invalidColor.identity.colorIntent =
+        std::bit_cast<runtime::EvaluationColorIntent>(std::uint8_t{0xFF});
+    expectations.expect(prepare(publishFixture(std::move(invalidColor))).error() ==
+                            output::ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent,
+                        "unknown color-intent values fail closed during preflight");
+
+    auto invalidOutput = compositionFixture();
+    invalidOutput.identity.output = runtime::OperationIndex::fromRaw(0);
+    expectations.expect(prepare(publishFixture(std::move(invalidOutput))).error() ==
+                            output::ProcessFrameSemanticIdentityErrorCode::InvalidOutput,
+                        "a non-terminal selected operation is rejected");
+
+    auto invalidSemantics = compositionFixture();
+    invalidSemantics.identity.evaluatorSemanticsVersion = 0;
+    expectations.expect(prepare(publishFixture(std::move(invalidSemantics))).error() ==
+                            output::ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion,
+                        "zero semantic versions are rejected before hashing");
+
+    const auto baseline = preparedIdentity(publishFixture(compositionFixture()));
+    auto providerNeutral = compositionFixture();
+    providerNeutral.identity.provider =
+        std::bit_cast<runtime::EvaluationProvider>(std::uint8_t{0xFF});
+    const auto changedProvider = preparedIdentity(publishFixture(std::move(providerNeutral)));
+    expectations.expect(
+        std::ranges::equal(baseline->canonicalBytes(), changedProvider->canonicalBytes()),
+        "execution-provider provenance remains outside portable semantic bytes");
 }
 
 } // namespace
 
 int main() {
     Expectations expectations;
-    testCompositionGoldenVector(expectations);
-    testProxyGoldenVector(expectations);
-    testPixelBitsOriginAndOrder(expectations);
-    testTransactionalCapacity(expectations);
-    testPlanAndImageConsistency(expectations);
-    testSemanticVersionsAndProviderNeutrality(expectations);
+    testGoldenVectorsAndLifetime(expectations);
+    testProgressAndRepeatability(expectations);
+    testPixelBitsAndPreflightPrecedence(expectations);
+    testBoundsMalformedAndCancelledPublication(expectations);
+    testClosedSemanticValidationAndProviderNeutrality(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

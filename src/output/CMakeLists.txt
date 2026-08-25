@@ -5,6 +5,7 @@ target_sources(
     PRIVATE
         output_analysis.cpp
         output_analysis_contract.cpp
+        output_analysis_digest.cpp
         output_facet_descriptor.cpp
         process_frame_semantic_identity.cpp
     PUBLIC
@@ -12,14 +13,16 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/output/output_analysis.hpp
+            include/bloom/output/output_analysis_digest.hpp
             include/bloom/output/output_facet_descriptor.hpp
+            include/bloom/output/output_limits.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
 )
 
 target_compile_features(bloom_output PUBLIC cxx_std_20)
 target_link_libraries(
     bloom_output
-    PUBLIC bloom_core bloom_render bloom_runtime_evaluator
+    PUBLIC bloom_color bloom_core bloom_render bloom_runtime_evaluator
 )
 bloom_enable_warnings(bloom_output)
 
@@ -68,5 +71,20 @@ if(BUILD_TESTING)
         NAME bloom.output.analysis
         COMMAND bloom_output_analysis_test
         LABELS unit output serialization
+    )
+
+    add_executable(
+        bloom_output_analysis_digest_test
+        tests/output_analysis_digest_tests.cpp
+    )
+    target_link_libraries(
+        bloom_output_analysis_digest_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_analysis_digest_test)
+    bloom_add_test(
+        NAME bloom.output.analysis_digest
+        COMMAND bloom_output_analysis_digest_test
+        LABELS unit output identity serialization
     )
 endif()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/output/output_facet_descriptor.hpp>
+#include <bloom/output/output_limits.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -15,9 +16,6 @@ inline constexpr std::uint16_t kOutputAnalysisSerializationVersionV1 = 1;
 inline constexpr std::uint32_t kOutputPresetVersionV1 = 1;
 inline constexpr std::size_t kOutputAnalysisFacetCountV1 = 11;
 inline constexpr std::uint16_t kOutputAnalysisAllFacetsPermittedV1 = 0x07FFU;
-inline constexpr std::uint32_t kOutputAnalysisMaximumDimensionV1 = 32'768U;
-inline constexpr std::uint64_t kOutputAnalysisMaximumPixelCountV1 = 67'108'864U;
-
 enum class OutputPresetV1 : std::uint8_t {
     PngRgba8SrgbV1 = 1,
     FlatExrRgba32fLinRec709SceneV1 = 2,

@@ -1,5 +1,6 @@
 #include <bloom/output/process_frame_semantic_identity.hpp>
 
+#include <bloom/output/output_limits.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <algorithm>
@@ -9,10 +10,13 @@
 #include <concepts>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <numeric>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace {
@@ -25,6 +29,7 @@ using bloom::render::ImageExtent;
 using bloom::render::Rgba32fImage;
 using bloom::runtime::CompiledCompositionOutput;
 using bloom::runtime::CompositionFormatResolution;
+using bloom::runtime::ProcessFrame;
 using bloom::runtime::ProcessFrameIdentity;
 using bloom::runtime::ProxyResolution;
 
@@ -35,6 +40,8 @@ constexpr std::string_view kProcessPixelSemanticsProfileId = "bloom.process.rgba
 constexpr std::size_t kPixelStreamFixedBytes =
     sizeof(kPixelStreamDomain) + sizeof(std::uint16_t) + sizeof(std::uint64_t);
 constexpr std::size_t kBytesPerPixel = 4 * sizeof(std::uint32_t);
+constexpr std::size_t kPixelHashChunkPixels = 256;
+constexpr std::size_t kPixelHashChunkBytes = kPixelHashChunkPixels * kBytesPerPixel;
 constexpr std::size_t kCompositionIdentityBytes =
     sizeof(kSemanticIdentityDomain) + sizeof(std::uint16_t) + 3 * sizeof(std::uint64_t) +
     2 * sizeof(std::int64_t) + sizeof(std::uint64_t) + sizeof(std::uint8_t) +
@@ -46,6 +53,7 @@ constexpr std::size_t kCompositionIdentityBytes =
 static_assert(sizeof(kSemanticIdentityDomain) == 34);
 static_assert(kProcessColorId.size() == 16);
 static_assert(kProcessPixelSemanticsProfileId.size() == 33);
+static_assert(kPixelHashChunkBytes == 4096);
 static_assert(kCompositionIdentityBytes ==
               bloom::output::kCompositionProcessFrameSemanticIdentityV1Bytes);
 static_assert(kCompositionIdentityBytes + 2 * sizeof(std::uint32_t) ==
@@ -196,67 +204,97 @@ class FixedWriter final {
     std::size_t offset_ = 0;
 };
 
-struct ValidatedIdentity final {
+struct PreflightIdentity final {
     std::size_t requiredBytes;
     std::uint8_t resolutionKind;
     std::optional<ImageExtent> proxyExtent;
     std::uint64_t outputNodeId;
-    Sha256Digest processPixelDigest;
+    std::uint64_t pixelCount;
 };
 
-struct ValidationOutcome final {
-    std::optional<ValidatedIdentity> value;
-    ProcessFrameSemanticIdentityErrorCode failure;
+struct PreflightOutcome final {
+    std::optional<PreflightIdentity> value;
+    ProcessFrameSemanticIdentityErrorCode error =
+        ProcessFrameSemanticIdentityErrorCode::InternalInvariant;
 };
 
-[[nodiscard]] ValidationOutcome
-validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept {
-    return {.value = std::nullopt, .failure = failure};
+[[nodiscard]] PreflightOutcome
+preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
+    return {.value = std::nullopt,
+            .error = error == ProcessFrameSemanticIdentityErrorCode::None
+                         ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
+                         : error};
 }
 
-[[nodiscard]] ValidationOutcome validateIdentity(const ProcessFrameIdentity& identity,
-                                                 const Rgba32fImage& image) noexcept {
+[[nodiscard]] bool exceedsOutputLimits(const Rgba32fImage& image,
+                                       const std::uint64_t pixelCount) noexcept {
+    const auto* descriptor = image.descriptor();
+    if (descriptor == nullptr) {
+        return true;
+    }
+    const auto dataExtent = descriptor->dataWindow().extent();
+    const auto displayExtent = descriptor->displayWindow().extent();
+    return dataExtent.width() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
+           dataExtent.height() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
+           displayExtent.width() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
+           displayExtent.height() > bloom::output::kOutputAnalysisMaximumDimensionV1 ||
+           pixelCount > bloom::output::kOutputAnalysisMaximumPixelCountV1 ||
+           descriptor->layout().pixelStorageBytes >
+               bloom::output::kOutputAnalysisMaximumProcessPixelBytesV1;
+}
+
+[[nodiscard]] PreflightOutcome preflightIdentity(const ProcessFrame& frame) noexcept {
+    const auto& identity = frame.identity();
+    const auto& image = frame.processImage();
     if (identity.plan == nullptr) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::MissingPlan);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::MissingPlan);
     }
     const auto& plan = *identity.plan;
     if (!plan.projectId().isValid() || !plan.compositionId().isValid()) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidStableId);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidStableId);
     }
     if (!isNormalizedTime(identity.time)) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidTime);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidTime);
     }
     if (identity.quality != bloom::runtime::EvaluationQuality::Reference) {
-        return validationFailure(
+        return preflightFailure(
             ProcessFrameSemanticIdentityErrorCode::UnsupportedEvaluationQuality);
     }
     if (identity.colorIntent != bloom::runtime::EvaluationColorIntent::LinearRec709Scene) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent);
     }
     if (plan.planSemanticsVersion() == 0 || plan.animationSamplingSemanticsVersion() == 0 ||
         identity.animationSamplingSemanticsVersion == 0 ||
         identity.evaluatorSemanticsVersion == 0 || identity.imagePrimitiveSemanticsVersion == 0 ||
         identity.animationSamplingSemanticsVersion != plan.animationSamplingSemanticsVersion()) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion);
     }
     if (plan.operations().empty() || identity.output != plan.output() ||
         identity.output.value() != plan.operations().size() - 1) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
     }
     const auto* output =
         std::get_if<CompiledCompositionOutput>(&plan.operations()[identity.output.value()]);
     if (output == nullptr || output->input.value() >= identity.output.value()) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
     }
     if (!output->sourceNodeId.isValid()) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidStableId);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidStableId);
     }
 
     const auto* descriptor = image.descriptor();
     const auto pixelCount = checkedPixelCount(image);
     if (descriptor == nullptr || !pixelCount.has_value()) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidImage);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidImage);
     }
+    if (exceedsOutputLimits(image, *pixelCount)) {
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::ResourceLimitExceeded);
+    }
+    constexpr auto maximumHashBytes = std::numeric_limits<std::uint64_t>::max() / 8U;
+    if (*pixelCount > (maximumHashBytes - kPixelStreamFixedBytes) / kBytesPerPixel) {
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
+    }
+
     const auto displayExtent = descriptor->displayWindow().extent();
     std::uint8_t resolutionKind = 0;
     std::optional<ImageExtent> proxyExtent;
@@ -265,39 +303,150 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
     if (std::holds_alternative<CompositionFormatResolution>(identity.resolution)) {
         if (displayExtent.width() != plan.format().width() ||
             displayExtent.height() != plan.format().height()) {
-            return validationFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
+            return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
         }
         resolutionKind = 1;
         requiredBytes = bloom::output::kCompositionProcessFrameSemanticIdentityV1Bytes;
     } else if (const auto* proxy = std::get_if<ProxyResolution>(&identity.resolution)) {
         if (displayExtent != proxy->extent) {
-            return validationFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
+            return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
         }
         const auto proxyAspect = proxyPixelAspect(plan.format(), proxy->extent);
         if (!proxyAspect.has_value()) {
-            return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
+            return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
         }
         expectedPixelAspect = *proxyAspect;
         proxyExtent = proxy->extent;
         resolutionKind = 2;
         requiredBytes = bloom::output::kProxyProcessFrameSemanticIdentityV1Bytes;
     } else {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
     }
     if (descriptor->pixelAspect() != expectedPixelAspect) {
-        return validationFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
+        return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
     }
-    const auto digestResult = bloom::output::hashProcessPixelStreamV1(image);
-    if (!digestResult) {
-        return validationFailure(digestResult.error());
+    return {.value = PreflightIdentity{requiredBytes, resolutionKind, proxyExtent,
+                                       output->sourceNodeId.value(), *pixelCount},
+            .error = ProcessFrameSemanticIdentityErrorCode::None};
+}
+
+void reportProgress(const bloom::output::ProcessFrameSemanticIdentityProgressCallback& callback,
+                    const bloom::output::ProcessFrameSemanticIdentityProgress& progress) noexcept {
+    if (!callback) {
+        return;
     }
-    return {.value = ValidatedIdentity{requiredBytes, resolutionKind, proxyExtent,
-                                       output->sourceNodeId.value(), digestResult.digest()},
-            .failure = ProcessFrameSemanticIdentityErrorCode::None};
+    try {
+        callback(progress);
+    } catch (...) {
+        // Monitoring is best effort and must not change identity bytes.
+        return;
+    }
+}
+
+struct PixelHashOutcome final {
+    std::optional<Sha256Digest> digest;
+    ProcessFrameSemanticIdentityErrorCode error =
+        ProcessFrameSemanticIdentityErrorCode::InternalInvariant;
+    bool cancelled = false;
+};
+
+[[nodiscard]] PixelHashOutcome
+hashFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
+    return {.digest = std::nullopt,
+            .error = error == ProcessFrameSemanticIdentityErrorCode::None
+                         ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
+                         : error,
+            .cancelled = false};
+}
+
+[[nodiscard]] PixelHashOutcome hashProcessPixels(
+    const Rgba32fImage& image, const std::uint64_t pixelCount,
+    const bloom::runtime::CancellationToken& cancellation,
+    const bloom::output::ProcessFrameSemanticIdentityProgressCallback& progress) noexcept {
+    reportProgress(
+        progress, {.stage = bloom::output::ProcessFrameSemanticIdentityProgressStage::HashingPixels,
+                   .completed = 0,
+                   .total = pixelCount});
+    if (cancellation.isCancellationRequested()) {
+        return {.digest = std::nullopt,
+                .error = ProcessFrameSemanticIdentityErrorCode::None,
+                .cancelled = true};
+    }
+
+    Sha256Hasher hasher;
+    if (!update(hasher, kPixelStreamDomain) ||
+        !updateBigEndian(hasher, bloom::output::kProcessPixelStreamSerializationVersion) ||
+        !updateBigEndian(hasher, pixelCount)) {
+        return hashFailure(ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
+    }
+
+    const auto* descriptor = image.descriptor();
+    if (descriptor == nullptr) {
+        return hashFailure(ProcessFrameSemanticIdentityErrorCode::InternalInvariant);
+    }
+    const auto width = static_cast<std::size_t>(descriptor->dataWindow().extent().width());
+    const auto height = descriptor->dataWindow().extent().height();
+    const auto pixels = image.pixels();
+    std::array<std::byte, kPixelHashChunkBytes> encoded{};
+    std::uint64_t completed = 0;
+    for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
+        const auto rowOffset = static_cast<std::size_t>(rowIndex) * width;
+        const auto row = pixels.subspan(rowOffset, width);
+        for (std::size_t offset = 0; offset < row.size(); offset += kPixelHashChunkPixels) {
+            if (cancellation.isCancellationRequested()) {
+                return {.digest = std::nullopt,
+                        .error = ProcessFrameSemanticIdentityErrorCode::None,
+                        .cancelled = true};
+            }
+            const auto chunkPixelCount = std::min(kPixelHashChunkPixels, row.size() - offset);
+            std::size_t encodedOffset = 0;
+            for (const auto pixel : row.subspan(offset, chunkPixelCount)) {
+                const auto alpha = pixel.alpha();
+                const auto hasNoncanonicalTransparentBits =
+                    alpha == 0.0F &&
+                    std::ranges::any_of(pixel.components(), [](const float component) {
+                        return std::bit_cast<std::uint32_t>(component) != 0U;
+                    });
+                if (!std::isfinite(pixel.red()) || !std::isfinite(pixel.green()) ||
+                    !std::isfinite(pixel.blue()) || !std::isfinite(alpha) || alpha < 0.0F ||
+                    alpha > 1.0F || hasNoncanonicalTransparentBits) {
+                    return hashFailure(ProcessFrameSemanticIdentityErrorCode::InvalidPixel);
+                }
+                for (const auto component : pixel.components()) {
+                    const auto componentBytes =
+                        bigEndianBytes(std::bit_cast<std::uint32_t>(component));
+                    std::ranges::copy(componentBytes,
+                                      encoded.begin() + static_cast<std::ptrdiff_t>(encodedOffset));
+                    encodedOffset += componentBytes.size();
+                }
+            }
+            if (!update(hasher, std::span(encoded).first(encodedOffset))) {
+                return hashFailure(ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
+            }
+            completed += static_cast<std::uint64_t>(chunkPixelCount);
+        }
+        reportProgress(
+            progress,
+            {.stage = bloom::output::ProcessFrameSemanticIdentityProgressStage::HashingPixels,
+             .completed = completed,
+             .total = pixelCount});
+        if (cancellation.isCancellationRequested()) {
+            return {.digest = std::nullopt,
+                    .error = ProcessFrameSemanticIdentityErrorCode::None,
+                    .cancelled = true};
+        }
+    }
+    if (completed != pixelCount) {
+        return hashFailure(ProcessFrameSemanticIdentityErrorCode::InternalInvariant);
+    }
+    return {.digest = hasher.finalize(),
+            .error = ProcessFrameSemanticIdentityErrorCode::None,
+            .cancelled = false};
 }
 
 [[nodiscard]] bool emitIdentity(const ProcessFrameIdentity& identity, const Rgba32fImage& image,
-                                const ValidatedIdentity& validated,
+                                const PreflightIdentity& preflight,
+                                const Sha256Digest& processPixelDigest,
                                 const std::span<std::byte> destination) noexcept {
     const auto& plan = *identity.plan;
     const auto* descriptor = image.descriptor();
@@ -314,12 +463,12 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
         !writer.integer(plan.compositionId().value()) ||
         !writer.integer(plan.sourceRevision().value()) ||
         !writer.integer(identity.time.numerator()) ||
-        !writer.integer(identity.time.denominator()) || !writer.integer(validated.outputNodeId) ||
-        !writer.integer(validated.resolutionKind)) {
+        !writer.integer(identity.time.denominator()) || !writer.integer(preflight.outputNodeId) ||
+        !writer.integer(preflight.resolutionKind)) {
         return false;
     }
-    if (validated.proxyExtent.has_value() && (!writer.integer(validated.proxyExtent->width()) ||
-                                              !writer.integer(validated.proxyExtent->height()))) {
+    if (preflight.proxyExtent.has_value() && (!writer.integer(preflight.proxyExtent->width()) ||
+                                              !writer.integer(preflight.proxyExtent->height()))) {
         return false;
     }
     return writer.integer(dataWindow.originX()) && writer.integer(dataWindow.originY()) &&
@@ -336,98 +485,120 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
            writer.integer(identity.animationSamplingSemanticsVersion) &&
            writer.integer(identity.evaluatorSemanticsVersion) &&
            writer.integer(identity.imagePrimitiveSemanticsVersion) &&
-           writer.exact(std::as_bytes(validated.processPixelDigest.bytes())) &&
-           writer.size() == validated.requiredBytes;
+           writer.exact(std::as_bytes(processPixelDigest.bytes())) &&
+           writer.size() == preflight.requiredBytes;
 }
 
 } // namespace
 
 namespace bloom::output {
 
-ProcessPixelDigestV1Result hashProcessPixelStreamV1(const render::Rgba32fImage& image) noexcept {
-    const auto pixelCount = checkedPixelCount(image);
-    if (!pixelCount.has_value()) {
-        return ProcessPixelDigestV1Result::failure(
-            ProcessFrameSemanticIdentityErrorCode::InvalidImage);
-    }
-    constexpr auto maximumHashBytes = std::numeric_limits<std::uint64_t>::max() / 8U;
-    if (*pixelCount > (maximumHashBytes - kPixelStreamFixedBytes) / kBytesPerPixel) {
-        return ProcessPixelDigestV1Result::failure(
-            ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
-    }
+ProcessFrameSemanticIdentityV1::ProcessFrameSemanticIdentityV1(
+    std::shared_ptr<const runtime::ProcessFrame> processFrame,
+    std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
+    const std::size_t canonicalByteCount, const core::Sha256Digest processPixelDigest) noexcept
+    : processFrame_(std::move(processFrame)), canonicalBytes_(canonicalBytes),
+      canonicalByteCount_(canonicalByteCount), processPixelDigest_(processPixelDigest) {}
 
-    Sha256Hasher hasher;
-    if (!update(hasher, kPixelStreamDomain) ||
-        !updateBigEndian(hasher, kProcessPixelStreamSerializationVersion) ||
-        !updateBigEndian(hasher, *pixelCount)) {
-        return ProcessPixelDigestV1Result::failure(
-            ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
+ProcessFrameSemanticIdentityV1PreparationResult
+ProcessFrameSemanticIdentityV1PreparationResult::prepared(
+    std::shared_ptr<const ProcessFrameSemanticIdentityV1> identity) noexcept {
+    if (identity == nullptr) {
+        return failed(ProcessFrameSemanticIdentityErrorCode::InternalInvariant);
     }
-    for (const auto pixel : image.pixels()) {
-        const auto alpha = pixel.alpha();
-        if (!std::isfinite(pixel.red()) || !std::isfinite(pixel.green()) ||
-            !std::isfinite(pixel.blue()) || !std::isfinite(alpha) || alpha < 0.0F || alpha > 1.0F ||
-            (alpha == 0.0F &&
-             (pixel.red() != 0.0F || pixel.green() != 0.0F || pixel.blue() != 0.0F))) {
-            return ProcessPixelDigestV1Result::failure(
-                ProcessFrameSemanticIdentityErrorCode::InvalidPixel);
+    return {ProcessFrameSemanticIdentityPreparationStatus::Prepared, std::move(identity),
+            ProcessFrameSemanticIdentityErrorCode::None};
+}
+
+ProcessFrameSemanticIdentityV1PreparationResult
+ProcessFrameSemanticIdentityV1PreparationResult::cancelled() noexcept {
+    return {ProcessFrameSemanticIdentityPreparationStatus::Cancelled,
+            {},
+            ProcessFrameSemanticIdentityErrorCode::None};
+}
+
+ProcessFrameSemanticIdentityV1PreparationResult
+ProcessFrameSemanticIdentityV1PreparationResult::failed(
+    const ProcessFrameSemanticIdentityErrorCode error) noexcept {
+    return {ProcessFrameSemanticIdentityPreparationStatus::Failed,
+            {},
+            error == ProcessFrameSemanticIdentityErrorCode::None
+                ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
+                : error};
+}
+
+ProcessFrameSemanticIdentityV1PreparationResult::ProcessFrameSemanticIdentityV1PreparationResult(
+    const ProcessFrameSemanticIdentityPreparationStatus status,
+    std::shared_ptr<const ProcessFrameSemanticIdentityV1> identity,
+    const ProcessFrameSemanticIdentityErrorCode error) noexcept
+    : status_(status), identity_(std::move(identity)), error_(error) {}
+
+ProcessFrameSemanticIdentityV1PreparationResult ProcessFrameSemanticIdentityV1Preparer::prepare(
+    std::shared_ptr<const runtime::ProcessFrame> processFrame,
+    const runtime::CancellationToken& cancellation,
+    const ProcessFrameSemanticIdentityProgressCallback& progress) const noexcept {
+    try {
+        if (cancellation.isCancellationRequested()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
         }
-        for (const auto component : pixel.components()) {
-            if (!updateBigEndian(hasher, std::bit_cast<std::uint32_t>(component))) {
-                return ProcessPixelDigestV1Result::failure(
-                    ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
-            }
+        reportProgress(progress, {.stage = ProcessFrameSemanticIdentityProgressStage::Preflight,
+                                  .completed = 0,
+                                  .total = 1});
+        if (processFrame == nullptr) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::failed(
+                ProcessFrameSemanticIdentityErrorCode::MissingFrame);
         }
-    }
-    return ProcessPixelDigestV1Result::success(hasher.finalize());
-}
+        const auto preflight = preflightIdentity(*processFrame);
+        if (!preflight.value.has_value()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::failed(preflight.error);
+        }
+        reportProgress(progress, {.stage = ProcessFrameSemanticIdentityProgressStage::Preflight,
+                                  .completed = 1,
+                                  .total = 1});
+        if (cancellation.isCancellationRequested()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
+        }
 
-ProcessFrameSemanticIdentityV1Validation
-validateProcessFrameSemanticIdentityV1(const runtime::ProcessFrameIdentity& identity,
-                                       const render::Rgba32fImage& image) noexcept {
-    const auto validated = validateIdentity(identity, image);
-    if (!validated.value.has_value()) {
-        return ProcessFrameSemanticIdentityV1Validation::failure(validated.failure);
-    }
-    return ProcessFrameSemanticIdentityV1Validation::success(validated.value->requiredBytes,
-                                                             validated.value->processPixelDigest);
-}
+        const auto hashed = hashProcessPixels(processFrame->processImage(),
+                                              preflight.value->pixelCount, cancellation, progress);
+        if (hashed.cancelled || cancellation.isCancellationRequested()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
+        }
+        if (!hashed.digest.has_value()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::failed(hashed.error);
+        }
 
-ProcessFrameSemanticIdentityV1Validation
-validateProcessFrameSemanticIdentityV1(const runtime::ProcessFrame& frame) noexcept {
-    return validateProcessFrameSemanticIdentityV1(frame.identity(), frame.processImage());
-}
+        reportProgress(progress, {.stage = ProcessFrameSemanticIdentityProgressStage::Encoding,
+                                  .completed = 0,
+                                  .total = 1});
+        if (cancellation.isCancellationRequested()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
+        }
+        std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes{};
+        if (!emitIdentity(processFrame->identity(), processFrame->processImage(), *preflight.value,
+                          *hashed.digest,
+                          std::span(canonicalBytes).first(preflight.value->requiredBytes))) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::failed(
+                ProcessFrameSemanticIdentityErrorCode::InternalInvariant);
+        }
+        reportProgress(progress, {.stage = ProcessFrameSemanticIdentityProgressStage::Encoding,
+                                  .completed = 1,
+                                  .total = 1});
+        if (cancellation.isCancellationRequested()) {
+            return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
+        }
 
-ProcessFrameSemanticIdentityV1WriteResult
-writeProcessFrameSemanticIdentityV1(const runtime::ProcessFrameIdentity& identity,
-                                    const render::Rgba32fImage& image,
-                                    const std::span<std::byte> destination) noexcept {
-    const auto validated = validateIdentity(identity, image);
-    if (!validated.value.has_value()) {
-        return ProcessFrameSemanticIdentityV1WriteResult::failure(validated.failure);
+        auto identity = std::shared_ptr<const ProcessFrameSemanticIdentityV1>(
+            new ProcessFrameSemanticIdentityV1(std::move(processFrame), canonicalBytes,
+                                               preflight.value->requiredBytes, *hashed.digest));
+        return ProcessFrameSemanticIdentityV1PreparationResult::prepared(std::move(identity));
+    } catch (const std::bad_alloc&) {
+        return ProcessFrameSemanticIdentityV1PreparationResult::failed(
+            ProcessFrameSemanticIdentityErrorCode::AllocationFailure);
+    } catch (const std::length_error&) {
+        return ProcessFrameSemanticIdentityV1PreparationResult::failed(
+            ProcessFrameSemanticIdentityErrorCode::AllocationFailure);
     }
-    const auto requiredBytes = validated.value->requiredBytes;
-    if (destination.size() < requiredBytes) {
-        return ProcessFrameSemanticIdentityV1WriteResult::failure(
-            ProcessFrameSemanticIdentityErrorCode::InsufficientCapacity, requiredBytes,
-            destination.size(), validated.value->processPixelDigest);
-    }
-
-    std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> encoded{};
-    if (!emitIdentity(identity, image, *validated.value, std::span(encoded).first(requiredBytes))) {
-        return ProcessFrameSemanticIdentityV1WriteResult::failure(
-            ProcessFrameSemanticIdentityErrorCode::InternalInvariant, requiredBytes,
-            destination.size(), validated.value->processPixelDigest);
-    }
-    std::ranges::copy(std::span(encoded).first(requiredBytes), destination.begin());
-    return ProcessFrameSemanticIdentityV1WriteResult::success(requiredBytes,
-                                                              validated.value->processPixelDigest);
-}
-
-ProcessFrameSemanticIdentityV1WriteResult
-writeProcessFrameSemanticIdentityV1(const runtime::ProcessFrame& frame,
-                                    const std::span<std::byte> destination) noexcept {
-    return writeProcessFrameSemanticIdentityV1(frame.identity(), frame.processImage(), destination);
 }
 
 } // namespace bloom::output

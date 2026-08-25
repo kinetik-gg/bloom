@@ -1,13 +1,15 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
-#include <bloom/render/image.hpp>
+#include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <span>
-#include <type_traits>
 
 namespace bloom::output {
 
@@ -20,6 +22,7 @@ inline constexpr std::size_t kProxyProcessFrameSemanticIdentityV1Bytes = 257;
 // fixed exact ASCII constants, so this boundary deliberately performs no Unicode normalization.
 enum class ProcessFrameSemanticIdentityErrorCode : std::uint8_t {
     None,
+    MissingFrame,
     MissingPlan,
     InvalidStableId,
     InvalidTime,
@@ -31,154 +34,129 @@ enum class ProcessFrameSemanticIdentityErrorCode : std::uint8_t {
     InvalidImage,
     InconsistentImage,
     InvalidPixel,
+    ResourceLimitExceeded,
     HashInputTooLarge,
-    InsufficientCapacity,
+    AllocationFailure,
     InternalInvariant,
 };
 
-class [[nodiscard]] ProcessPixelDigestV1Result final {
-  public:
-    [[nodiscard]] static constexpr ProcessPixelDigestV1Result
-    success(const core::Sha256Digest digest) noexcept {
-        return ProcessPixelDigestV1Result(ProcessFrameSemanticIdentityErrorCode::None, digest);
-    }
-    [[nodiscard]] static constexpr ProcessPixelDigestV1Result
-    failure(const ProcessFrameSemanticIdentityErrorCode code) noexcept {
-        return ProcessPixelDigestV1Result(
-            code == ProcessFrameSemanticIdentityErrorCode::None
-                ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
-                : code,
-            {});
-    }
-
-    [[nodiscard]] constexpr bool hasValue() const noexcept {
-        return error_ == ProcessFrameSemanticIdentityErrorCode::None;
-    }
-    [[nodiscard]] constexpr explicit operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr ProcessFrameSemanticIdentityErrorCode error() const noexcept {
-        return error_;
-    }
-    [[nodiscard]] constexpr core::Sha256Digest digest() const noexcept { return digest_; }
-
-  private:
-    constexpr ProcessPixelDigestV1Result(const ProcessFrameSemanticIdentityErrorCode error,
-                                         const core::Sha256Digest digest) noexcept
-        : digest_(digest), error_(error) {}
-
-    core::Sha256Digest digest_;
-    ProcessFrameSemanticIdentityErrorCode error_;
+enum class ProcessFrameSemanticIdentityPreparationStatus : std::uint8_t {
+    Prepared,
+    Cancelled,
+    Failed,
 };
 
-class [[nodiscard]] ProcessFrameSemanticIdentityV1Validation final {
-  public:
-    [[nodiscard]] static constexpr ProcessFrameSemanticIdentityV1Validation
-    success(const std::size_t requiredBytes, const core::Sha256Digest digest) noexcept {
-        return ProcessFrameSemanticIdentityV1Validation(ProcessFrameSemanticIdentityErrorCode::None,
-                                                        requiredBytes, digest);
-    }
-    [[nodiscard]] static constexpr ProcessFrameSemanticIdentityV1Validation
-    failure(const ProcessFrameSemanticIdentityErrorCode code) noexcept {
-        return ProcessFrameSemanticIdentityV1Validation(
-            code == ProcessFrameSemanticIdentityErrorCode::None
-                ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
-                : code,
-            0, {});
-    }
+enum class ProcessFrameSemanticIdentityProgressStage : std::uint8_t {
+    Preflight,
+    HashingPixels,
+    Encoding,
+};
 
-    [[nodiscard]] constexpr bool hasValue() const noexcept {
-        return error_ == ProcessFrameSemanticIdentityErrorCode::None;
+struct ProcessFrameSemanticIdentityProgress final {
+    ProcessFrameSemanticIdentityProgressStage stage =
+        ProcessFrameSemanticIdentityProgressStage::Preflight;
+    std::uint64_t completed = 0;
+    std::uint64_t total = 0;
+
+    friend bool operator==(const ProcessFrameSemanticIdentityProgress&,
+                           const ProcessFrameSemanticIdentityProgress&) = default;
+};
+
+using ProcessFrameSemanticIdentityProgressCallback =
+    std::function<void(const ProcessFrameSemanticIdentityProgress&)>;
+
+class ProcessFrameSemanticIdentityV1Preparer;
+
+// One inseparable lifetime binds the exact immutable frame, its canonical identity bytes, and the
+// process-pixel digest. Construction is private and publication occurs only after preparation has
+// completed successfully.
+class ProcessFrameSemanticIdentityV1 final {
+  public:
+    ProcessFrameSemanticIdentityV1(const ProcessFrameSemanticIdentityV1&) = delete;
+    ProcessFrameSemanticIdentityV1& operator=(const ProcessFrameSemanticIdentityV1&) = delete;
+    ProcessFrameSemanticIdentityV1(ProcessFrameSemanticIdentityV1&&) = delete;
+    ProcessFrameSemanticIdentityV1& operator=(ProcessFrameSemanticIdentityV1&&) = delete;
+    ~ProcessFrameSemanticIdentityV1() = default;
+
+    [[nodiscard]] const std::shared_ptr<const runtime::ProcessFrame>&
+    processFrame() const& noexcept {
+        return processFrame_;
     }
-    [[nodiscard]] constexpr explicit operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr ProcessFrameSemanticIdentityErrorCode error() const noexcept {
-        return error_;
+    [[nodiscard]] const std::shared_ptr<const runtime::ProcessFrame>&
+    processFrame() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> canonicalBytes() const& noexcept {
+        return std::span(canonicalBytes_).first(canonicalByteCount_);
     }
-    [[nodiscard]] constexpr std::size_t requiredBytes() const noexcept { return requiredBytes_; }
-    [[nodiscard]] constexpr core::Sha256Digest processPixelDigest() const noexcept {
+    [[nodiscard]] std::span<const std::byte> canonicalBytes() const&& = delete;
+    [[nodiscard]] const core::Sha256Digest& processPixelDigest() const& noexcept {
         return processPixelDigest_;
     }
+    [[nodiscard]] const core::Sha256Digest& processPixelDigest() const&& = delete;
 
   private:
-    constexpr ProcessFrameSemanticIdentityV1Validation(
-        const ProcessFrameSemanticIdentityErrorCode error, const std::size_t requiredBytes,
-        const core::Sha256Digest digest) noexcept
-        : requiredBytes_(requiredBytes), processPixelDigest_(digest), error_(error) {}
+    ProcessFrameSemanticIdentityV1(
+        std::shared_ptr<const runtime::ProcessFrame> processFrame,
+        std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
+        std::size_t canonicalByteCount, core::Sha256Digest processPixelDigest) noexcept;
 
-    std::size_t requiredBytes_;
-    core::Sha256Digest processPixelDigest_;
-    ProcessFrameSemanticIdentityErrorCode error_;
+    std::shared_ptr<const runtime::ProcessFrame> processFrame_;
+    std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes_{};
+    std::size_t canonicalByteCount_ = 0;
+    core::Sha256Digest processPixelDigest_{};
+
+    friend class ProcessFrameSemanticIdentityV1Preparer;
 };
 
-class [[nodiscard]] ProcessFrameSemanticIdentityV1WriteResult final {
+class [[nodiscard]] ProcessFrameSemanticIdentityV1PreparationResult final {
   public:
-    [[nodiscard]] static constexpr ProcessFrameSemanticIdentityV1WriteResult
-    success(const std::size_t bytesWritten, const core::Sha256Digest digest) noexcept {
-        return ProcessFrameSemanticIdentityV1WriteResult(
-            ProcessFrameSemanticIdentityErrorCode::None, bytesWritten, bytesWritten, 0, digest);
-    }
-    [[nodiscard]] static constexpr ProcessFrameSemanticIdentityV1WriteResult
-    failure(const ProcessFrameSemanticIdentityErrorCode code, const std::size_t requiredBytes = 0,
-            const std::size_t availableBytes = 0, const core::Sha256Digest digest = {}) noexcept {
-        return ProcessFrameSemanticIdentityV1WriteResult(
-            code == ProcessFrameSemanticIdentityErrorCode::None
-                ? ProcessFrameSemanticIdentityErrorCode::InternalInvariant
-                : code,
-            requiredBytes, 0, availableBytes, digest);
-    }
+    // Publication results are cheap shared-ownership values. Explicit copy operations suppress
+    // consuming moves, so an rvalue copy cannot leave a Prepared source with a null product.
+    ProcessFrameSemanticIdentityV1PreparationResult(
+        const ProcessFrameSemanticIdentityV1PreparationResult&) noexcept = default;
+    ProcessFrameSemanticIdentityV1PreparationResult&
+    operator=(const ProcessFrameSemanticIdentityV1PreparationResult&) noexcept = default;
 
-    [[nodiscard]] constexpr bool hasValue() const noexcept {
-        return error_ == ProcessFrameSemanticIdentityErrorCode::None;
+    [[nodiscard]] ProcessFrameSemanticIdentityPreparationStatus status() const noexcept {
+        return status_;
     }
-    [[nodiscard]] constexpr explicit operator bool() const noexcept { return hasValue(); }
-    [[nodiscard]] constexpr ProcessFrameSemanticIdentityErrorCode error() const noexcept {
-        return error_;
+    [[nodiscard]] const std::shared_ptr<const ProcessFrameSemanticIdentityV1>&
+    identity() const& noexcept {
+        return identity_;
     }
-    [[nodiscard]] constexpr std::size_t requiredBytes() const noexcept { return requiredBytes_; }
-    [[nodiscard]] constexpr std::size_t writtenBytes() const noexcept { return writtenBytes_; }
-    [[nodiscard]] constexpr std::size_t availableBytes() const noexcept { return availableBytes_; }
-    [[nodiscard]] constexpr core::Sha256Digest processPixelDigest() const noexcept {
-        return processPixelDigest_;
-    }
+    [[nodiscard]] const std::shared_ptr<const ProcessFrameSemanticIdentityV1>&
+    identity() const&& = delete;
+    [[nodiscard]] ProcessFrameSemanticIdentityErrorCode error() const noexcept { return error_; }
 
   private:
-    constexpr ProcessFrameSemanticIdentityV1WriteResult(
-        const ProcessFrameSemanticIdentityErrorCode error, const std::size_t requiredBytes,
-        const std::size_t writtenBytes, const std::size_t availableBytes,
-        const core::Sha256Digest digest) noexcept
-        : requiredBytes_(requiredBytes), writtenBytes_(writtenBytes),
-          availableBytes_(availableBytes), processPixelDigest_(digest), error_(error) {}
+    static ProcessFrameSemanticIdentityV1PreparationResult
+    prepared(std::shared_ptr<const ProcessFrameSemanticIdentityV1> identity) noexcept;
+    static ProcessFrameSemanticIdentityV1PreparationResult cancelled() noexcept;
+    static ProcessFrameSemanticIdentityV1PreparationResult
+    failed(ProcessFrameSemanticIdentityErrorCode error) noexcept;
 
-    std::size_t requiredBytes_;
-    std::size_t writtenBytes_;
-    std::size_t availableBytes_;
-    core::Sha256Digest processPixelDigest_;
-    ProcessFrameSemanticIdentityErrorCode error_;
+    ProcessFrameSemanticIdentityV1PreparationResult(
+        ProcessFrameSemanticIdentityPreparationStatus status,
+        std::shared_ptr<const ProcessFrameSemanticIdentityV1> identity,
+        ProcessFrameSemanticIdentityErrorCode error) noexcept;
+
+    ProcessFrameSemanticIdentityPreparationStatus status_ =
+        ProcessFrameSemanticIdentityPreparationStatus::Failed;
+    std::shared_ptr<const ProcessFrameSemanticIdentityV1> identity_;
+    ProcessFrameSemanticIdentityErrorCode error_ =
+        ProcessFrameSemanticIdentityErrorCode::InternalInvariant;
+
+    friend class ProcessFrameSemanticIdentityV1Preparer;
 };
 
-// Hashes the exact packed process rows without allocating or copying the image. The digest domain,
-// count, components, and component bit patterns are those of Process Pixel Stream Version 1.
-[[nodiscard]] ProcessPixelDigestV1Result
-hashProcessPixelStreamV1(const render::Rgba32fImage& image) noexcept;
-
-// Validation computes the pixel digest and exact encoded size without touching caller storage.
-[[nodiscard]] ProcessFrameSemanticIdentityV1Validation
-validateProcessFrameSemanticIdentityV1(const runtime::ProcessFrameIdentity& identity,
-                                       const render::Rgba32fImage& image) noexcept;
-[[nodiscard]] ProcessFrameSemanticIdentityV1Validation
-validateProcessFrameSemanticIdentityV1(const runtime::ProcessFrame& frame) noexcept;
-
-// Writing is transactional: every identity, plan, image, conversion, digest, and capacity check
-// completes before any byte in destination is changed. The canonical record preserves call-defined
-// semantic field order; it contains no execution provider, provenance, pointer, or budget data.
-[[nodiscard]] ProcessFrameSemanticIdentityV1WriteResult
-writeProcessFrameSemanticIdentityV1(const runtime::ProcessFrameIdentity& identity,
-                                    const render::Rgba32fImage& image,
-                                    std::span<std::byte> destination) noexcept;
-[[nodiscard]] ProcessFrameSemanticIdentityV1WriteResult
-writeProcessFrameSemanticIdentityV1(const runtime::ProcessFrame& frame,
-                                    std::span<std::byte> destination) noexcept;
-
-static_assert(std::is_trivially_copyable_v<ProcessPixelDigestV1Result>);
-static_assert(std::is_trivially_copyable_v<ProcessFrameSemanticIdentityV1Validation>);
-static_assert(std::is_trivially_copyable_v<ProcessFrameSemanticIdentityV1WriteResult>);
+// A worker-style, bounded producer. It performs complete cheap preflight before reading pixels,
+// hashes pixels in fixed stack chunks with cancellation checks, encodes into fixed storage, and
+// publishes the immutable product only as its final action.
+class ProcessFrameSemanticIdentityV1Preparer final {
+  public:
+    [[nodiscard]] ProcessFrameSemanticIdentityV1PreparationResult
+    prepare(std::shared_ptr<const runtime::ProcessFrame> processFrame,
+            const runtime::CancellationToken& cancellation,
+            const ProcessFrameSemanticIdentityProgressCallback& progress = {}) const noexcept;
+};
 
 } // namespace bloom::output
