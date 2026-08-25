@@ -367,8 +367,9 @@ manifest encoding, its Draft 2020-12 schema artifact, and manifest requirement s
 exact project coverage validation are also implemented. The complete writable document `1.0`
 Draft 2020-12 schema artifact, strict artifact checker, exact canonical Float64 codec, finite
 known-field Float64 normalization, and the lossless editable unknown-number subset are implemented.
-DOM integration, the document writer, instance validation, and golden document fixtures remain
-pending.
+The version 1 canonical document writer and its golden document fixtures are implemented; the
+writer takes color settings as an explicit caller value until Project owns durable color identity.
+DOM integration, the document reader, and instance validation remain pending.
 
 - implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema
   dialect without reopening their wire semantics

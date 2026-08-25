@@ -5,6 +5,7 @@ target_sources(
     PRIVATE
         canonical_base64.cpp
         canonical_decimal.cpp
+        canonical_document.cpp
         canonical_json_string.cpp
         canonical_json_string_detail.hpp
         canonical_json_writer.cpp
@@ -21,6 +22,7 @@ target_sources(
         FILES
             include/bloom/project/canonical_base64.hpp
             include/bloom/project/canonical_decimal.hpp
+            include/bloom/project/canonical_document.hpp
             include/bloom/project/canonical_json_string.hpp
             include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/canonical_manifest.hpp
@@ -57,6 +59,15 @@ if(BUILD_TESTING)
         NAME bloom.project.canonical_manifest
         COMMAND bloom_project_canonical_manifest_test
         LABELS unit project persistence manifest
+    )
+
+    add_executable(bloom_project_canonical_document_test tests/canonical_document_tests.cpp)
+    target_link_libraries(bloom_project_canonical_document_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_canonical_document_test)
+    bloom_add_test(
+        NAME bloom.project.canonical_document
+        COMMAND bloom_project_canonical_document_test
+        LABELS unit project persistence document
     )
 
     add_executable(bloom_project_canonical_json_writer_test tests/canonical_json_writer_tests.cpp)

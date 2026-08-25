@@ -6,9 +6,10 @@ Implementation status: bounded reservations and PMR allocation, canonical intege
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
 and schema checks, the normative document `1.0` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, and the Linux
-staged-artifact close/reopen verification foundation are implemented. Complete JSON
-parsing/document encoding, ZIP, migration, unknown-member overlay, format-specific semantic
-verification, and cross-platform publication parity remain pending.
+staged-artifact close/reopen verification foundation, and the version 1 canonical document
+writer over immutable snapshots with explicitly supplied color settings are implemented. Complete
+JSON parsing, ZIP, migration, unknown-member overlay, format-specific semantic verification, and
+cross-platform publication parity remain pending.
 
 Updated: 2026-08-25
 
