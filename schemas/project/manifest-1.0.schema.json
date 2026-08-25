@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kinetik:bloom:schema:project-manifest:1.0",
+  "title": "Bloom Project Manifest 1.0",
+  "$comment": "Project I/O separately enforces duplicate decoded keys, canonical ordering and integer-token spelling, duplicate requirement identities, exact node/extension coverage against document truth, and encoded-byte, value-count, and nesting resource limits.",
+  "type": "object",
+  "required": [
+    "format",
+    "containerVersion",
+    "document",
+    "requirements"
+  ],
+  "properties": {
+    "format": {
+      "const": "org.kinetik.bloom.project"
+    },
+    "containerVersion": {
+      "$ref": "#/$defs/fixedVersion-1.0"
+    },
+    "document": {
+      "$ref": "#/$defs/document-1.0"
+    },
+    "requirements": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "$ref": "#/$defs/requirement-1.0"
+      }
+    }
+  },
+  "$defs": {
+    "unsigned32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "positiveMajorVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "namespacedIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "fixedVersion-1.0": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 0
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "requirementVersion-1.0": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "$ref": "#/$defs/positiveMajorVersion"
+        },
+        "minor": {
+          "$ref": "#/$defs/unsigned32"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "document-1.0": {
+      "type": "object",
+      "required": [
+        "path",
+        "schemaVersion"
+      ],
+      "properties": {
+        "path": {
+          "const": "document.json"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/fixedVersion-1.0"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "requirement-1.0": {
+      "type": "object",
+      "required": [
+        "providerId",
+        "capabilityId",
+        "schemaVersion",
+        "providedNodeTypeIds"
+      ],
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/namespacedIdentifier"
+        },
+        "capabilityId": {
+          "$ref": "#/$defs/namespacedIdentifier"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/requirementVersion-1.0"
+        },
+        "providedNodeTypeIds": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/namespacedIdentifier"
+              },
+              {
+                "not": {
+                  "enum": [
+                    "bloom.composition-output",
+                    "bloom.layer-output",
+                    "bloom.layer-stack",
+                    "bloom.solid-source",
+                    "bloom.text-source"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "unevaluatedProperties": true
+    }
+  },
+  "unevaluatedProperties": true
+}
