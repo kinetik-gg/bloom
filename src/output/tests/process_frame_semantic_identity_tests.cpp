@@ -185,16 +185,21 @@ plan(const core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square()
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlan{.sourceRevision = kSourceRevision,
-                                         .projectId = kProjectId,
-                                         .compositionId = kCompositionId,
-                                         .format = *format,
-                                         .operations = std::move(operations),
-                                         .output = runtime::OperationIndex::fromRaw(1),
-                                         .scalarCurves = {},
-                                         .vec2Curves = {},
-                                         .planSemanticsVersion = 7,
-                                         .animationSamplingSemanticsVersion = 8});
+        runtime::CompiledCompositionPlanDefinition{.sourceRevision = kSourceRevision,
+                                                   .projectId = kProjectId,
+                                                   .compositionId = kCompositionId,
+                                                   .format = *format,
+                                                   .operations = std::move(operations),
+                                                   .output = runtime::OperationIndex::fromRaw(1),
+                                                   .scalarCurves = {},
+                                                   .vec2Curves = {},
+                                                   .planSemanticsVersion = 7,
+                                                   .animationSamplingSemanticsVersion = 8});
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+publishPlan(runtime::CompiledCompositionPlanDefinition definition) {
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
 [[nodiscard]] runtime::ProcessFrameIdentity
@@ -379,9 +384,9 @@ void testPlanAndImageConsistency(Expectations& expectations) {
                  output::ProcessFrameSemanticIdentityErrorCode::MissingPlan),
         "a missing compiled plan is rejected");
 
-    auto invalidIdPlan =
-        std::make_shared<runtime::CompiledCompositionPlan>(*fixture.frameIdentity.plan);
-    invalidIdPlan->projectId = {};
+    auto invalidIdDefinition = fixture.frameIdentity.plan->copyDefinition();
+    invalidIdDefinition.projectId = {};
+    const auto invalidIdPlan = publishPlan(std::move(invalidIdDefinition));
     auto invalidId = fixture.frameIdentity;
     invalidId.plan = invalidIdPlan;
     expectations.expect(
@@ -396,14 +401,14 @@ void testPlanAndImageConsistency(Expectations& expectations) {
                                  output::ProcessFrameSemanticIdentityErrorCode::InvalidOutput),
                         "a non-terminal selected output is rejected");
 
-    auto invalidOutputNodePlan =
-        std::make_shared<runtime::CompiledCompositionPlan>(*fixture.frameIdentity.plan);
-    auto* invalidOutputOperation =
-        std::get_if<runtime::CompiledCompositionOutput>(&invalidOutputNodePlan->operations.back());
+    auto invalidOutputNodeDefinition = fixture.frameIdentity.plan->copyDefinition();
+    auto* invalidOutputOperation = std::get_if<runtime::CompiledCompositionOutput>(
+        &invalidOutputNodeDefinition.operations.back());
     if (invalidOutputOperation == nullptr) {
         std::abort();
     }
     invalidOutputOperation->sourceNodeId = {};
+    const auto invalidOutputNodePlan = publishPlan(std::move(invalidOutputNodeDefinition));
     auto invalidOutputNode = fixture.frameIdentity;
     invalidOutputNode.plan = invalidOutputNodePlan;
     expectations.expect(hasError(output::validateProcessFrameSemanticIdentityV1(
@@ -469,9 +474,9 @@ void testSemanticVersionsAndProviderNeutrality(Expectations& expectations) {
     expectations.expect(static_cast<bool>(baselineWrite), "baseline semantic identity is valid");
 
     auto changedPlanVersion = fixture.frameIdentity;
-    auto revisedPlan =
-        std::make_shared<runtime::CompiledCompositionPlan>(*fixture.frameIdentity.plan);
-    revisedPlan->planSemanticsVersion = 107;
+    auto revisedDefinition = fixture.frameIdentity.plan->copyDefinition();
+    revisedDefinition.planSemanticsVersion = 107;
+    const auto revisedPlan = publishPlan(std::move(revisedDefinition));
     changedPlanVersion.plan = revisedPlan;
     std::array<std::byte, output::kCompositionProcessFrameSemanticIdentityV1Bytes> revised{};
     const auto revisedWrite = output::writeProcessFrameSemanticIdentityV1(
@@ -494,9 +499,9 @@ void testSemanticVersionsAndProviderNeutrality(Expectations& expectations) {
                         "a different nonzero primitive semantic version changes canonical bytes");
 
     auto changedAnimation = fixture.frameIdentity;
-    auto animationPlan =
-        std::make_shared<runtime::CompiledCompositionPlan>(*fixture.frameIdentity.plan);
-    animationPlan->animationSamplingSemanticsVersion = 108;
+    auto animationDefinition = fixture.frameIdentity.plan->copyDefinition();
+    animationDefinition.animationSamplingSemanticsVersion = 108;
+    const auto animationPlan = publishPlan(std::move(animationDefinition));
     changedAnimation.plan = animationPlan;
     changedAnimation.animationSamplingSemanticsVersion = 108;
     const auto animationWrite = output::writeProcessFrameSemanticIdentityV1(

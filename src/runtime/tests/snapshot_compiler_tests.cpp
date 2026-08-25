@@ -303,22 +303,25 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     }
     expectations.expect(*first.plan == *second.plan,
                         "plan is independent of document insertion and hash order");
-    expectations.expect(
-        first.plan->sourceRevision == document::Revision{} && first.plan->projectId == kProjectId &&
-            first.plan->compositionId == kCompositionId && first.plan->format == *format &&
-            first.plan->planSemanticsVersion == runtime::kCompiledCompositionPlanSemanticsVersion &&
-            first.plan->animationSamplingSemanticsVersion ==
-                runtime::kAnimationSamplingSemanticsVersion,
-        "revision, identity, and exact composition format carry through");
-    expectations.expect(first.plan->operations.size() == 6 &&
-                            first.plan->output == runtime::OperationIndex::fromRaw(5),
+    expectations.expect(first.plan->sourceRevision() == document::Revision{} &&
+                            first.plan->projectId() == kProjectId &&
+                            first.plan->compositionId() == kCompositionId &&
+                            first.plan->format() == *format &&
+                            first.plan->planSemanticsVersion() ==
+                                runtime::kCompiledCompositionPlanSemanticsVersion &&
+                            first.plan->animationSamplingSemanticsVersion() ==
+                                runtime::kAnimationSamplingSemanticsVersion,
+                        "revision, identity, and exact composition format carry through");
+    expectations.expect(first.plan->operations().size() == 6 &&
+                            first.plan->output() == runtime::OperationIndex::fromRaw(5),
                         "plan contains one topological operation per reachable node");
 
-    const auto* solid = std::get_if<runtime::CompiledSolid>(&first.plan->operations[0]);
-    const auto* firstLayer = std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations[1]);
-    const auto* stack = std::get_if<runtime::CompiledLayerStack>(&first.plan->operations[4]);
+    const auto* solid = std::get_if<runtime::CompiledSolid>(&first.plan->operations()[0]);
+    const auto* firstLayer =
+        std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations()[1]);
+    const auto* stack = std::get_if<runtime::CompiledLayerStack>(&first.plan->operations()[4]);
     const auto* output =
-        std::get_if<runtime::CompiledCompositionOutput>(&first.plan->operations[5]);
+        std::get_if<runtime::CompiledCompositionOutput>(&first.plan->operations()[5]);
     const auto* firstPosition = firstLayer == nullptr
                                     ? nullptr
                                     : std::get_if<document::Vec2d>(&firstLayer->position.source);
@@ -348,12 +351,12 @@ void testDeterministicTypedPlan(Expectations& expectations) {
 
     const auto single = compile(makeProject(singleLayerOptions()), registry);
     expectations.expect(single.status == runtime::SnapshotCompileStatus::Compiled && single.plan &&
-                            single.plan->operations.size() == 4 &&
-                            single.plan->output == runtime::OperationIndex::fromRaw(3),
+                            single.plan->operations().size() == 4 &&
+                            single.plan->output() == runtime::OperationIndex::fromRaw(3),
                         "one-solid topology lowers to the minimal four-operation plan");
     if (single.plan) {
         const auto* singleStack =
-            std::get_if<runtime::CompiledLayerStack>(&single.plan->operations[2]);
+            std::get_if<runtime::CompiledLayerStack>(&single.plan->operations()[2]);
         expectations.expect(singleStack != nullptr && singleStack->entries.size() == 1 &&
                                 singleStack->entries.front().input ==
                                     runtime::OperationIndex::fromRaw(1),
@@ -369,7 +372,7 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     const auto revised =
         compiler.compile({*publication.snapshot, kCompositionId}, runtime::CancellationToken{});
     expectations.expect(revised.plan &&
-                            revised.plan->sourceRevision == document::Revision::fromRaw(1),
+                            revised.plan->sourceRevision() == document::Revision::fromRaw(1),
                         "compiler carries the exact published source revision");
 }
 
@@ -389,7 +392,7 @@ void testCustomSolidLoweringRemainsSupported(Expectations& expectations) {
     const auto result = compile(std::move(project), registry);
     expectations.expect(
         result.status == runtime::SnapshotCompileStatus::Compiled && result.plan &&
-            std::holds_alternative<runtime::CompiledSolid>(result.plan->operations.front()),
+            std::holds_alternative<runtime::CompiledSolid>(result.plan->operations().front()),
         "custom Solid type lowers through the supported closed Solid operation");
 }
 
@@ -585,7 +588,8 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                             result.diagnostics.empty(),
                         "a supported typed animation curve lowers into the runtime plan");
     if (result.plan) {
-        const auto* layer = std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations[1]);
+        const auto* layer =
+            std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations()[1]);
         const auto* curveIndex =
             layer == nullptr ? nullptr
                              : std::get_if<runtime::ScalarCurveIndex>(&layer->opacity.source);
@@ -593,8 +597,8 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
             layer == nullptr ? nullptr
                              : std::get_if<runtime::Vec2CurveIndex>(&layer->position.source);
         expectations.expect(
-            result.plan->scalarCurves.size() == 1 && result.plan->vec2Curves.size() == 1 &&
-                result.plan->scalarCurves.front() ==
+            result.plan->scalarCurves().size() == 1 && result.plan->vec2Curves().size() == 1 &&
+                result.plan->scalarCurves().front() ==
                     runtime::CompiledScalarCurve{
                         curveId,
                         {{document::KeyframeId::fromRaw(101), core::RationalTime::fromInteger(0),
@@ -604,8 +608,8 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                 layer != nullptr && layer->opacity.id == kFirstOpacity && curveIndex != nullptr &&
                 curveIndex->value() == 0 && layer->position.id == kFirstPosition &&
                 positionCurveIndex != nullptr && positionCurveIndex->value() == 0 &&
-                result.plan->vec2Curves.front().id == positionCurveId &&
-                result.plan->vec2Curves.front().keyframes.size() == 2,
+                result.plan->vec2Curves().front().id == positionCurveId &&
+                result.plan->vec2Curves().front().keyframes.size() == 2,
             "compiled curve tables and parameter references preserve canonical typed identity");
 
         const auto halfway = core::RationalTime::create(1, 2);
@@ -614,7 +618,7 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
         const auto evaluated =
             evaluator.evaluate(result.plan,
                                {.time = *halfway,
-                                .output = result.plan->output,
+                                .output = result.plan->output(),
                                 .resolution = runtime::CompositionFormatResolution{},
                                 .quality = runtime::EvaluationQuality::Reference,
                                 .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
@@ -658,9 +662,10 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
         compile(makeProject(singleLayerOptions()), registry,
                 runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
                                                    document::Vec2d{12.5, -3.0}});
-    const auto* layer = first.plan == nullptr
-                            ? nullptr
-                            : std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations[1]);
+    const auto* layer =
+        first.plan == nullptr
+            ? nullptr
+            : std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations()[1]);
     const auto* position =
         layer == nullptr ? nullptr : std::get_if<document::Vec2d>(&layer->position.source);
     expectations.expect(
@@ -750,7 +755,7 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
                 runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
                                                    document::Vec2d{7.0, 8.0}});
     expectations.expect(animated.status == runtime::SnapshotCompileStatus::Compiled &&
-                            animated.plan && animated.plan->vec2Curves.empty(),
+                            animated.plan && animated.plan->vec2Curves().empty(),
                         "an accepted override lowers as a constant and omits its dormant curve");
 }
 

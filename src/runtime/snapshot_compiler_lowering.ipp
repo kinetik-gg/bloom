@@ -190,7 +190,7 @@ lower(const std::vector<document::NodeId>& order) {
         return {};
     }
     return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlan{
+        runtime::CompiledCompositionPlanDefinition{
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
             composition_->format(), std::move(operations), output->second,
             std::move(curveTables->scalar), std::move(curveTables->vec2),

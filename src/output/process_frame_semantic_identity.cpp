@@ -220,7 +220,7 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::MissingPlan);
     }
     const auto& plan = *identity.plan;
-    if (!plan.projectId.isValid() || !plan.compositionId.isValid()) {
+    if (!plan.projectId().isValid() || !plan.compositionId().isValid()) {
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidStableId);
     }
     if (!isNormalizedTime(identity.time)) {
@@ -233,18 +233,18 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
     if (identity.colorIntent != bloom::runtime::EvaluationColorIntent::LinearRec709Scene) {
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent);
     }
-    if (plan.planSemanticsVersion == 0 || plan.animationSamplingSemanticsVersion == 0 ||
+    if (plan.planSemanticsVersion() == 0 || plan.animationSamplingSemanticsVersion() == 0 ||
         identity.animationSamplingSemanticsVersion == 0 ||
         identity.evaluatorSemanticsVersion == 0 || identity.imagePrimitiveSemanticsVersion == 0 ||
-        identity.animationSamplingSemanticsVersion != plan.animationSamplingSemanticsVersion) {
+        identity.animationSamplingSemanticsVersion != plan.animationSamplingSemanticsVersion()) {
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidSemanticsVersion);
     }
-    if (plan.operations.empty() || identity.output != plan.output ||
-        identity.output.value() != plan.operations.size() - 1) {
+    if (plan.operations().empty() || identity.output != plan.output() ||
+        identity.output.value() != plan.operations().size() - 1) {
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
     }
     const auto* output =
-        std::get_if<CompiledCompositionOutput>(&plan.operations[identity.output.value()]);
+        std::get_if<CompiledCompositionOutput>(&plan.operations()[identity.output.value()]);
     if (output == nullptr || output->input.value() >= identity.output.value()) {
         return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidOutput);
     }
@@ -260,11 +260,11 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
     const auto displayExtent = descriptor->displayWindow().extent();
     std::uint8_t resolutionKind = 0;
     std::optional<ImageExtent> proxyExtent;
-    PixelAspectRatio expectedPixelAspect = plan.format.pixelAspect();
+    PixelAspectRatio expectedPixelAspect = plan.format().pixelAspect();
     std::size_t requiredBytes = 0;
     if (std::holds_alternative<CompositionFormatResolution>(identity.resolution)) {
-        if (displayExtent.width() != plan.format.width() ||
-            displayExtent.height() != plan.format.height()) {
+        if (displayExtent.width() != plan.format().width() ||
+            displayExtent.height() != plan.format().height()) {
             return validationFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
         }
         resolutionKind = 1;
@@ -273,7 +273,7 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
         if (displayExtent != proxy->extent) {
             return validationFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
         }
-        const auto proxyAspect = proxyPixelAspect(plan.format, proxy->extent);
+        const auto proxyAspect = proxyPixelAspect(plan.format(), proxy->extent);
         if (!proxyAspect.has_value()) {
             return validationFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
         }
@@ -310,8 +310,9 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
     FixedWriter writer(destination);
     if (!writer.literal(kSemanticIdentityDomain) ||
         !writer.integer(bloom::output::kProcessFrameSemanticIdentitySerializationVersion) ||
-        !writer.integer(plan.projectId.value()) || !writer.integer(plan.compositionId.value()) ||
-        !writer.integer(plan.sourceRevision.value()) ||
+        !writer.integer(plan.projectId().value()) ||
+        !writer.integer(plan.compositionId().value()) ||
+        !writer.integer(plan.sourceRevision().value()) ||
         !writer.integer(identity.time.numerator()) ||
         !writer.integer(identity.time.denominator()) || !writer.integer(validated.outputNodeId) ||
         !writer.integer(validated.resolutionKind)) {
@@ -331,7 +332,7 @@ validationFailure(const ProcessFrameSemanticIdentityErrorCode failure) noexcept 
            writer.text(kProcessColorId) && writer.integer(std::uint8_t{1}) &&
            writer.integer(std::uint8_t{1}) && writer.integer(std::uint8_t{1}) &&
            writer.text(kProcessPixelSemanticsProfileId) &&
-           writer.integer(plan.planSemanticsVersion) &&
+           writer.integer(plan.planSemanticsVersion()) &&
            writer.integer(identity.animationSamplingSemanticsVersion) &&
            writer.integer(identity.evaluatorSemanticsVersion) &&
            writer.integer(identity.imagePrimitiveSemanticsVersion) &&

@@ -15,15 +15,15 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
 
     const auto& processIdentity = displayFrame->identity().processFrame;
     const auto& plan = *processIdentity.plan;
-    if (processIdentity.output != plan.output ||
+    if (processIdentity.output != plan.output() ||
         displayFrame->processFrame()->identity() != processIdentity) {
         return std::nullopt;
     }
 
     PreviewRequestIdentity desiredIdentity{
-        .projectId = plan.projectId,
-        .compositionId = plan.compositionId,
-        .sourceRevision = plan.sourceRevision,
+        .projectId = plan.projectId(),
+        .compositionId = plan.compositionId(),
+        .sourceRevision = plan.sourceRevision(),
         .requestGeneration = requestGeneration,
         .time = processIdentity.time,
         .output = PreviewOutput::Composition,

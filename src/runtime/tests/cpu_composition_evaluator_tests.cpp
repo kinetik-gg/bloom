@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,18 @@ namespace core = bloom::core;
 namespace document = bloom::document;
 namespace render = bloom::render;
 namespace runtime = bloom::runtime;
+
+template <typename Plan>
+concept HasMutableOperations = requires(Plan& plan, runtime::CompiledOperation operation) {
+    plan.operations().push_back(std::move(operation));
+};
+
+static_assert(!std::is_copy_constructible_v<runtime::CompiledCompositionPlan>);
+static_assert(!std::is_move_constructible_v<runtime::CompiledCompositionPlan>);
+static_assert(!HasMutableOperations<runtime::CompiledCompositionPlan>);
+static_assert(
+    std::is_const_v<std::remove_reference_t<
+        decltype(std::declval<const runtime::CompiledCompositionPlan&>().operations().front())>>);
 
 constexpr auto kProjectId = document::ProjectId::fromRaw(1);
 constexpr auto kCompositionId = document::CompositionId::fromRaw(2);
@@ -81,6 +94,11 @@ class Expectations final {
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+publishPlan(runtime::CompiledCompositionPlanDefinition definition) {
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
              const document::Vec2d position = {2.0, 1.0}, const double opacity = 1.0,
              const document::CompositionFormat compositionFormat = format()) {
@@ -95,9 +113,9 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
-                                         compositionFormat, std::move(operations),
-                                         runtime::OperationIndex::fromRaw(3)});
+        runtime::CompiledCompositionPlanDefinition{
+            document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+            std::move(operations), runtime::OperationIndex::fromRaw(3)});
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
@@ -124,9 +142,9 @@ twoSolidPlan(const bool redOnTop = true) {
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
-                                         format(), std::move(operations),
-                                         runtime::OperationIndex::fromRaw(5)});
+        runtime::CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
+                                                   kCompositionId, format(), std::move(operations),
+                                                   runtime::OperationIndex::fromRaw(5)});
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
@@ -135,39 +153,39 @@ twoSolidPlan(const bool redOnTop = true) {
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
-        runtime::CompiledCompositionPlan{document::Revision::fromRaw(7), kProjectId, kCompositionId,
-                                         format(), std::move(operations),
-                                         runtime::OperationIndex::fromRaw(1)});
+        runtime::CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
+                                                   kCompositionId, format(), std::move(operations),
+                                                   runtime::OperationIndex::fromRaw(1)});
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> animatedLayerPlan() {
-    auto plan = std::make_shared<runtime::CompiledCompositionPlan>(*oneSolidPlan());
-    auto& layer = std::get<runtime::CompiledLayerOutput>(plan->operations[1]);
+    auto definition = oneSolidPlan()->copyDefinition();
+    auto& layer = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
     layer.position.source = runtime::Vec2CurveIndex::fromRaw(0);
     layer.opacity.source = runtime::ScalarCurveIndex::fromRaw(0);
-    plan->scalarCurves.push_back(
+    definition.scalarCurves.push_back(
         {kOpacityCurve,
          {{document::KeyframeId::fromRaw(60), core::RationalTime::fromInteger(0), 1.0,
            runtime::CompiledKeyframeInterpolation::Linear},
           {document::KeyframeId::fromRaw(61), core::RationalTime::fromInteger(1), 0.0,
            runtime::CompiledKeyframeInterpolation::Linear}}});
-    plan->vec2Curves.push_back({kPositionCurve,
-                                {{document::KeyframeId::fromRaw(62),
-                                  core::RationalTime::fromInteger(0),
-                                  {2.0, 1.0},
-                                  runtime::CompiledKeyframeInterpolation::Linear},
-                                 {document::KeyframeId::fromRaw(63),
-                                  core::RationalTime::fromInteger(1),
-                                  {3.0, 1.0},
-                                  runtime::CompiledKeyframeInterpolation::Linear}}});
-    return plan;
+    definition.vec2Curves.push_back({kPositionCurve,
+                                     {{document::KeyframeId::fromRaw(62),
+                                       core::RationalTime::fromInteger(0),
+                                       {2.0, 1.0},
+                                       runtime::CompiledKeyframeInterpolation::Linear},
+                                      {document::KeyframeId::fromRaw(63),
+                                       core::RationalTime::fromInteger(1),
+                                       {3.0, 1.0},
+                                       runtime::CompiledKeyframeInterpolation::Linear}}});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
 [[nodiscard]] runtime::EvaluationRequest
 requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budget = 1U << 20U,
            runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
     return {.time = core::RationalTime::fromInteger(0),
-            .output = plan.output,
+            .output = plan.output(),
             .resolution = std::move(resolution),
             .quality = runtime::EvaluationQuality::Reference,
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
@@ -244,9 +262,10 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
                                 runtime::kAnimationSamplingSemanticsVersion,
                         "animation sampling semantics participate in the published cache identity");
 
-    auto invalidIndex = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    std::get<runtime::CompiledLayerOutput>(invalidIndex->operations[1]).opacity.source =
+    auto invalidIndexDefinition = plan->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(invalidIndexDefinition.operations[1]).opacity.source =
         runtime::ScalarCurveIndex::fromRaw(1);
+    const auto invalidIndex = publishPlan(std::move(invalidIndexDefinition));
     const auto invalid = evaluator.evaluate(invalidIndex, requestFor(*invalidIndex), {});
     expectations.expect(
         invalid.status() == runtime::EvaluationStatus::Failed && !invalid.diagnostics().empty() &&
@@ -254,8 +273,9 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
             invalid.diagnostics().front().subject.parameterId == kOpacityA,
         "out-of-range animation references fail preflight with typed parameter identity");
 
-    auto duplicateId = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    duplicateId->vec2Curves.front().id = kOpacityCurve;
+    auto duplicateIdDefinition = plan->copyDefinition();
+    duplicateIdDefinition.vec2Curves.front().id = kOpacityCurve;
+    const auto duplicateId = publishPlan(std::move(duplicateIdDefinition));
     const auto duplicate = evaluator.evaluate(duplicateId, requestFor(*duplicateId), {});
     expectations.expect(duplicate.status() == runtime::EvaluationStatus::Failed &&
                             !duplicate.diagnostics().empty() &&
@@ -263,47 +283,51 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
                                 runtime::EvaluationDiagnosticCode::InvalidPlan,
                         "curve identities are globally unique across typed plan tables");
 
-    auto duplicateKey = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    duplicateKey->vec2Curves.front().keyframes.front().id =
-        duplicateKey->scalarCurves.front().keyframes.front().id;
+    auto duplicateKeyDefinition = plan->copyDefinition();
+    duplicateKeyDefinition.vec2Curves.front().keyframes.front().id =
+        duplicateKeyDefinition.scalarCurves.front().keyframes.front().id;
+    const auto duplicateKey = publishPlan(std::move(duplicateKeyDefinition));
     const auto duplicateKeyResult = evaluator.evaluate(duplicateKey, requestFor(*duplicateKey), {});
     expectations.expect(duplicateKeyResult.status() == runtime::EvaluationStatus::Failed &&
                             !duplicateKeyResult.diagnostics().empty() &&
                             duplicateKeyResult.diagnostics().front().subject.animationCurveId ==
                                 kPositionCurve &&
                             duplicateKeyResult.diagnostics().front().subject.keyframeId ==
-                                duplicateKey->vec2Curves.front().keyframes.front().id,
+                                duplicateKey->vec2Curves().front().keyframes.front().id,
                         "keyframe identities are validated globally before animation sampling");
 
-    auto unusedCurve = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    unusedCurve->scalarCurves.push_back(
+    auto unusedCurveDefinition = plan->copyDefinition();
+    unusedCurveDefinition.scalarCurves.push_back(
         {document::AnimationCurveId::fromRaw(52),
          {{document::KeyframeId::fromRaw(64), core::RationalTime::fromInteger(0), 0.5,
            runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto unusedCurve = publishPlan(std::move(unusedCurveDefinition));
     const auto unused = evaluator.evaluate(unusedCurve, requestFor(*unusedCurve), {});
     expectations.expect(unused.status() == runtime::EvaluationStatus::Failed &&
                             unused.diagnostics().front().subject.animationCurveId ==
                                 document::AnimationCurveId::fromRaw(52),
                         "compiled plans reject unreferenced curve-table entries");
 
-    auto sharedCurve = std::make_shared<runtime::CompiledCompositionPlan>(*twoSolidPlan());
-    sharedCurve->scalarCurves.push_back(
+    auto sharedCurveDefinition = twoSolidPlan()->copyDefinition();
+    sharedCurveDefinition.scalarCurves.push_back(
         {kOpacityCurve,
          {{document::KeyframeId::fromRaw(60), core::RationalTime::fromInteger(0), 1.0,
            runtime::CompiledKeyframeInterpolation::Linear}}});
-    std::get<runtime::CompiledLayerOutput>(sharedCurve->operations[1]).opacity.source =
+    std::get<runtime::CompiledLayerOutput>(sharedCurveDefinition.operations[1]).opacity.source =
         runtime::ScalarCurveIndex::fromRaw(0);
-    std::get<runtime::CompiledLayerOutput>(sharedCurve->operations[3]).opacity.source =
+    std::get<runtime::CompiledLayerOutput>(sharedCurveDefinition.operations[3]).opacity.source =
         runtime::ScalarCurveIndex::fromRaw(0);
+    const auto sharedCurve = publishPlan(std::move(sharedCurveDefinition));
     const auto shared = evaluator.evaluate(sharedCurve, requestFor(*sharedCurve), {});
     expectations.expect(shared.status() == runtime::EvaluationStatus::Failed &&
                             shared.diagnostics().front().subject.animationCurveId == kOpacityCurve,
                         "version-one plans reject curves shared by multiple parameters");
 
-    auto duplicateParameter = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
+    auto duplicateParameterDefinition = plan->copyDefinition();
     auto& duplicateParameterLayer =
-        std::get<runtime::CompiledLayerOutput>(duplicateParameter->operations[1]);
+        std::get<runtime::CompiledLayerOutput>(duplicateParameterDefinition.operations[1]);
     duplicateParameterLayer.opacity.id = duplicateParameterLayer.position.id;
+    const auto duplicateParameter = publishPlan(std::move(duplicateParameterDefinition));
     const auto duplicateParameterResult =
         evaluator.evaluate(duplicateParameter, requestFor(*duplicateParameter), {});
     expectations.expect(duplicateParameterResult.status() == runtime::EvaluationStatus::Failed &&
@@ -311,8 +335,9 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
                                 kPositionA,
                         "compiled plans preserve globally unique parameter identities");
 
-    auto invalidOpacity = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    invalidOpacity->scalarCurves.front().keyframes.front().value = 1.5;
+    auto invalidOpacityDefinition = plan->copyDefinition();
+    invalidOpacityDefinition.scalarCurves.front().keyframes.front().value = 1.5;
+    const auto invalidOpacity = publishPlan(std::move(invalidOpacityDefinition));
     const auto invalidOpacityResult =
         evaluator.evaluate(invalidOpacity, requestFor(*invalidOpacity), {});
     expectations.expect(
@@ -320,7 +345,7 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
             invalidOpacityResult.diagnostics().front().subject.parameterId == kOpacityA &&
             invalidOpacityResult.diagnostics().front().subject.animationCurveId == kOpacityCurve &&
             invalidOpacityResult.diagnostics().front().subject.keyframeId ==
-                invalidOpacity->scalarCurves.front().keyframes.front().id,
+                invalidOpacity->scalarCurves().front().keyframes.front().id,
         "animated opacity domain failures retain parameter, curve, and key identity");
 }
 
@@ -487,8 +512,7 @@ void testProxyAndPeakBudget(Expectations& expectations) {
 void testIdentityAndPreparedHandoff(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto firstPlan = oneSolidPlan();
-    const auto equivalentPlan =
-        std::make_shared<const runtime::CompiledCompositionPlan>(*firstPlan);
+    const auto equivalentPlan = publishPlan(firstPlan->copyDefinition());
     const auto divergentPlan = oneSolidPlan({0.0, 1.0, 0.0, 1.0});
     const auto first = evaluator.evaluate(firstPlan, requestFor(*firstPlan), {});
     const auto equivalent = evaluator.evaluate(equivalentPlan, requestFor(*equivalentPlan), {});
@@ -564,6 +588,44 @@ void testIdentityAndPreparedHandoff(Expectations& expectations) {
                         "typed preview result cannot represent Prepared without a frame");
 }
 
+void testPublishedPlanOwnsItsImmutableDefinition(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto retainedDefinition = oneSolidPlan()->copyDefinition();
+    const auto publishedPlan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(retainedDefinition);
+    const auto publishedDefinition = publishedPlan->copyDefinition();
+
+    const auto before = evaluator.evaluate(publishedPlan, requestFor(*publishedPlan), {});
+    retainedDefinition.sourceRevision = document::Revision::fromRaw(99);
+    retainedDefinition.output = runtime::OperationIndex::fromRaw(0);
+    std::get<runtime::CompiledSolid>(retainedDefinition.operations.front()).color =
+        core::Color4d{0.0, 1.0, 0.0, 1.0};
+    retainedDefinition.operations.clear();
+    retainedDefinition.scalarCurves.push_back(
+        {kOpacityCurve,
+         {{document::KeyframeId::fromRaw(90), core::RationalTime::fromInteger(0), 0.0,
+           runtime::CompiledKeyframeInterpolation::Hold}}});
+    ++retainedDefinition.planSemanticsVersion;
+
+    const auto after = evaluator.evaluate(publishedPlan, requestFor(*publishedPlan), {});
+    render::Rgba32f beforePixel = render::Rgba32f::transparent();
+    render::Rgba32f afterPixel = render::Rgba32f::transparent();
+    const auto* beforeSample = pixel(before, 0, 0, beforePixel);
+    const auto* afterSample = pixel(after, 0, 0, afterPixel);
+    expectations.expect(
+        publishedPlan->copyDefinition() == publishedDefinition,
+        "retained mutable construction storage cannot change a published compiled plan");
+    expectations.expect(
+        before.frame() != nullptr && after.frame() != nullptr &&
+            before.frame()->identity() == after.frame()->identity() && beforeSample != nullptr &&
+            afterSample != nullptr && *beforeSample == *afterSample,
+        "definition mutation cannot change process-frame identity or evaluated digest inputs");
+    expectations.expect(before.frame() != nullptr && after.frame() != nullptr &&
+                            before.frame()->identity().plan.get() == publishedPlan.get() &&
+                            after.frame()->identity().plan.get() == publishedPlan.get(),
+                        "evaluated frames retain the immutable plan without a per-frame deep copy");
+}
+
 void testStructuredFailuresAndProgress(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto plan = oneSolidPlan();
@@ -575,17 +637,19 @@ void testStructuredFailuresAndProgress(Expectations& expectations) {
                                 runtime::EvaluationDiagnosticCode::InvalidRequest,
                         "unknown evaluation quality fails with a structured diagnostic");
 
-    auto invalidPlan = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    std::get<runtime::CompiledLayerOutput>(invalidPlan->operations[1]).input =
+    auto invalidDefinition = plan->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(invalidDefinition.operations[1]).input =
         runtime::OperationIndex::fromRaw(99);
+    const auto invalidPlan = publishPlan(std::move(invalidDefinition));
     const auto invalid = evaluator.evaluate(invalidPlan, requestFor(*invalidPlan), {});
     expectations.expect(invalid.status() == runtime::EvaluationStatus::Failed &&
                             invalid.diagnostics().front().code ==
                                 runtime::EvaluationDiagnosticCode::InvalidPlan,
                         "out-of-range plan references fail without unsafe indexing");
 
-    auto incompatiblePlan = std::make_shared<runtime::CompiledCompositionPlan>(*plan);
-    ++incompatiblePlan->animationSamplingSemanticsVersion;
+    auto incompatibleDefinition = plan->copyDefinition();
+    ++incompatibleDefinition.animationSamplingSemanticsVersion;
+    const auto incompatiblePlan = publishPlan(std::move(incompatibleDefinition));
     const auto incompatible =
         evaluator.evaluate(incompatiblePlan, requestFor(*incompatiblePlan), {});
     expectations.expect(incompatible.status() == runtime::EvaluationStatus::Failed &&
@@ -827,6 +891,7 @@ int main() {
         testEmptyStackIsTransparent(expectations);
         testProxyAndPeakBudget(expectations);
         testIdentityAndPreparedHandoff(expectations);
+        testPublishedPlanOwnsItsImmutableDefinition(expectations);
         testStructuredFailuresAndProgress(expectations);
         testRepeatability(expectations);
         testDeterministicScanlineCancellation(expectations);

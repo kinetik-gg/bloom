@@ -9,6 +9,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <variant>
 #include <vector>
 
@@ -162,7 +163,10 @@ struct CompiledCompositionOutput {
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledLayerOutput, CompiledLayerStack, CompiledCompositionOutput>;
 
-struct CompiledCompositionPlan {
+// Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
+// this complete definition into private storage, so retaining or changing the definition cannot
+// change evaluation or identity semantics after publication.
+struct CompiledCompositionPlanDefinition final {
     document::Revision sourceRevision;
     document::ProjectId projectId;
     document::CompositionId compositionId;
@@ -174,8 +178,65 @@ struct CompiledCompositionPlan {
     std::uint32_t planSemanticsVersion = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
+    friend bool operator==(const CompiledCompositionPlanDefinition&,
+                           const CompiledCompositionPlanDefinition&) = default;
+};
+
+// Immutable after construction. Frames may retain this object through shared ownership without a
+// per-frame plan copy because no public API can mutate the published fields or vector storage.
+class CompiledCompositionPlan final {
+  public:
+    explicit CompiledCompositionPlan(CompiledCompositionPlanDefinition definition) noexcept;
+
+    CompiledCompositionPlan(const CompiledCompositionPlan&) = delete;
+    CompiledCompositionPlan& operator=(const CompiledCompositionPlan&) = delete;
+    CompiledCompositionPlan(CompiledCompositionPlan&&) = delete;
+    CompiledCompositionPlan& operator=(CompiledCompositionPlan&&) = delete;
+    ~CompiledCompositionPlan() = default;
+
+    [[nodiscard]] document::Revision sourceRevision() const noexcept { return sourceRevision_; }
+    [[nodiscard]] document::ProjectId projectId() const noexcept { return projectId_; }
+    [[nodiscard]] document::CompositionId compositionId() const noexcept { return compositionId_; }
+    [[nodiscard]] const document::CompositionFormat& format() const& noexcept { return format_; }
+    [[nodiscard]] const document::CompositionFormat& format() const&& = delete;
+    [[nodiscard]] std::span<const CompiledOperation> operations() const& noexcept {
+        return operations_;
+    }
+    [[nodiscard]] std::span<const CompiledOperation> operations() const&& = delete;
+    [[nodiscard]] OperationIndex output() const noexcept { return output_; }
+    [[nodiscard]] std::span<const CompiledScalarCurve> scalarCurves() const& noexcept {
+        return scalarCurves_;
+    }
+    [[nodiscard]] std::span<const CompiledScalarCurve> scalarCurves() const&& = delete;
+    [[nodiscard]] std::span<const CompiledVec2Curve> vec2Curves() const& noexcept {
+        return vec2Curves_;
+    }
+    [[nodiscard]] std::span<const CompiledVec2Curve> vec2Curves() const&& = delete;
+    [[nodiscard]] std::uint32_t planSemanticsVersion() const noexcept {
+        return planSemanticsVersion_;
+    }
+    [[nodiscard]] std::uint32_t animationSamplingSemanticsVersion() const noexcept {
+        return animationSamplingSemanticsVersion_;
+    }
+
+    // This is intentionally an allocating deep copy for tests and tooling that need a mutable
+    // candidate definition. It never exposes aliases into the published plan.
+    [[nodiscard]] CompiledCompositionPlanDefinition copyDefinition() const;
+
     friend bool operator==(const CompiledCompositionPlan&,
                            const CompiledCompositionPlan&) = default;
+
+  private:
+    document::Revision sourceRevision_;
+    document::ProjectId projectId_;
+    document::CompositionId compositionId_;
+    document::CompositionFormat format_;
+    std::vector<CompiledOperation> operations_;
+    OperationIndex output_;
+    std::vector<CompiledScalarCurve> scalarCurves_;
+    std::vector<CompiledVec2Curve> vec2Curves_;
+    std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
+    std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
 };
 
 } // namespace bloom::runtime

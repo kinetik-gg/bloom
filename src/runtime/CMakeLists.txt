@@ -27,6 +27,7 @@ target_sources(
     bloom_runtime_compiler
     PRIVATE
         compile_diagnostics.cpp
+        compiled_plan.cpp
         node_definition_registry.cpp
         snapshot_compiler.cpp
         snapshot_compiler_lowering.ipp

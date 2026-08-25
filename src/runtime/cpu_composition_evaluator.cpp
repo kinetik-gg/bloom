@@ -164,42 +164,42 @@ template <typename Value>
 
 [[nodiscard]] bool hasExpectedInputKinds(const CompiledCompositionPlan& plan,
                                          const std::size_t index, EvaluationDiagnostic& failure) {
-    const auto& operation = plan.operations[index];
+    const auto& operation = plan.operations()[index];
     return std::visit(
         Overloaded{
             [](const CompiledSolid&) { return true; },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
-                if (layer.input.value() >= index ||
-                    !std::holds_alternative<CompiledSolid>(plan.operations[layer.input.value()])) {
+                if (layer.input.value() >= index || !std::holds_alternative<CompiledSolid>(
+                                                        plan.operations()[layer.input.value()])) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer Output has an invalid image input",
                         "The input must name an earlier Solid operation.",
-                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
                 if (!layer.position.id.isValid() || !layer.opacity.id.isValid()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer Output has an invalid parameter identity", {},
-                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
                 if (const auto* curve = std::get_if<Vec2CurveIndex>(&layer.position.source);
-                    curve != nullptr && curve->value() >= plan.vec2Curves.size()) {
+                    curve != nullptr && curve->value() >= plan.vec2Curves().size()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer position references an invalid animation curve", {},
-                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     failure.subject.parameterId = layer.position.id;
                     return false;
                 }
                 if (const auto* curve = std::get_if<ScalarCurveIndex>(&layer.opacity.source);
-                    curve != nullptr && curve->value() >= plan.scalarCurves.size()) {
+                    curve != nullptr && curve->value() >= plan.scalarCurves().size()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer opacity references an invalid animation curve", {},
-                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     failure.subject.parameterId = layer.opacity.id;
                     return false;
                 }
@@ -211,16 +211,16 @@ template <typename Value>
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack has a non-topological input", {},
-                            subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                            subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                         return false;
                     }
                     const auto* layer =
-                        std::get_if<CompiledLayerOutput>(&plan.operations[entry.input.value()]);
+                        std::get_if<CompiledLayerOutput>(&plan.operations()[entry.input.value()]);
                     if (layer == nullptr || layer->layerId != entry.layerId) {
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack entry does not match its layer output", {},
-                            subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                            subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                         return false;
                     }
                 }
@@ -228,11 +228,11 @@ template <typename Value>
             },
             [&plan, index, &failure](const CompiledCompositionOutput& output) {
                 if (output.input.value() >= index || !std::holds_alternative<CompiledLayerStack>(
-                                                         plan.operations[output.input.value()])) {
+                                                         plan.operations()[output.input.value()])) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Composition Output has an invalid stack input", {},
-                        subjectFor(OperationIndex::fromRaw(index), plan.operations[index]));
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
                 return true;
@@ -242,7 +242,7 @@ template <typename Value>
 }
 
 template <typename Curve>
-[[nodiscard]] bool hasCanonicalCurveIds(const std::vector<Curve>& curves) noexcept {
+[[nodiscard]] bool hasCanonicalCurveIds(const std::span<const Curve> curves) noexcept {
     return std::adjacent_find(curves.begin(), curves.end(),
                               [](const Curve& left, const Curve& right) {
                                   return !left.id.isValid() || !right.id.isValid() ||
@@ -252,8 +252,8 @@ template <typename Curve>
 }
 
 [[nodiscard]] static bool
-hasDisjointCurveIds(const std::vector<CompiledScalarCurve>& scalarCurves,
-                    const std::vector<CompiledVec2Curve>& vec2Curves) noexcept {
+hasDisjointCurveIds(const std::span<const CompiledScalarCurve> scalarCurves,
+                    const std::span<const CompiledVec2Curve> vec2Curves) noexcept {
     auto scalar = scalarCurves.begin();
     auto vec2 = vec2Curves.begin();
     while (scalar != scalarCurves.end() && vec2 != vec2Curves.end()) {
@@ -288,12 +288,12 @@ resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositi
         return std::nullopt;
     }
     const auto index = curve->value();
-    if (index >= resolved.vec2CurveValues.size() || index >= plan.vec2Curves.size()) {
+    if (index >= resolved.vec2CurveValues.size() || index >= plan.vec2Curves().size()) {
         return std::nullopt;
     }
     const auto& sample = resolved.vec2CurveValues[index];
-    return ResolvedParameter<document::Vec2d>{sample.value, parameter.id, plan.vec2Curves[index].id,
-                                              sample.segmentStart};
+    return ResolvedParameter<document::Vec2d>{sample.value, parameter.id,
+                                              plan.vec2Curves()[index].id, sample.segmentStart};
 }
 
 [[nodiscard]] static std::optional<ResolvedParameter<double>>
@@ -307,11 +307,11 @@ resolveParameter(const CompiledScalarParameter& parameter, const CompiledComposi
         return std::nullopt;
     }
     const auto index = curve->value();
-    if (index >= resolved.scalarCurveValues.size() || index >= plan.scalarCurves.size()) {
+    if (index >= resolved.scalarCurveValues.size() || index >= plan.scalarCurves().size()) {
         return std::nullopt;
     }
     const auto& sample = resolved.scalarCurveValues[index];
-    return ResolvedParameter<double>{sample.value, parameter.id, plan.scalarCurves[index].id,
+    return ResolvedParameter<double>{sample.value, parameter.id, plan.scalarCurves()[index].id,
                                      sample.segmentStart};
 }
 
@@ -334,8 +334,8 @@ template <typename Value>
         return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                                                     "Evaluation has no compiled plan"));
     }
-    if (plan->planSemanticsVersion != kCompiledCompositionPlanSemanticsVersion ||
-        plan->animationSamplingSemanticsVersion != kAnimationSamplingSemanticsVersion) {
+    if (plan->planSemanticsVersion() != kCompiledCompositionPlanSemanticsVersion ||
+        plan->animationSamplingSemanticsVersion() != kAnimationSamplingSemanticsVersion) {
         return PreflightOutcome::failure(diagnostic(
             EvaluationDiagnosticCode::InvalidPlan, "Compiled plan semantics are unsupported",
             "Recompile the document snapshot with the current runtime semantics."));
@@ -346,28 +346,29 @@ template <typename Value>
             diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                        "Evaluation request uses an unsupported intent"));
     }
-    if (plan->operations.empty() || request.output.value() >= plan->operations.size() ||
-        request.output != plan->output || request.output.value() + 1 != plan->operations.size() ||
+    if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
+        request.output != plan->output() ||
+        request.output.value() + 1 != plan->operations().size() ||
         !std::holds_alternative<CompiledCompositionOutput>(
-            plan->operations[request.output.value()])) {
+            plan->operations()[request.output.value()])) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                        "Evaluation output is not the plan's terminal Composition Output"));
     }
 
     const auto extentResult =
-        render::ImageExtent::create(plan->format.width(), plan->format.height());
+        render::ImageExtent::create(plan->format().width(), plan->format().height());
     if (!extentResult) {
         return PreflightOutcome::failure(
             imageDiagnostic(*extentResult.error(), {}, "Evaluation extent is invalid"));
     }
     auto extent = *extentResult.value();
-    core::PixelAspectRatio pixelAspect = plan->format.pixelAspect();
+    core::PixelAspectRatio pixelAspect = plan->format().pixelAspect();
     double horizontalScale = 1.0;
     double verticalScale = 1.0;
     if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
         extent = proxy->extent;
-        const auto derivedPixelAspect = proxyPixelAspect(plan->format, extent);
+        const auto derivedPixelAspect = proxyPixelAspect(plan->format(), extent);
         if (!derivedPixelAspect.has_value()) {
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::InvalidProxyPixelAspect,
@@ -375,8 +376,8 @@ template <typename Value>
                 "Choose a proxy extent whose reduced pixel aspect fits Bloom's ratio type."));
         }
         pixelAspect = *derivedPixelAspect;
-        horizontalScale = static_cast<double>(extent.width()) / plan->format.width();
-        verticalScale = static_cast<double>(extent.height()) / plan->format.height();
+        horizontalScale = static_cast<double>(extent.width()) / plan->format().width();
+        verticalScale = static_cast<double>(extent.height()) / plan->format().height();
     }
 
     const auto windowResult = render::ImageWindow::create(0, 0, extent.width(), extent.height());
@@ -391,7 +392,7 @@ template <typename Value>
         return PreflightOutcome::failure(
             imageDiagnostic(*descriptorResult.error(), {}, "Process image descriptor is invalid"));
     }
-    const auto operationCount = plan->operations.size();
+    const auto operationCount = plan->operations().size();
     std::vector<bool> reachable(operationCount, false);
     std::vector<std::size_t> pending{request.output.value()};
     while (!pending.empty()) {
@@ -409,7 +410,7 @@ template <typename Value>
             continue;
         }
         reachable[index] = true;
-        forEachInput(plan->operations[index],
+        forEachInput(plan->operations()[index],
                      [&pending](const OperationIndex input) { pending.push_back(input.value()); });
     }
 
@@ -426,25 +427,26 @@ template <typename Value>
             return PreflightOutcome::failure(
                 diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                            "Compiled plan contains an unreachable operation", {},
-                           subjectFor(OperationIndex::fromRaw(index), plan->operations[index])));
+                           subjectFor(OperationIndex::fromRaw(index), plan->operations()[index])));
         }
         EvaluationDiagnostic invalidOperation;
         if (!hasExpectedInputKinds(*plan, index, invalidOperation)) {
             return PreflightOutcome::failure(std::move(invalidOperation));
         }
         bool overflow = false;
-        forEachInput(plan->operations[index], [&consumers, &overflow](const OperationIndex input) {
-            auto& count = consumers[input.value()];
-            if (count == std::numeric_limits<std::size_t>::max()) {
-                overflow = true;
-            } else {
-                ++count;
-            }
-        });
+        forEachInput(plan->operations()[index],
+                     [&consumers, &overflow](const OperationIndex input) {
+                         auto& count = consumers[input.value()];
+                         if (count == std::numeric_limits<std::size_t>::max()) {
+                             overflow = true;
+                         } else {
+                             ++count;
+                         }
+                     });
         if (overflow) {
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::ArithmeticOverflow, "Operation consumer count overflowed",
-                {}, subjectFor(OperationIndex::fromRaw(index), plan->operations[index])));
+                {}, subjectFor(OperationIndex::fromRaw(index), plan->operations()[index])));
         }
         reportProgress(progress, {.stage = EvaluationProgressStage::Preflight,
                                   .operation = OperationIndex::fromRaw(index),
@@ -452,17 +454,17 @@ template <typename Value>
                                   .total = operationCount});
     }
 
-    if (!hasCanonicalCurveIds(plan->scalarCurves) || !hasCanonicalCurveIds(plan->vec2Curves) ||
-        !hasDisjointCurveIds(plan->scalarCurves, plan->vec2Curves)) {
+    if (!hasCanonicalCurveIds(plan->scalarCurves()) || !hasCanonicalCurveIds(plan->vec2Curves()) ||
+        !hasDisjointCurveIds(plan->scalarCurves(), plan->vec2Curves())) {
         return PreflightOutcome::failure(diagnostic(
             EvaluationDiagnosticCode::InvalidPlan, "Animation curve tables are not canonical",
             "Curve identities must be valid, globally unique, and strictly ordered."));
     }
 
-    std::vector<std::uint8_t> scalarCurveReferences(plan->scalarCurves.size(), 0);
-    std::vector<std::uint8_t> vec2CurveReferences(plan->vec2Curves.size(), 0);
-    std::vector<document::ParameterId> scalarCurveOwners(plan->scalarCurves.size());
-    std::vector<document::ParameterId> vec2CurveOwners(plan->vec2Curves.size());
+    std::vector<std::uint8_t> scalarCurveReferences(plan->scalarCurves().size(), 0);
+    std::vector<std::uint8_t> vec2CurveReferences(plan->vec2Curves().size(), 0);
+    std::vector<document::ParameterId> scalarCurveOwners(plan->scalarCurves().size());
+    std::vector<document::ParameterId> vec2CurveOwners(plan->vec2Curves().size());
     std::unordered_set<document::ParameterId> parameterIds;
     std::optional<EvaluationDiagnostic> parameterFailure;
     const auto registerParameter = [&](const document::ParameterId parameterId,
@@ -479,13 +481,13 @@ template <typename Value>
         }
         return true;
     };
-    for (std::size_t index = 0; index < plan->operations.size() && !parameterFailure.has_value();
+    for (std::size_t index = 0; index < plan->operations().size() && !parameterFailure.has_value();
          ++index) {
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
         const auto operationSubject =
-            subjectFor(OperationIndex::fromRaw(index), plan->operations[index]);
+            subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
         std::visit(
             Overloaded{
                 [&](const CompiledSolid& solid) {
@@ -514,7 +516,7 @@ template <typename Value>
                         if (references != 0) {
                             auto subject = operationSubject;
                             subject.parameterId = layer.position.id;
-                            subject.animationCurveId = plan->vec2Curves[curveIndex].id;
+                            subject.animationCurveId = plan->vec2Curves()[curveIndex].id;
                             subject.field = "position";
                             parameterFailure =
                                 diagnostic(EvaluationDiagnosticCode::InvalidPlan,
@@ -542,7 +544,7 @@ template <typename Value>
                         if (references != 0) {
                             auto subject = operationSubject;
                             subject.parameterId = layer.opacity.id;
-                            subject.animationCurveId = plan->scalarCurves[curveIndex].id;
+                            subject.animationCurveId = plan->scalarCurves()[curveIndex].id;
                             subject.field = "opacity";
                             parameterFailure =
                                 diagnostic(EvaluationDiagnosticCode::InvalidPlan,
@@ -557,7 +559,7 @@ template <typename Value>
                 [](const CompiledLayerStack&) {},
                 [](const CompiledCompositionOutput&) {},
             },
-            plan->operations[index]);
+            plan->operations()[index]);
     }
     if (parameterFailure.has_value()) {
         return PreflightOutcome::failure(std::move(*parameterFailure));
@@ -565,7 +567,7 @@ template <typename Value>
     for (std::size_t index = 0; index < scalarCurveReferences.size(); ++index) {
         if (scalarCurveReferences[index] == 0) {
             EvaluationSubject subject;
-            subject.animationCurveId = plan->scalarCurves[index].id;
+            subject.animationCurveId = plan->scalarCurves()[index].id;
             subject.field = "animationCurve";
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::InvalidPlan,
@@ -575,7 +577,7 @@ template <typename Value>
     for (std::size_t index = 0; index < vec2CurveReferences.size(); ++index) {
         if (vec2CurveReferences[index] == 0) {
             EvaluationSubject subject;
-            subject.animationCurveId = plan->vec2Curves[index].id;
+            subject.animationCurveId = plan->vec2Curves()[index].id;
             subject.field = "animationCurve";
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::InvalidPlan,
@@ -584,10 +586,10 @@ template <typename Value>
     }
 
     std::vector<ResolvedCurveSample<double>> scalarCurveValues;
-    scalarCurveValues.reserve(plan->scalarCurves.size());
+    scalarCurveValues.reserve(plan->scalarCurves().size());
     std::unordered_set<document::KeyframeId> keyframeIds;
-    for (std::size_t curveIndex = 0; curveIndex < plan->scalarCurves.size(); ++curveIndex) {
-        const auto& curve = plan->scalarCurves[curveIndex];
+    for (std::size_t curveIndex = 0; curveIndex < plan->scalarCurves().size(); ++curveIndex) {
+        const auto& curve = plan->scalarCurves()[curveIndex];
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
@@ -627,9 +629,9 @@ template <typename Value>
     }
 
     std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;
-    vec2CurveValues.reserve(plan->vec2Curves.size());
-    for (std::size_t curveIndex = 0; curveIndex < plan->vec2Curves.size(); ++curveIndex) {
-        const auto& curve = plan->vec2Curves[curveIndex];
+    vec2CurveValues.reserve(plan->vec2Curves().size());
+    for (std::size_t curveIndex = 0; curveIndex < plan->vec2Curves().size(); ++curveIndex) {
+        const auto& curve = plan->vec2Curves()[curveIndex];
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
@@ -676,7 +678,7 @@ template <typename Value>
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
-        if (isImageProducing(plan->operations[index])) {
+        if (isImageProducing(plan->operations()[index])) {
             if (!checkedAdd(residentBytes, imageBytes, residentBytes)) {
                 return PreflightOutcome::failure(
                     diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
@@ -687,7 +689,7 @@ template <typename Value>
         if (index == request.output.value()) {
             continue;
         }
-        forEachInput(plan->operations[index],
+        forEachInput(plan->operations()[index],
                      [&remaining, &residentBytes, imageBytes](const OperationIndex input) {
                          auto& count = remaining[input.value()];
                          --count;
@@ -748,15 +750,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                            "Evaluation preflight produced no result or diagnostic"));
         }
         auto resolved = std::move(*checked.resolved);
-        std::vector<std::optional<render::Rgba32fImage>> slots(plan->operations.size());
+        std::vector<std::optional<render::Rgba32fImage>> slots(plan->operations().size());
         std::optional<render::Rgba32fImage> processImage;
 
-        for (std::size_t index = 0; index < plan->operations.size(); ++index) {
+        for (std::size_t index = 0; index < plan->operations().size(); ++index) {
             if (cancellation.isCancellationRequested()) {
                 return EvaluationResult::cancelled();
             }
             const auto operationIndex = OperationIndex::fromRaw(index);
-            const auto operationSubject = subjectFor(operationIndex, plan->operations[index]);
+            const auto operationSubject = subjectFor(operationIndex, plan->operations()[index]);
             std::optional<render::Rgba32fImage> produced;
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
@@ -820,8 +822,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                           {}, operationSubject);
                             return;
                         }
-                        const auto fullCenterX = static_cast<double>(plan->format.width()) / 2.0;
-                        const auto fullCenterY = static_cast<double>(plan->format.height()) / 2.0;
+                        const auto fullCenterX = static_cast<double>(plan->format().width()) / 2.0;
+                        const auto fullCenterY = static_cast<double>(plan->format().height()) / 2.0;
                         const double translationX =
                             (position->value.x - fullCenterX) * resolved.horizontalScale;
                         const double translationY =
@@ -977,7 +979,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                   .total = 1});
                     },
                 },
-                plan->operations[index]);
+                plan->operations()[index]);
 
             if (operationCancelled || cancellation.isCancellationRequested()) {
                 return EvaluationResult::cancelled();
@@ -989,7 +991,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 slots[index].emplace(std::move(*produced));
             }
             if (index != request.output.value()) {
-                forEachInput(plan->operations[index], [&](const OperationIndex input) {
+                forEachInput(plan->operations()[index], [&](const OperationIndex input) {
                     auto& remaining = resolved.remainingConsumers[input.value()];
                     --remaining;
                     if (remaining == 0) {
@@ -1006,7 +1008,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                              diagnostic(EvaluationDiagnosticCode::InternalInvariant,
                                         "Composition Output did not publish a process image"));
         }
-        const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion;
+        const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion();
         ProcessFrameIdentity identity{
             .plan = std::move(plan),
             .time = request.time,

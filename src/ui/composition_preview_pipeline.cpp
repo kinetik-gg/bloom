@@ -202,7 +202,7 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
 
         const runtime::EvaluationRequest evaluationRequest{
             .time = desiredIdentity.time,
-            .output = compileResult.plan->output,
+            .output = compileResult.plan->output(),
             .resolution = desiredIdentity.resolution,
             .quality = desiredIdentity.quality,
             .colorIntent = desiredIdentity.colorIntent,
