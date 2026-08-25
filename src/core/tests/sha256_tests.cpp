@@ -6,8 +6,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
+
+template <typename Value>
+concept HasRvalueDigestBytes = requires(Value&& value) { std::move(value).bytes(); };
+
+static_assert(!HasRvalueDigestBytes<bloom::core::Sha256Digest>);
+static_assert(requires(const bloom::core::Sha256Digest& digest) { digest.bytes(); });
 
 class Expectations final {
   public:

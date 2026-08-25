@@ -2,12 +2,15 @@
 
 #include <bloom/core/sha256.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace bloom::color {
 
@@ -86,6 +89,7 @@ enum class DisplayProcessorIdentityError : std::uint8_t {
 class DisplayProcessorIdentityV1Validation;
 class DisplayProcessorIdentityV1WriteResult;
 class DisplayProcessorIdentityV1ParseResult;
+class DisplayProcessorIdentityV1AdoptionResult;
 
 [[nodiscard]] DisplayProcessorIdentityV1Validation
 validateDisplayProcessorIdentityV1(const DisplayProcessorIdentityV1InputView& input) noexcept;
@@ -97,11 +101,25 @@ writeDisplayProcessorIdentityV1(const DisplayProcessorIdentityV1InputView& input
                                 std::span<std::byte> destination) noexcept;
 
 class DisplayProcessorIdentityV1View;
+class DisplayProcessorIdentityV1;
 
 // Validates a complete canonical record and returns a typed borrowed view. The caller retains the
-// byte storage and must keep it alive and unchanged while using the view.
+// byte storage and must keep it alive and unchanged while using the view. Passing an explicit span
+// is an assertion of that responsibility; temporary owning byte ranges are rejected below.
 [[nodiscard]] DisplayProcessorIdentityV1ParseResult
 parseDisplayProcessorIdentityV1(std::span<const std::byte> canonicalBytes) noexcept;
+
+template <typename Range>
+    requires std::ranges::contiguous_range<Range> && std::ranges::sized_range<Range> &&
+                 (!std::ranges::borrowed_range<Range>) &&
+                 std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, std::byte>
+DisplayProcessorIdentityV1ParseResult parseDisplayProcessorIdentityV1(Range&&) = delete;
+
+// Moves already caller-budgeted vector storage into an immutable retained identity only after the
+// complete record validates. Success performs no allocation or byte copy. Failure does not consume
+// the caller's vector.
+[[nodiscard]] DisplayProcessorIdentityV1AdoptionResult
+adoptDisplayProcessorIdentityV1(std::vector<std::byte>&& canonicalBytes) noexcept;
 
 class [[nodiscard]] DisplayProcessorIdentityV1Validation final {
   public:
@@ -174,13 +192,15 @@ class DisplayProcessorIdentityV1View final {
         return canonicalBytes_;
     }
     [[nodiscard]] constexpr std::span<const std::byte> canonicalBytes() const&& = delete;
-    [[nodiscard]] constexpr core::Sha256Digest expectedOcioRevision() const noexcept {
+    [[nodiscard]] constexpr const core::Sha256Digest& expectedOcioRevision() const& noexcept {
         return expectedOcioRevision_;
     }
+    [[nodiscard]] constexpr const core::Sha256Digest& expectedOcioRevision() const&& = delete;
 
   private:
     friend DisplayProcessorIdentityV1ParseResult
         parseDisplayProcessorIdentityV1(std::span<const std::byte>) noexcept;
+    friend class DisplayProcessorIdentityV1;
 
     constexpr DisplayProcessorIdentityV1View(const std::span<const std::byte> canonicalBytes,
                                              const core::Sha256Digest expectedOcioRevision) noexcept
@@ -221,6 +241,86 @@ class [[nodiscard]] DisplayProcessorIdentityV1ParseResult final {
     DisplayProcessorIdentityError error_ = DisplayProcessorIdentityError::None;
 };
 
+// Move-only immutable ownership for retained, cached, or asynchronous use. A moved-from value is
+// empty; hasValue() and borrowedView() make that state explicit and never forge a trusted view.
+class DisplayProcessorIdentityV1 final {
+  public:
+    DisplayProcessorIdentityV1(DisplayProcessorIdentityV1&& other) noexcept;
+    DisplayProcessorIdentityV1& operator=(DisplayProcessorIdentityV1&&) = delete;
+    DisplayProcessorIdentityV1(const DisplayProcessorIdentityV1&) = delete;
+    DisplayProcessorIdentityV1& operator=(const DisplayProcessorIdentityV1&) = delete;
+
+    [[nodiscard]] bool hasValue() const noexcept { return !canonicalBytes_.empty(); }
+    [[nodiscard]] explicit operator bool() const noexcept { return hasValue(); }
+
+    [[nodiscard]] std::span<const std::byte> canonicalBytes() const& noexcept {
+        return canonicalBytes_;
+    }
+    [[nodiscard]] std::span<const std::byte> canonicalBytes() const&& = delete;
+    // Revision access is intentionally routed through borrowedView(), which is empty after move.
+    [[nodiscard]] std::optional<DisplayProcessorIdentityV1View> borrowedView() const& noexcept;
+    [[nodiscard]] std::optional<DisplayProcessorIdentityV1View> borrowedView() const&& = delete;
+
+  private:
+    friend DisplayProcessorIdentityV1AdoptionResult
+    adoptDisplayProcessorIdentityV1(std::vector<std::byte>&&) noexcept;
+
+    DisplayProcessorIdentityV1(std::vector<std::byte>&& canonicalBytes,
+                               const core::Sha256Digest& expectedOcioRevision) noexcept;
+
+    std::vector<std::byte> canonicalBytes_;
+    core::Sha256Digest expectedOcioRevision_;
+};
+
+class [[nodiscard]] DisplayProcessorIdentityV1AdoptionResult final {
+  public:
+    DisplayProcessorIdentityV1AdoptionResult(
+        DisplayProcessorIdentityV1AdoptionResult&& other) noexcept;
+    DisplayProcessorIdentityV1AdoptionResult&
+    operator=(DisplayProcessorIdentityV1AdoptionResult&&) = delete;
+    DisplayProcessorIdentityV1AdoptionResult(const DisplayProcessorIdentityV1AdoptionResult&) =
+        delete;
+    DisplayProcessorIdentityV1AdoptionResult&
+    operator=(const DisplayProcessorIdentityV1AdoptionResult&) = delete;
+
+    // These states are mutually exclusive. A newly returned result has an identity or was
+    // rejected. The transferred state is observable only after moving the result or taking its
+    // identity, so false plus Error::None is never an unexplained validation failure.
+    [[nodiscard]] bool hasIdentity() const noexcept {
+        return identity_.has_value() && identity_->hasValue();
+    }
+    [[nodiscard]] bool wasRejected() const noexcept {
+        return error_ != DisplayProcessorIdentityError::None;
+    }
+    [[nodiscard]] bool identityWasTransferred() const noexcept { return identityTransferred_; }
+    [[nodiscard]] explicit operator bool() const noexcept { return hasIdentity(); }
+    [[nodiscard]] const DisplayProcessorIdentityV1* identity() const& noexcept {
+        return hasIdentity() ? &*identity_ : nullptr;
+    }
+    [[nodiscard]] const DisplayProcessorIdentityV1* identity() const&& = delete;
+    // Error and offset describe only wasRejected(); transferred results report Error::None.
+    [[nodiscard]] DisplayProcessorIdentityError error() const noexcept { return error_; }
+    [[nodiscard]] std::size_t errorOffset() const noexcept { return errorOffset_; }
+
+    // Transfers the immutable identity without allocating and leaves this result unsuccessful.
+    [[nodiscard]] std::optional<DisplayProcessorIdentityV1> takeIdentity() && noexcept;
+    [[nodiscard]] std::optional<DisplayProcessorIdentityV1> takeIdentity() const&& = delete;
+
+  private:
+    friend DisplayProcessorIdentityV1AdoptionResult
+    adoptDisplayProcessorIdentityV1(std::vector<std::byte>&&) noexcept;
+
+    explicit DisplayProcessorIdentityV1AdoptionResult(
+        DisplayProcessorIdentityV1&& identity) noexcept;
+    DisplayProcessorIdentityV1AdoptionResult(DisplayProcessorIdentityError error,
+                                             std::size_t errorOffset) noexcept;
+
+    std::optional<DisplayProcessorIdentityV1> identity_;
+    std::size_t errorOffset_ = 0;
+    DisplayProcessorIdentityError error_ = DisplayProcessorIdentityError::None;
+    bool identityTransferred_ = false;
+};
+
 static_assert(std::is_trivially_copyable_v<DisplayProcessorContextVariableV1View>);
 static_assert(std::is_trivially_copyable_v<DisplayProcessorIdentityV1InputView>);
 static_assert(std::is_trivially_copyable_v<DisplayProcessorIdentityV1Validation>);
@@ -228,5 +328,11 @@ static_assert(std::is_trivially_copyable_v<DisplayProcessorIdentityV1WriteResult
 static_assert(std::is_trivially_copyable_v<DisplayProcessorIdentityV1View>);
 static_assert(std::is_trivially_copyable_v<DisplayProcessorIdentityV1ParseResult>);
 static_assert(!std::is_default_constructible_v<DisplayProcessorIdentityV1View>);
+static_assert(!std::is_default_constructible_v<DisplayProcessorIdentityV1>);
+static_assert(std::is_nothrow_move_constructible_v<DisplayProcessorIdentityV1>);
+static_assert(!std::is_copy_constructible_v<DisplayProcessorIdentityV1>);
+static_assert(!std::is_move_assignable_v<DisplayProcessorIdentityV1>);
+static_assert(!std::is_default_constructible_v<DisplayProcessorIdentityV1AdoptionResult>);
+static_assert(std::is_nothrow_move_constructible_v<DisplayProcessorIdentityV1AdoptionResult>);
 
 } // namespace bloom::color

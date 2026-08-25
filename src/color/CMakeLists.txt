@@ -15,6 +15,7 @@ target_sources(
     bloom_color
     PRIVATE
         display_processor_identity.cpp
+        display_processor_identity_ownership.cpp
         ocio_content_revision.cpp
         ocio_loose_content_revision.cpp
     PUBLIC

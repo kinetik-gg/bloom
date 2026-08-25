@@ -91,8 +91,40 @@ concept HasRvalueCanonicalBytes = requires(Value&& value) { std::move(value).can
 template <typename Value>
 concept HasRvalueIdentityPointer = requires(Value&& value) { std::move(value).identity(); };
 
+template <typename Value>
+concept HasRvalueExpectedRevision =
+    requires(Value&& value) { std::move(value).expectedOcioRevision(); };
+
+template <typename Value>
+concept HasRvalueBorrowedView = requires(Value&& value) { std::move(value).borrowedView(); };
+
+template <typename Range>
+concept CanParseIdentityRange =
+    requires(Range&& range) { color::parseDisplayProcessorIdentityV1(std::forward<Range>(range)); };
+
+template <typename Range>
+concept CanAdoptIdentityRange =
+    requires(Range&& range) { color::adoptDisplayProcessorIdentityV1(std::forward<Range>(range)); };
+
 static_assert(!HasRvalueCanonicalBytes<color::DisplayProcessorIdentityV1View>);
 static_assert(!HasRvalueIdentityPointer<color::DisplayProcessorIdentityV1ParseResult>);
+static_assert(!HasRvalueIdentityPointer<color::DisplayProcessorIdentityV1AdoptionResult>);
+static_assert(!HasRvalueExpectedRevision<color::DisplayProcessorIdentityV1View>);
+static_assert(!HasRvalueCanonicalBytes<color::DisplayProcessorIdentityV1>);
+static_assert(!HasRvalueExpectedRevision<color::DisplayProcessorIdentityV1>);
+static_assert(!HasRvalueBorrowedView<color::DisplayProcessorIdentityV1>);
+static_assert(!CanParseIdentityRange<std::vector<std::byte>>);
+static_assert(CanParseIdentityRange<std::vector<std::byte>&>);
+static_assert(CanParseIdentityRange<std::span<const std::byte>>);
+static_assert(CanAdoptIdentityRange<std::vector<std::byte>>);
+static_assert(!CanAdoptIdentityRange<std::vector<std::byte>&>);
+static_assert(!std::is_default_constructible_v<color::DisplayProcessorIdentityV1>);
+static_assert(!std::is_constructible_v<color::DisplayProcessorIdentityV1, std::vector<std::byte>&&,
+                                       bloom::core::Sha256Digest>);
+static_assert(!std::is_copy_constructible_v<color::DisplayProcessorIdentityV1>);
+static_assert(std::is_nothrow_move_constructible_v<color::DisplayProcessorIdentityV1>);
+static_assert(!std::is_default_constructible_v<color::DisplayProcessorIdentityV1AdoptionResult>);
+static_assert(!std::is_copy_constructible_v<color::DisplayProcessorIdentityV1AdoptionResult>);
 
 [[nodiscard]] Input goldenInput() noexcept {
     static constexpr std::array contextVariables{
@@ -491,6 +523,80 @@ void testBorrowedViewLifetimeSurface(Expectations& expectations) {
                         "a copied borrowed view survives its parse result while storage remains");
 }
 
+void testOwningAdoptionAndMove(Expectations& expectations) {
+    std::vector<std::byte> storage(kGoldenBytes.begin(), kGoldenBytes.end());
+    const auto* const originalData = storage.data();
+    const auto originalCapacity = storage.capacity();
+    auto adopted = color::adoptDisplayProcessorIdentityV1(std::move(storage));
+    const auto* const identity = adopted.identity();
+    expectations.expect(adopted && adopted.hasIdentity() && !adopted.wasRejected() &&
+                            !adopted.identityWasTransferred() && adopted.error() == Error::None &&
+                            identity != nullptr &&
+                            identity->canonicalBytes().data() == originalData &&
+                            identity->canonicalBytes().size() == kGoldenBytes.size() &&
+                            identity->canonicalBytes().size() <= originalCapacity,
+                        "adoption validates then transfers the caller's exact vector storage");
+
+    const auto borrowed = identity == nullptr ? std::nullopt : identity->borrowedView();
+    expectations.expect(borrowed.has_value() && borrowed->canonicalBytes().data() == originalData &&
+                            borrowed->canonicalBytes().size() == kGoldenBytes.size() &&
+                            borrowed->expectedOcioRevision() ==
+                                bloom::core::Sha256Digest::fromBytes(kRevisionBytes),
+                        "an owned identity publishes a validated synchronous borrowed view");
+
+    color::DisplayProcessorIdentityV1AdoptionResult movedResult(std::move(adopted));
+    // The result type explicitly defines its moved-from state as transferred.
+    // NOLINTBEGIN(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+    const bool movedResultState =
+        !adopted.hasIdentity() && !adopted.wasRejected() && adopted.identityWasTransferred();
+    expectations.expect(movedResultState && movedResult.hasIdentity() &&
+                            !movedResult.wasRejected() && !movedResult.identityWasTransferred(),
+                        "moving an adoption result distinguishes source transfer from rejection");
+
+    auto extracted = std::move(movedResult).takeIdentity();
+    // takeIdentity has a specified consumed state distinct from validation rejection.
+    const bool takenResultState = !movedResult.hasIdentity() && !movedResult.wasRejected() &&
+                                  movedResult.identityWasTransferred();
+    expectations.expect(extracted.has_value() && extracted->canonicalBytes().data() == originalData,
+                        "the typed result transfers ownership without copying bytes");
+    expectations.expect(takenResultState,
+                        "a taken result has an explicit transferred state, not a false failure");
+    if (!extracted.has_value()) {
+        return;
+    }
+
+    color::DisplayProcessorIdentityV1 retained(std::move(*extracted));
+    const auto retainedView = retained.borrowedView();
+    // The owner defines moved-from as empty and cannot publish a trusted borrowed view.
+    const bool movedOwnerState = !static_cast<bool>(*extracted) &&
+                                 extracted->canonicalBytes().empty() &&
+                                 !extracted->borrowedView().has_value();
+    // NOLINTEND(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+    expectations.expect(
+        retained && retained.canonicalBytes().data() == originalData && retainedView.has_value() &&
+            retainedView->canonicalBytes().data() == originalData && movedOwnerState,
+        "moving retained ownership preserves storage and its validated view");
+}
+
+void testInvalidAdoptionPreservesStorage(Expectations& expectations) {
+    std::vector<std::byte> invalid(kGoldenBytes.begin(), kGoldenBytes.end());
+    invalid[0] = std::byte{'X'};
+    const auto before = invalid;
+    const auto* const originalData = invalid.data();
+    auto rejected = color::adoptDisplayProcessorIdentityV1(std::move(invalid));
+    // Failed adoption explicitly promises not to consume its rvalue-reference argument.
+    const bool storagePreserved =
+        invalid.data() == originalData && invalid == before; // NOLINT(bugprone-use-after-move)
+    expectations.expect(!rejected && !rejected.hasIdentity() && rejected.wasRejected() &&
+                            !rejected.identityWasTransferred() && rejected.identity() == nullptr &&
+                            rejected.error() == Error::InvalidDomain &&
+                            rejected.errorOffset() == 0 && storagePreserved,
+                        "invalid adoption returns a typed parse failure without consuming storage");
+    const auto extracted = std::move(rejected).takeIdentity();
+    expectations.expect(!extracted.has_value(),
+                        "a failed adoption cannot manufacture an owning identity");
+}
+
 } // namespace
 
 int main() {
@@ -502,5 +608,7 @@ int main() {
     testCountAndAggregateBounds(expectations);
     testMalformedParserInputs(expectations);
     testBorrowedViewLifetimeSurface(expectations);
+    testOwningAdoptionAndMove(expectations);
+    testInvalidAdoptionPreservesStorage(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

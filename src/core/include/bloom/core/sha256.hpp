@@ -26,9 +26,11 @@ class Sha256Digest final {
     fromLowercaseHex(std::string_view text) noexcept;
 
     [[nodiscard]] constexpr std::span<const std::uint8_t, kSha256DigestBytes>
-    bytes() const noexcept {
+    bytes() const& noexcept {
         return bytes_;
     }
+    [[nodiscard]] constexpr std::span<const std::uint8_t, kSha256DigestBytes>
+    bytes() const&& = delete;
     [[nodiscard]] LowercaseHex toLowercaseHex() const noexcept;
 
     friend constexpr auto operator<=>(const Sha256Digest&, const Sha256Digest&) noexcept = default;
