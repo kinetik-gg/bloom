@@ -61,8 +61,7 @@ struct SortWindows final {
     plan.window0 = project.compositions().size();
     for (const auto& composition : project.compositions()) {
         plan.window1 = maximumOf(plan.window1, composition.parameters().records().size());
-        plan.window1 =
-            maximumOf(plan.window1, composition.animationCurves().records().size());
+        plan.window1 = maximumOf(plan.window1, composition.animationCurves().records().size());
         plan.window1 = maximumOf(plan.window1, composition.graph().nodes().size());
         plan.window1 = maximumOf(plan.window1, composition.graph().edges().size());
         plan.window1 = maximumOf(plan.window1, composition.graph().layerOutputs().size());
@@ -70,8 +69,7 @@ struct SortWindows final {
             plan.window2 = maximumOf(plan.window2, node.parameters.size());
         }
         for (const auto& record : composition.animationCurves().records()) {
-            if (const auto* scalar =
-                    std::get_if<bloom::document::ScalarAnimationCurve>(&record)) {
+            if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, scalar->keyframes.size());
             } else if (const auto* vector =
                            std::get_if<bloom::document::Vec2AnimationCurve>(&record)) {
@@ -122,10 +120,9 @@ struct WalkState final {
     std::size_t compositionIndex = kCanonicalDocumentNoIndex;
     std::size_t elementIndex = kCanonicalDocumentNoIndex;
 
-    void
-    fail(const CanonicalDocumentError failure,
-         const std::size_t failedCompositionIndex = kCanonicalDocumentNoIndex,
-         const std::size_t failedElementIndex = kCanonicalDocumentNoIndex) noexcept {
+    void fail(const CanonicalDocumentError failure,
+              const std::size_t failedCompositionIndex = kCanonicalDocumentNoIndex,
+              const std::size_t failedElementIndex = kCanonicalDocumentNoIndex) noexcept {
         if (error == CanonicalDocumentError::None) {
             error = failure;
             compositionIndex = failedCompositionIndex;
@@ -170,12 +167,10 @@ struct EmitState final {
     if (!state.ok(writer.beginObject())) {
         return false;
     }
-    if (!state.ok(writer.memberName("major")) ||
-        !state.ok(writer.integerValue(version.major))) {
+    if (!state.ok(writer.memberName("major")) || !state.ok(writer.integerValue(version.major))) {
         return false;
     }
-    if (!state.ok(writer.memberName("minor")) ||
-        !state.ok(writer.integerValue(version.minor))) {
+    if (!state.ok(writer.memberName("minor")) || !state.ok(writer.integerValue(version.minor))) {
         return false;
     }
     return state.ok(writer.endObject());
@@ -224,8 +219,8 @@ struct EmitState final {
     return state.ok(state.writer.endObject());
 }
 
-[[nodiscard]] std::string_view extensionTargetKind(
-    const bloom::document::ExtensionTarget& target) noexcept {
+[[nodiscard]] std::string_view
+extensionTargetKind(const bloom::document::ExtensionTarget& target) noexcept {
     using namespace bloom::document;
     if (std::holds_alternative<ProjectId>(target)) {
         return "project";
@@ -254,8 +249,8 @@ struct EmitState final {
     return "keyframe";
 }
 
-[[nodiscard]] std::uint64_t extensionTargetValue(
-    const bloom::document::ExtensionTarget& target) noexcept {
+[[nodiscard]] std::uint64_t
+extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     if (const auto* projectId = std::get_if<bloom::document::ProjectId>(&target)) {
         return projectId->value();
     }
@@ -330,10 +325,8 @@ struct EmitState final {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("color4")) &&
                state.ok(writer.memberName("red")) && state.ok(writer.float64Value(color->red)) &&
                state.ok(writer.memberName("green")) &&
-               state.ok(writer.float64Value(color->green)) &&
-               state.ok(writer.memberName("blue")) &&
-               state.ok(writer.float64Value(color->blue)) &&
-               state.ok(writer.memberName("alpha")) &&
+               state.ok(writer.float64Value(color->green)) && state.ok(writer.memberName("blue")) &&
+               state.ok(writer.float64Value(color->blue)) && state.ok(writer.memberName("alpha")) &&
                state.ok(writer.float64Value(color->alpha)) && state.ok(writer.endObject());
     }
     if (const auto* text = std::get_if<std::string>(&value)) {
@@ -375,8 +368,11 @@ struct EmitState final {
             return false;
         }
         if (!emitConstantValue(state, constant->value)) {
-            { state.walk.fail(CanonicalDocumentError::InvalidParameter,
-                                   state.walk.compositionIndex, parameterRank); return false; }
+            {
+                state.walk.fail(CanonicalDocumentError::InvalidParameter,
+                                state.walk.compositionIndex, parameterRank);
+                return false;
+            }
         }
     } else if (const auto* curve = std::get_if<AnimationCurveSource>(&record.source)) {
         if (!state.ok(writer.memberName("kind")) ||
@@ -389,14 +385,18 @@ struct EmitState final {
     } else {
         // Admission rejected live driver sources before staging; reaching this path means the
         // caller bypassed canonicalDocumentSize.
-        { state.walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource,
-                               state.walk.compositionIndex, parameterRank); return false; }
+        {
+            state.walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource,
+                            state.walk.compositionIndex, parameterRank);
+            return false;
+        }
     }
     return state.ok(writer.endObject()) && state.ok(writer.endObject());
 }
 
-[[nodiscard]] bool emitInterpolation(
-    EmitState& state, const bloom::document::KeyframeInterpolation interpolation) noexcept {
+[[nodiscard]] bool
+emitInterpolation(EmitState& state,
+                  const bloom::document::KeyframeInterpolation interpolation) noexcept {
     switch (interpolation) {
     case bloom::document::KeyframeInterpolation::Hold:
         return state.ok(state.writer.stringValue("hold"));
@@ -481,13 +481,16 @@ struct EmitState final {
     }
     const auto& records = composition.animationCurves().records();
     std::span<const std::size_t> order;
-    if (!makeOrder(records,
-                   [](const AnimationCurveRecord& record) noexcept {
-                       return animationCurveId(record).value();
-                   },
-                   state.sort.window1, order, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                               compositionIndex); return false; }
+    if (!makeOrder(
+            records,
+            [](const AnimationCurveRecord& record) noexcept {
+                return animationCurveId(record).value();
+            },
+            state.sort.window1, order, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
     }
     for (const auto recordIndex : order) {
         const auto& record = records[recordIndex];
@@ -503,16 +506,22 @@ struct EmitState final {
                 return false;
             }
             std::span<const std::size_t> keyOrder;
-            if (!makeOrder(scalar->keyframes,
-                           [](const ScalarKeyframe& key) noexcept { return key.time; },
-                           state.sort.window2, keyOrder, state.walk.error)) {
-                { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                       compositionIndex); return false; }
+            if (!makeOrder(
+                    scalar->keyframes, [](const ScalarKeyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                {
+                    state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                    compositionIndex);
+                    return false;
+                }
             }
             for (const auto keyIndex : keyOrder) {
                 if (!emitScalarKeyframe(state, scalar->keyframes[keyIndex])) {
-                    { state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                           compositionIndex); return false; }
+                    {
+                        state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                        compositionIndex);
+                        return false;
+                    }
                 }
             }
         } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
@@ -521,21 +530,29 @@ struct EmitState final {
                 return false;
             }
             std::span<const std::size_t> keyOrder;
-            if (!makeOrder(vector->keyframes,
-                           [](const Vec2Keyframe& key) noexcept { return key.time; },
-                           state.sort.window2, keyOrder, state.walk.error)) {
-                { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                       compositionIndex); return false; }
+            if (!makeOrder(
+                    vector->keyframes, [](const Vec2Keyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                {
+                    state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                    compositionIndex);
+                    return false;
+                }
             }
             for (const auto keyIndex : keyOrder) {
                 if (!emitVec2Keyframe(state, vector->keyframes[keyIndex])) {
-                    { state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                           compositionIndex); return false; }
+                    {
+                        state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                        compositionIndex);
+                        return false;
+                    }
                 }
             }
         } else {
-            { state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                   compositionIndex); return false; }
+            {
+                state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
+                return false;
+            }
         }
         if (!state.ok(writer.endArray()) || !state.ok(writer.endObject())) {
             return false;
@@ -553,11 +570,13 @@ struct EmitState final {
     }
     const auto& records = composition.parameters().records();
     std::span<const std::size_t> order;
-    if (!makeOrder(records,
-                   [](const ParameterRecord& record) noexcept { return record.id.value(); },
-                   state.sort.window1, order, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                               compositionIndex); return false; }
+    if (!makeOrder(
+            records, [](const ParameterRecord& record) noexcept { return record.id.value(); },
+            state.sort.window1, order, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
     }
     for (const auto index : order) {
         if (!emitParameter(state, records[index], index)) {
@@ -580,10 +599,13 @@ struct EmitState final {
         return false;
     }
     std::span<const std::size_t> nodeOrder;
-    if (!makeOrder(graph.nodes(), [](const NodeRecord& node) noexcept { return node.id.value(); },
-                   state.sort.window1, nodeOrder, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                               compositionIndex); return false; }
+    if (!makeOrder(
+            graph.nodes(), [](const NodeRecord& node) noexcept { return node.id.value(); },
+            state.sort.window1, nodeOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
     }
     for (const auto nodeIndex : nodeOrder) {
         const auto& node = graph.nodes()[nodeIndex];
@@ -604,14 +626,18 @@ struct EmitState final {
             return false;
         }
         std::span<const std::size_t> bindingOrder;
-        if (!makeOrder(node.parameters,
-                       [](const ParameterBinding& binding) noexcept
-                           -> std::pair<std::string_view, std::uint64_t> {
-                           return {binding.role, binding.parameterId.value()};
-                       },
-                       state.sort.window2, bindingOrder, state.walk.error)) {
-            { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                   compositionIndex); return false; }
+        if (!makeOrder(
+                node.parameters,
+                [](const ParameterBinding& binding) noexcept
+                    -> std::pair<std::string_view, std::uint64_t> {
+                    return {binding.role, binding.parameterId.value()};
+                },
+                state.sort.window2, bindingOrder, state.walk.error)) {
+            {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                compositionIndex);
+                return false;
+            }
         }
         for (const auto bindingIndex : bindingOrder) {
             const auto& binding = node.parameters[bindingIndex];
@@ -641,10 +667,13 @@ struct EmitState final {
         return false;
     }
     std::span<const std::size_t> edgeOrder;
-    if (!makeOrder(graph.edges(), [](const EdgeRecord& edge) noexcept { return edge.id.value(); },
-                   state.sort.window1, edgeOrder, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                               compositionIndex); return false; }
+    if (!makeOrder(
+            graph.edges(), [](const EdgeRecord& edge) noexcept { return edge.id.value(); },
+            state.sort.window1, edgeOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
     }
     for (const auto edgeIndex : edgeOrder) {
         const auto& edge = graph.edges()[edgeIndex];
@@ -688,7 +717,10 @@ struct EmitState final {
                 return false;
             }
         } else {
-            { state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex); return false; }
+            {
+                state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
+                return false;
+            }
         }
         if (!state.ok(writer.endObject()) || !state.ok(writer.endObject())) {
             return false;
@@ -702,14 +734,17 @@ struct EmitState final {
         return false;
     }
     std::span<const std::size_t> boundaryOrder;
-    if (!makeOrder(graph.layerOutputs(),
-                   [](const LayerOutputBoundary& boundary) noexcept
-                       -> std::pair<std::uint64_t, std::uint64_t> {
-                       return {boundary.layerId.value(), boundary.nodeId.value()};
-                   },
-                   state.sort.window1, boundaryOrder, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                               compositionIndex); return false; }
+    if (!makeOrder(
+            graph.layerOutputs(),
+            [](const LayerOutputBoundary& boundary) noexcept
+                -> std::pair<std::uint64_t, std::uint64_t> {
+                return {boundary.layerId.value(), boundary.nodeId.value()};
+            },
+            state.sort.window1, boundaryOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
     }
     for (const auto boundaryIndex : boundaryOrder) {
         const auto& boundary = graph.layerOutputs()[boundaryIndex];
@@ -765,7 +800,10 @@ struct EmitState final {
     }
 
     if (!graph.compositionOutput().has_value()) {
-        { state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex); return false; }
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
+            return false;
+        }
     }
     if (!state.ok(writer.memberName("compositionOutput"))) {
         return false;
@@ -787,8 +825,7 @@ struct EmitState final {
     if (!emitNamedId(state, "id", composition.id().value())) {
         return false;
     }
-    if (!state.ok(writer.memberName("name")) ||
-        !state.ok(writer.stringValue(composition.name()))) {
+    if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(composition.name()))) {
         return false;
     }
     if (!state.ok(writer.memberName("duration"))) {
@@ -802,12 +839,10 @@ struct EmitState final {
         return false;
     }
     const auto format = composition.format();
-    if (!state.ok(writer.memberName("width")) ||
-        !state.ok(writer.integerValue(format.width()))) {
+    if (!state.ok(writer.memberName("width")) || !state.ok(writer.integerValue(format.width()))) {
         return false;
     }
-    if (!state.ok(writer.memberName("height")) ||
-        !state.ok(writer.integerValue(format.height()))) {
+    if (!state.ok(writer.memberName("height")) || !state.ok(writer.integerValue(format.height()))) {
         return false;
     }
     if (!state.ok(writer.memberName("pixelAspect"))) {
@@ -847,20 +882,17 @@ struct EmitState final {
     }
     bool emitted = false;
     if (const auto* builtIn = std::get_if<BuiltInOcioConfigLocator>(&locator)) {
-        emitted = state.ok(writer.memberName("kind")) &&
-                  state.ok(writer.stringValue("builtin")) &&
+        emitted = state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("builtin")) &&
                   state.ok(writer.memberName("uri")) && state.ok(writer.stringValue(builtIn->uri));
-    } else if (const auto* projectRelative =
-                   std::get_if<ProjectRelativeOciozLocator>(&locator)) {
+    } else if (const auto* projectRelative = std::get_if<ProjectRelativeOciozLocator>(&locator)) {
         emitted = state.ok(writer.memberName("kind")) &&
                   state.ok(writer.stringValue("project-relative-ocioz")) &&
                   state.ok(writer.memberName("path")) &&
                   state.ok(writer.stringValue(projectRelative->path));
     } else if (const auto* externalOcioz = std::get_if<ExternalOciozLocator>(&locator)) {
-        emitted = state.ok(writer.memberName("kind")) &&
-                  state.ok(writer.stringValue("external-ocioz")) &&
-                  state.ok(writer.memberName("uri")) &&
-                  state.ok(writer.stringValue(externalOcioz->uri));
+        emitted =
+            state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("external-ocioz")) &&
+            state.ok(writer.memberName("uri")) && state.ok(writer.stringValue(externalOcioz->uri));
     } else if (const auto* externalConfig = std::get_if<ExternalOcioConfigLocator>(&locator)) {
         emitted = state.ok(writer.memberName("kind")) &&
                   state.ok(writer.stringValue("external-config")) &&
@@ -930,11 +962,12 @@ struct EmitState final {
     case OcioConfigPortability::External:
         portability = "external";
         break;
-    default:
-        { state.walk.fail(CanonicalDocumentError::OcioPortabilityMismatch); return false; }
+    default: {
+        state.walk.fail(CanonicalDocumentError::OcioPortabilityMismatch);
+        return false;
     }
-    if (!state.ok(writer.memberName("portability")) ||
-        !state.ok(writer.stringValue(portability))) {
+    }
+    if (!state.ok(writer.memberName("portability")) || !state.ok(writer.stringValue(portability))) {
         return false;
     }
     if (!state.ok(writer.memberName("contextVariables")) || !state.ok(writer.beginArray())) {
@@ -944,8 +977,7 @@ struct EmitState final {
         if (!state.ok(writer.beginObject())) {
             return false;
         }
-        if (!state.ok(writer.memberName("name")) ||
-            !state.ok(writer.stringValue(variable.name))) {
+        if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(variable.name))) {
             return false;
         }
         if (!state.ok(writer.memberName("value")) ||
@@ -966,12 +998,18 @@ struct EmitState final {
                                const bloom::document::OpaqueExtensionPayload& payload) noexcept {
     const auto encodedSize = bloom::project::canonicalBase64EncodedSize(payload.size());
     if (!encodedSize.hasValue() || *encodedSize.value() > state.payloadScratch.size()) {
-        { state.walk.fail(CanonicalDocumentError::PayloadBufferTooSmall); return false; }
+        {
+            state.walk.fail(CanonicalDocumentError::PayloadBufferTooSmall);
+            return false;
+        }
     }
     const auto encoded = bloom::project::encodeCanonicalBase64(
         payload.bytes(), state.payloadScratch.first(*encodedSize.value()));
     if (!encoded) {
-        { state.walk.fail(CanonicalDocumentError::PayloadBufferTooSmall); return false; }
+        {
+            state.walk.fail(CanonicalDocumentError::PayloadBufferTooSmall);
+            return false;
+        }
     }
     return state.ok(state.writer.stringValue(
         std::string_view(state.payloadScratch.data(), *encodedSize.value())));
@@ -1020,8 +1058,7 @@ struct EmitState final {
         }
     } else if (const auto* table =
                    std::get_if<ExtensionHostReferenceTable>(&record.referencePolicy)) {
-        if (!state.ok(writer.memberName("kind")) ||
-            !state.ok(writer.stringValue("host-table"))) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("host-table"))) {
             return false;
         }
         if (!state.ok(writer.memberName("references")) || !state.ok(writer.beginArray())) {
@@ -1065,7 +1102,10 @@ struct EmitState final {
             return false;
         }
     } else {
-        { state.walk.fail(CanonicalDocumentError::InvalidExtensionRecord); return false; }
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidExtensionRecord);
+            return false;
+        }
     }
     if (!state.ok(writer.endObject())) {
         return false;
@@ -1114,12 +1154,14 @@ struct EmitState final {
         return false;
     }
     std::span<const std::size_t> compositionOrder;
-    if (!makeOrder(state.project.compositions(),
-                   [](const Composition& composition) noexcept {
-                       return composition.id().value();
-                   },
-                   state.sort.window0, compositionOrder, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity); return false; }
+    if (!makeOrder(
+            state.project.compositions(),
+            [](const Composition& composition) noexcept { return composition.id().value(); },
+            state.sort.window0, compositionOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity);
+            return false;
+        }
     }
     for (const auto compositionIndex : compositionOrder) {
         if (!emitComposition(state, state.project.compositions()[compositionIndex],
@@ -1158,10 +1200,14 @@ struct EmitState final {
         return false;
     }
     std::span<const std::size_t> recordOrder;
-    if (!makeOrder(state.project.extensionRecords(),
-                   [](const ExtensionRecord& record) noexcept { return record.id.value(); },
-                   state.sort.window1, recordOrder, state.walk.error)) {
-        { state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity); return false; }
+    if (!makeOrder(
+            state.project.extensionRecords(),
+            [](const ExtensionRecord& record) noexcept { return record.id.value(); },
+            state.sort.window1, recordOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity);
+            return false;
+        }
     }
     for (const auto recordIndex : recordOrder) {
         if (!emitExtensionRecord(state, state.project.extensionRecords()[recordIndex])) {
@@ -1212,8 +1258,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         return walk;
     }
     if (limits.maximumValues > bloom::project::kCanonicalJsonMaximumValues ||
-        limits.maximumContainerEntries >
-            bloom::project::kCanonicalJsonMaximumContainerEntries ||
+        limits.maximumContainerEntries > bloom::project::kCanonicalJsonMaximumContainerEntries ||
         limits.maximumOutputBytes > bloom::project::kCanonicalDocumentMaximumBytes) {
         walk.fail(CanonicalDocumentError::InvalidLimits);
         return walk;
@@ -1255,11 +1300,10 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
          ++compositionIndex) {
         const auto& composition = project.compositions()[compositionIndex];
         const auto& parameters = composition.parameters().records();
-        for (std::size_t parameterIndex = 0; parameterIndex < parameters.size();
-             ++parameterIndex) {
+        for (std::size_t parameterIndex = 0; parameterIndex < parameters.size(); ++parameterIndex) {
             if (std::holds_alternative<DriverBindingSource>(parameters[parameterIndex].source)) {
-                walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource,
-                          compositionIndex, parameterIndex);
+                walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource, compositionIndex,
+                          parameterIndex);
                 return walk;
             }
         }
@@ -1291,8 +1335,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         return walk;
     }
     for (const auto& record : project.extensionRecords()) {
-        const auto encodedSize =
-            bloom::project::canonicalBase64EncodedSize(record.payload.size());
+        const auto encodedSize = bloom::project::canonicalBase64EncodedSize(record.payload.size());
         if (!encodedSize.hasValue() || *encodedSize.value() > document.payloadScratch.size()) {
             walk.fail(CanonicalDocumentError::PayloadBufferTooSmall);
             return walk;
@@ -1337,9 +1380,9 @@ CanonicalDocumentSizeResult canonicalDocumentSize(const CanonicalDocumentV1& doc
     return CanonicalDocumentSizeResult::success(requiredSize);
 }
 
-CanonicalDocumentWriteResult encodeCanonicalDocument(const CanonicalDocumentV1& document,
-                                                     const std::span<char> output,
-                                                     const CanonicalDocumentLimits limits) noexcept {
+CanonicalDocumentWriteResult
+encodeCanonicalDocument(const CanonicalDocumentV1& document, const std::span<char> output,
+                        const CanonicalDocumentLimits limits) noexcept {
     const auto sizeResult = canonicalDocumentSize(document, limits);
     if (!sizeResult) {
         return CanonicalDocumentWriteResult::failure(sizeResult.error(), std::nullopt,
@@ -1361,8 +1404,7 @@ CanonicalDocumentWriteResult encodeCanonicalDocument(const CanonicalDocumentV1& 
                     snapshot.project(),
                     snapshot.ids().highWater(),
                     *document.colorSettings,
-                    splitSortScratch(document.sortScratch,
-                                     measureSortPlan(snapshot.project())),
+                    splitSortScratch(document.sortScratch, measureSortPlan(snapshot.project())),
                     document.payloadScratch,
                     {}};
     if (!emitDocumentRoot(state) || writer.bytesWritten() != requiredSize) {

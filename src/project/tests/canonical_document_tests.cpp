@@ -118,8 +118,7 @@ void expectRequestError(Expectations& expectations, const CanonicalDocumentV1& r
                         const CanonicalDocumentLimits limits,
                         const CanonicalDocumentError expectedError,
                         const std::size_t expectedCompositionIndex,
-                        const std::size_t expectedElementIndex,
-                        const std::string_view message) {
+                        const std::size_t expectedElementIndex, const std::string_view message) {
     const auto size = bloom::project::canonicalDocumentSize(request, limits);
     expectations.expect(!size.hasValue() && size.error() == expectedError &&
                             size.compositionIndex() == expectedCompositionIndex &&
@@ -524,22 +523,22 @@ void testComposedGoldenBytes(Expectations& expectations) {
     const auto duration = RationalTime::create(48, 24);
     const auto frameRate = FrameRate::create(24000, 1001);
     const auto pixelAspect = PixelAspectRatio::create(2, 1);
-    const auto format = CompositionFormat::create(
-        1280, 720, pixelAspect.value_or(PixelAspectRatio::square()),
-        frameRate.value_or(FrameRate::framesPerSecond24()));
+    const auto format =
+        CompositionFormat::create(1280, 720, pixelAspect.value_or(PixelAspectRatio::square()),
+                                  frameRate.value_or(FrameRate::framesPerSecond24()));
     if (!duration.has_value() || !format.has_value()) {
         expectations.expect(false, "the composed fixture values are constructible");
         return;
     }
 
     CanonicalGraph graph{NodeId::fromRaw(1)};
-    const NodeRecord layerOutputNode{NodeId::fromRaw(3),
-                                     std::string(kLayerOutputNodeType),
-                                     {{"opacity", ParameterId::fromRaw(3)},
-                                      {"position", ParameterId::fromRaw(5)}},
-                                     kLayerOutputNodeSchemaVersion};
-    const NodeRecord layerStackNode{NodeId::fromRaw(1), std::string(kLayerStackNodeType), {},
-                                    kLayerStackNodeSchemaVersion};
+    const NodeRecord layerOutputNode{
+        NodeId::fromRaw(3),
+        std::string(kLayerOutputNodeType),
+        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        kLayerOutputNodeSchemaVersion};
+    const NodeRecord layerStackNode{
+        NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
                                            std::string(kCompositionOutputNodeType),
                                            {},
@@ -548,9 +547,8 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                      std::string(kSolidSourceNodeType),
                                      {{"color", ParameterId::fromRaw(7)}},
                                      kSolidSourceNodeSchemaVersion};
-    const bool nodesAdded =
-        graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
-        graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
+    const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
+                            graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
         EdgeId::fromRaw(3),
         {NodeId::fromRaw(1), std::string(kLayerStackOutputPort)},
@@ -559,44 +557,41 @@ void testComposedGoldenBytes(Expectations& expectations) {
         EdgeId::fromRaw(1),
         {NodeId::fromRaw(2), std::string(kSolidSourceOutputPort)},
         NodeInputRef{NodeId::fromRaw(3), std::string(kLayerOutputContentInputPort)}};
-    const EdgeRecord layerToStackEdge{
-        EdgeId::fromRaw(2),
-        {NodeId::fromRaw(3), std::string(kLayerOutputOutputPort)},
-        LayerStackInputRef{NodeId::fromRaw(1), LayerSlotId::fromRaw(1),
-                           std::string(kLayerStackContentInputRole)}};
-    const bool edgesAdded =
-        graph.addEdge(stackToOutputEdge) && graph.addEdge(solidToLayerEdge) &&
-        graph.addEdge(layerToStackEdge);
+    const EdgeRecord layerToStackEdge{EdgeId::fromRaw(2),
+                                      {NodeId::fromRaw(3), std::string(kLayerOutputOutputPort)},
+                                      LayerStackInputRef{NodeId::fromRaw(1),
+                                                         LayerSlotId::fromRaw(1),
+                                                         std::string(kLayerStackContentInputRole)}};
+    const bool edgesAdded = graph.addEdge(stackToOutputEdge) && graph.addEdge(solidToLayerEdge) &&
+                            graph.addEdge(layerToStackEdge);
     const bool boundariesAdded =
         graph.addLayerOutput({NodeId::fromRaw(3), LayerId::fromRaw(1), "Hero Plate",
                               std::string(kLayerOutputOutputPort)});
-    expectations.expect(nodesAdded && edgesAdded && boundariesAdded &&
-                            graph.layerStack().append(
-                                {LayerSlotId::fromRaw(1), LayerId::fromRaw(1)}),
-                        "the composed fixture graph accepts its deliberately scrambled parts");
+    expectations.expect(
+        nodesAdded && edgesAdded && boundariesAdded &&
+            graph.layerStack().append({LayerSlotId::fromRaw(1), LayerId::fromRaw(1)}),
+        "the composed fixture graph accepts its deliberately scrambled parts");
 
     graph.setCompositionOutput({NodeId::fromRaw(4), std::string(kCompositionOutputOutputPort)});
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
-    expectations.expect(
-        composition.parameters().insert(
-            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
-             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
-            composition.parameters().insert(
-                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
-                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
-            composition.parameters().insert(
-                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
-        "the composed fixture parameters insert out of numeric ID order");
+    expectations.expect(composition.parameters().insert(
+                            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
+                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
+                                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
+                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
+                        "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);
     curve.keyframes.push_back(
         {KeyframeId::fromRaw(21), RationalTime{}, 0.25, KeyframeInterpolation::Hold});
-    curve.keyframes.push_back(
-        {KeyframeId::fromRaw(22), RationalTime::fromInteger(48), 1.0,
-         KeyframeInterpolation::Linear});
+    curve.keyframes.push_back({KeyframeId::fromRaw(22), RationalTime::fromInteger(48), 1.0,
+                               KeyframeInterpolation::Linear});
     expectations.expect(composition.animationCurves().insert(curve),
                         "the composed fixture animation curve inserts");
 
@@ -625,11 +620,10 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                                   .colorSettings = &settings,
                                                   .payloadScratch = payloadScratch,
                                                   .sortScratch = {}};
-    expectRequestError(expectations, requestTooSmallSort, {},
-                       CanonicalDocumentError::SortBufferTooSmall,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       "an exhausted sort scratch budget is rejected before any emission");
+    expectRequestError(
+        expectations, requestTooSmallSort, {}, CanonicalDocumentError::SortBufferTooSmall,
+        bloom::project::kCanonicalDocumentNoIndex, bloom::project::kCanonicalDocumentNoIndex,
+        "an exhausted sort scratch budget is rejected before any emission");
 
     const CanonicalDocumentV1 valid{.snapshot = &snapshot,
                                     .colorSettings = &settings,
@@ -837,14 +831,11 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "application/x-vendor-table",
         ExtensionHostReferenceTable{{{std::string("primary-comp"), CompositionId::fromRaw(1)}}},
         OpaqueExtensionPayload{}};
-    const ExtensionRecord markerRecord{ExtensionRecordId::fromRaw(5),
-                                       "vendor.module",
-                                       "vendor.module.marker",
-                                       {1, 0},
-                                       CompositionId::fromRaw(1),
-                                       "application/octet-stream",
-                                       NoExtensionReferences{},
-                                       OpaqueExtensionPayload{std::byte{0x00}}};
+    const ExtensionRecord markerRecord{
+        ExtensionRecordId::fromRaw(5), "vendor.module",
+        "vendor.module.marker",        {1, 0},
+        CompositionId::fromRaw(1),     "application/octet-stream",
+        NoExtensionReferences{},       OpaqueExtensionPayload{std::byte{0x00}}};
     const ExtensionRecord remapperRecord{
         ExtensionRecordId::fromRaw(2),
         "vendor.module",
@@ -853,8 +844,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         std::nullopt,
         "text/x-vendor-note",
         ExtensionOwnerRemapper{"vendor.module.record-remapper", {1, 0}},
-        OpaqueExtensionPayload{std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE},
-                               std::byte{0xEF}}};
+        OpaqueExtensionPayload{std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}}};
     expectations.expect(newProject.project.addExtensionRecord(linkTableRecord) &&
                             newProject.project.addExtensionRecord(markerRecord) &&
                             newProject.project.addExtensionRecord(remapperRecord),
@@ -870,11 +860,10 @@ void testExtensionGoldenBytes(Expectations& expectations) {
                                                      .colorSettings = &settings,
                                                      .payloadScratch = {},
                                                      .sortScratch = sortScratch};
-    expectRequestError(expectations, requestNoPayloadBuffer, {},
-                       CanonicalDocumentError::PayloadBufferTooSmall,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       "an exhausted payload scratch budget is rejected before any emission");
+    expectRequestError(
+        expectations, requestNoPayloadBuffer, {}, CanonicalDocumentError::PayloadBufferTooSmall,
+        bloom::project::kCanonicalDocumentNoIndex, bloom::project::kCanonicalDocumentNoIndex,
+        "an exhausted payload scratch budget is rejected before any emission");
 
     const CanonicalDocumentV1 valid{.snapshot = &snapshot,
                                     .colorSettings = &settings,
@@ -920,8 +909,7 @@ void testInvalidColorSettingsRejections(Expectations& expectations) {
                        "the revision algorithm must be SHA-256 before encoding");
 
     auto mismatchedPortability = neutralColorSettings();
-    mismatchedPortability.ocioConfig.portability =
-        bloom::document::OcioConfigPortability::External;
+    mismatchedPortability.ocioConfig.portability = bloom::document::OcioConfigPortability::External;
     const CanonicalDocumentV1 portabilityRequest{.snapshot = &snapshot,
                                                  .colorSettings = &mismatchedPortability,
                                                  .payloadScratch = payloadScratch,
@@ -937,13 +925,14 @@ void testInvalidColorSettingsRejections(Expectations& expectations) {
                                          .colorSettings = &foreignBuiltinUri,
                                          .payloadScratch = payloadScratch,
                                          .sortScratch = sortScratch};
-    expectRequestError(expectations, uriRequest, {},
-                       CanonicalDocumentError::InvalidColorSettings, noIndex, noIndex,
+    expectRequestError(expectations, uriRequest, {}, CanonicalDocumentError::InvalidColorSettings,
+                       noIndex, noIndex,
                        "the only writable builtin locator is the qualified Bloom Neutral URI");
 
     auto unsortedContext = neutralColorSettings();
     unsortedContext.ocioConfig.contextVariables = {
-        {"BETA", "1"}, {"ALPHA", "2"},
+        {"BETA", "1"},
+        {"ALPHA", "2"},
     };
     const CanonicalDocumentV1 contextRequest{.snapshot = &snapshot,
                                              .colorSettings = &unsortedContext,
@@ -978,11 +967,10 @@ void testDriverSourceAdmission(Expectations& expectations) {
         expectations.expect(false, "the driver fixture composition exists");
         return;
     }
-    expectations.expect(
-        composition->parameters().insert(
-            {ParameterId::fromRaw(2), std::string(kOpacityParameterSchemaKey),
-             DriverBindingSource{DriverBindingId::fromRaw(4)}}),
-        "the driver fixture parameter inserts with a live driver source");
+    expectations.expect(composition->parameters().insert(
+                            {ParameterId::fromRaw(2), std::string(kOpacityParameterSchemaKey),
+                             DriverBindingSource{DriverBindingId::fromRaw(4)}}),
+                        "the driver fixture parameter inserts with a live driver source");
 
     IdAllocatorHighWater highWater{};
     highWater.composition = 1;
@@ -1020,19 +1008,17 @@ void testLimitsAndCapacityAdversarial(Expectations& expectations) {
 
     CanonicalDocumentLimits raisedCeilings;
     raisedCeilings.maximumValues = bloom::project::kCanonicalJsonMaximumValues + 1;
-    expectRequestError(expectations, request, raisedCeilings,
-                       CanonicalDocumentError::InvalidLimits,
+    expectRequestError(expectations, request, raisedCeilings, CanonicalDocumentError::InvalidLimits,
                        bloom::project::kCanonicalDocumentNoIndex,
                        bloom::project::kCanonicalDocumentNoIndex,
                        "caller budgets cannot raise the accepted v1 ceilings");
 
     CanonicalDocumentLimits starvedValues;
     starvedValues.maximumValues = 10;
-    expectRequestError(expectations, request, starvedValues,
-                       CanonicalDocumentError::ValueCountExceeded,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       "a lower value budget rejects during preflight accounting");
+    expectRequestError(
+        expectations, request, starvedValues, CanonicalDocumentError::ValueCountExceeded,
+        bloom::project::kCanonicalDocumentNoIndex, bloom::project::kCanonicalDocumentNoIndex,
+        "a lower value budget rejects during preflight accounting");
 
     std::array<char, 64> starvedOutput{};
     starvedOutput.fill('?');
@@ -1040,8 +1026,8 @@ void testLimitsAndCapacityAdversarial(Expectations& expectations) {
         bloom::project::encodeCanonicalDocument(request, starvedOutput, starvedValues);
     expectations.expect(!starvedEncode &&
                             starvedEncode.error() == CanonicalDocumentError::ValueCountExceeded &&
-                            starvedEncode.bytesWritten() == 0 &&
-                            starvedOutput.front() == '?' && starvedOutput.back() == '?',
+                            starvedEncode.bytesWritten() == 0 && starvedOutput.front() == '?' &&
+                            starvedOutput.back() == '?',
                         "a value-budget failure leaves the destination untouched");
 
     CanonicalDocumentLimits starvedContainers;
@@ -1060,11 +1046,10 @@ void testLimitsAndCapacityAdversarial(Expectations& expectations) {
 
     CanonicalDocumentLimits oneByteShort;
     oneByteShort.maximumOutputBytes = *exact.value() - 1;
-    expectRequestError(expectations, request, oneByteShort,
-                       CanonicalDocumentError::DocumentSizeExceeded,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       bloom::project::kCanonicalDocumentNoIndex,
-                       "the exact canonical byte count is checked against the output limit");
+    expectRequestError(
+        expectations, request, oneByteShort, CanonicalDocumentError::DocumentSizeExceeded,
+        bloom::project::kCanonicalDocumentNoIndex, bloom::project::kCanonicalDocumentNoIndex,
+        "the exact canonical byte count is checked against the output limit");
 
     CanonicalDocumentLimits atLimit;
     atLimit.maximumOutputBytes = *exact.value();
@@ -1073,14 +1058,12 @@ void testLimitsAndCapacityAdversarial(Expectations& expectations) {
 
     std::vector<char> shortOutput(*exact.value() - 1, '?');
     const auto shortResult = bloom::project::encodeCanonicalDocument(request, shortOutput);
-    expectations.expect(!shortResult &&
-                            shortResult.error() ==
-                                CanonicalDocumentError::OutputCapacityExceeded &&
-                            shortResult.requiredSize().has_value() &&
-                            *shortResult.requiredSize() == *exact.value() &&
-                            shortResult.bytesWritten() == 0 &&
-                            shortOutput.front() == '?' && shortOutput.back() == '?',
-                        "capacity shortage reports the exact requirement and writes nothing");
+    expectations.expect(
+        !shortResult && shortResult.error() == CanonicalDocumentError::OutputCapacityExceeded &&
+            shortResult.requiredSize().has_value() &&
+            *shortResult.requiredSize() == *exact.value() && shortResult.bytesWritten() == 0 &&
+            shortOutput.front() == '?' && shortOutput.back() == '?',
+        "capacity shortage reports the exact requirement and writes nothing");
 
     std::vector<char> exactOutput(*exact.value(), '?');
     const auto exactResult = bloom::project::encodeCanonicalDocument(request, exactOutput);
@@ -1088,7 +1071,6 @@ void testLimitsAndCapacityAdversarial(Expectations& expectations) {
                             exactOutput.back() == '\n',
                         "exact capacity emits the complete document ending in one LF");
 }
-
 
 } // namespace
 

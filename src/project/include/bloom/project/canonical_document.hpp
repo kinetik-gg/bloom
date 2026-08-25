@@ -81,12 +81,13 @@ enum class CanonicalDocumentError : std::uint8_t {
 
 class [[nodiscard]] CanonicalDocumentSizeResult final {
   public:
-    [[nodiscard]] static constexpr CanonicalDocumentSizeResult success(const std::size_t size) noexcept {
+    [[nodiscard]] static constexpr CanonicalDocumentSizeResult
+    success(const std::size_t size) noexcept {
         return CanonicalDocumentSizeResult(size);
     }
     [[nodiscard]] static constexpr CanonicalDocumentSizeResult
-    failure(const CanonicalDocumentError error, const std::size_t compositionIndex =
-                                                     kCanonicalDocumentNoIndex,
+    failure(const CanonicalDocumentError error,
+            const std::size_t compositionIndex = kCanonicalDocumentNoIndex,
             const std::size_t elementIndex = kCanonicalDocumentNoIndex) noexcept {
         return CanonicalDocumentSizeResult(error, compositionIndex, elementIndex);
     }
@@ -120,8 +121,9 @@ class [[nodiscard]] CanonicalDocumentWriteResult final {
   public:
     [[nodiscard]] static constexpr CanonicalDocumentWriteResult
     success(const std::size_t bytesWritten) noexcept {
-        return CanonicalDocumentWriteResult(CanonicalDocumentError::None, bytesWritten, bytesWritten,
-                                            kCanonicalDocumentNoIndex, kCanonicalDocumentNoIndex);
+        return CanonicalDocumentWriteResult(CanonicalDocumentError::None, bytesWritten,
+                                            bytesWritten, kCanonicalDocumentNoIndex,
+                                            kCanonicalDocumentNoIndex);
     }
     [[nodiscard]] static constexpr CanonicalDocumentWriteResult
     failure(const CanonicalDocumentError error,
