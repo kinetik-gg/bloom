@@ -337,6 +337,17 @@ text(display pixel-semantics profile ID)
 text(packing ID)                     # exactly "straight-rgba8" in version 1
 ```
 
+Version 1 accepts only source Color Interop ID `lin_rec709_scene`, output Color Interop ID
+`srgb_rec709_display`, quality ID `reference`, display pixel-semantics profile
+`bloom.color.ocio-cpu-display.v1`, and packing ID `straight-rgba8`. The display and view names are
+nonempty and each is at most 4096 UTF-8 bytes. Look mode `0` has count zero; look mode `1` has
+between 1 and 128 ordered, nonempty names, each at most 4096 UTF-8 bytes. The existing context
+limits remain 256 variables, 128 ASCII bytes per name, and 4096 UTF-8 bytes per value. The complete
+canonical identity, including its domain prefix, counts, and length fields, is at most 2 MiB
+(`2097152` bytes). Every count and byte-length calculation is checked before allocation or
+caller-buffer mutation. A record that exceeds any component or total limit is invalid rather than
+truncated.
+
 The version 1 display pixel-semantics profile ID is exactly
 `bloom.color.ocio-cpu-display.v1`. Its qualification freezes Float32 input/output, alpha handling,
 chunk independence, finite-value failure, and exact output bits for the profile's fixtures on every

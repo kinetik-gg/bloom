@@ -3,9 +3,10 @@
 Status: accepted
 
 Implementation status: the allocation-free Process Pixel Stream and Process-Frame Semantic
-Identity version 1 codecs, validation, and portable golden vectors are implemented. OutputAnalysis,
-facet reports and descriptors, preset preparation, PNG/OpenEXR adapters, staged-format
-verification, and end-to-end publication remain pending.
+Identity version 1 codecs, validation, portable golden vectors, and the closed facet-descriptor
+grammar are implemented. OutputAnalysis report construction/validation and digesting, preset
+preparation, PNG/OpenEXR adapters, staged-format verification, and end-to-end publication remain
+pending.
 
 Updated: 2026-08-25
 
@@ -34,6 +35,19 @@ The two initial presets are closed, versioned contracts:
 
 - `PngRgba8SrgbV1`
 - `FlatExrRgba32fLinRec709SceneV1`
+
+Their typed identity derives every portable string and version; callers never provide the fields
+independently and enum ordinals are never serialized:
+
+| Typed preset | Serialized preset ID | Version | Output pixel-semantics profile | Expected OCIO revision | Display identity |
+| --- | --- | ---: | --- | --- | --- |
+| `PngRgba8SrgbV1` | exact text `PngRgba8SrgbV1` | `1` | `bloom.output.png-rgba8-srgb.semantic.v1` | exactly 32 bytes | required |
+| `FlatExrRgba32fLinRec709SceneV1` | exact text `FlatExrRgba32fLinRec709SceneV1` | `1` | `bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1` | zero bytes | zero bytes |
+
+A mismatched preset ID, version, or profile tuple is invalid. For PNG, the separate expected OCIO
+revision must equal both the revision embedded in the canonical `DisplayProcessorIdentity` and the
+64 lowercase hexadecimal digits in the target external-dependency descriptor. The EXR preset
+rejects a nonempty OCIO revision or display identity.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.
@@ -114,7 +128,7 @@ a typed report. Each facet has one preservation state:
 
 | State | Meaning |
 | --- | --- |
-| `Exact` | Value and representation survive exactly |
+| `Exact` | The preset-defined target preserves the source without numeric or semantic loss, or realizes a target-only requirement exactly |
 | `Equivalent` | Standardized representation differs but has the same declared meaning |
 | `Approximated` | A bounded, declared conversion changes values or representation |
 | `Omitted` | Source information is intentionally not written |
@@ -126,6 +140,14 @@ The report covers at least pixels, precision, color, alpha association, channel 
 window, display window, pixel aspect, compression, metadata, and external dependencies. Every
 non-exact facet carries a stable code, source/target values, artist-facing explanation, and whether
 the preset permits it.
+
+Analysis has two explicit stages. A deterministic typed report attempt may describe `Missing` or
+`Unsupported` inputs and remain useful to Jobs, scripting, headless clients, and the UI without
+having an approval digest. `OutputAnalysisDigest` becomes available only when a validated process
+identity exists and, for PNG, a matching expected OCIO revision and validated canonical
+`DisplayProcessorIdentity` exist. Approval requires both that digest and all eleven derived
+permission bits. Bloom never invents an empty PNG display identity or a placeholder process
+identity merely to hash a failure report.
 
 Canonical ordering and serialization produce an `OutputAnalysisDigest`. A caller cannot reduce this
 to `acceptLoss = true`. Publication requires an immutable request that binds the exact digest the
@@ -178,13 +200,26 @@ code from this closed version 1 vocabulary:
 | external dependencies | `png.ocio-external-reference`, `dependency.missing`, `adapter.unavailable`, `resource.limit-exceeded` |
 
 Codes are valid only for their listed facet; another code or a future code requires a new analysis
-serialization version. Every code is the exact non-localized ASCII spelling shown. `Missing` and
-`Unsupported` always set `presetPermits=0`. More generally,
-approval is forbidden when any facet has `presetPermits=0`, regardless of its preservation state or
-the caller's policy. Headless policy may approve only the exact digest of a report whose eleven
-permission bits are all `1`.
-`Equivalent` has no permitted non-empty code in version 1 and therefore cannot be emitted by these
-two presets; introducing an equivalent representation requires a later vocabulary version.
+serialization version. Every code is the exact non-localized ASCII spelling shown. State and
+permission are derived from preset and code; callers cannot choose them:
+
+| Code set | Required state | Valid preset | `presetPermits` |
+| --- | --- | --- | ---: |
+| empty code | `Exact` | both | `1` |
+| `png.display-transform-clamp-quantize`, `png.float32-to-uint8`, `png.lin-rec709-scene-to-srgb`, `png.premultiplied-to-straight` | `Approximated` | PNG | `1` |
+| `exr.par-rounded-binary32` | `Approximated` | EXR | `1` |
+| `metadata.omitted` | `Omitted` | both | `1` |
+| `png.ocio-external-reference` | `ExternalReference` | PNG | `1` |
+| `process-frame.missing`, `compression.unavailable`, `dependency.missing`, `adapter.unavailable`, `resource.limit-exceeded` | `Missing` | both | `0` |
+| `ocio.missing`, `ocio.changed`, `ocio.invalid`, `ocio.resource-missing`, `ocio.version-unsupported` | `Missing` | PNG | `0` |
+| `pixels.unsupported`, `precision.unsupported`, `color.unsupported`, `alpha.unsupported`, `channels.unsupported`, `window.out-of-range`, `pixel-aspect.unsupported`, `compression.unsupported`, `metadata.unsupported` | `Unsupported` | both | `0` |
+| `png.origin-window-required`, `png.equal-window-required`, `png.square-pixel-required` | `Unsupported` | PNG | `0` |
+
+The five `ocio.*` codes map one-to-one from the corresponding typed color-resolution failures.
+An unknown code/state/preset/permission tuple is structurally invalid, not merely non-approvable.
+`Equivalent` has no valid tuple in version 1. Approval is forbidden when any permission bit is
+zero, regardless of caller policy; a headless policy can approve only the exact digest of a report
+whose eleven derived permission bits are all `1`.
 
 Source and target descriptors use one canonical ASCII grammar. A descriptor is empty only when the
 preset's facet schema declares that side absent. Otherwise it is semicolon-separated `key=value`
@@ -214,6 +249,116 @@ either window uses `height`, `origin-x`, `origin-y`, `width`; pixel aspect uses 
 metadata uses `profile`; external dependencies use `kind` and `revision`. Optional information is
 represented by an explicit `id:none`, not an undeclared field. List indices are minimal decimal and
 contiguous. The qualified dependency profile pins Unicode normalization fixtures.
+
+The descriptor schema on each side is exact:
+
+| Facet | Source for both presets | PNG target | EXR target |
+| --- | --- | --- | --- |
+| pixels | `Pixels` | `Pixels` | `Pixels` |
+| precision | `Precision` | `Precision` | `Precision` |
+| color | `Color` | `Color` | `Color` |
+| alpha association | `AlphaAssociation` | `AlphaAssociation` | `AlphaAssociation` |
+| channels | `Channels` | `Channels` | `Channels` |
+| data window | `Window` | `Window` | `Window` |
+| display window | `Window` | `Window` | `Window` |
+| pixel aspect | `PixelAspectRational` | `PixelAspectRational` | `PixelAspectBinary32` |
+| compression | `Absent` | `Compression` | `Compression` |
+| metadata | `Metadata` | `Metadata` | `Metadata` |
+| external dependencies | `ExternalDependencies` | `ExternalDependencies` | `ExternalDependencies` |
+
+The following spellings close version 1. `W` and `H` are the process data-window extent;
+`DX/DY/DW/DH` and `SX/SY/SW/SH` are the signed origins and unsigned extents of the process data and
+display windows; `N/D` is the positive reduced process pixel aspect. Substitution emits the tagged
+minimal decimal form, not the placeholder letters. Source descriptors in facet order are exactly:
+
+```text
+height=u:H;packing=id:rgba;sample-type=id:binary32;width=u:W
+component-type=id:binary32
+color-id=id:lin_rec709_scene
+association=id:premultiplied;zero-alpha=id:canonical-zero
+count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
+height=u:DH;origin-x=i:DX;origin-y=i:DY;width=u:DW
+height=u:SH;origin-x=i:SX;origin-y=i:SY;width=u:SW
+denominator=u:D;numerator=u:N
+""
+profile=id:none
+kind=id:none;revision=id:none
+```
+
+The empty line is the `Absent` compression source. `canonical-zero` means exact positive-zero RGB
+whenever alpha is exact zero. The channel descriptor expresses semantic `R,G,B,A` order; EXR's
+physical lexical `A,B,G,R` header order is a file-profile rule and does not reorder this descriptor.
+`profile=id:none` describes optional artist/application metadata; mandatory PNG signaling and EXR
+header/color attributes remain part of their color and output-profile contracts.
+`kind=id:none` means no unresolved output-time dependency, not an absence of evaluation lineage.
+
+PNG target descriptors in the same facet order are exactly:
+
+```text
+height=u:H;packing=id:rgba;sample-type=id:uint8;width=u:W
+component-type=id:uint8
+color-id=id:srgb_rec709_display
+association=id:straight;zero-alpha=id:canonical-zero
+count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
+height=u:H;origin-x=i:0;origin-y=i:0;width=u:W
+height=u:H;origin-x=i:0;origin-y=i:0;width=u:W
+denominator=u:1;numerator=u:1
+method=id:deflate-level-6-filter-none
+profile=id:none
+kind=id:ocio;revision=id:R
+```
+
+The PNG target always describes its implicit zero-origin window using the process data extent,
+including in a report that the preset does not permit. `deflate-level-6-filter-none` names the exact
+level-6, default-strategy, filter-zero policy below. `R` is substituted by exactly 64 lowercase
+hexadecimal digits of the expected OCIO revision.
+
+EXR target descriptors in the same facet order are exactly:
+
+```text
+height=u:H;packing=id:rgba;sample-type=id:binary32;width=u:W
+component-type=id:binary32
+color-id=id:lin_rec709_scene
+association=id:premultiplied;zero-alpha=id:canonical-zero
+count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
+height=u:DH;origin-x=i:DX;origin-y=i:DY;width=u:DW
+height=u:SH;origin-x=i:SX;origin-y=i:SY;width=u:SW
+value=f32:BITS
+method=id:zip
+profile=id:none
+kind=id:none;revision=id:none
+```
+
+`BITS` is substituted by the eight lowercase hexadecimal digits of the rounded binary32 pixel
+aspect. EXR pixel aspect is `Exact` only when the exact rational value of that binary32 equals
+`N/D`; otherwise it is permitted `Approximated`. Descriptor and digest intake is bounded: each
+source or target descriptor is at most 1024 ASCII bytes, a version 1 process identity is exactly
+249 or 257 bytes, and the complete canonical analysis-digest preimage is at most 4 MiB
+(`4194304` bytes). A longer descriptor returns the distinct `DescriptorTooLong` validation result.
+All size arithmetic is checked before allocation or caller-buffer mutation. Digesting streams the
+components and never requires allocating the complete preimage. Its API accepts a validated typed
+process frame and validated typed display identity, never arbitrary caller-provided identity byte
+spans.
+
+Nominal analysis is derived exactly as follows:
+
+| Facet | PNG | EXR |
+| --- | --- | --- |
+| pixels | `Approximated`, `png.display-transform-clamp-quantize` | `Exact` |
+| precision | `Approximated`, `png.float32-to-uint8` | `Exact` |
+| color | `Approximated`, `png.lin-rec709-scene-to-srgb` when the processor is ready | `Exact` |
+| alpha association | `Approximated`, `png.premultiplied-to-straight` | `Exact` |
+| channels | `Exact` | `Exact` |
+| data window | `Exact` iff source equals the PNG target; otherwise `Unsupported`, `png.origin-window-required` | `Exact` iff the inclusive bounds fit signed 32-bit; otherwise `Unsupported`, `window.out-of-range` |
+| display window | `Exact` iff source equals the PNG target; otherwise `Unsupported`, `png.equal-window-required` | same EXR bounds rule as data window |
+| pixel aspect | `Exact` iff `1/1`; otherwise `Unsupported`, `png.square-pixel-required` | `Exact` or permitted `Approximated`, `exr.par-rounded-binary32` |
+| compression | `Exact` | `Exact` |
+| metadata | `Exact` | `Exact` |
+| external dependencies | `ExternalReference`, `png.ocio-external-reference` | `Exact` |
+
+`png.equal-window-required` means specifically that the source display window differs from the PNG
+implicit target `(0,0,W,H)`. Thus equal source data/display windows at a nonzero origin do not
+silently pass.
 
 The process-frame and display-processor identity byte records carry their own leading serialization
 version. An adapter that cannot provide those closed canonical bytes cannot produce an approvable
