@@ -78,6 +78,7 @@ using bloom::host::ProjectSessionCreateStatus;
 using bloom::host::ProjectSessionIdentitySource;
 using bloom::host::ProjectSessionSavepointStatus;
 using bloom::host::PublicationIntentId;
+using bloom::host::SessionPathIntentAbandonStatus;
 using bloom::host::SessionPathIntentAdvanceStatus;
 using bloom::host::SessionPathIntentKind;
 using bloom::host::SessionResultAcceptanceAdvanceStatus;
@@ -168,6 +169,7 @@ void testNewProjectBaselineAndSnapshots(Expectations& expectations,
     expectations.expect(
         state.projectSessionId.isValid() && state.resultAcceptanceGeneration.value() == 1 &&
             state.openIntentGeneration.value() == 1 && state.pathIntentGeneration.value() == 1 &&
+            state.pathIntentKind == SessionPathIntentKind::ExistingPath &&
             !state.newestAcceptedPublicationIntent.isValid(),
         "a new runtime session starts with one identity and three generation ones");
     expectations.expect(state.contentKind == ProjectSessionContentKind::DecodedDocument &&
@@ -269,12 +271,16 @@ void testGenerationCapturesAndSubsetPredicates(Expectations& expectations) {
     const auto plainSave = session.capturePlainSavePathIntent();
     const auto firstOpen = session.admitOpenIntent();
     const auto firstSaveAs = session.advancePathIntentForSaveAs();
-    expectations.expect(resultCapture.isValid() && plainSave.isValid() &&
-                            plainSave.kind() == SessionPathIntentKind::ExistingPath && firstOpen &&
-                            firstSaveAs && firstOpen.capture().generation().value() == 2 &&
-                            firstSaveAs.capture().generation().value() == 2 &&
-                            firstSaveAs.capture().kind() == SessionPathIntentKind::ReplacementPath,
-                        "the first Open and Save As advance their independent generations to two");
+    const auto plainWhileReplacementPending = session.capturePlainSavePathIntent();
+    expectations.expect(
+        resultCapture.isValid() && plainSave.isValid() &&
+            plainSave.kind() == SessionPathIntentKind::ExistingPath && firstOpen && firstSaveAs &&
+            firstOpen.capture().generation().value() == 2 &&
+            firstSaveAs.capture().generation().value() == 2 &&
+            firstSaveAs.capture().kind() == SessionPathIntentKind::ReplacementPath &&
+            !plainWhileReplacementPending.isValid() &&
+            session.stateSnapshot().pathIntentKind == SessionPathIntentKind::ReplacementPath,
+        "the first Open and Save As advance their independent generations to two");
     expectations.expect(session.matchesResultAcceptance(resultCapture) &&
                             session.isDesiredOpenIntent(firstOpen.capture()) &&
                             !session.matchesPathIntent(plainSave) &&
@@ -308,34 +314,63 @@ void testGenerationCapturesAndSubsetPredicates(Expectations& expectations) {
                             !session.matchesPathIntent(otherPath),
                         "equal generation numbers from a different runtime session never match");
 
+    const auto beforeInstalledReplacement = session.stateSnapshot();
     const auto advanced = bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(session);
+    const auto afterInstalledReplacement = session.stateSnapshot();
     expectations.expect(
         advanced == SessionResultAcceptanceAdvanceStatus::Advanced &&
             !session.matchesResultAcceptance(resultCapture) &&
             !session.isDesiredOpenIntent(secondOpen.capture()) &&
-            !session.matchesPathIntent(currentPath),
-        "installed-content acceptance advancement invalidates every older result capture");
+            !session.matchesPathIntent(currentPath) &&
+            session.abandonSaveAsIntent(currentPath) ==
+                SessionPathIntentAbandonStatus::StaleIntent &&
+            afterInstalledReplacement.pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            afterInstalledReplacement.pathIntentGeneration ==
+                beforeInstalledReplacement.pathIntentGeneration &&
+            afterInstalledReplacement.displayPath == beforeInstalledReplacement.displayPath &&
+            afterInstalledReplacement.cleanRevision == beforeInstalledReplacement.cleanRevision &&
+            session.capturePlainSavePathIntent().isValid(),
+        "installed-content replacement cancels pending path authority and invalidates old "
+        "captures");
 }
 
 void testGenerationExhaustionBoundaries(Expectations& expectations) {
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
 
     ProjectSessionIdentitySource acceptanceSource;
-    auto acceptanceSession = newSession(expectations, acceptanceSource);
+    auto acceptanceSession =
+        decodedSessionWithPath(expectations, acceptanceSource, "maximum-acceptance.bloom");
     expectations.expect(
         bloom::host::ProjectSessionTestAccess::setGenerations(acceptanceSession, maximum - 1, 5, 7),
         "the acceptance fixture reaches its penultimate value");
+    expectations.expect(
+        acceptanceSession.acceptSavepoint(
+            acceptanceSession.capturePlainSavePathIntent(), publicationIntent(49),
+            currentRevision(acceptanceSession)) == ProjectSessionSavepointStatus::Accepted,
+        "the acceptance boundary fixture has a current-generation publication frontier");
     const auto acceptanceAdvanced =
         bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(acceptanceSession);
+    const auto afterAcceptanceAdvanced = acceptanceSession.stateSnapshot();
     const auto acceptanceFinal = acceptanceSession.captureResultAcceptance();
+    expectations.expect(
+        acceptanceSession.acceptSavepoint(
+            acceptanceSession.capturePlainSavePathIntent(), publicationIntent(50),
+            currentRevision(acceptanceSession)) == ProjectSessionSavepointStatus::Accepted,
+        "the final acceptance generation can establish its own publication frontier");
+    const auto beforeAcceptanceExhausted = acceptanceSession.stateSnapshot();
     const auto acceptanceExhausted =
         bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(acceptanceSession);
+    const auto afterAcceptanceExhausted = acceptanceSession.stateSnapshot();
     expectations.expect(
         acceptanceAdvanced == SessionResultAcceptanceAdvanceStatus::Advanced &&
+            !afterAcceptanceAdvanced.newestAcceptedPublicationIntent.isValid() &&
             acceptanceFinal.generation().value() == maximum && acceptanceFinal.isValid() &&
             acceptanceExhausted == SessionResultAcceptanceAdvanceStatus::RuntimeIdentityExhausted &&
-            acceptanceSession.captureResultAcceptance() == acceptanceFinal,
-        "result-acceptance generation issues UINT64_MAX once and then remains unchanged");
+            acceptanceSession.captureResultAcceptance() == acceptanceFinal &&
+            beforeAcceptanceExhausted.newestAcceptedPublicationIntent == publicationIntent(50) &&
+            afterAcceptanceExhausted.newestAcceptedPublicationIntent == publicationIntent(50) &&
+            afterAcceptanceExhausted.pathIntentKind == beforeAcceptanceExhausted.pathIntentKind,
+        "result-acceptance advance resets the scoped frontier while exhaustion preserves it");
 
     const auto beforeAcceptanceBlockedOpen = acceptanceSession.stateSnapshot();
     const auto acceptanceBlockedOpen = acceptanceSession.admitOpenIntent();
@@ -373,23 +408,54 @@ void testGenerationExhaustionBoundaries(Expectations& expectations) {
     expectations.expect(
         bloom::host::ProjectSessionTestAccess::setGenerations(pathSession, 1, 4, maximum - 1),
         "the path fixture reaches its penultimate value");
+    expectations.expect(pathSession.acceptSavepoint(pathSession.capturePlainSavePathIntent(),
+                                                    publicationIntent(59),
+                                                    currentRevision(pathSession)) ==
+                            ProjectSessionSavepointStatus::Accepted,
+                        "the path boundary fixture has an existing-path publication frontier");
     const auto finalPath = pathSession.advancePathIntentForSaveAs();
+    const auto afterFinalPathAdvance = pathSession.stateSnapshot();
+    const auto plainWhileFinalReplacementPending = pathSession.capturePlainSavePathIntent();
+    const auto beforeReplacementPathExhaustion = pathSession.stateSnapshot();
+    const auto exhaustedReplacementPath = pathSession.advancePathIntentForSaveAs();
+    const auto afterReplacementPathExhaustion = pathSession.stateSnapshot();
+    const auto replacementPath = ProjectDisplayPath::create("maximum-replacement.bloom");
+    expectations.expect(replacementPath.has_value() && finalPath &&
+                            pathSession.acceptSavepoint(finalPath.capture(), publicationIntent(60),
+                                                        currentRevision(pathSession),
+                                                        replacementPath) ==
+                                ProjectSessionSavepointStatus::Accepted,
+                        "the final replacement generation can install its resolved path");
     const auto plainAtMaximum = pathSession.capturePlainSavePathIntent();
-    const auto beforePathExhaustion = pathSession.stateSnapshot();
-    const auto exhaustedPath = pathSession.advancePathIntentForSaveAs();
-    const auto afterPathExhaustion = pathSession.stateSnapshot();
+    const auto beforeExistingPathExhaustion = pathSession.stateSnapshot();
+    const auto exhaustedExistingPath = pathSession.advancePathIntentForSaveAs();
+    const auto afterExistingPathExhaustion = pathSession.stateSnapshot();
     expectations.expect(
         finalPath && finalPath.capture().generation().value() == maximum &&
             finalPath.capture().kind() == SessionPathIntentKind::ReplacementPath &&
+            afterFinalPathAdvance.pathIntentKind == SessionPathIntentKind::ReplacementPath &&
+            !afterFinalPathAdvance.newestAcceptedPublicationIntent.isValid() &&
+            !plainWhileFinalReplacementPending.isValid() &&
+            exhaustedReplacementPath.status() ==
+                SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted &&
+            afterReplacementPathExhaustion.pathIntentKind ==
+                beforeReplacementPathExhaustion.pathIntentKind &&
+            afterReplacementPathExhaustion.newestAcceptedPublicationIntent ==
+                beforeReplacementPathExhaustion.newestAcceptedPublicationIntent &&
             plainAtMaximum.isValid() &&
             plainAtMaximum.kind() == SessionPathIntentKind::ExistingPath &&
             pathSession.matchesPathIntent(plainAtMaximum) &&
-            exhaustedPath.status() == SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted &&
-            afterPathExhaustion.resultAcceptanceGeneration ==
-                beforePathExhaustion.resultAcceptanceGeneration &&
-            afterPathExhaustion.openIntentGeneration == beforePathExhaustion.openIntentGeneration &&
-            afterPathExhaustion.pathIntentGeneration == beforePathExhaustion.pathIntentGeneration,
-        "Save As exhausts exactly while plain Save can still capture the final path generation");
+            exhaustedExistingPath.status() ==
+                SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted &&
+            afterExistingPathExhaustion.pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            afterExistingPathExhaustion.newestAcceptedPublicationIntent == publicationIntent(60) &&
+            afterExistingPathExhaustion.resultAcceptanceGeneration ==
+                beforeExistingPathExhaustion.resultAcceptanceGeneration &&
+            afterExistingPathExhaustion.openIntentGeneration ==
+                beforeExistingPathExhaustion.openIntentGeneration &&
+            afterExistingPathExhaustion.pathIntentGeneration ==
+                beforeExistingPathExhaustion.pathIntentGeneration,
+        "path exhaustion preserves both replacement/existing phase and the scoped frontier");
 }
 
 void testDirtySavepointBranching(Expectations& expectations,
@@ -529,14 +595,20 @@ void testSavepointPathAuthority(Expectations& expectations) {
         return;
     }
     const auto beforeMissingReplacement = session.stateSnapshot();
+    const auto plainWhileReplacementPending = session.capturePlainSavePathIntent();
     expectations.expect(
-        session.acceptSavepoint(saveAs.capture(), publicationIntent(2), revision) ==
+        beforeMissingReplacement.pathIntentKind == SessionPathIntentKind::ReplacementPath &&
+            !beforeMissingReplacement.newestAcceptedPublicationIntent.isValid() &&
+            !plainWhileReplacementPending.isValid() &&
+            session.acceptSavepoint(saveAs.capture(), publicationIntent(2), revision) ==
                 ProjectSessionSavepointStatus::PathRequired &&
             session.stateSnapshot().newestAcceptedPublicationIntent ==
                 beforeMissingReplacement.newestAcceptedPublicationIntent &&
             session.acceptSavepoint(saveAs.capture(), publicationIntent(2), revision,
                                     replacement) == ProjectSessionSavepointStatus::Accepted &&
             session.stateSnapshot().displayPath == replacement &&
+            session.stateSnapshot().pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            session.capturePlainSavePathIntent().isValid() &&
             session.stateSnapshot().newestAcceptedPublicationIntent == publicationIntent(2),
         "Save As requires a published replacement path and advances only after acceptance");
 }
@@ -574,6 +646,113 @@ void testPublicationCallbackOrdering(Expectations& expectations) {
             afterReverseCallbacks.dirty == false &&
             afterReverseCallbacks.newestAcceptedPublicationIntent == publicationIntent(2),
         "reverse r1/r2 callbacks cannot roll back the path, clean revision, or dirty truth");
+}
+
+void testPublicationFrontierScopesToPathGeneration(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto bThenA = decodedSessionWithPath(expectations, identitySource, "current-a.bloom");
+    const auto bCurrentPath = bThenA.capturePlainSavePathIntent();
+    expectations.expect(
+        bThenA.acceptSavepoint(bCurrentPath, publicationIntent(2), currentRevision(bThenA)) ==
+                ProjectSessionSavepointStatus::Accepted &&
+            bThenA.stateSnapshot().newestAcceptedPublicationIntent == publicationIntent(2),
+        "B may accept on the current path generation while A is still resolving its target");
+
+    const auto aResolved = bThenA.advancePathIntentForSaveAs();
+    const auto aTarget = ProjectDisplayPath::create("resolved-a.bloom");
+    expectations.expect(
+        aResolved && aTarget.has_value() &&
+            !bThenA.stateSnapshot().newestAcceptedPublicationIntent.isValid() &&
+            bThenA.acceptSavepoint(aResolved.capture(), publicationIntent(1),
+                                   currentRevision(bThenA),
+                                   aTarget) == ProjectSessionSavepointStatus::Accepted,
+        "A's lower publication ID is valid after resolving into a newer path generation");
+    const auto afterA = bThenA.stateSnapshot();
+    expectations.expect(
+        afterA.displayPath == aTarget &&
+            afterA.pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            afterA.newestAcceptedPublicationIntent == publicationIntent(1) &&
+            bThenA.acceptSavepoint(bCurrentPath, publicationIntent(3), currentRevision(bThenA)) ==
+                ProjectSessionSavepointStatus::StaleIntent &&
+            bThenA.stateSnapshot().displayPath == afterA.displayPath &&
+            bThenA.stateSnapshot().newestAcceptedPublicationIntent == publicationIntent(1),
+        "an old-generation callback remains stale even when its publication ID is newer");
+
+    auto aThenB = decodedSessionWithPath(expectations, identitySource, "current-b.bloom");
+    const auto delayedB = aThenB.capturePlainSavePathIntent();
+    const auto newerPathA = aThenB.advancePathIntentForSaveAs();
+    const auto newerTargetA = ProjectDisplayPath::create("newer-a.bloom");
+    expectations.expect(
+        newerPathA && newerTargetA.has_value() &&
+            aThenB.acceptSavepoint(delayedB, publicationIntent(2), currentRevision(aThenB)) ==
+                ProjectSessionSavepointStatus::StaleIntent &&
+            aThenB.acceptSavepoint(newerPathA.capture(), publicationIntent(1),
+                                   currentRevision(aThenB),
+                                   newerTargetA) == ProjectSessionSavepointStatus::Accepted &&
+            aThenB.acceptSavepoint(newerPathA.capture(), publicationIntent(3),
+                                   currentRevision(aThenB),
+                                   newerTargetA) == ProjectSessionSavepointStatus::StaleIntent,
+        "advancing A first rejects delayed B and makes A's replacement capture single-use");
+}
+
+void testSaveAsAbandonment(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto pathful = decodedSessionWithPath(expectations, identitySource, "abandon-current.bloom");
+    const auto pending = pathful.advancePathIntentForSaveAs();
+    expectations.expect(pending && !pathful.capturePlainSavePathIntent().isValid(),
+                        "pending replacement authority excludes plain Save capture");
+    const auto beforeAbandon = pathful.stateSnapshot();
+    expectations.expect(pathful.abandonSaveAsIntent(pending.capture()) ==
+                            SessionPathIntentAbandonStatus::Abandoned,
+                        "the still-current replacement intent can be abandoned");
+    const auto afterAbandon = pathful.stateSnapshot();
+    const auto lateTarget = ProjectDisplayPath::create("late-abandoned.bloom");
+    expectations.expect(
+        afterAbandon.pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            afterAbandon.pathIntentGeneration == beforeAbandon.pathIntentGeneration &&
+            afterAbandon.displayPath == beforeAbandon.displayPath &&
+            afterAbandon.cleanRevision == beforeAbandon.cleanRevision &&
+            afterAbandon.newestAcceptedPublicationIntent ==
+                beforeAbandon.newestAcceptedPublicationIntent &&
+            pathful.capturePlainSavePathIntent().isValid() &&
+            pathful.abandonSaveAsIntent(pending.capture()) ==
+                SessionPathIntentAbandonStatus::StaleIntent &&
+            lateTarget.has_value() &&
+            pathful.acceptSavepoint(pending.capture(), publicationIntent(1),
+                                    currentRevision(pathful),
+                                    lateTarget) == ProjectSessionSavepointStatus::StaleIntent,
+        "abandonment changes only phase and makes the replacement callback permanently stale");
+
+    const auto superseded = pathful.advancePathIntentForSaveAs();
+    const auto current = pathful.advancePathIntentForSaveAs();
+    expectations.expect(
+        superseded && current &&
+            pathful.abandonSaveAsIntent(superseded.capture()) ==
+                SessionPathIntentAbandonStatus::StaleIntent &&
+            pathful.stateSnapshot().pathIntentKind == SessionPathIntentKind::ReplacementPath &&
+            pathful.abandonSaveAsIntent(current.capture()) ==
+                SessionPathIntentAbandonStatus::Abandoned,
+        "a newer Save As supersedes pending replacement authority before abandonment");
+
+    auto pathless = newSession(expectations, identitySource);
+    const auto pathlessPending = pathless.advancePathIntentForSaveAs();
+    expectations.expect(
+        pathlessPending &&
+            pathless.abandonSaveAsIntent(pathlessPending.capture()) ==
+                SessionPathIntentAbandonStatus::Abandoned &&
+            pathless.stateSnapshot().pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            !pathless.capturePlainSavePathIntent().isValid(),
+        "abandoning pathless Save As restores Existing phase without fabricating a plain path");
+    const auto replacedPathlessPending = pathless.advancePathIntentForSaveAs();
+    expectations.expect(
+        replacedPathlessPending &&
+            bloom::host::ProjectSessionTestAccess::advanceResultAcceptance(pathless) ==
+                SessionResultAcceptanceAdvanceStatus::Advanced &&
+            pathless.stateSnapshot().pathIntentKind == SessionPathIntentKind::ExistingPath &&
+            !pathless.capturePlainSavePathIntent().isValid() &&
+            pathless.abandonSaveAsIntent(replacedPathlessPending.capture()) ==
+                SessionPathIntentAbandonStatus::StaleIntent,
+        "result replacement cancels pathless replacement authority without fabricating a path");
 }
 
 void testCommandResultsAndNoChange(Expectations& expectations,
@@ -659,7 +838,9 @@ void testPreservedReadOnlyState(Expectations& expectations,
                         "decoded access fails with a typed no-document status");
     expectations.expect(!session.capturePlainSavePathIntent().isValid() &&
                             session.advancePathIntentForSaveAs().status() ==
-                                SessionPathIntentAdvanceStatus::ReadOnly,
+                                SessionPathIntentAdvanceStatus::ReadOnly &&
+                            session.abandonSaveAsIntent({}) ==
+                                SessionPathIntentAbandonStatus::ReadOnly,
                         "preserved content cannot manufacture a native Save or Save As intent");
 
     Transaction blocked("Blocked edit");
@@ -741,13 +922,14 @@ void testMoveAndLifetimeSafety(Expectations& expectations,
                         "the move fixture has history");
     const auto acceptanceCapture = original.captureResultAcceptance();
     const auto openCapture = original.admitOpenIntent().capture();
-    const auto pathCapture = original.advancePathIntentForSaveAs().capture();
+    const auto replacementCapture = original.advancePathIntentForSaveAs().capture();
     const auto movedPath = ProjectDisplayPath::create("moved.bloom");
     expectations.expect(movedPath.has_value() &&
-                            original.acceptSavepoint(pathCapture, publicationIntent(9),
+                            original.acceptSavepoint(replacementCapture, publicationIntent(9),
                                                      currentRevision(original), movedPath) ==
                                 ProjectSessionSavepointStatus::Accepted,
                         "the move fixture owns an accepted publication frontier");
+    const auto pathCapture = original.capturePlainSavePathIntent();
     const auto beforeMove = original.stateSnapshot();
     auto moved = std::move(original);
     expectations.expect(
@@ -773,6 +955,8 @@ void testMoveAndLifetimeSafety(Expectations& expectations,
             original.advancePathIntentForSaveAs()
                     .status() == // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
                 SessionPathIntentAdvanceStatus::InvalidSession &&
+            original.abandonSaveAsIntent(replacementCapture) ==
+                SessionPathIntentAbandonStatus::InvalidSession &&
             !original.matchesResultAcceptance(
                 acceptanceCapture) && // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
             !original.isDesiredOpenIntent(
@@ -807,6 +991,8 @@ int main() {
         testDirtySavepointBranching(expectations, identitySource);
         testSavepointPathAuthority(expectations);
         testPublicationCallbackOrdering(expectations);
+        testPublicationFrontierScopesToPathGeneration(expectations);
+        testSaveAsAbandonment(expectations);
         testCommandResultsAndNoChange(expectations, identitySource);
         testDegradedEditableAuthorization(expectations, identitySource);
         testPreservedReadOnlyState(expectations, identitySource);

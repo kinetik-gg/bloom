@@ -102,6 +102,7 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
       openIntentGeneration_(std::exchange(other.openIntentGeneration_, OpenIntentGeneration{})),
       pathIntentGeneration_(
           std::exchange(other.pathIntentGeneration_, SessionPathIntentGeneration{})),
+      pathIntentKind_(other.pathIntentKind_),
       newestAcceptedPublicationIntent_(
           std::exchange(other.newestAcceptedPublicationIntent_, PublicationIntentId{})),
       contentKind_(other.contentKind_), editability_(other.editability_),
@@ -179,6 +180,7 @@ ProjectSession::createPreservedReadOnly(ProjectSessionIdentitySource& identitySo
 bool ProjectSession::isValid() const noexcept {
     if (!valid_ || !projectSessionId_.isValid() || !resultAcceptanceGeneration_.isValid() ||
         !openIntentGeneration_.isValid() || !pathIntentGeneration_.isValid() ||
+        !SessionPathIntentCapture::isKnownKind(pathIntentKind_) ||
         (!displayPath_.has_value() &&
          contentKind_ == ProjectSessionContentKind::PreservedReadOnly)) {
         return false;
@@ -197,6 +199,7 @@ ProjectSessionStateSnapshot ProjectSession::stateSnapshot() const {
         .resultAcceptanceGeneration = resultAcceptanceGeneration_,
         .openIntentGeneration = openIntentGeneration_,
         .pathIntentGeneration = pathIntentGeneration_,
+        .pathIntentKind = pathIntentKind_,
         .newestAcceptedPublicationIntent = newestAcceptedPublicationIntent_,
         .contentKind = contentKind_,
         .editability = editability_,
@@ -240,7 +243,7 @@ SessionResultAcceptanceCapture ProjectSession::captureResultAcceptance() const n
 SessionPathIntentCapture ProjectSession::capturePlainSavePathIntent() const noexcept {
     const auto resultAcceptance = captureResultAcceptance();
     if (!resultAcceptance.isValid() || contentKind_ != ProjectSessionContentKind::DecodedDocument ||
-        !displayPath_.has_value()) {
+        !displayPath_.has_value() || pathIntentKind_ != SessionPathIntentKind::ExistingPath) {
         return {};
     }
     return SessionPathIntentCapture(resultAcceptance, pathIntentGeneration_,
@@ -272,8 +275,25 @@ SessionPathIntentAdvanceResult ProjectSession::advancePathIntentForSaveAs() noex
             SessionPathIntentAdvanceStatus::RuntimeIdentityExhausted);
     }
     pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(pathIntentGeneration_.value() + 1);
+    pathIntentKind_ = SessionPathIntentKind::ReplacementPath;
+    newestAcceptedPublicationIntent_ = {};
     return SessionPathIntentAdvanceResult(SessionPathIntentCapture(
         captureResultAcceptance(), pathIntentGeneration_, SessionPathIntentKind::ReplacementPath));
+}
+
+SessionPathIntentAbandonStatus
+ProjectSession::abandonSaveAsIntent(const SessionPathIntentCapture intent) noexcept {
+    if (!isValid()) {
+        return SessionPathIntentAbandonStatus::InvalidSession;
+    }
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
+        return SessionPathIntentAbandonStatus::ReadOnly;
+    }
+    if (intent.kind() != SessionPathIntentKind::ReplacementPath || !matchesPathIntent(intent)) {
+        return SessionPathIntentAbandonStatus::StaleIntent;
+    }
+    pathIntentKind_ = SessionPathIntentKind::ExistingPath;
+    return SessionPathIntentAbandonStatus::Abandoned;
 }
 
 bool ProjectSession::matchesResultAcceptance(
@@ -290,7 +310,7 @@ bool ProjectSession::isDesiredOpenIntent(const OpenIntentCapture capture) const 
 bool ProjectSession::matchesPathIntent(const SessionPathIntentCapture capture) const noexcept {
     return isValid() && capture.isValid() &&
            capture.resultAcceptance() == captureResultAcceptance() &&
-           capture.generation() == pathIntentGeneration_;
+           capture.generation() == pathIntentGeneration_ && capture.kind() == pathIntentKind_;
 }
 
 SessionResultAcceptanceAdvanceStatus
@@ -303,6 +323,8 @@ ProjectSession::advanceResultAcceptanceForInstalledReplacement() noexcept {
     }
     resultAcceptanceGeneration_ =
         SessionResultAcceptanceGeneration::fromRaw(resultAcceptanceGeneration_.value() + 1);
+    pathIntentKind_ = SessionPathIntentKind::ExistingPath;
+    newestAcceptedPublicationIntent_ = {};
     return SessionResultAcceptanceAdvanceStatus::Advanced;
 }
 
@@ -390,6 +412,7 @@ ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
 
     if (intent.kind() == SessionPathIntentKind::ReplacementPath) {
         displayPath_ = std::move(publishedPath);
+        pathIntentKind_ = SessionPathIntentKind::ExistingPath;
     }
     cleanRevision_ = publishedRevision;
     newestAcceptedPublicationIntent_ = publicationIntent;

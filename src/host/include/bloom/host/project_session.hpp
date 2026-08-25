@@ -195,6 +195,13 @@ enum class SessionPathIntentAdvanceStatus : std::uint8_t {
     RuntimeIdentityExhausted,
 };
 
+enum class SessionPathIntentAbandonStatus : std::uint8_t {
+    Abandoned,
+    ReadOnly,
+    InvalidSession,
+    StaleIntent,
+};
+
 class [[nodiscard]] SessionPathIntentAdvanceResult final {
   public:
     [[nodiscard]] explicit constexpr operator bool() const noexcept {
@@ -315,6 +322,8 @@ struct ProjectSessionStateSnapshot final {
     SessionResultAcceptanceGeneration resultAcceptanceGeneration;
     OpenIntentGeneration openIntentGeneration;
     SessionPathIntentGeneration pathIntentGeneration;
+    SessionPathIntentKind pathIntentKind = SessionPathIntentKind::ExistingPath;
+    // Scoped to the current result-acceptance/path-intent generation pair.
     PublicationIntentId newestAcceptedPublicationIntent;
     ProjectSessionContentKind contentKind = ProjectSessionContentKind::PreservedReadOnly;
     std::optional<DecodedProjectEditability> editability;
@@ -375,6 +384,8 @@ class ProjectSession final {
     [[nodiscard]] SessionPathIntentCapture capturePlainSavePathIntent() const noexcept;
     [[nodiscard]] OpenIntentAdmissionResult admitOpenIntent() noexcept;
     [[nodiscard]] SessionPathIntentAdvanceResult advancePathIntentForSaveAs() noexcept;
+    [[nodiscard]] SessionPathIntentAbandonStatus
+    abandonSaveAsIntent(SessionPathIntentCapture intent) noexcept;
     [[nodiscard]] bool
     matchesResultAcceptance(SessionResultAcceptanceCapture capture) const noexcept;
     [[nodiscard]] bool isDesiredOpenIntent(OpenIntentCapture capture) const noexcept;
@@ -415,6 +426,7 @@ class ProjectSession final {
         SessionResultAcceptanceGeneration::fromRaw(1);
     OpenIntentGeneration openIntentGeneration_ = OpenIntentGeneration::fromRaw(1);
     SessionPathIntentGeneration pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(1);
+    SessionPathIntentKind pathIntentKind_ = SessionPathIntentKind::ExistingPath;
     PublicationIntentId newestAcceptedPublicationIntent_;
     ProjectSessionContentKind contentKind_ = ProjectSessionContentKind::PreservedReadOnly;
     std::optional<DecodedProjectEditability> editability_;
