@@ -2,6 +2,7 @@
 
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_json_string.hpp>
+#include <bloom/project/unknown_json_number.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -319,6 +320,12 @@ CanonicalJsonWriterResult CanonicalJsonWriter::float64Value(const double value) 
         return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::NonFiniteNumber);
     }
     return writeToken(token.value()->view());
+}
+
+CanonicalJsonWriterResult
+CanonicalJsonWriter::unknownNumberValue(const UnknownJsonNumber& value) noexcept {
+    const auto token = formatUnknownJsonNumber(value);
+    return writeToken(token.view());
 }
 
 CanonicalJsonWriterResult CanonicalJsonWriter::finish() noexcept {

@@ -10,6 +10,8 @@
 
 namespace bloom::project {
 
+class UnknownJsonNumber;
+
 inline constexpr std::size_t kCanonicalJsonMaximumDepth = 128;
 inline constexpr std::size_t kCanonicalJsonMaximumValues = 4'000'000;
 inline constexpr std::size_t kCanonicalJsonMaximumContainerEntries = 1'000'000;
@@ -91,6 +93,10 @@ class CanonicalJsonWriter final {
     // Float64 values use Bloom's typed RFC 8785/ECMAScript-derived spelling. NaN and infinities are
     // rejected without changing the output or writer state.
     [[nodiscard]] CanonicalJsonWriterResult float64Value(double value) noexcept;
+    // Unknown additive members use their closed lossless numeric subset. This deliberately avoids
+    // exposing a raw-token writer that could bypass canonical JSON and owning-schema rules.
+    [[nodiscard]] CanonicalJsonWriterResult
+    unknownNumberValue(const UnknownJsonNumber& value) noexcept;
 
     // Completes the document with exactly one LF. A second call or any later write is invalid.
     [[nodiscard]] CanonicalJsonWriterResult finish() noexcept;

@@ -1,4 +1,5 @@
 #include <bloom/project/canonical_json_writer.hpp>
+#include <bloom/project/unknown_json_number.hpp>
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,7 @@ using bloom::project::CanonicalJsonWriter;
 using bloom::project::CanonicalJsonWriterError;
 using bloom::project::CanonicalJsonWriterLimits;
 using bloom::project::CanonicalJsonWriterResult;
+using bloom::project::parseUnknownJsonNumber;
 
 static_assert(bloom::project::kCanonicalJsonMaximumDepth == 128);
 static_assert(bloom::project::kCanonicalJsonMaximumValues == 4'000'000);
@@ -134,6 +136,52 @@ void testFloat64FailuresAreTransactional(Expectations& expectations) {
                   "a smaller finite Float64 can complete the member");
     expectSuccess(expectations, writer.endObject(), "the Float64 failure object closes");
     expectSuccess(expectations, writer.finish(), "the Float64 failure object finishes");
+}
+
+void testUnknownNumbersUseTheClosedTypedPath(Expectations& expectations) {
+    const auto minimumInteger = parseUnknownJsonNumber("-9223372036854775808");
+    const auto negativeZero = parseUnknownJsonNumber("-0.0");
+    const auto minimumSubnormal = parseUnknownJsonNumber("5e-324");
+    expectations.expect(minimumInteger && negativeZero && minimumSubnormal,
+                        "unknown-number fixtures enter through the validated value type");
+    if (!minimumInteger || !negativeZero || !minimumSubnormal) {
+        return;
+    }
+
+    std::array<char, 128> output{};
+    CanonicalJsonWriter writer(output);
+    expectSuccess(expectations, writer.beginArray(), "the unknown-number array begins");
+    expectSuccess(expectations, writer.unknownNumberValue(*minimumInteger.value()),
+                  "the exact int64 minimum is emitted as a JSON number");
+    expectSuccess(expectations, writer.unknownNumberValue(*negativeZero.value()),
+                  "Float64 signed zero keeps its canonical bits and spelling");
+    expectSuccess(expectations, writer.unknownNumberValue(*minimumSubnormal.value()),
+                  "a canonical Float64 exponent remains a JSON number");
+    expectSuccess(expectations, writer.endArray(), "the unknown-number array ends");
+    expectSuccess(expectations, writer.finish(), "the unknown-number document finishes");
+    constexpr std::string_view expected = "[\n"
+                                          "  -9223372036854775808,\n"
+                                          "  -0.0,\n"
+                                          "  5e-324\n"
+                                          "]\n";
+    expectations.expect(
+        std::string_view(writer.written().data(), writer.written().size()) == expected,
+        "the typed path reproduces canonical numeric tokens without quotes or raw-token intake");
+
+    constexpr char sentinel = '?';
+    std::array<char, 19> limitedOutput{};
+    limitedOutput.fill(sentinel);
+    CanonicalJsonWriter limitedWriter(limitedOutput);
+    const auto failed = limitedWriter.unknownNumberValue(*minimumInteger.value());
+    expectations.expect(
+        !failed && failed.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
+            failed.requiredCapacity() == 20 && limitedWriter.bytesWritten() == 0 &&
+            std::ranges::all_of(limitedOutput, [](const char value) { return value == sentinel; }),
+        "unknown-number capacity failure reports the exact token size and writes nothing");
+    expectSuccess(expectations, limitedWriter.unknownNumberValue(*negativeZero.value()),
+                  "a smaller typed number can follow a transactional capacity failure");
+    expectSuccess(expectations, limitedWriter.finish(),
+                  "the recovered unknown-number writer finishes normally");
 }
 
 void testEmptyAndRootValues(Expectations& expectations) {
@@ -398,5 +446,6 @@ int main() {
     testFixedDepthBoundary(expectations);
     testInvalidLimits(expectations);
     testFloat64FailuresAreTransactional(expectations);
+    testUnknownNumbersUseTheClosedTypedPath(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
