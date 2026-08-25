@@ -35,6 +35,11 @@ using SessionPathIntentGeneration = core::Id<SessionPathIntentGenerationTag>;
 class ProjectSession;
 class ProjectSessionTestAccess;
 
+enum class ProjectSessionContentKind : std::uint8_t {
+    DecodedDocument,
+    PreservedReadOnly,
+};
+
 struct ProjectSessionIdentitySourceSnapshot final {
     ProjectSessionId lastIssuedSessionId;
     bool identityExhausted = false;
@@ -99,8 +104,15 @@ class OpenIntentCapture final {
         return resultAcceptance_;
     }
     [[nodiscard]] constexpr OpenIntentGeneration generation() const noexcept { return generation_; }
+    [[nodiscard]] constexpr ProjectSessionContentKind contentKind() const noexcept {
+        return contentKind_;
+    }
+    [[nodiscard]] constexpr std::optional<document::Revision> decodedRevision() const noexcept {
+        return decodedRevision_;
+    }
     [[nodiscard]] constexpr bool isValid() const noexcept {
-        return resultAcceptance_.isValid() && generation_.isValid();
+        return resultAcceptance_.isValid() && generation_.isValid() &&
+               hasValidContentBinding(contentKind_, decodedRevision_);
     }
 
     friend constexpr bool operator==(const OpenIntentCapture&,
@@ -110,11 +122,28 @@ class OpenIntentCapture final {
     friend class ProjectSession;
 
     constexpr OpenIntentCapture(const SessionResultAcceptanceCapture resultAcceptance,
-                                const OpenIntentGeneration generation) noexcept
-        : resultAcceptance_(resultAcceptance), generation_(generation) {}
+                                const OpenIntentGeneration generation,
+                                const ProjectSessionContentKind contentKind,
+                                const std::optional<document::Revision> decodedRevision) noexcept
+        : resultAcceptance_(resultAcceptance), generation_(generation), contentKind_(contentKind),
+          decodedRevision_(decodedRevision) {}
+
+    [[nodiscard]] static constexpr bool
+    hasValidContentBinding(const ProjectSessionContentKind contentKind,
+                           const std::optional<document::Revision> decodedRevision) noexcept {
+        switch (contentKind) {
+        case ProjectSessionContentKind::DecodedDocument:
+            return decodedRevision.has_value();
+        case ProjectSessionContentKind::PreservedReadOnly:
+            return !decodedRevision.has_value();
+        }
+        return false;
+    }
 
     SessionResultAcceptanceCapture resultAcceptance_;
     OpenIntentGeneration generation_;
+    ProjectSessionContentKind contentKind_ = ProjectSessionContentKind::PreservedReadOnly;
+    std::optional<document::Revision> decodedRevision_;
 };
 
 enum class SessionPathIntentKind : std::uint8_t {
@@ -230,11 +259,6 @@ enum class SessionResultAcceptanceAdvanceStatus : std::uint8_t {
     Advanced,
     InvalidSession,
     RuntimeIdentityExhausted,
-};
-
-enum class ProjectSessionContentKind : std::uint8_t {
-    DecodedDocument,
-    PreservedReadOnly,
 };
 
 enum class DecodedProjectEditability : std::uint8_t {

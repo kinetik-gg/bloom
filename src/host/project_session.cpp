@@ -259,8 +259,12 @@ OpenIntentAdmissionResult ProjectSession::admitOpenIntent() noexcept {
         return OpenIntentAdmissionResult(OpenIntentAdmissionStatus::RuntimeIdentityExhausted);
     }
     openIntentGeneration_ = OpenIntentGeneration::fromRaw(openIntentGeneration_.value() + 1);
-    return OpenIntentAdmissionResult(
-        OpenIntentCapture(captureResultAcceptance(), openIntentGeneration_));
+    const auto decodedRevision =
+        contentKind_ == ProjectSessionContentKind::DecodedDocument
+            ? std::optional<document::Revision>{commandStack_->trackedRevision()}
+            : std::nullopt;
+    return OpenIntentAdmissionResult(OpenIntentCapture(
+        captureResultAcceptance(), openIntentGeneration_, contentKind_, decodedRevision));
 }
 
 SessionPathIntentAdvanceResult ProjectSession::advancePathIntentForSaveAs() noexcept {
@@ -302,9 +306,15 @@ bool ProjectSession::matchesResultAcceptance(
 }
 
 bool ProjectSession::isDesiredOpenIntent(const OpenIntentCapture capture) const noexcept {
-    return isValid() && capture.isValid() &&
-           capture.resultAcceptance() == captureResultAcceptance() &&
-           capture.generation() == openIntentGeneration_;
+    if (!isValid() || !capture.isValid() ||
+        capture.resultAcceptance() != captureResultAcceptance() ||
+        capture.generation() != openIntentGeneration_ || capture.contentKind() != contentKind_) {
+        return false;
+    }
+    if (contentKind_ == ProjectSessionContentKind::PreservedReadOnly) {
+        return true;
+    }
+    return capture.decodedRevision() == commandStack_->trackedRevision();
 }
 
 bool ProjectSession::matchesPathIntent(const SessionPathIntentCapture capture) const noexcept {
