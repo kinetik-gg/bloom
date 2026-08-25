@@ -14,6 +14,7 @@ target_sources(
         project_io_memory_resource.cpp
         strict_json_preflight.cpp
         strict_json_preflight.hpp
+        unknown_json_number.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -26,6 +27,7 @@ target_sources(
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
+            include/bloom/project/unknown_json_number.hpp
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
@@ -106,6 +108,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.canonical_decimal
         COMMAND bloom_project_canonical_decimal_test
+        LABELS unit project persistence
+    )
+
+    add_executable(bloom_project_unknown_json_number_test tests/unknown_json_number_tests.cpp)
+    target_link_libraries(bloom_project_unknown_json_number_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_unknown_json_number_test)
+    bloom_add_test(
+        NAME bloom.project.unknown_json_number
+        COMMAND bloom_project_unknown_json_number_test
         LABELS unit project persistence
     )
 
