@@ -455,11 +455,10 @@ void testCompositionSettings(ExpectationContext& expectations) {
         return;
     }
     const auto& customValue = custom.value();
-    expectations.expect(
-        customValue.width() == 3'840 && customValue.height() == 2'160 &&
-            customValue.pixelAspect() == *widescreenPixels &&
-            customValue.frameRate() == *cinemaRate,
-        "custom composition format preserves normalized durable settings");
+    expectations.expect(customValue.width() == 3'840 && customValue.height() == 2'160 &&
+                            customValue.pixelAspect() == *widescreenPixels &&
+                            customValue.frameRate() == *cinemaRate,
+                        "custom composition format preserves normalized durable settings");
     expectations.expect(!CompositionFormat::create(0, 1).has_value() &&
                             !CompositionFormat::create(1, 0).has_value(),
                         "zero composition extents are rejected");

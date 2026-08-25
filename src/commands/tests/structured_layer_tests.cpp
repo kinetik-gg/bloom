@@ -223,20 +223,27 @@ void testCompositionFormatCommand(TestContext& test) {
     CommandStack stack(document);
     const auto original = document.snapshot();
     const auto frameRate = document::FrameRate::create(24'000, 1'001);
-    requireFixture(frameRate.has_value(), "custom frame rate fixture must be valid");
+    if (!frameRate.has_value()) {
+        test.expect(false, "custom frame rate fixture must be valid");
+        return;
+    }
     const auto format = document::CompositionFormat::create(
-        3'840, 2'160, core::PixelAspectRatio::square(), *frameRate);
-    requireFixture(format.has_value(), "custom format fixture must be valid");
+        3'840, 2'160, core::PixelAspectRatio::square(), frameRate.value());
+    if (!format.has_value()) {
+        test.expect(false, "custom format fixture must be valid");
+        return;
+    }
+    const auto& formatValue = format.value();
 
     Transaction change("Change composition format", original.revision());
-    change.emplace<SetCompositionFormat>(kCompositionId, *format);
+    change.emplace<SetCompositionFormat>(kCompositionId, formatValue);
     test.expect(stack.execute(std::move(change)).changed() &&
-                    composition(document.snapshot()).format() == *format,
+                    composition(document.snapshot()).format() == formatValue,
                 "composition format command should publish exact render settings");
     test.expect(stack.undo().changed() &&
                     composition(document.snapshot()).format() == composition(original).format(),
                 "composition format command should undo exactly");
-    test.expect(stack.redo().changed() && composition(document.snapshot()).format() == *format,
+    test.expect(stack.redo().changed() && composition(document.snapshot()).format() == formatValue,
                 "composition format command should redo exactly");
 }
 

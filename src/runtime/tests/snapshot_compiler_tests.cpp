@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -77,6 +78,14 @@ void require(const bool condition, const std::string_view message) {
     if (!condition) {
         throw std::logic_error(std::string(message));
     }
+}
+
+template <typename Value>
+[[nodiscard]] Value requireValue(std::optional<Value> value, const std::string_view message) {
+    if (!value.has_value()) {
+        throw std::logic_error(std::string(message));
+    }
+    return *value;
 }
 
 struct ProjectOptions final {
@@ -247,7 +256,7 @@ compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
         std::optional<runtime::SnapshotParameterOverride> parameterOverride = std::nullopt) {
     document::Document document(std::move(project));
     runtime::SnapshotCompiler compiler(registry);
-    return compiler.compile({document.snapshot(), kCompositionId, std::move(parameterOverride)},
+    return compiler.compile({document.snapshot(), kCompositionId, parameterOverride},
                             runtime::CancellationToken{});
 }
 
@@ -281,18 +290,20 @@ void testRegistryMustBeFrozen(Expectations& expectations) {
 }
 
 void testDeterministicTypedPlan(Expectations& expectations) {
-    const auto pixelAspect = core::PixelAspectRatio::create(4, 3);
-    const auto frameRate = document::FrameRate::create(30000, 1001);
-    require(pixelAspect.has_value() && frameRate.has_value(), "format fixture must be valid");
-    const auto format = document::CompositionFormat::create(2048, 858, *pixelAspect, *frameRate);
-    require(format.has_value(), "non-square project format must be valid");
+    const auto pixelAspect =
+        requireValue(core::PixelAspectRatio::create(4, 3), "pixel-aspect fixture must be valid");
+    const auto frameRate =
+        requireValue(document::FrameRate::create(30000, 1001), "frame-rate fixture must be valid");
+    const auto format =
+        requireValue(document::CompositionFormat::create(2048, 858, pixelAspect, frameRate),
+                     "non-square project format must be valid");
 
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
     registry.freeze();
-    const auto first = compile(makeProject({.format = *format}), registry);
+    const auto first = compile(makeProject({.format = format}), registry);
     const auto second =
-        compile(makeProject({.reverseInsertion = true, .format = *format}), registry);
+        compile(makeProject({.reverseInsertion = true, .format = format}), registry);
 
     expectations.expect(first.status == runtime::SnapshotCompileStatus::Compiled && first.plan,
                         "supported reachable graph compiles");
@@ -306,7 +317,7 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     expectations.expect(first.plan->sourceRevision() == document::Revision{} &&
                             first.plan->projectId() == kProjectId &&
                             first.plan->compositionId() == kCompositionId &&
-                            first.plan->format() == *format &&
+                            first.plan->format() == format &&
                             first.plan->planSemanticsVersion() ==
                                 runtime::kCompiledCompositionPlanSemanticsVersion &&
                             first.plan->animationSamplingSemanticsVersion() ==
@@ -363,14 +374,15 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                             "one-solid stack dependency is exact and topologically prior");
     }
 
-    document::Document revisedDocument(makeProject({.format = *format}));
+    document::Document revisedDocument(makeProject({.format = format}));
     const auto base = revisedDocument.snapshot();
     auto publication = revisedDocument.commit(base.revision(), revisedDocument.draft(base));
-    require(publication.committed() && publication.snapshot.has_value(),
-            "revision fixture must publish");
+    require(publication.committed(), "revision fixture must publish");
+    const auto publicationSnapshot =
+        requireValue(publication.snapshot, "revision fixture must publish a snapshot");
     runtime::SnapshotCompiler compiler(registry);
     const auto revised =
-        compiler.compile({*publication.snapshot, kCompositionId}, runtime::CancellationToken{});
+        compiler.compile({publicationSnapshot, kCompositionId}, runtime::CancellationToken{});
     expectations.expect(revised.plan &&
                             revised.plan->sourceRevision() == document::Revision::fromRaw(1),
                         "compiler carries the exact published source revision");
@@ -552,9 +564,9 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
     auto animated = makeProject(singleLayerOptions());
     auto* animatedComposition = animated.findComposition(kCompositionId);
     require(animatedComposition != nullptr, "animation fixture composition must exist");
-    const auto animatedFormat = document::CompositionFormat::create(4, 2);
-    require(animatedFormat.has_value(), "animation evaluation format must be valid");
-    animatedComposition->setFormat(*animatedFormat);
+    const auto animatedFormat = requireValue(document::CompositionFormat::create(4, 2),
+                                             "animation evaluation format must be valid");
+    animatedComposition->setFormat(animatedFormat);
     auto* parameters = &animatedComposition->parameters();
     constexpr auto curveId = document::AnimationCurveId::fromRaw(100);
     constexpr auto positionCurveId = document::AnimationCurveId::fromRaw(103);
@@ -612,12 +624,12 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                 result.plan->vec2Curves().front().keyframes.size() == 2,
             "compiled curve tables and parameter references preserve canonical typed identity");
 
-        const auto halfway = core::RationalTime::create(1, 2);
-        require(halfway.has_value(), "animation evaluation time must be valid");
+        const auto halfway = requireValue(core::RationalTime::create(1, 2),
+                                          "animation evaluation time must be valid");
         const runtime::CpuCompositionEvaluator evaluator;
         const auto evaluated =
             evaluator.evaluate(result.plan,
-                               {.time = *halfway,
+                               {.time = halfway,
                                 .output = result.plan->output(),
                                 .resolution = runtime::CompositionFormatResolution{},
                                 .quality = runtime::EvaluationQuality::Reference,

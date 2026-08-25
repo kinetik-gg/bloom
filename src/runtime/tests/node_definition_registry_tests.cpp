@@ -197,11 +197,17 @@ void testLargeFrozenRegistryLookup(Expectations& expectations) {
 
 } // namespace
 
-int main() {
+int main() try {
     Expectations expectations;
     testValidationAndDuplicates(expectations);
     testFreezeAndBuiltIns(expectations);
     testStructuralLoweringsRequireCanonicalKeys(expectations);
     testLargeFrozenRegistryLookup(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+} catch (const std::exception& error) {
+    std::cerr << "Unexpected test exception: " << error.what() << '\n';
+    return EXIT_FAILURE;
+} catch (...) {
+    std::cerr << "Unexpected non-standard test exception\n";
+    return EXIT_FAILURE;
 }
