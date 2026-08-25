@@ -13,11 +13,15 @@ add_library(bloom_color STATIC)
 
 target_sources(
     bloom_color
-    PRIVATE ocio_content_revision.cpp
+    PRIVATE
+        ocio_content_revision.cpp
+        ocio_loose_content_revision.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
-        FILES include/bloom/color/ocio_content_revision.hpp
+        FILES
+            include/bloom/color/ocio_content_revision.hpp
+            include/bloom/color/ocio_loose_content_revision.hpp
 )
 
 target_compile_features(bloom_color PUBLIC cxx_std_20)
@@ -35,6 +39,19 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.color.ocio-content-revision
         COMMAND bloom_color_ocio_content_revision_test
+        LABELS unit color identity
+    )
+
+    add_executable(
+        bloom_color_ocio_loose_content_revision_test
+        tests/ocio_loose_content_revision_tests.cpp
+    )
+    target_link_libraries(bloom_color_ocio_loose_content_revision_test PRIVATE bloom_color)
+    bloom_enable_warnings(bloom_color_ocio_loose_content_revision_test)
+    bloom_add_test(
+        NAME bloom.color.ocio-loose-content-revision
+        COMMAND bloom_color_ocio_loose_content_revision_test
+        TIMEOUT 120
         LABELS unit color identity
     )
 endif()
