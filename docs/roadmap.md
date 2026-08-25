@@ -57,7 +57,8 @@ Bloom currently has:
 - a portable, allocation-free process-pixel digest and Process-Frame Semantic Identity version 1
   codec whose canonical bytes exclude execution-provider provenance
 - a cancellable frame-bound semantic-identity preparer plus preset-specific immutable PNG/EXR
-  preservation reports and stable OutputAnalysis digest golden vectors
+  preservation reports, stable OutputAnalysis digest golden vectors, preset-bound analysis
+  products, and a module-private Output Semantic Identity version 1 streaming serializer/preparer
 
 The local Batch 3 checkpoint is implemented and has been launched. Add Solid remains synchronized
 through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
@@ -358,12 +359,13 @@ Parallel implementation tracks:
 
 Implementation status: canonical object-ID, allocator, signed-integer, JSON-`uint32`, normalized
 rational, positive-ratio, strict padded Base64, UTF-8 JSON-string, and bounded canonical-layout
-primitives are implemented with adversarial tests. Canonical manifest encoding, its Draft 2020-12
-schema artifact, and manifest requirement shape/order and exact project coverage validation are
-also implemented. The complete writable document `1.0` Draft 2020-12 schema artifact, strict
-artifact checker, exact canonical Float64 codec, finite known-field Float64 normalization, and the
-lossless editable unknown-number subset are implemented. DOM integration, the document writer,
-instance validation, and golden document fixtures remain pending.
+primitives with shared exact count/write state are implemented with adversarial tests. Canonical
+manifest encoding, its Draft 2020-12 schema artifact, and manifest requirement shape/order and
+exact project coverage validation are also implemented. The complete writable document `1.0`
+Draft 2020-12 schema artifact, strict artifact checker, exact canonical Float64 codec, finite
+known-field Float64 normalization, and the lossless editable unknown-number subset are implemented.
+DOM integration, the document writer, instance validation, and golden document fixtures remain
+pending.
 
 - implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema
   dialect without reopening their wire semantics
@@ -493,8 +495,9 @@ PNG/flat-EXR publication contracts are accepted implementation contracts in
 [`architecture/frame-output.md`](architecture/frame-output.md). Dependency implementations and
 qualification remain pending. The portable Process Pixel Stream and Process-Frame Semantic Identity
 version 1 codecs, owning preparer, preset-specific preservation analyzer/report, analysis digest,
-and golden vectors are implemented; preset conversion, file adapters, and semantic verification
-remain pending.
+preset-bound analysis products, the module-private Output Semantic Identity version 1 streaming
+serializer/preparer, and golden vectors are implemented; preset conversion, production
+verifier-product issuance, file adapters, and semantic verification remain pending.
 
 Implement:
 
