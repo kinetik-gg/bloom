@@ -19,10 +19,13 @@ identity, resource, and qualification rules below are frozen; production compone
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
 Implementation status: the two exact Draft 2020-12 schema artifacts and an offline checker for
-checked-in synthetic contract fixtures are implemented. That checker is deliberately not a
-production lock or prefix validator: reviewed Unicode 15.1 bootstrap/collision data, complete
-prefix filesystem inventory with no-follow/hardlink/link-chain evidence, and a trusted qualified
-identity capability remain pending with production intake.
+checked-in synthetic contract fixtures are implemented. The dependency-only superbuild root
+exists with its first recipe: yyjson 0.12.0 builds offline from a digest-verified archive into a
+staging prefix with library-only feature minimization, and its acquisition provenance and license
+records are reviewed in `dependencies/licenses/yyjson/`. No prefix is qualified: the production
+lock, the production lock/prefix validator, reviewed Unicode 15.1 bootstrap/collision data,
+complete prefix filesystem inventory with no-follow/hardlink/link-chain evidence, a trusted
+qualified identity capability, and qualified-mode CMake consumption remain pending.
 
 ## Repository Shape
 
