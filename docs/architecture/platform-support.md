@@ -2,6 +2,12 @@
 
 Status: working
 
+Implementation status: the portable staged-artifact interface has a tested Linux foundation with
+checked writer close, no-follow exact-stage reopen, bounded verifier reads, explicit acceptance or
+rejection, and publication blocked until acceptance. Non-Linux providers currently fail explicitly
+as unsupported. Format-specific semantic validators, cancellation/progress integration, macOS and
+Windows providers, and three-platform parity qualification remain pending.
+
 Updated: 2026-08-25
 
 ## Objective

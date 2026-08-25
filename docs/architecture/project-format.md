@@ -2,9 +2,12 @@
 
 Status: accepted
 
-Implementation status: foundational I/O memory accounting, canonical integer/rational and Base64
-codecs, durable allocator high-water state, and opaque extension envelopes are implemented. JSON,
-ZIP, migration, unknown-member overlay, and atomic filesystem publication remain pending.
+Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
+Base64, UTF-8 string, and JSON-layout primitives, canonical manifest encoding and schema checks,
+manifest requirement validation, durable allocator high-water state, opaque extension envelopes,
+and the Linux staged-artifact close/reopen verification foundation are implemented. Complete JSON
+parsing/document encoding, the document schema, ZIP, migration, unknown-member overlay,
+format-specific semantic verification, and cross-platform publication parity remain pending.
 
 Updated: 2026-08-25
 

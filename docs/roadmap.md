@@ -332,10 +332,14 @@ contracts needed by deterministic project I/O.
 
 Contract status: ADRs 0015, 0018, and 0019 accept the container, project-session intent, and
 offline-superbuild/lock/qualified-prefix mechanism. Foundational I/O memory, integer/rational and
-Base64 codecs, durable allocator/extension state, publication ordering, and synchronous project
-session ownership are implemented. JSON/ZIP I/O, unknown-member overlay, filesystem publication,
-async session intent, color identity, and all concrete dependency profiles remain pending; no
-dependency is qualified merely because the intake mechanism is accepted. See
+Base64 codecs, canonical JSON strings/layout, canonical manifest encoding/schema checks, manifest
+requirement coverage, durable allocator/extension state, publication ordering, budget-enforced PMR
+allocation, a Linux staged-artifact foundation with mandatory close/reopen verification, standalone
+color-setting values/content revisions, and synchronous project-session ownership are implemented.
+Complete document JSON/ZIP I/O, unknown-member overlay, format-specific semantic verification,
+cross-platform filesystem publication, async session intent,
+Project-owned color identity, the qualified built-in asset, and all concrete dependency profiles
+remain pending; no dependency is qualified merely because the intake mechanism is accepted. See
 [`architecture/project-format.md`](architecture/project-format.md),
 [`architecture/project-session.md`](architecture/project-session.md), and
 [`architecture/dependency-intake.md`](architecture/dependency-intake.md).
@@ -345,8 +349,11 @@ Parallel implementation tracks:
 ### 5A — Format Schema, Codec Surface, And Fixtures
 
 Implementation status: canonical object-ID, allocator, signed-integer, JSON-`uint32`, normalized
-rational, positive-ratio, and strict padded Base64 codecs are implemented with adversarial tests.
-Float64, JSON strings/DOM, complete schemas, and golden document fixtures remain pending.
+rational, positive-ratio, strict padded Base64, UTF-8 JSON-string, and bounded canonical-layout
+primitives are implemented with adversarial tests. Canonical manifest encoding, its Draft 2020-12
+schema artifact, and manifest requirement shape/order and exact project coverage validation are
+also implemented. Float64, parsing/DOM, the document schema and writer, and golden document fixtures
+remain pending.
 
 - implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema
   dialect without reopening their wire semantics
@@ -368,8 +375,12 @@ are implemented and preserved through document snapshot, draft, commit, removal,
 
 ### 5C — Platform And Dependency Foundation
 
-Implementation status: the bounded application `PublicationCoordinator` is implemented. Platform
-preflight/staging/publication and concrete dependency profiles remain pending.
+Implementation status: the bounded application `PublicationCoordinator` and a tested Linux
+preflight/staging/atomic-publication foundation are implemented. The platform lease now requires a
+checked writer close, reopens the exact stage no-follow, exposes bounded verification reads, and
+blocks publication until explicit verifier acceptance. Format-specific verifiers,
+cancellation/progress hooks, macOS and Windows providers, parity fixtures, safe lifetime-record
+pruning integration, and concrete dependency profiles remain pending.
 
 - pin yyjson, libzip, zlib, and hashes; keep them private/SYSTEM and record licenses/SBOM metadata
 - add a narrow staged-file/atomic-publication interface with POSIX, macOS, and Windows behavior and
@@ -378,6 +389,12 @@ preflight/staging/publication and concrete dependency profiles remain pending.
   lowest-unresolved tombstone pruning, and shared ordering across Project I/O and frame output
 
 ### 5D — Durable Color Identity And Built-In Asset
+
+Implementation status: the standalone `ColorSettings`/`OcioConfigReference` v1 value model,
+locator/context validation, and versioned built-in/archive and external-loose revision hashing are
+implemented. No placeholder digest is manufactured. Attaching the values to `Project`, creating
+new-project defaults, and snapshot preservation wait for the qualified Bloom Neutral asset/profile
+so those changes can land without a false identity.
 
 - add project-level `ColorSettings` and `OcioConfigReference` to durable document state, with new
   projects fixed to `lin_rec709_scene` and `bloom://ocio/neutral-v1/config.ocio`

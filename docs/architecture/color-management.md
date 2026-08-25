@@ -2,7 +2,10 @@
 
 Status: accepted
 
-Implementation status: pending
+Implementation status: standalone version 1 durable value validation and domain-separated
+built-in/archive and external-loose content revision primitives are implemented. Project ownership,
+the qualified Bloom Neutral asset/profile, resolution, OCIO integration, processing, and
+cross-platform qualification remain pending.
 
 Updated: 2026-08-25
 

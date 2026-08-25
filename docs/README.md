@@ -47,13 +47,17 @@ provide research or rationale, but they are not binding until adopted here.
   one-active/one-newest preview-request gate are implemented. The 16 ms pointer cadence, timeline
   key projection, and direct manipulation remain active work.
 - Persistence, project-session, color-management, frame-output, and dependency-intake contracts now
-  define Batches 5–7. Initial persistence foundations now include bounded I/O memory, canonical
-  decimal and Base64 codecs, durable allocator high-water state, opaque extension records,
-  application-wide publication ordering, and synchronous Qt-free project-session ownership. JSON,
-  ZIP, platform publication, and async Open/Save remain pending. Color and output are accepted
-  implementation contracts, including immutable Bloom Neutral v1 as the new-project OCIO default;
-  their adapters and qualified dependency profiles remain pending implementation. ADR 0019 accepts
-  the dependency mechanism, while concrete prefixes and profiles remain pending qualification.
+  define Batches 5–7. Initial persistence foundations now include budget-enforced I/O allocation,
+  strict text/decimal/Base64 primitives, bounded canonical JSON layout writing, canonical manifest
+  encoding and schema checks, manifest dependency validation, durable allocator and extension
+  state, application-wide publication ordering, a Linux staged-artifact foundation with mandatory
+  close/reopen verification, and synchronous Qt-free project-session ownership. Complete JSON
+  parsing/document encoding, the document schema, ZIP, format-specific semantic verification,
+  non-Linux publication, and async Open/Save remain pending. Standalone durable color-setting
+  values and versioned OCIO content-revision primitives are implemented without inventing a default
+  digest; Project ownership waits for the qualified Bloom Neutral v1 asset and profile. ADR 0019
+  accepts the dependency mechanism, while concrete prefixes and profiles remain pending
+  qualification.
 - Vulkan/MoltenVK remains a working GPU direction until its per-operation parity and lifecycle spike
   passes on Linux, macOS, and Windows.
 
