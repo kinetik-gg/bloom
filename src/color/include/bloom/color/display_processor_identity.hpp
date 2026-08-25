@@ -295,7 +295,11 @@ class [[nodiscard]] DisplayProcessorIdentityV1AdoptionResult final {
     [[nodiscard]] bool identityWasTransferred() const noexcept { return identityTransferred_; }
     [[nodiscard]] explicit operator bool() const noexcept { return hasIdentity(); }
     [[nodiscard]] const DisplayProcessorIdentityV1* identity() const& noexcept {
-        return hasIdentity() ? &*identity_ : nullptr;
+        if (!identity_.has_value()) {
+            return nullptr;
+        }
+        const auto* const identity = identity_.operator->();
+        return identity->hasValue() ? identity : nullptr;
     }
     [[nodiscard]] const DisplayProcessorIdentityV1* identity() const&& = delete;
     // Error and offset describe only wasRejected(); transferred results report Error::None.
