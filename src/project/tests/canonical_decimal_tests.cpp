@@ -1,5 +1,7 @@
 #include <bloom/project/canonical_decimal.hpp>
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -52,6 +54,8 @@ static_assert(!ExposesRvalueResultPointer<std::uint64_t>);
 static_assert(!ExposesRvalueResultPointer<bloom::core::RationalTime>);
 static_assert(!ExposesRvalueTextView<bloom::project::CanonicalDecimalText>);
 static_assert(!ExposesRvalueTextData<bloom::project::CanonicalDecimalText>);
+static_assert(!ExposesRvalueTextView<bloom::project::CanonicalFloat64Text>);
+static_assert(!ExposesRvalueTextData<bloom::project::CanonicalFloat64Text>);
 
 void testObjectIdsAndHighWater(Expectations& expectations) {
     const auto one = bloom::project::parseCanonicalObjectId("1");
@@ -232,6 +236,71 @@ void testFormattingAndRoundTrips(Expectations& expectations) {
     }
 }
 
+void testCanonicalFloat64(Expectations& expectations) {
+    struct Fixture final {
+        std::uint64_t bits;
+        std::string_view text;
+    };
+    constexpr Fixture fixtures[] = {
+        {0x0000000000000000ULL, "0.0"},
+        {0x8000000000000000ULL, "-0.0"},
+        {0x0000000000000001ULL, "5e-324"},
+        {0x8000000000000001ULL, "-5e-324"},
+        {0x7fefffffffffffffULL, "1.7976931348623157e+308"},
+        {0xffefffffffffffffULL, "-1.7976931348623157e+308"},
+        {0x4340000000000000ULL, "9007199254740992.0"},
+        {0xc340000000000000ULL, "-9007199254740992.0"},
+        {0x4430000000000000ULL, "295147905179352830000.0"},
+        {0x44b52d02c7e14af5ULL, "9.999999999999997e+22"},
+        {0x44b52d02c7e14af6ULL, "1e+23"},
+        {0x44b52d02c7e14af7ULL, "1.0000000000000001e+23"},
+        {0x444b1ae4d6e2ef4eULL, "999999999999999700000.0"},
+        {0x444b1ae4d6e2ef4fULL, "999999999999999900000.0"},
+        {0x444b1ae4d6e2ef50ULL, "1e+21"},
+        {0x3eb0c6f7a0b5ed8cULL, "9.999999999999997e-7"},
+        {0x3eb0c6f7a0b5ed8dULL, "0.000001"},
+        {0x41b3de4355555553ULL, "333333333.3333332"},
+        {0x41b3de4355555554ULL, "333333333.33333325"},
+        {0x41b3de4355555555ULL, "333333333.3333333"},
+        {0x41b3de4355555556ULL, "333333333.3333334"},
+        {0x41b3de4355555557ULL, "333333333.33333343"},
+        {0xbecbf647612f3696ULL, "-0.0000033333333333333333"},
+        {0x43143ff3c1cb0959ULL, "1424953923781206.2"},
+    };
+
+    for (const auto& fixture : fixtures) {
+        const auto value = std::bit_cast<double>(fixture.bits);
+        const auto formatted = bloom::project::formatCanonicalFloat64(value);
+        expectations.expect(formatted && formatted.value()->view() == fixture.text,
+                            "Float64 formatting matches the frozen binary64 golden");
+
+        const auto parsed = bloom::project::parseCanonicalFloat64(fixture.text);
+        expectations.expect(parsed && std::bit_cast<std::uint64_t>(*parsed.value()) == fixture.bits,
+                            "canonical Float64 text preserves its exact binary64 bits");
+    }
+
+    for (const std::string_view noncanonical :
+         {"0", "-0", "1", "1.", ".1", "+1.0", "01.0", "1.00", "1e-6", "1E+21", "1e21", "1.0e+21",
+          "1e+021", " 1.0", "1.0 "}) {
+        const auto parsed = bloom::project::parseCanonicalFloat64(noncanonical);
+        expectations.expect(!parsed &&
+                                (parsed.error() == CanonicalDecimalError::InvalidLexicalForm ||
+                                 parsed.error() == CanonicalDecimalError::NonCanonical),
+                            "canonical Float64 parsing rejects alternate JSON spellings");
+    }
+
+    expectFailure(expectations, bloom::project::parseCanonicalFloat64("1e+9999"),
+                  CanonicalDecimalError::OutOfRange, CanonicalDecimalField::Value,
+                  "Float64 parsing rejects overflow");
+    const auto infinity =
+        bloom::project::formatCanonicalFloat64(std::numeric_limits<double>::infinity());
+    const auto nan =
+        bloom::project::formatCanonicalFloat64(std::numeric_limits<double>::quiet_NaN());
+    expectations.expect(!infinity && infinity.error() == CanonicalDecimalError::NonFinite && !nan &&
+                            nan.error() == CanonicalDecimalError::NonFinite,
+                        "Float64 formatting rejects infinity and NaN");
+}
+
 } // namespace
 
 int main() {
@@ -242,5 +311,6 @@ int main() {
     testRationalTime(expectations);
     testPositiveRatios(expectations);
     testFormattingAndRoundTrips(expectations);
+    testCanonicalFloat64(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

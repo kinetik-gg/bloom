@@ -359,7 +359,8 @@ rational, positive-ratio, strict padded Base64, UTF-8 JSON-string, and bounded c
 primitives are implemented with adversarial tests. Canonical manifest encoding, its Draft 2020-12
 schema artifact, and manifest requirement shape/order and exact project coverage validation are
 also implemented. The complete writable document `1.0` Draft 2020-12 schema artifact and strict
-artifact checker are implemented. Float64, parsing/DOM, the document writer, instance validation,
+artifact checker and exact canonical Float64 codec are implemented. General known-field Float64
+parsing, DOM integration, the document writer, instance validation,
 and golden document fixtures remain pending.
 
 - implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema

@@ -1,6 +1,7 @@
 #include <bloom/project/canonical_decimal.hpp>
 
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <limits>
@@ -113,6 +114,86 @@ parseSigned(const std::string_view text, const CanonicalDecimalField field) noex
         return static_cast<std::uint64_t>(value);
     }
     return static_cast<std::uint64_t>(-(value + 1)) + 1;
+}
+
+[[nodiscard]] bool validateJsonNumberLexicalForm(const std::string_view text) noexcept {
+    if (text.empty()) {
+        return false;
+    }
+
+    std::size_t cursor = 0;
+    if (text[cursor] == '-') {
+        ++cursor;
+        if (cursor == text.size()) {
+            return false;
+        }
+    }
+
+    if (text[cursor] == '0') {
+        ++cursor;
+        if (cursor < text.size() && isAsciiDigit(text[cursor])) {
+            return false;
+        }
+    } else {
+        if (text[cursor] < '1' || text[cursor] > '9') {
+            return false;
+        }
+        do {
+            ++cursor;
+        } while (cursor < text.size() && isAsciiDigit(text[cursor]));
+    }
+
+    if (cursor < text.size() && text[cursor] == '.') {
+        ++cursor;
+        const auto fractionBegin = cursor;
+        while (cursor < text.size() && isAsciiDigit(text[cursor])) {
+            ++cursor;
+        }
+        if (cursor == fractionBegin) {
+            return false;
+        }
+    }
+
+    if (cursor < text.size() && (text[cursor] == 'e' || text[cursor] == 'E')) {
+        ++cursor;
+        if (cursor < text.size() && (text[cursor] == '+' || text[cursor] == '-')) {
+            ++cursor;
+        }
+        const auto exponentBegin = cursor;
+        while (cursor < text.size() && isAsciiDigit(text[cursor])) {
+            ++cursor;
+        }
+        if (cursor == exponentBegin) {
+            return false;
+        }
+    }
+
+    return cursor == text.size();
+}
+
+template <std::size_t Capacity>
+void appendCharacter(std::array<char, Capacity>& output, std::size_t& size,
+                     const char character) noexcept {
+    if (size >= output.size()) {
+        std::terminate();
+    }
+    output[size++] = character;
+}
+
+template <std::size_t Capacity>
+void appendCharacters(std::array<char, Capacity>& output, std::size_t& size,
+                      const std::string_view characters) noexcept {
+    for (const char character : characters) {
+        appendCharacter(output, size, character);
+    }
+}
+
+template <std::size_t Capacity>
+void appendZeroes(std::array<char, Capacity>& output, std::size_t& size,
+                  const std::size_t count) noexcept {
+    for (std::size_t index = 0; index < count; ++index) {
+        appendCharacter(output, size, '0');
+    }
 }
 
 } // namespace
@@ -274,6 +355,157 @@ CanonicalDecimalText formatCanonicalInt64(const std::int64_t value) noexcept {
     }
     result.size_ = static_cast<std::uint8_t>(conversion.ptr - result.characters_.data());
     return result;
+}
+
+CanonicalFloat64TextResult formatCanonicalFloat64(const double value) noexcept {
+    static_assert(std::numeric_limits<double>::is_iec559);
+    static_assert(std::numeric_limits<double>::digits == 53);
+
+    if (!std::isfinite(value)) {
+        return CanonicalFloat64TextResult::failure(CanonicalDecimalError::NonFinite,
+                                                   CanonicalDecimalField::Value);
+    }
+
+    CanonicalFloat64Text result;
+    std::size_t outputSize = 0;
+    if (std::signbit(value)) {
+        appendCharacter(result.characters_, outputSize, '-');
+    }
+    const double magnitudeValue = std::fabs(value);
+    if (magnitudeValue == 0.0) {
+        appendCharacters(result.characters_, outputSize, "0.0");
+        result.size_ = static_cast<std::uint8_t>(outputSize);
+        return CanonicalFloat64TextResult::success(result);
+    }
+
+    std::array<char, 24> shortest{};
+    const auto conversion = std::to_chars(shortest.data(), shortest.data() + shortest.size(),
+                                          magnitudeValue, std::chars_format::general);
+    if (conversion.ec != std::errc{}) {
+        std::terminate();
+    }
+    const std::string_view shortestView(shortest.data(),
+                                        static_cast<std::size_t>(conversion.ptr - shortest.data()));
+
+    std::array<char, 17> digits{};
+    std::size_t digitCount = 0;
+    std::size_t digitsBeforePoint = 0;
+    std::size_t cursor = 0;
+    bool sawPoint = false;
+    while (cursor < shortestView.size() && shortestView[cursor] != 'e' &&
+           shortestView[cursor] != 'E') {
+        if (shortestView[cursor] == '.') {
+            sawPoint = true;
+            digitsBeforePoint = digitCount;
+        } else {
+            if (digitCount >= digits.size()) {
+                std::terminate();
+            }
+            digits[digitCount++] = shortestView[cursor];
+        }
+        ++cursor;
+    }
+    if (!sawPoint) {
+        digitsBeforePoint = digitCount;
+    }
+
+    int explicitExponent = 0;
+    if (cursor < shortestView.size()) {
+        ++cursor;
+        bool negativeExponent = false;
+        if (cursor < shortestView.size() &&
+            (shortestView[cursor] == '+' || shortestView[cursor] == '-')) {
+            negativeExponent = shortestView[cursor] == '-';
+            ++cursor;
+        }
+        while (cursor < shortestView.size()) {
+            explicitExponent = explicitExponent * 10 + (shortestView[cursor] - '0');
+            ++cursor;
+        }
+        if (negativeExponent) {
+            explicitExponent = -explicitExponent;
+        }
+    }
+
+    const int scientificExponent = explicitExponent + static_cast<int>(digitsBeforePoint) - 1;
+    if (scientificExponent >= -6 && scientificExponent < 21) {
+        const int decimalPoint = scientificExponent + 1;
+        if (decimalPoint <= 0) {
+            appendCharacters(result.characters_, outputSize, "0.");
+            appendZeroes(result.characters_, outputSize, static_cast<std::size_t>(-decimalPoint));
+            appendCharacters(result.characters_, outputSize,
+                             std::string_view(digits.data(), digitCount));
+        } else if (static_cast<std::size_t>(decimalPoint) >= digitCount) {
+            appendCharacters(result.characters_, outputSize,
+                             std::string_view(digits.data(), digitCount));
+            appendZeroes(result.characters_, outputSize,
+                         static_cast<std::size_t>(decimalPoint) - digitCount);
+            appendCharacters(result.characters_, outputSize, ".0");
+        } else {
+            appendCharacters(
+                result.characters_, outputSize,
+                std::string_view(digits.data(), static_cast<std::size_t>(decimalPoint)));
+            appendCharacter(result.characters_, outputSize, '.');
+            appendCharacters(result.characters_, outputSize,
+                             std::string_view(digits.data() + decimalPoint,
+                                              digitCount - static_cast<std::size_t>(decimalPoint)));
+        }
+    } else {
+        appendCharacter(result.characters_, outputSize, digits[0]);
+        if (digitCount > 1) {
+            appendCharacter(result.characters_, outputSize, '.');
+            appendCharacters(result.characters_, outputSize,
+                             std::string_view(digits.data() + 1, digitCount - 1));
+        }
+        appendCharacter(result.characters_, outputSize, 'e');
+        appendCharacter(result.characters_, outputSize, scientificExponent < 0 ? '-' : '+');
+
+        std::array<char, 3> exponentText{};
+        const auto exponentMagnitude = static_cast<unsigned int>(
+            scientificExponent < 0 ? -scientificExponent : scientificExponent);
+        const auto exponentConversion = std::to_chars(
+            exponentText.data(), exponentText.data() + exponentText.size(), exponentMagnitude, 10);
+        if (exponentConversion.ec != std::errc{}) {
+            std::terminate();
+        }
+        appendCharacters(
+            result.characters_, outputSize,
+            std::string_view(exponentText.data(), static_cast<std::size_t>(exponentConversion.ptr -
+                                                                           exponentText.data())));
+    }
+
+    result.size_ = static_cast<std::uint8_t>(outputSize);
+    return CanonicalFloat64TextResult::success(result);
+}
+
+CanonicalFloat64Result parseCanonicalFloat64(const std::string_view text) noexcept {
+    if (!validateJsonNumberLexicalForm(text)) {
+        return CanonicalFloat64Result::failure(CanonicalDecimalError::InvalidLexicalForm,
+                                               CanonicalDecimalField::Value);
+    }
+
+    double value = 0.0;
+    const auto conversion =
+        std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
+    if (conversion.ec == std::errc::result_out_of_range) {
+        return CanonicalFloat64Result::failure(CanonicalDecimalError::OutOfRange,
+                                               CanonicalDecimalField::Value);
+    }
+    if (conversion.ec != std::errc{} || conversion.ptr != text.data() + text.size()) {
+        return CanonicalFloat64Result::failure(CanonicalDecimalError::InvalidLexicalForm,
+                                               CanonicalDecimalField::Value);
+    }
+    if (!std::isfinite(value)) {
+        return CanonicalFloat64Result::failure(CanonicalDecimalError::NonFinite,
+                                               CanonicalDecimalField::Value);
+    }
+
+    const auto canonical = formatCanonicalFloat64(value);
+    if (!canonical || canonical.value()->view() != text) {
+        return CanonicalFloat64Result::failure(CanonicalDecimalError::NonCanonical,
+                                               CanonicalDecimalField::Value);
+    }
+    return CanonicalFloat64Result::success(value);
 }
 
 } // namespace bloom::project

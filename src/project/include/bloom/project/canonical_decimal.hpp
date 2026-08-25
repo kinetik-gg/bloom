@@ -19,6 +19,8 @@ enum class CanonicalDecimalError : std::uint8_t {
     ZeroNotAllowed,
     NotReduced,
     NonCanonicalZero,
+    NonFinite,
+    NonCanonical,
 };
 
 enum class CanonicalDecimalField : std::uint8_t {
@@ -93,12 +95,36 @@ class CanonicalDecimalText final {
     std::uint8_t size_ = 0;
 };
 
+class CanonicalFloat64Text final {
+  public:
+    [[nodiscard]] constexpr std::string_view view() const& noexcept {
+        return {characters_.data(), static_cast<std::size_t>(size_)};
+    }
+    [[nodiscard]] constexpr std::string_view view() const&& = delete;
+    [[nodiscard]] constexpr const char* data() const& noexcept { return characters_.data(); }
+    [[nodiscard]] constexpr const char* data() const&& = delete;
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return static_cast<std::size_t>(size_);
+    }
+    [[nodiscard]] constexpr bool empty() const noexcept { return size_ == 0; }
+
+  private:
+    friend CanonicalDecimalResult<CanonicalFloat64Text> formatCanonicalFloat64(double) noexcept;
+
+    constexpr CanonicalFloat64Text() noexcept = default;
+
+    std::array<char, 25> characters_{};
+    std::uint8_t size_ = 0;
+};
+
 using CanonicalUInt64Result = CanonicalDecimalResult<std::uint64_t>;
 using CanonicalUInt32Result = CanonicalDecimalResult<std::uint32_t>;
 using CanonicalInt64Result = CanonicalDecimalResult<std::int64_t>;
 using CanonicalRationalTimeResult = CanonicalDecimalResult<core::RationalTime>;
 using CanonicalPositiveRatioResult = CanonicalDecimalResult<CanonicalPositiveRatio>;
 using CanonicalPixelAspectRatioResult = CanonicalDecimalResult<core::PixelAspectRatio>;
+using CanonicalFloat64Result = CanonicalDecimalResult<double>;
+using CanonicalFloat64TextResult = CanonicalDecimalResult<CanonicalFloat64Text>;
 
 [[nodiscard]] CanonicalUInt64Result parseCanonicalObjectId(std::string_view text) noexcept;
 [[nodiscard]] CanonicalUInt64Result
@@ -115,9 +141,13 @@ parseCanonicalPixelAspectRatio(std::string_view numerator, std::string_view deno
 
 [[nodiscard]] CanonicalDecimalText formatCanonicalUInt64(std::uint64_t value) noexcept;
 [[nodiscard]] CanonicalDecimalText formatCanonicalInt64(std::int64_t value) noexcept;
+[[nodiscard]] CanonicalFloat64Result parseCanonicalFloat64(std::string_view text) noexcept;
+[[nodiscard]] CanonicalFloat64TextResult formatCanonicalFloat64(double value) noexcept;
 
 static_assert(std::is_trivially_copyable_v<CanonicalPositiveRatio>);
 static_assert(std::is_trivially_copyable_v<CanonicalDecimalText>);
+static_assert(std::is_trivially_copyable_v<CanonicalFloat64Text>);
 static_assert(sizeof(CanonicalDecimalText) <= 24);
+static_assert(sizeof(CanonicalFloat64Text) <= 32);
 
 } // namespace bloom::project
