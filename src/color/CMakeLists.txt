@@ -14,12 +14,14 @@ add_library(bloom_color STATIC)
 target_sources(
     bloom_color
     PRIVATE
+        display_processor_identity.cpp
         ocio_content_revision.cpp
         ocio_loose_content_revision.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/color/display_processor_identity.hpp
             include/bloom/color/ocio_content_revision.hpp
             include/bloom/color/ocio_loose_content_revision.hpp
 )
@@ -53,5 +55,17 @@ if(BUILD_TESTING)
         COMMAND bloom_color_ocio_loose_content_revision_test
         TIMEOUT 120
         LABELS unit color identity
+    )
+
+    add_executable(
+        bloom_color_display_processor_identity_test
+        tests/display_processor_identity_tests.cpp
+    )
+    target_link_libraries(bloom_color_display_processor_identity_test PRIVATE bloom_color)
+    bloom_enable_warnings(bloom_color_display_processor_identity_test)
+    bloom_add_test(
+        NAME bloom.color.display-processor-identity
+        COMMAND bloom_color_display_processor_identity_test
+        LABELS unit color identity codec
     )
 endif()
