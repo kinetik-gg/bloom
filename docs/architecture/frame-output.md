@@ -285,9 +285,10 @@ profile=id:none
 kind=id:none;revision=id:none
 ```
 
-The empty line is the `Absent` compression source. `canonical-zero` means exact positive-zero RGB
-whenever alpha is exact zero. The channel descriptor expresses semantic `R,G,B,A` order; EXR's
-physical lexical `A,B,G,R` header order is a file-profile rule and does not reorder this descriptor.
+The `""` notation marks the `Absent` compression source; the quote characters are not serialized
+and the descriptor has zero bytes. `canonical-zero` means exact positive-zero RGB whenever alpha is
+exact zero. The channel descriptor expresses semantic `R,G,B,A` order; EXR's physical lexical
+`A,B,G,R` header order is a file-profile rule and does not reorder this descriptor.
 `profile=id:none` describes optional artist/application metadata; mandatory PNG signaling and EXR
 header/color attributes remain part of their color and output-profile contracts.
 `kind=id:none` means no unresolved output-time dependency, not an absence of evaluation lineage.
