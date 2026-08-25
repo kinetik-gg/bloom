@@ -134,6 +134,16 @@ An obsolete preview may populate a content-addressed cache when its key remains 
 not replace a newer frame in the viewer. Persistent operations such as save and export use their
 captured snapshot deliberately; later edits do not silently change the operation already in flight.
 
+Frame-output approval uses an application-owned pre-approval task group rather than deferring
+evaluation until after the decision. The group evaluates or reuses one immutable process frame,
+prepares its semantic identity in a cancellable CPU `Identifying` stage, and publishes the bounded
+owning products from which analysis and its exact digest are derived. The application service—not a
+panel—retains and charges those products while an artist decides. Approval constructs an immutable
+export request that retains the same products; export cannot reevaluate or substitute the frame,
+processor, report, or identity. Dismissal or supersession releases the attempt when no admitted job
+retains it. The complete ordering and ownership contract is defined by
+[`frame-output.md`](frame-output.md).
+
 Revision and generation acceptance are application-controller semantics, not scheduler policy. The
 kernel transports typed results and terminal state without knowing document revisions; the
 implemented preview controller performs these publication checks on the UI side of the neutral

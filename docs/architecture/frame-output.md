@@ -4,9 +4,9 @@ Status: accepted
 
 Implementation status: the allocation-free Process Pixel Stream and Process-Frame Semantic
 Identity version 1 codecs, validation, portable golden vectors, and the closed facet-descriptor
-grammar are implemented. OutputAnalysis report construction/validation and digesting, preset
-preparation, PNG/OpenEXR adapters, staged-format verification, and end-to-end publication remain
-pending.
+grammar are implemented. The cancellable owning semantic-identity preparer, OutputAnalysis report
+construction/validation and digesting, preset preparation, PNG/OpenEXR adapters, staged-format
+verification, and end-to-end publication remain pending.
 
 Updated: 2026-08-25
 
@@ -121,6 +121,24 @@ from the portable semantic identity. Request generation, cancellation, priority,
 task owner, pointer identity, and cache residency enter neither record. Until this codec and its
 pixel-stream verification are implemented, no output analysis is approvable.
 
+The version 1 public application API does not expose synchronous process-pixel hashing or a public
+canonical-identity writer. A CPU worker stage receives one
+`std::shared_ptr<const ProcessFrame>` and is the only producer of a private-constructible,
+immutable `ProcessFrameSemanticIdentityV1` handle. That product retains the exact process frame,
+the canonical identity bytes derived from it, and the process-pixel digest as one inseparable
+lifetime. Its frame and canonical-byte views are available only from a retained lvalue handle;
+neither may be detached and paired with another frame.
+
+The preparer performs checked descriptor, layout, dimension, pixel-count, and byte preflight before
+reading any pixel or allocating variable-size storage. It then streams pixels in bounded chunks,
+checking cancellation between chunks and reporting monotonic pixel progress, and publishes the
+identity handle only after the complete digest and canonical bytes have been produced. Cancellation,
+allocation failure, a resource-limit failure, or any invariant failure publishes no partial
+identity. The immutable handle is the version 1 reuse unit: an analysis and its approved export may
+share it, but version 1 has no global identity cache, shared in-flight wait, or scheduler-level
+deduplication. Scheduler coalescing may supersede obsolete attempts; it must not make independent
+consumers share cancellation or wait on one another.
+
 ## Preservation And Loss Report
 
 Before a file task is admitted, the output adapter produces a deterministic `OutputAnalysis` with
@@ -140,13 +158,49 @@ The report covers at least pixels, precision, color, alpha association, channel 
 window, display window, pixel aspect, compression, metadata, and external dependencies. Every
 non-exact facet carries a stable code, source/target values, and whether the preset permits it.
 
-Analysis has two explicit stages. A deterministic typed report attempt may describe `Missing` or
-`Unsupported` inputs and remain useful to Jobs, scripting, headless clients, and the UI without
-having an approval digest. `OutputAnalysisDigest` becomes available only when a validated process
-identity exists and, for PNG, a matching expected OCIO revision and validated canonical
-`DisplayProcessorIdentity` exist. Approval requires both that digest and all eleven derived
-permission bits. Bloom never invents an empty PNG display identity or a placeholder process
-identity merely to hash a failure report.
+Analysis exposes a typed report before it exposes an approvable product. A deterministic report may
+describe `Missing` or `Unsupported` inputs and remain useful to Jobs, scripting, headless clients,
+and the UI without having an approval digest. `OutputAnalysisDigest` becomes available only when a
+validated frame-bound process identity exists and, for PNG, a matching expected OCIO revision and
+validated canonical `DisplayProcessorIdentity` exist. Approval requires both that digest and all
+eleven derived permission bits. Bloom never invents an empty PNG display identity or a placeholder
+process identity merely to hash a failure report.
+
+### Pre-Approval Output Analysis Attempt
+
+The application output service owns one bounded output-analysis-attempt task group for a captured
+document revision, output request, preset, and target. Before asking an artist or headless policy to
+approve anything, its dependent worker stages perform, in order:
+
+1. cheap blocking-I/O target preflight, including canonical target identity and no-follow observed
+   destination state;
+2. CPU evaluation or exact immutable `ProcessFrame` reuse under the closed output limits;
+3. cancellable CPU preparation of the frame-bound `ProcessFrameSemanticIdentityV1`;
+4. for PNG, bounded color/config resolution plus preparation or exact reuse of the qualified
+   display processor and its canonical `DisplayProcessorIdentity`; EXR has no display product;
+5. creation and self-validation of the immutable owning report; and
+6. streaming computation of `OutputAnalysisDigest` from that report and the retained identity
+   products.
+
+The application controller submits each dependent stage only after consuming its predecessor's
+typed result; a worker never waits on another task or on the UI. A failed or unavailable stage may
+still produce the truthful nonapprovable report defined below, but it never produces a placeholder
+identity or approval digest. A completed approvable `OutputAnalysisAttempt` is an immutable owning
+product that retains the target-preflight result, the frame-bound process-identity handle, the
+qualified PNG display-processor handle and identity when applicable, the owning report, and its
+exact digest.
+
+The digest implementation consumes the process-identity product and derives source descriptors
+from that product's retained frame; it accepts neither a second process frame nor arbitrary
+canonical identity bytes. Recomputing pixel hashes or substituting an equivalent-looking frame or
+processor at approval or export is forbidden. These ownership rules do not change the frozen
+version 1 digest bytes.
+
+The output service retains and charges the completed attempt while the artist decides; a panel only
+observes it and may issue approve, dismiss, or supersede intent. Headless policy uses the same owned
+product. Dismissal or supersession cancels unfinished work and releases the completed attempt and
+its reservations when no admitted export retains them. A disposable panel never owns the attempt,
+its task group, its retained frame, or its resource reservation.
 
 ### Analyzer And Owning Report Contract
 
@@ -407,9 +461,9 @@ source or target descriptor is at most 1024 ASCII bytes, a version 1 process ide
 249 or 257 bytes, and the complete canonical analysis-digest preimage is at most 4 MiB
 (`4194304` bytes). A longer descriptor returns the distinct `DescriptorTooLong` validation result.
 All size arithmetic is checked before allocation or caller-buffer mutation. Digesting streams the
-components and never requires allocating the complete preimage. Its API accepts a validated typed
-process frame and validated typed display identity, never arbitrary caller-provided identity byte
-spans.
+components and never requires allocating the complete preimage. Its API accepts the retained
+frame-bound `ProcessFrameSemanticIdentityV1` product and the validated typed display-identity
+product, never a separate process frame or arbitrary caller-provided identity byte spans.
 
 Nominal analysis is derived exactly as follows:
 
@@ -648,13 +702,14 @@ verification passed.
 
 An approved `FrameExportRequest` captures:
 
-- immutable document snapshot and revision;
-- project, composition, output, time, and process-cache identity;
-- process color identity, alpha/precision/window/PAR descriptors, and primitive-semantics versions;
-- versioned output preset, output pixel-semantics profile, and adapter execution provenance;
-- qualified display-processor identity for PNG, absent for process EXR;
-- canonical artifact-target identity, observed destination state, publication-intent ID, overwrite
-  policy, resource/time limits, and approved `OutputAnalysisDigest`; and
+- one completed approvable `OutputAnalysisAttempt`, retaining its captured document snapshot and
+  revision, project/composition/output/time identity, exact frame-bound process identity and frame,
+  owning report, preset/profile, adapter provenance, canonical target preflight, and qualified PNG
+  display-processor handle and identity when applicable;
+- the exact `OutputAnalysisDigest` approved by the artist or headless policy, which must byte-equal
+  the retained attempt's digest;
+- publication-intent ID, overwrite policy, resource/time limits, and any destination option that
+  does not alter the retained canonical target identity; and
 - a task owner/group used for progress, cancellation, and shutdown.
 
 Task generation, cancellation state, byte budgets, destination path, and overwrite policy do not
@@ -662,40 +717,47 @@ enter either pixel cache identity. They remain part of job/publication identity.
 key excludes display/view, looks, monitor/output intent, packing, and display processor. A
 display/output cache key begins with the exact process-frame identity and adds the complete prepared
 processor, display intent, packing, and output-preparation revisions. The request is immutable after
-admission; a newer document revision creates a different job rather than changing the frame under
-an active writer.
+admission and exposes no frame, processor, report, identity, or target-substitution mutator. Export
+uses the retained frame and processor products directly; it cannot reevaluate the captured snapshot
+or resolve a replacement identity. A newer document revision creates a different analysis attempt
+and job rather than changing the frame under an active writer.
 
 ## Non-Blocking Execution
 
-Before approval, a blocking-I/O target-preflight task resolves the canonical publication target and
-records its no-follow state. The application controller combines that typed result with
-`OutputAnalysis`; approval then assigns a publication-intent ID and constructs the immutable
-`FrameExportRequest`. Neither analysis nor approval performs filesystem work on the UI thread.
+The pre-approval `OutputAnalysisAttempt` graph above performs target access, evaluation, semantic
+identity hashing, color resolution, and digesting entirely through bounded worker stages. The UI or
+headless caller receives the completed typed attempt and approves only its exact digest. Approval
+itself performs no evaluation, hashing, color work, or filesystem access: it assigns a
+publication-intent ID and constructs the immutable `FrameExportRequest` from the retained attempt.
 
-One approved foreground export job is a task group with an explicit dependency graph:
+One approved foreground export job has this explicit dependency graph:
 
-1. CPU process work validates the bound analysis and evaluates or reuses the immutable process
-   frame.
-2. For PNG, blocking-I/O color work resolves the bounded config/resources and prepares or reuses an
-   immutable `PreparedCpuDisplayProcessorHandle` through the qualified built-in or supervised-helper
-   path; EXR skips this stage.
-3. For PNG, dependent output preparation applies a qualified built-in on CPU in bounded chunks or
-   drives bounded helper slabs for an external config, then produces one immutable prepared
-   display/output frame; EXR exposes immutable process rows directly.
-4. Blocking-I/O publication asks the shared `StagedArtifactCoordinator` for a
-   `StagedArtifactLease`, writes, reopens, verifies, hashes, then enters its short atomic-publication
-   section.
+1. CPU output preflight validates the retained attempt/request binding and checked aggregate
+   resources without reevaluating the composition or rehashing the process frame.
+2. For PNG, dependent output preparation applies the retained qualified built-in processor on CPU
+   in bounded chunks or drives bounded helper slabs for the retained external-config processor,
+   then produces one immutable prepared display/output frame; EXR exposes rows from the retained
+   process frame directly.
+3. Blocking-I/O publication asks the shared `StagedArtifactCoordinator` for a
+   `StagedArtifactLease`, revalidates the retained target preflight, writes, reopens, verifies,
+   hashes, then enters its short atomic-publication section.
 
 The application controller submits a dependent stage only after consuming its predecessor's typed
 successful result through the task mailbox. A worker never waits on another task, future, worker
-thread, processor build, or the UI event loop. Progress is monotonic and stage-aware (`Resolving`,
-`Evaluating`, `ColorPreparing`, `Writing`, `Verifying`, `Publishing`).
+thread, processor build, or the UI event loop. Attempt and export progress are monotonic within each
+stage and use the ordered stage vocabulary `Resolving`, `Evaluating`, `Identifying`,
+`ColorPreparing`, `Analyzing`, `PreparingOutput`, `Writing`, `Verifying`, and `Publishing`. EXR
+skips `ColorPreparing`; no active worker is implied while an approvable attempt awaits a decision.
 
-Preflight computes the checked peak resident bytes across the retained process frame, prepared
-display/output pixels, encoder scratch, and verification chunks. The request has one aggregate
-budget; display mapping does not gain a hidden second allowance. Variable-size encoded output also
-has an explicit cap. An insufficient or overflowing budget rejects the stage before allocation or
-file creation.
+Attempt resource admission computes and reserves the checked retained bytes needed through the
+approval decision, including the process frame, semantic-identity product, report, target state,
+and PNG processor product. Approved-job admission transactionally expands that reservation to the
+checked peak across retained attempt products, prepared display/output pixels, encoder scratch, and
+verification chunks; it neither double-charges shared retained storage nor grants display mapping a
+hidden second allowance. Variable-size encoded output also has an explicit cap. An insufficient or
+overflowing reservation rejects the stage before allocation or file creation. Cancellation before
+identity completion publishes no partial identity; cancellation before publication publishes no
+artifact.
 
 Version 1 export limits are closed; a request may lower but not raise them:
 
@@ -800,7 +862,9 @@ Shared fixtures cover:
 - exact transparent empty stack, opaque/translucent solids, negative/HDR RGB, alpha endpoints,
   signed zero, odd dimensions, hostile signed windows, square and non-square PAR;
 - exact process-frame, display-processor, analysis, and output-semantic identity bytes, including
-  every serializer boundary and malformed/non-canonical rejection;
+  every serializer boundary and malformed/non-canonical rejection; private-only process-identity
+  construction, exact retained-frame lifetime, cancellation before and during chunked hashing,
+  monotonic `Identifying` progress, and no partial identity publication;
 - the closed facet-code vocabulary, descriptor grammar, and rejection of approval when any
   `presetPermits` bit is zero;
 - PNG exact packed bytes and tie cases, exact required chunk order/content, row filter bytes,
@@ -812,6 +876,9 @@ Shared fixtures cover:
 - insufficient budgets, disk-full/short-write, permission failures, cancellation at each stage,
   canonical-path aliases, symlink/reparse rejection, external destination mutation, ordered
   same-target intents, overwrite denial, replace failure, and post-replacement flush warning;
+- attempt dismissal and supersession release every reservation, approval accepts only the exact
+  retained digest, and approved export cannot substitute a frame/processor, recompute semantic
+  identity, or reevaluate the document snapshot;
 - exact-at-limit, one-over, arithmetic-overflow, allocation-failure, no-progress, helper, job, and
   service budget cases;
 - identical report digests and reopened semantic outputs under the same portable pixel-semantics
