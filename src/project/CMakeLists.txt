@@ -77,6 +77,14 @@ if(BUILD_TESTING)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(bloom_project_strict_json_preflight_test PRIVATE bloom_project)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|GNU)$")
+        # The allocation probe replaces global new and unsized delete. Keep every deallocation on
+        # that measured path and avoid libstdc++ sized-delete builtin conflicts under clang-tidy.
+        target_compile_options(
+            bloom_project_strict_json_preflight_test
+            PRIVATE -fno-sized-deallocation
+        )
+    endif()
     bloom_enable_warnings(bloom_project_strict_json_preflight_test)
     bloom_add_test(
         NAME bloom.project.strict_json_preflight
