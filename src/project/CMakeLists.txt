@@ -7,6 +7,7 @@ target_sources(
         canonical_decimal.cpp
         canonical_json_string.cpp
         canonical_json_string_detail.hpp
+        canonical_json_writer.cpp
         project_io_memory.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -15,6 +16,7 @@ target_sources(
             include/bloom/project/canonical_base64.hpp
             include/bloom/project/canonical_decimal.hpp
             include/bloom/project/canonical_json_string.hpp
+            include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/project_io_memory.hpp
 )
 
@@ -34,6 +36,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.canonical_json_string
         COMMAND bloom_project_canonical_json_string_test
+        LABELS unit project persistence text
+    )
+
+    add_executable(bloom_project_canonical_json_writer_test tests/canonical_json_writer_tests.cpp)
+    target_link_libraries(bloom_project_canonical_json_writer_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_canonical_json_writer_test)
+    bloom_add_test(
+        NAME bloom.project.canonical_json_writer
+        COMMAND bloom_project_canonical_json_writer_test
         LABELS unit project persistence text
     )
 
