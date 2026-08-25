@@ -28,6 +28,12 @@ The Qt-free `src/runtime` kernel currently implements:
   non-blocking result handles delivered through neutral mailboxes
 - admission shutdown that returns promptly, rejects new work, requests cancellation, and leaves
   quiescent service destruction to its explicit lifecycle owner
+- a bounded asynchronous GPU executor contract: one generation-scoped render-service lease pulls
+  starters, `Running` survives starter return, and a move-only take-once completion publishes into
+  the ordinary neutral mailbox without a scheduler-owned GPU worker
+- independently checked GPU pending-state, admitted-state, live-continuation, queued-command-byte,
+  and request-owned-byte caps; transactional coalescing, owner/group cancellation, priority,
+  history, quiescence, device loss, and shutdown use the same scheduler truth as CPU and I/O work
 
 The implemented Qt/application layer adds:
 
@@ -193,9 +199,12 @@ process, and estimated memory. Executors use bounded queues, concurrency limits,
 Submitting work must apply backpressure or discard replaceable speculative requests instead of
 growing an unbounded queue.
 
-The implemented kernel currently distinguishes bounded CPU and blocking-I/O execution. GPU queues,
-external processes, and memory-budget admission remain owning-adapter responsibilities for later
-batches; they must preserve the same cancellation, diagnostics, and no-UI-wait contract.
+The implemented kernel now distinguishes bounded CPU, blocking-I/O, and deferred GPU execution.
+The GPU scheduler owns bounded admission and task state but no device or worker: one exclusive,
+generation-scoped lease lets the render-owned service thread pull starters. A rejected replacement
+does not disturb admitted work. External-process execution and format-specific memory estimates
+remain owning-adapter responsibilities and must preserve the same cancellation, diagnostics, and
+no-UI-wait contract.
 
 ## Cancellation
 
@@ -315,6 +324,11 @@ kinds do not yet exist.
 Kernel tests cover priority and fairness, executor separation, bounded admission, coalescing,
 reprioritization, cancellation before and during work, task groups, progress, diagnostics, exception
 conversion, terminal/result coherence, bounded registries and history, and shutdown initiation.
+Focused fake-service tests additionally cover GPU service-thread affinity, synchronous and retained
+completion, token drop/move-overwrite/duplicate consumption, starter exceptions, exact independent
+caps, cancellation and coalescing, detach during dispatch and active starters, device-loss
+generation recovery, wake reentrancy, take-once results, shutdown fallback, stale-token lifetime,
+and exact accounting/quiescence.
 
 Integration tests now cover stale revision and same-revision generation suppression, selection-only
 changes, Viewer and Jobs replacement during live work, rate-limited UI-thread progress delivery,
@@ -323,8 +337,8 @@ terminal publication, application-level quit interception, and staged shutdown w
 preview work.
 
 Later batches still need to cover project destruction, partial-output cleanup and atomic
-publication, simulated device loss and fallback policy, and shutdown decisions for active save and
-final-render tasks.
+publication, backend resource invalidation and CPU fallback policy above the tested scheduler loss
+primitive, and shutdown decisions for active save and final-render tasks.
 
 UI integration tests use deliberately slow fake operations and assert that event processing, input,
 and cancellation remain responsive. Thread sanitizers, lock-order checks, queue-depth metrics, task
@@ -333,13 +347,13 @@ the implementation grows.
 
 ## Implemented Boundary And Next Integration
 
-The bounded executors, snapshot compiler, revision/generation-safe preview controller, exact session
-time, one-active/one-newest preview gate, Qt bridge, Jobs surface, clean application quiescence, and
-Batch 3 CPU preview path are implemented. The
-immutable typed plan is consumed by a deterministic CPU evaluator that publishes real pixels
-without weakening the established ownership, cancellation, color, alpha, or stale-result
-contracts. The 16 ms pointer cadence, timeline key projection, and direct manipulation remain
-pending interaction work.
+The bounded CPU/I/O executors, generation-scoped deferred GPU continuation path, snapshot compiler,
+revision/generation-safe preview controller, exact session time, one-active/one-newest preview gate,
+Qt bridge, Jobs surface, clean application quiescence, and Batch 3 CPU preview path are implemented.
+The immutable typed plan is consumed by a deterministic CPU evaluator that publishes real pixels
+without weakening the established ownership, cancellation, color, alpha, or stale-result contracts.
+The 16 ms pointer cadence, timeline key projection, and direct manipulation remain pending
+interaction work.
 
 Distributed rendering, persistent job databases, and a general workflow engine are not required.
 The contract above is intentionally broader than the first implementation so later media and GPU

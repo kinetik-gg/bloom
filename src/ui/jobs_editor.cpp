@@ -47,6 +47,8 @@ QString executorText(const runtime::TaskExecutor executor) {
         return JobsEditor::tr("CPU");
     case runtime::TaskExecutor::BlockingIo:
         return JobsEditor::tr("Blocking I/O");
+    case runtime::TaskExecutor::Gpu:
+        return JobsEditor::tr("GPU service");
     }
     return JobsEditor::tr("Unknown executor");
 }

@@ -3,6 +3,7 @@
 #include <bloom/core/id.hpp>
 
 #include <chrono>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -47,6 +48,7 @@ enum class TaskPriority {
 enum class TaskExecutor {
     Cpu,
     BlockingIo,
+    Gpu,
 };
 
 enum class TaskState {
@@ -150,6 +152,7 @@ enum class TaskSubmissionStatus {
     GroupRegistryFull,
     ShuttingDown,
     IdExhausted,
+    ExecutorUnavailable,
 };
 
 struct TaskSchedulerConfig {
@@ -157,12 +160,53 @@ struct TaskSchedulerConfig {
     std::size_t blockingIoWorkerCount = 1;
     std::size_t cpuQueueCapacity = 256;
     std::size_t blockingIoQueueCapacity = 64;
+    std::size_t gpuPendingQueueCapacity = 256;
+    std::size_t gpuAdmittedStateCapacity = 512;
+    std::size_t gpuLiveContinuationCapacity = 64;
+    std::size_t gpuQueuedCommandByteCapacity = std::size_t{256} * 1024U * 1024U;
+    std::size_t gpuRequestOwnedByteCapacity = std::size_t{1024} * 1024U * 1024U;
     std::size_t terminalHistoryCapacity = 256;
     std::size_t diagnosticsPerTask = 64;
     std::size_t groupRegistryCapacity = 256;
 
     [[nodiscard]] static TaskSchedulerConfig defaults() noexcept;
     [[nodiscard]] bool isValid() const noexcept;
+};
+
+class GpuServiceGeneration final {
+  public:
+    GpuServiceGeneration() = default;
+
+    [[nodiscard]] static std::optional<GpuServiceGeneration>
+    fromRaw(const std::uint64_t value) noexcept {
+        return value == 0 ? std::nullopt : std::optional(GpuServiceGeneration(value));
+    }
+
+    [[nodiscard]] bool isValid() const noexcept { return value_ != 0; }
+    [[nodiscard]] std::uint64_t value() const noexcept { return value_; }
+
+    friend bool operator==(const GpuServiceGeneration&, const GpuServiceGeneration&) = default;
+    friend auto operator<=>(const GpuServiceGeneration&, const GpuServiceGeneration&) = default;
+
+  private:
+    explicit GpuServiceGeneration(const std::uint64_t value) noexcept : value_(value) {}
+
+    std::uint64_t value_ = 0;
+};
+
+struct GpuTaskAdmission {
+    std::size_t queuedCommandBytes = 0;
+    std::size_t requestOwnedBytes = 0;
+
+    [[nodiscard]] bool isValid() const noexcept;
+};
+
+enum class GpuDispatchStatus {
+    Dispatched,
+    Empty,
+    ExecutorUnavailable,
+    WrongThread,
+    ShuttingDown,
 };
 
 } // namespace bloom::runtime

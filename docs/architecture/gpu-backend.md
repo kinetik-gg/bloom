@@ -102,22 +102,28 @@ may later use worker threads, but submission ordering and resource retirement re
 The UI submits a render intent and receives either a completed-frame notification or a structured
 failure. It never polls a fence.
 
-The GPU spike must add an asynchronous `TaskExecutor::Gpu` contract; it may not reuse the current
-synchronous `TaskFunction`, which becomes terminal when its call returns. The GPU executor is a
-bounded service event loop owned by the GPU thread. Admission creates a move-only scheduler-owned
-`GpuTaskCompletion` token, queues one state-machine request, and leaves the task `Running`. Submission
-callbacks advance that state machine without blocking. A fence/timeline completion, device-loss
-event, or cancellation cleanup consumes the token exactly once and publishes the terminal result
-through the ordinary task mailbox. Dropping an unconsumed token is an internal failure and
-terminalizes the task; it never leaves a permanently running record.
+The Qt- and Vulkan-free runtime now implements the asynchronous `TaskExecutor::Gpu` scheduler
+contract; it does not reuse the synchronous `TaskFunction`, which becomes terminal when its call
+returns. The scheduler owns bounded admission and state machines but no GPU worker. One exclusive
+generation-scoped lease lets the render-owned service thread pull a starter. Dispatch creates its
+move-only `GpuTaskCompletion` token and leaves the task `Running` after the starter returns. A later
+fence/timeline completion, device-loss event, or cancellation cleanup consumes the token exactly
+once and publishes the terminal result through the ordinary task mailbox. Dropping or overwriting
+an unconsumed token is an internal failure and terminalizes the task; it never leaves a permanently
+running record.
 
-The token carries `TaskId`, task generation, cancellation state, and a weak scheduler completion
-sink, but no Qt or Vulkan handle. Only the GPU service may consume it. The service owns device and
-queue submission; ordinary CPU or blocking-I/O workers prepare immutable inputs but never submit or
-wait for GPU work. Separate caps bound admitted state machines, queued command bytes, live tokens,
-and request-owned GPU memory before allocation. Queue exhaustion applies back-pressure at admission.
-The spike is not accepted until this continuation path, exactly-once terminalization, and scheduler
-shutdown behavior exist; a synchronous fence wait hidden inside the current task function is not a
+The token carries `TaskId`, GPU service generation, attachment identity, cancellation state, and a
+weak scheduler completion sink, but no Qt or Vulkan handle. Only the GPU service may consume it. The
+service owns device and queue submission; ordinary CPU or blocking-I/O workers prepare immutable
+inputs but never submit or wait for GPU work. Separate caps bound admitted state machines, queued
+command bytes, live tokens, and request-owned bytes before the scheduler retains or queues a
+request. Callers must preflight those declared sizes before constructing large request-owned
+products; this slice does not expose a reservation API. Queue exhaustion applies back-pressure at
+admission.
+This continuation path, exactly-once terminalization, strict service-thread completion, independent
+admission caps, generation loss/recovery, and scheduler shutdown fallback are implemented with a
+fake service. The Vulkan device service, fence integration, resource retirement, and cross-platform
+qualification spike remain pending; a synchronous fence wait hidden inside a task function is not a
 valid interim implementation.
 
 - Requests carry snapshot identity, time, output, resolution, quality, color intent, and a

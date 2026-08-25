@@ -54,6 +54,17 @@ namespace {
            *request.coalescingKey == *record.coalescingKey;
 }
 
+void wakeBestEffort(const std::shared_ptr<const GpuTaskWakeSink>& wake) noexcept {
+    if (wake == nullptr) {
+        return;
+    }
+    try {
+        (*wake)();
+    } catch (...) {
+        return;
+    }
+}
+
 } // namespace
 
 namespace detail {
@@ -93,6 +104,7 @@ SchedulerState::Admission SchedulerState::admit(TaskRequest request,
 
     std::shared_ptr<TaskGroupControl> group;
     std::vector<std::shared_ptr<TaskRecord>> superseded;
+    std::shared_ptr<const GpuTaskWakeSink> gpuWakeRequest;
     TaskId id;
     {
         std::lock_guard lock(mutex);
@@ -137,10 +149,11 @@ SchedulerState::Admission SchedulerState::admit(TaskRequest request,
                                                        "No additional task IDs are available")};
         }
 
-        const std::size_t supersededCount = request.coalescingKey.has_value()
-                                                ? countPendingMatchesLocked(request, cpu) +
-                                                      countPendingMatchesLocked(request, blockingIo)
-                                                : 0;
+        const std::size_t supersededCount =
+            request.coalescingKey.has_value() ? countPendingMatchesLocked(request, cpu) +
+                                                    countPendingMatchesLocked(request, blockingIo) +
+                                                    countPendingMatchesLocked(request, gpu)
+                                              : 0;
         superseded.reserve(supersededCount);
 
         id = TaskId::fromRaw(nextTaskId);
@@ -156,6 +169,8 @@ SchedulerState::Admission SchedulerState::admit(TaskRequest request,
         if (request.coalescingKey.has_value()) {
             removeCoalescedLocked(request, cpu, superseded);
             removeCoalescedLocked(request, blockingIo, superseded);
+            removeCoalescedLocked(request, gpu, superseded);
+            gpuWakeRequest = gpuWakeLocked();
         }
         target.pending.push_back(record);
         groupAdded(group);
@@ -166,6 +181,7 @@ SchedulerState::Admission SchedulerState::admit(TaskRequest request,
     for (const auto& previous : superseded) {
         finalizeRemoved(previous);
     }
+    wakeBestEffort(gpuWakeRequest);
     executor(record->snapshot.executor).available.notify_one();
     return {.status = TaskSubmissionStatus::Accepted, .id = id, .diagnostic = std::nullopt};
 }
@@ -221,6 +237,7 @@ SchedulerState::GroupAdmission SchedulerState::createGroup(TaskOwner owner, std:
 bool SchedulerState::cancelTask(const TaskId id) noexcept {
     std::shared_ptr<TaskRecord> removed;
     bool acceptedCancellation = false;
+    std::shared_ptr<const GpuTaskWakeSink> wake;
     {
         std::lock_guard lock(mutex);
         const auto found = records.find(id);
@@ -239,10 +256,14 @@ bool SchedulerState::cancelTask(const TaskId id) noexcept {
             ++finalizing;
             removed = record;
         }
+        if (record->snapshot.executor == TaskExecutor::Gpu) {
+            wake = gpuWakeLocked();
+        }
     }
     if (removed != nullptr) {
         finalizeRemoved(removed);
     }
+    wakeBestEffort(wake);
     return acceptedCancellation;
 }
 
@@ -252,6 +273,7 @@ std::size_t SchedulerState::cancelOwner(const TaskOwner owner) {
     }
     std::vector<std::shared_ptr<TaskRecord>> removed;
     std::size_t cancellationCount = 0;
+    std::shared_ptr<const GpuTaskWakeSink> wake;
     {
         std::lock_guard lock(mutex);
         removed.reserve(countQueuedOwnerLocked(owner));
@@ -268,10 +290,14 @@ std::size_t SchedulerState::cancelOwner(const TaskOwner owner) {
         }
         cancellationCount += removeQueuedOwnerLocked(owner, removed);
         cancellationCount += cancelRunningOwnerLocked(owner);
+        if (cancellationCount != 0) {
+            wake = gpuWakeLocked();
+        }
     }
     for (const auto& record : removed) {
         finalizeRemoved(record);
     }
+    wakeBestEffort(wake);
     return cancellationCount;
 }
 
@@ -280,6 +306,7 @@ void SchedulerState::cancelGroup(const std::shared_ptr<TaskGroupControl>& group)
         return;
     }
     std::vector<std::shared_ptr<TaskRecord>> removed;
+    std::shared_ptr<const GpuTaskWakeSink> wake;
     {
         std::lock_guard lock(mutex);
         const TaskGroupId id = group->snapshot.id;
@@ -287,10 +314,12 @@ void SchedulerState::cancelGroup(const std::shared_ptr<TaskGroupControl>& group)
         group->cancellation->requested.store(true, std::memory_order_release);
         static_cast<void>(removeQueuedGroupLocked(id, removed));
         static_cast<void>(cancelRunningGroupLocked(id));
+        wake = gpuWakeLocked();
     }
     for (const auto& record : removed) {
         finalizeRemoved(record);
     }
+    wakeBestEffort(wake);
 }
 
 bool SchedulerState::removePendingLocked(const std::shared_ptr<TaskRecord>& record) noexcept {
@@ -325,6 +354,9 @@ void SchedulerState::removeCoalescedLocked(
         record->completionClaimed = true;
         superseded.push_back(record);
         ++finalizing;
+        if (&target == &gpu) {
+            releaseGpuAccountingLocked(record);
+        }
         iterator = target.pending.erase(iterator);
     }
 }
@@ -350,7 +382,7 @@ std::size_t SchedulerState::countQueuedOwnerLocked(const TaskOwner owner) const 
             target.pending.begin(), target.pending.end(),
             [&owner](const auto& record) { return record->snapshot.owner == owner; }));
     };
-    return countIn(cpu) + countIn(blockingIo);
+    return countIn(cpu) + countIn(blockingIo) + countIn(gpu);
 }
 
 std::size_t SchedulerState::countQueuedGroupLocked(const TaskGroupId groupId) const noexcept {
@@ -359,13 +391,13 @@ std::size_t SchedulerState::countQueuedGroupLocked(const TaskGroupId groupId) co
             target.pending.begin(), target.pending.end(),
             [groupId](const auto& record) { return record->snapshot.groupId == groupId; }));
     };
-    return countIn(cpu) + countIn(blockingIo);
+    return countIn(cpu) + countIn(blockingIo) + countIn(gpu);
 }
 
 std::size_t SchedulerState::removeQueuedOwnerLocked(
     const TaskOwner owner, std::vector<std::shared_ptr<TaskRecord>>& removed) noexcept {
     std::size_t count = 0;
-    for (auto* target : {&cpu, &blockingIo}) {
+    for (auto* target : {&cpu, &blockingIo, &gpu}) {
         auto iterator = target->pending.begin();
         while (iterator != target->pending.end()) {
             const auto& record = *iterator;
@@ -388,7 +420,7 @@ std::size_t SchedulerState::removeQueuedOwnerLocked(
 std::size_t SchedulerState::removeQueuedGroupLocked(
     const TaskGroupId groupId, std::vector<std::shared_ptr<TaskRecord>>& removed) noexcept {
     std::size_t count = 0;
-    for (auto* target : {&cpu, &blockingIo}) {
+    for (auto* target : {&cpu, &blockingIo, &gpu}) {
         auto iterator = target->pending.begin();
         while (iterator != target->pending.end()) {
             const auto& record = *iterator;

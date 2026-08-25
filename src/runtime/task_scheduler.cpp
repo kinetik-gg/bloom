@@ -88,22 +88,35 @@ SchedulerState::SchedulerState(TaskSchedulerConfig schedulerConfig,
     : config(schedulerConfig), workerStartHook(std::move(startHook)) {
     cpu.capacity = config.cpuQueueCapacity;
     blockingIo.capacity = config.blockingIoQueueCapacity;
+    gpu.capacity = config.gpuPendingQueueCapacity;
     cpu.pending.reserve(cpu.capacity);
     blockingIo.pending.reserve(blockingIo.capacity);
-    cancellationQueue.reserve(cpu.capacity + blockingIo.capacity);
+    gpu.pending.reserve(gpu.capacity);
+    cancellationQueue.reserve(cpu.capacity + blockingIo.capacity + gpu.capacity);
     cpu.workers.reserve(config.cpuWorkerCount);
     blockingIo.workers.reserve(config.blockingIoWorkerCount);
     terminalRing.resize(config.terminalHistoryCapacity);
     const std::size_t activeAndQueuedCapacity =
-        config.cpuQueueCapacity + config.blockingIoQueueCapacity + config.cpuWorkerCount +
-        config.blockingIoWorkerCount;
-    running.reserve(config.cpuWorkerCount + config.blockingIoWorkerCount);
+        config.cpuQueueCapacity + config.blockingIoQueueCapacity + config.gpuAdmittedStateCapacity +
+        config.cpuWorkerCount + config.blockingIoWorkerCount;
+    running.reserve(config.cpuWorkerCount + config.blockingIoWorkerCount +
+                    config.gpuLiveContinuationCapacity);
     records.reserve(activeAndQueuedCapacity + config.terminalHistoryCapacity);
     groups.reserve(config.groupRegistryCapacity);
 }
 
 SchedulerState::~SchedulerState() {
     requestShutdown();
+    std::optional<GpuServiceGeneration> generation;
+    std::uint64_t attachmentId = 0;
+    {
+        std::lock_guard lock(mutex);
+        generation = gpuGeneration;
+        attachmentId = gpuAttachmentId;
+    }
+    if (generation.has_value()) {
+        static_cast<void>(forceGpuShutdown(*generation, attachmentId));
+    }
     joinWorkers();
 }
 
@@ -162,7 +175,15 @@ void SchedulerState::finalizerLoop() noexcept {
 }
 
 SchedulerState::ExecutorState& SchedulerState::executor(const TaskExecutor kind) noexcept {
-    return kind == TaskExecutor::Cpu ? cpu : blockingIo;
+    switch (kind) {
+    case TaskExecutor::Cpu:
+        return cpu;
+    case TaskExecutor::BlockingIo:
+        return blockingIo;
+    case TaskExecutor::Gpu:
+        return gpu;
+    }
+    return cpu;
 }
 
 std::shared_ptr<TaskRecord> SchedulerState::takeNextLocked(ExecutorState& target) {
@@ -294,6 +315,7 @@ void SchedulerState::finalizeRemoved(const std::shared_ptr<TaskRecord>& record) 
     publishTerminalSnapshot(record, publishedOutcome);
     {
         std::lock_guard lock(mutex);
+        releaseGpuAccountingLocked(record);
         if (finalizing > 0) {
             --finalizing;
         }
@@ -328,19 +350,33 @@ bool SchedulerState::reprioritize(const TaskId id, const TaskPriority priority) 
     if (!validPriority(priority)) {
         return false;
     }
-    std::lock_guard lock(mutex);
-    const auto found = records.find(id);
-    if (found == records.end()) {
-        return false;
+    std::shared_ptr<const GpuTaskWakeSink> wake;
+    {
+        std::lock_guard lock(mutex);
+        const auto found = records.find(id);
+        if (found == records.end()) {
+            return false;
+        }
+        const auto& record = found->second;
+        std::lock_guard recordLock(record->mutex);
+        if (record->snapshot.state != TaskState::Queued || record->completionClaimed) {
+            return false;
+        }
+        record->snapshot.priority = priority;
+        record->ageCredit = 0;
+        if (record->snapshot.executor == TaskExecutor::Gpu) {
+            wake = gpuWakeLocked();
+        } else {
+            executor(record->snapshot.executor).available.notify_one();
+        }
     }
-    const auto& record = found->second;
-    std::lock_guard recordLock(record->mutex);
-    if (record->snapshot.state != TaskState::Queued || record->completionClaimed) {
-        return false;
+    if (wake != nullptr) {
+        try {
+            (*wake)();
+        } catch (...) {
+            return true;
+        }
     }
-    record->snapshot.priority = priority;
-    record->ageCredit = 0;
-    executor(record->snapshot.executor).available.notify_one();
     return true;
 }
 
@@ -377,6 +413,7 @@ std::optional<TaskSnapshot> SchedulerState::snapshot(const TaskId id) const {
 }
 
 void SchedulerState::requestShutdown() noexcept {
+    std::shared_ptr<const GpuTaskWakeSink> wake;
     {
         std::lock_guard lock(mutex);
         if (stopping) {
@@ -390,7 +427,7 @@ void SchedulerState::requestShutdown() noexcept {
                 record->cancellation->requested.store(true, std::memory_order_release);
             }
         }
-        for (auto* target : {&cpu, &blockingIo}) {
+        for (auto* target : {&cpu, &blockingIo, &gpu}) {
             for (const auto& record : target->pending) {
                 std::lock_guard recordLock(record->mutex);
                 record->cancellation->requested.store(true, std::memory_order_release);
@@ -406,10 +443,18 @@ void SchedulerState::requestShutdown() noexcept {
                 group->cancellation->requested.store(true, std::memory_order_release);
             }
         }
+        wake = gpuWakeLocked();
     }
     cpu.available.notify_all();
     blockingIo.available.notify_all();
     cancellationAvailable.notify_all();
+    if (wake != nullptr) {
+        try {
+            (*wake)();
+        } catch (...) {
+            return;
+        }
+    }
 }
 
 bool SchedulerState::isAccepting() const noexcept {
@@ -419,8 +464,9 @@ bool SchedulerState::isAccepting() const noexcept {
 
 bool SchedulerState::isQuiescent() const noexcept {
     std::lock_guard lock(mutex);
-    return cpu.pending.empty() && blockingIo.pending.empty() && cpu.active == 0 &&
-           blockingIo.active == 0 && finalizing == 0;
+    return cpu.pending.empty() && blockingIo.pending.empty() && gpu.pending.empty() &&
+           cpu.active == 0 && blockingIo.active == 0 && gpuLiveContinuations == 0 &&
+           finalizing == 0;
 }
 
 } // namespace detail

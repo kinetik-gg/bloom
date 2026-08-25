@@ -21,6 +21,8 @@ struct SchedulerState;
 struct TaskContextState;
 struct TaskGroupControl;
 struct TaskSchedulerTestAccess;
+struct GpuCompletionCore;
+class GpuTaskWork;
 
 template <typename Result> struct ResultMailbox {
     std::mutex mutex;
@@ -137,6 +139,13 @@ template <> class TaskResult<void> final {
 
 template <TaskResultValue Value>
 using TaskFunction = std::function<TaskResult<Value>(TaskContext&)>;
+
+template <TaskResultValue Value> class GpuTaskCompletion;
+template <TaskResultValue Value>
+using GpuTaskStarter = std::function<void(TaskContext&, GpuTaskCompletion<Value>)>;
+using GpuTaskWakeSink = std::function<void()>;
+class GpuExecutorLease;
+struct GpuExecutorAttachment;
 
 namespace detail {
 
@@ -371,6 +380,14 @@ class TaskScheduler final {
         return submission;
     }
 
+    template <TaskResultValue Value>
+    [[nodiscard]] TaskSubmission<Value>
+    submitGpu(TaskRequest request, const GpuServiceGeneration generation,
+              const GpuTaskAdmission admission, GpuTaskStarter<Value> starter);
+
+    [[nodiscard]] GpuExecutorAttachment attachGpuExecutor(GpuServiceGeneration generation,
+                                                          GpuTaskWakeSink wakeSink);
+
     [[nodiscard]] TaskGroupSubmission createGroup(TaskOwner owner, std::string name);
     [[nodiscard]] bool cancel(TaskId id) noexcept;
     [[nodiscard]] std::size_t cancelOwner(TaskOwner owner);
@@ -398,8 +415,14 @@ class TaskScheduler final {
     [[nodiscard]] ErasedSubmission
     submitErased(TaskRequest request, std::shared_ptr<detail::CancellationState> cancellation,
                  std::shared_ptr<detail::TaskWork> work);
+    [[nodiscard]] ErasedSubmission submitGpuErased(
+        TaskRequest request, GpuServiceGeneration generation, GpuTaskAdmission admission,
+        std::shared_ptr<detail::CancellationState> cancellation,
+        std::shared_ptr<detail::TaskWork> work, std::shared_ptr<detail::GpuTaskWork> gpuWork);
 
     std::shared_ptr<detail::SchedulerState> state_;
 };
 
 } // namespace bloom::runtime
+
+#include <bloom/runtime/task_gpu_executor.hpp>

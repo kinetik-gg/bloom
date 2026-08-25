@@ -16,6 +16,11 @@ constexpr std::size_t kMaxQueueCapacity = 65'536;
 constexpr std::size_t kMaxTerminalHistory = 65'536;
 constexpr std::size_t kMaxDiagnosticsPerTask = 1'024;
 constexpr std::size_t kMaxGroupRegistry = 16'384;
+constexpr std::size_t kMaxGpuPendingQueue = 65'536;
+constexpr std::size_t kMaxGpuAdmittedStates = 65'536;
+constexpr std::size_t kMaxGpuLiveContinuations = 16'384;
+constexpr std::size_t kMaxGpuQueuedCommandBytes = std::size_t{1} << 30U;
+constexpr std::size_t kMaxGpuRequestOwnedBytes = std::size_t{1} << 30U;
 
 struct ScaledFraction {
     std::uint64_t quotient = 0;
@@ -159,10 +164,24 @@ bool TaskSchedulerConfig::isValid() const noexcept {
     return cpuWorkerCount > 0 && cpuWorkerCount <= kMaxCpuWorkers && blockingIoWorkerCount > 0 &&
            blockingIoWorkerCount <= kMaxBlockingIoWorkers && cpuQueueCapacity > 0 &&
            cpuQueueCapacity <= kMaxQueueCapacity && blockingIoQueueCapacity > 0 &&
-           blockingIoQueueCapacity <= kMaxQueueCapacity && terminalHistoryCapacity > 0 &&
+           blockingIoQueueCapacity <= kMaxQueueCapacity && gpuPendingQueueCapacity > 0 &&
+           gpuPendingQueueCapacity <= kMaxGpuPendingQueue && gpuAdmittedStateCapacity > 0 &&
+           gpuAdmittedStateCapacity <= kMaxGpuAdmittedStates &&
+           gpuPendingQueueCapacity <= gpuAdmittedStateCapacity && gpuLiveContinuationCapacity > 0 &&
+           gpuLiveContinuationCapacity <= kMaxGpuLiveContinuations &&
+           gpuLiveContinuationCapacity <= gpuAdmittedStateCapacity &&
+           gpuQueuedCommandByteCapacity > 0 &&
+           gpuQueuedCommandByteCapacity <= kMaxGpuQueuedCommandBytes &&
+           gpuRequestOwnedByteCapacity > 0 &&
+           gpuRequestOwnedByteCapacity <= kMaxGpuRequestOwnedBytes && terminalHistoryCapacity > 0 &&
            terminalHistoryCapacity <= kMaxTerminalHistory && diagnosticsPerTask > 0 &&
            diagnosticsPerTask <= kMaxDiagnosticsPerTask && groupRegistryCapacity > 0 &&
            groupRegistryCapacity <= kMaxGroupRegistry;
+}
+
+bool GpuTaskAdmission::isValid() const noexcept {
+    return queuedCommandBytes <= kMaxGpuQueuedCommandBytes &&
+           requestOwnedBytes <= kMaxGpuRequestOwnedBytes;
 }
 
 CancellationToken::CancellationToken(

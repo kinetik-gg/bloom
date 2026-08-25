@@ -19,6 +19,8 @@ QString submissionFailureMessage(const runtime::TaskSubmissionStatus status) {
     case runtime::TaskSubmissionStatus::QueueFull:
         return CompositionPreviewController::tr(
             "The preview could not start because the task queue is full");
+    case runtime::TaskSubmissionStatus::ExecutorUnavailable:
+        return CompositionPreviewController::tr("The requested task executor is unavailable");
     case runtime::TaskSubmissionStatus::ShuttingDown:
         return CompositionPreviewController::tr("The preview was cancelled during shutdown");
     case runtime::TaskSubmissionStatus::InvalidRequest:
