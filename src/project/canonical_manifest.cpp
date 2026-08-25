@@ -1,16 +1,12 @@
 #include <bloom/project/canonical_manifest.hpp>
 
+#include <algorithm>
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/persisted_text.hpp>
-#include <bloom/project/canonical_decimal.hpp>
-#include <bloom/project/canonical_json_string.hpp>
-
-#include <algorithm>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <limits>
 #include <span>
 #include <string_view>
 
@@ -154,130 +150,6 @@ failure(const CanonicalManifestError error,
     return {};
 }
 
-class SizeAccumulator final {
-  public:
-    [[nodiscard]] bool add(const std::size_t bytes) noexcept {
-        if (bytes > std::numeric_limits<std::size_t>::max() - size_) {
-            return false;
-        }
-        size_ += bytes;
-        return true;
-    }
-
-    [[nodiscard]] std::size_t size() const noexcept { return size_; }
-
-  private:
-    std::size_t size_ = 0;
-};
-
-[[nodiscard]] bool addStringToken(SizeAccumulator& size, const std::string_view value) noexcept {
-    const auto tokenSize = bloom::project::canonicalJsonStringTokenSize(value);
-    return tokenSize && size.add(*tokenSize.value());
-}
-
-[[nodiscard]] bool addIntegerToken(SizeAccumulator& size, const std::uint32_t value) noexcept {
-    return size.add(bloom::project::formatCanonicalUInt64(value).size());
-}
-
-[[nodiscard]] bool addMemberPrefix(SizeAccumulator& size, const std::size_t depth, const bool first,
-                                   const std::string_view name) noexcept {
-    const std::size_t separatorAndIndent = (first ? 1 : 2) + depth * 2;
-    return size.add(separatorAndIndent) && addStringToken(size, name) && size.add(2);
-}
-
-[[nodiscard]] bool addArrayElementPrefix(SizeAccumulator& size, const std::size_t depth,
-                                         const bool first) noexcept {
-    return size.add((first ? 1 : 2) + depth * 2);
-}
-
-[[nodiscard]] bool addNonEmptyContainerEnd(SizeAccumulator& size,
-                                           const std::size_t depth) noexcept {
-    return size.add(2 + (depth - 1) * 2);
-}
-
-[[nodiscard]] bool addRequirementSize(SizeAccumulator& size,
-                                      const ManifestRequirement& requirement) noexcept {
-    if (!size.add(1) || !addMemberPrefix(size, 3, true, "providerId") ||
-        !addStringToken(size, requirement.providerId) ||
-        !addMemberPrefix(size, 3, false, "capabilityId") ||
-        !addStringToken(size, requirement.capabilityId) ||
-        !addMemberPrefix(size, 3, false, "schemaVersion") || !size.add(1) ||
-        !addMemberPrefix(size, 4, true, "major") ||
-        !addIntegerToken(size, requirement.schemaVersion.major) ||
-        !addMemberPrefix(size, 4, false, "minor") ||
-        !addIntegerToken(size, requirement.schemaVersion.minor) ||
-        !addNonEmptyContainerEnd(size, 4) ||
-        !addMemberPrefix(size, 3, false, "providedNodeTypeIds") || !size.add(1)) {
-        return false;
-    }
-
-    if (requirement.providedNodeTypeIds.empty()) {
-        if (!size.add(1)) {
-            return false;
-        }
-    } else {
-        for (std::size_t index = 0; index < requirement.providedNodeTypeIds.size(); ++index) {
-            if (!addArrayElementPrefix(size, 4, index == 0) ||
-                !addStringToken(size, requirement.providedNodeTypeIds[index])) {
-                return false;
-            }
-        }
-        if (!addNonEmptyContainerEnd(size, 4)) {
-            return false;
-        }
-    }
-    return addNonEmptyContainerEnd(size, 3);
-}
-
-[[nodiscard]] CanonicalManifestSizeResult
-computeManifestSize(const CanonicalManifestV1& manifest,
-                    const CanonicalManifestLimits& limits) noexcept {
-    SizeAccumulator size;
-    if (!size.add(1) || !addMemberPrefix(size, 1, true, "format") ||
-        !addStringToken(size, manifest.format) ||
-        !addMemberPrefix(size, 1, false, "containerVersion") || !size.add(1) ||
-        !addMemberPrefix(size, 2, true, "major") ||
-        !addIntegerToken(size, manifest.containerVersion.major) ||
-        !addMemberPrefix(size, 2, false, "minor") ||
-        !addIntegerToken(size, manifest.containerVersion.minor) ||
-        !addNonEmptyContainerEnd(size, 2) || !addMemberPrefix(size, 1, false, "document") ||
-        !size.add(1) || !addMemberPrefix(size, 2, true, "path") ||
-        !addStringToken(size, manifest.documentPath) ||
-        !addMemberPrefix(size, 2, false, "schemaVersion") || !size.add(1) ||
-        !addMemberPrefix(size, 3, true, "major") ||
-        !addIntegerToken(size, manifest.documentSchemaVersion.major) ||
-        !addMemberPrefix(size, 3, false, "minor") ||
-        !addIntegerToken(size, manifest.documentSchemaVersion.minor) ||
-        !addNonEmptyContainerEnd(size, 3) || !addNonEmptyContainerEnd(size, 2) ||
-        !addMemberPrefix(size, 1, false, "requirements") || !size.add(1)) {
-        return CanonicalManifestSizeResult::failure(CanonicalManifestError::SizeOverflow);
-    }
-
-    if (manifest.requirements.empty()) {
-        if (!size.add(1)) {
-            return CanonicalManifestSizeResult::failure(CanonicalManifestError::SizeOverflow);
-        }
-    } else {
-        for (std::size_t index = 0; index < manifest.requirements.size(); ++index) {
-            if (!addArrayElementPrefix(size, 2, index == 0) ||
-                !addRequirementSize(size, manifest.requirements[index])) {
-                return CanonicalManifestSizeResult::failure(CanonicalManifestError::SizeOverflow,
-                                                            index);
-            }
-        }
-        if (!addNonEmptyContainerEnd(size, 2)) {
-            return CanonicalManifestSizeResult::failure(CanonicalManifestError::SizeOverflow);
-        }
-    }
-    if (!addNonEmptyContainerEnd(size, 1) || !size.add(1)) {
-        return CanonicalManifestSizeResult::failure(CanonicalManifestError::SizeOverflow);
-    }
-    if (size.size() > limits.maximumOutputBytes) {
-        return CanonicalManifestSizeResult::failure(CanonicalManifestError::ManifestSizeExceeded);
-    }
-    return CanonicalManifestSizeResult::success(size.size());
-}
-
 void requireSuccess(const CanonicalJsonWriterResult result) noexcept {
     if (!result) {
         std::terminate();
@@ -345,7 +217,18 @@ CanonicalManifestSizeResult canonicalManifestSize(const CanonicalManifestV1& man
         return CanonicalManifestSizeResult::failure(validation.error, validation.requirementIndex,
                                                     validation.nodeTypeIndex);
     }
-    return computeManifestSize(manifest, limits);
+    const auto maximumContainerEntries =
+        std::max({std::size_t{4}, limits.maximumRequirements, limits.maximumProvidedNodeTypes});
+    auto counter =
+        CanonicalJsonWriter::counting({.maximumDepth = 5,
+                                       .maximumValues = limits.maximumValues,
+                                       .maximumContainerEntries = maximumContainerEntries});
+    emitManifest(counter, manifest);
+    const auto requiredSize = counter.bytesRequired();
+    if (requiredSize > limits.maximumOutputBytes) {
+        return CanonicalManifestSizeResult::failure(CanonicalManifestError::ManifestSizeExceeded);
+    }
+    return CanonicalManifestSizeResult::success(requiredSize);
 }
 
 CanonicalManifestWriteResult

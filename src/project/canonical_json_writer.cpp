@@ -37,6 +37,14 @@ CanonicalJsonWriter::CanonicalJsonWriter(const std::span<char> output,
                                          const CanonicalJsonWriterLimits limits) noexcept
     : output_(output), limits_(limits) {}
 
+CanonicalJsonWriter::CanonicalJsonWriter(CountOnlyTag,
+                                         const CanonicalJsonWriterLimits limits) noexcept
+    : limits_(limits), mode_(Mode::Count) {}
+
+CanonicalJsonWriter CanonicalJsonWriter::counting(const CanonicalJsonWriterLimits limits) noexcept {
+    return CanonicalJsonWriter(CountOnlyTag{}, limits);
+}
+
 CanonicalJsonWriterResult CanonicalJsonWriter::validateLimits() const noexcept {
     if (limits_.maximumDepth > kCanonicalJsonMaximumDepth ||
         limits_.maximumValues > kCanonicalJsonMaximumValues ||
@@ -52,7 +60,7 @@ CanonicalJsonWriter::ensureAdditionalCapacity(const std::size_t additionalBytes)
     if (!checkedAdd(offset_, additionalBytes, requiredCapacity)) {
         return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::SizeOverflow);
     }
-    if (requiredCapacity > output_.size()) {
+    if (!isCounting() && requiredCapacity > output_.size()) {
         return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::OutputCapacityExceeded,
                                                   requiredCapacity);
     }
@@ -98,6 +106,11 @@ void CanonicalJsonWriter::writeValuePrefix(const ValuePrefix& prefix) noexcept {
         return;
     }
 
+    if (isCounting()) {
+        offset_ += prefix.size;
+        return;
+    }
+
     const auto& parent = frames_[depth_ - 1];
     if (parent.entryCount != 0) {
         output_[offset_++] = ',';
@@ -137,7 +150,11 @@ CanonicalJsonWriterResult CanonicalJsonWriter::writeContainerStart(const Contain
     }
 
     writeValuePrefix(prefix);
-    output_[offset_++] = opening;
+    if (isCounting()) {
+        ++offset_;
+    } else {
+        output_[offset_++] = opening;
+    }
     completeValue();
     frames_[depth_++] = Frame{0, kind, false};
     return CanonicalJsonWriterResult::success();
@@ -165,12 +182,16 @@ CanonicalJsonWriterResult CanonicalJsonWriter::writeContainerEnd(const Container
         return capacity;
     }
 
-    if (frame.entryCount != 0) {
-        output_[offset_++] = '\n';
-        std::ranges::fill(output_.subspan(offset_, (depth_ - 1) * 2), ' ');
-        offset_ += (depth_ - 1) * 2;
+    if (isCounting()) {
+        offset_ += operationSize;
+    } else {
+        if (frame.entryCount != 0) {
+            output_[offset_++] = '\n';
+            std::ranges::fill(output_.subspan(offset_, (depth_ - 1) * 2), ' ');
+            offset_ += (depth_ - 1) * 2;
+        }
+        output_[offset_++] = closing;
     }
-    output_[offset_++] = closing;
     --depth_;
     return CanonicalJsonWriterResult::success();
 }
@@ -231,21 +252,25 @@ CanonicalJsonWriterResult CanonicalJsonWriter::memberName(const std::string_view
         return capacity;
     }
 
-    const auto tokenOffset = offset_ + prefixSize;
-    const auto tokenOutput = output_.subspan(tokenOffset, *tokenSizeResult.value());
-    const auto encoded = encodeCanonicalJsonStringToken(name, tokenOutput);
-    if (!encoded) {
-        return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::InvalidUtf8);
-    }
+    if (isCounting()) {
+        offset_ += operationSize;
+    } else {
+        const auto tokenOffset = offset_ + prefixSize;
+        const auto tokenOutput = output_.subspan(tokenOffset, *tokenSizeResult.value());
+        const auto encoded = encodeCanonicalJsonStringToken(name, tokenOutput);
+        if (!encoded) {
+            return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::InvalidUtf8);
+        }
 
-    if (frame.entryCount != 0) {
-        output_[offset_++] = ',';
+        if (frame.entryCount != 0) {
+            output_[offset_++] = ',';
+        }
+        output_[offset_++] = '\n';
+        std::ranges::fill(output_.subspan(offset_, depth_ * 2), ' ');
+        offset_ += depth_ * 2 + *tokenSizeResult.value();
+        output_[offset_++] = ':';
+        output_[offset_++] = ' ';
     }
-    output_[offset_++] = '\n';
-    std::ranges::fill(output_.subspan(offset_, depth_ * 2), ' ');
-    offset_ += depth_ * 2 + *tokenSizeResult.value();
-    output_[offset_++] = ':';
-    output_[offset_++] = ' ';
     ++frame.entryCount;
     frame.awaitingValue = true;
     return CanonicalJsonWriterResult::success();
@@ -272,13 +297,17 @@ CanonicalJsonWriterResult CanonicalJsonWriter::stringValue(const std::string_vie
         return capacity;
     }
 
-    const auto tokenOutput = output_.subspan(offset_ + prefix.size, *tokenSizeResult.value());
-    const auto encoded = encodeCanonicalJsonStringToken(value, tokenOutput);
-    if (!encoded) {
-        return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::InvalidUtf8);
+    if (isCounting()) {
+        offset_ += operationSize;
+    } else {
+        const auto tokenOutput = output_.subspan(offset_ + prefix.size, *tokenSizeResult.value());
+        const auto encoded = encodeCanonicalJsonStringToken(value, tokenOutput);
+        if (!encoded) {
+            return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::InvalidUtf8);
+        }
+        writeValuePrefix(prefix);
+        offset_ += *tokenSizeResult.value();
     }
-    writeValuePrefix(prefix);
-    offset_ += *tokenSizeResult.value();
     completeValue();
     return CanonicalJsonWriterResult::success();
 }
@@ -296,9 +325,13 @@ CanonicalJsonWriterResult CanonicalJsonWriter::writeToken(const std::string_view
         return capacity;
     }
 
-    writeValuePrefix(prefix);
-    std::ranges::copy(token, output_.subspan(offset_, token.size()).begin());
-    offset_ += token.size();
+    if (isCounting()) {
+        offset_ += operationSize;
+    } else {
+        writeValuePrefix(prefix);
+        std::ranges::copy(token, output_.subspan(offset_, token.size()).begin());
+        offset_ += token.size();
+    }
     completeValue();
     return CanonicalJsonWriterResult::success();
 }
@@ -339,7 +372,11 @@ CanonicalJsonWriterResult CanonicalJsonWriter::finish() noexcept {
         return capacity;
     }
 
-    output_[offset_++] = '\n';
+    if (isCounting()) {
+        ++offset_;
+    } else {
+        output_[offset_++] = '\n';
+    }
     finished_ = true;
     return CanonicalJsonWriterResult::success();
 }

@@ -1,3 +1,5 @@
+#include <bloom/project/canonical_base64.hpp>
+#include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_json_writer.hpp>
 #include <bloom/project/unknown_json_number.hpp>
 
@@ -10,6 +12,7 @@
 #include <limits>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace {
 
@@ -38,6 +41,9 @@ using bloom::project::parseUnknownJsonNumber;
 static_assert(bloom::project::kCanonicalJsonMaximumDepth == 128);
 static_assert(bloom::project::kCanonicalJsonMaximumValues == 4'000'000);
 static_assert(bloom::project::kCanonicalJsonMaximumContainerEntries == 1'000'000);
+static_assert(noexcept(CanonicalJsonWriter::counting()));
+static_assert(!std::is_copy_constructible_v<CanonicalJsonWriter>);
+static_assert(!std::is_move_constructible_v<CanonicalJsonWriter>);
 
 void expectSuccess(Expectations& expectations, const CanonicalJsonWriterResult result,
                    const std::string_view message) {
@@ -49,6 +55,234 @@ void expectSuccess(Expectations& expectations, const CanonicalJsonWriterResult r
 void expectError(Expectations& expectations, const CanonicalJsonWriterResult result,
                  const CanonicalJsonWriterError error, const std::string_view message) {
     expectations.expect(!result && result.error() == error, message);
+}
+
+bool emitCountingParityFixture(CanonicalJsonWriter& writer) {
+    const auto signedMinimum = bloom::project::formatCanonicalInt64(INT64_MIN);
+    const auto unsignedMaximum = bloom::project::formatCanonicalUInt64(UINT64_MAX);
+    const auto rationalNumerator = bloom::project::formatCanonicalInt64(-7);
+    const auto rationalDenominator = bloom::project::formatCanonicalInt64(3);
+    const auto unknownMinimum = parseUnknownJsonNumber("-9223372036854775808");
+    const auto unknownNegativeZero = parseUnknownJsonNumber("-0.0");
+    const auto unknownSubnormal = parseUnknownJsonNumber("5e-324");
+    if (!unknownMinimum || !unknownNegativeZero || !unknownSubnormal) {
+        return false;
+    }
+
+    constexpr std::array payload{std::byte{0x00}, std::byte{0x01}, std::byte{0x02}, std::byte{0xfe},
+                                 std::byte{0xff}};
+    std::array<char, 8> base64{};
+    if (!bloom::project::encodeCanonicalBase64(payload, base64)) {
+        return false;
+    }
+
+    constexpr std::string_view escaped{"\0\b\t\n\f\r\"\\/\xf0\x9f\x8c\xb1", 13};
+    bool succeeded = true;
+    const auto accept = [&succeeded](const CanonicalJsonWriterResult result) {
+        succeeded = static_cast<bool>(result) && succeeded;
+    };
+
+    accept(writer.beginObject());
+    accept(writer.memberName("uint32"));
+    accept(writer.integerValue(UINT32_MAX));
+    accept(writer.memberName("int64"));
+    accept(writer.stringValue(signedMinimum.view()));
+    accept(writer.memberName("uint64"));
+    accept(writer.stringValue(unsignedMaximum.view()));
+    accept(writer.memberName("rational"));
+    accept(writer.beginObject());
+    accept(writer.memberName("numerator"));
+    accept(writer.stringValue(rationalNumerator.view()));
+    accept(writer.memberName("denominator"));
+    accept(writer.stringValue(rationalDenominator.view()));
+    accept(writer.endObject());
+    accept(writer.memberName("float64"));
+    accept(writer.beginArray());
+    accept(writer.float64Value(std::bit_cast<double>(0x8000000000000000ULL)));
+    accept(writer.float64Value(std::bit_cast<double>(0x0000000000000001ULL)));
+    accept(writer.float64Value(1.7976931348623157e+308));
+    accept(writer.endArray());
+    accept(writer.memberName("escaped"));
+    accept(writer.stringValue(escaped));
+    accept(writer.memberName("base64"));
+    accept(writer.stringValue(std::string_view(base64.data(), base64.size())));
+    accept(writer.memberName("unknownNumbers"));
+    accept(writer.beginArray());
+    accept(writer.unknownNumberValue(*unknownMinimum.value()));
+    accept(writer.unknownNumberValue(*unknownNegativeZero.value()));
+    accept(writer.unknownNumberValue(*unknownSubnormal.value()));
+    accept(writer.endArray());
+    accept(writer.memberName("literals"));
+    accept(writer.beginArray());
+    accept(writer.booleanValue(true));
+    accept(writer.booleanValue(false));
+    accept(writer.nullValue());
+    accept(writer.endArray());
+    accept(writer.endObject());
+    accept(writer.finish());
+    return succeeded;
+}
+
+void testCountingMatchesWritingForEveryToken(Expectations& expectations) {
+    auto counter = CanonicalJsonWriter::counting();
+    expectations.expect(counter.isCounting() && counter.bytesRequired() == 0 &&
+                            counter.bytesWritten() == 0 && counter.written().empty(),
+                        "count-only mode begins empty without exposing fictitious written bytes");
+    expectations.expect(emitCountingParityFixture(counter) && counter.isFinished(),
+                        "the count pass accepts the complete canonical token fixture");
+    const auto exactSize = counter.bytesRequired();
+
+    std::array<char, 2'048> output{};
+    output.fill('?');
+    expectations.expect(exactSize < output.size(), "the parity fixture fits fixed test storage");
+    CanonicalJsonWriter writer(std::span<char>(output).first(exactSize));
+    expectations.expect(emitCountingParityFixture(writer) && writer.isFinished(),
+                        "the exact-size write pass accepts the same operation sequence");
+    expectations.expect(!writer.isCounting() && writer.bytesRequired() == exactSize &&
+                            writer.bytesWritten() == exactSize &&
+                            writer.written().size() == exactSize && output[exactSize] == '?',
+                        "counted bytes equal actual bytes and extra storage remains untouched");
+}
+
+void testCountingEmptyContainersAndScalarRoots(Expectations& expectations) {
+    auto objectCounter = CanonicalJsonWriter::counting();
+    expectSuccess(expectations, objectCounter.beginObject(), "counted empty object begins");
+    expectSuccess(expectations, objectCounter.endObject(), "counted empty object ends");
+    expectSuccess(expectations, objectCounter.finish(), "counted empty object finishes");
+    expectations.expect(objectCounter.bytesRequired() == 3,
+                        "an empty object count includes compact braces and final LF");
+
+    auto arrayCounter = CanonicalJsonWriter::counting();
+    expectSuccess(expectations, arrayCounter.beginArray(), "counted empty array begins");
+    expectSuccess(expectations, arrayCounter.endArray(), "counted empty array ends");
+    expectSuccess(expectations, arrayCounter.finish(), "counted empty array finishes");
+    expectations.expect(arrayCounter.bytesRequired() == 3,
+                        "an empty array count includes compact brackets and final LF");
+
+    auto scalarCounter = CanonicalJsonWriter::counting();
+    expectSuccess(expectations, scalarCounter.stringValue("root"),
+                  "counted scalar root is accepted");
+    expectations.expect(scalarCounter.bytesRequired() == 6 && !scalarCounter.isFinished(),
+                        "a pre-finish count reports only accepted logical bytes");
+    expectSuccess(expectations, scalarCounter.finish(), "counted scalar root finishes");
+    expectations.expect(scalarCounter.bytesRequired() == 7,
+                        "a finished scalar count includes the final LF");
+}
+
+void testCountingSharesStateAndValidation(Expectations& expectations) {
+    std::array<char, 256> output{};
+    auto counter = CanonicalJsonWriter::counting();
+    CanonicalJsonWriter writer(output);
+
+    const auto expectParity =
+        [&](const CanonicalJsonWriterResult counted, const CanonicalJsonWriterResult written,
+            const CanonicalJsonWriterError error, const std::string_view message) {
+            expectations.expect(counted.error() == error && written.error() == error &&
+                                    counter.bytesRequired() == writer.bytesRequired(),
+                                message);
+        };
+
+    expectParity(counter.finish(), writer.finish(), CanonicalJsonWriterError::InvalidState,
+                 "empty finish has identical count/write validation");
+    expectParity(counter.memberName("outside"), writer.memberName("outside"),
+                 CanonicalJsonWriterError::InvalidState,
+                 "member names outside objects fail identically");
+    expectParity(counter.beginObject(), writer.beginObject(), CanonicalJsonWriterError::None,
+                 "root object accounting matches output");
+    const auto beforeMissingName = counter.bytesRequired();
+    expectParity(counter.stringValue("missing-name"), writer.stringValue("missing-name"),
+                 CanonicalJsonWriterError::InvalidState,
+                 "object values without names fail identically");
+    expectations.expect(counter.bytesRequired() == beforeMissingName,
+                        "a count-mode grammar failure changes no measured state");
+    expectParity(counter.endArray(), writer.endArray(), CanonicalJsonWriterError::InvalidState,
+                 "mismatched closes fail identically");
+    expectParity(counter.memberName("value"), writer.memberName("value"),
+                 CanonicalJsonWriterError::None, "member-name accounting matches output");
+    const auto beforeInvalidNumber = counter.bytesRequired();
+    expectParity(counter.float64Value(std::numeric_limits<double>::infinity()),
+                 writer.float64Value(std::numeric_limits<double>::infinity()),
+                 CanonicalJsonWriterError::NonFiniteNumber,
+                 "non-finite validation is shared by both modes");
+    expectations.expect(counter.bytesRequired() == beforeInvalidNumber,
+                        "a count-mode token failure preserves the pending member");
+    expectParity(counter.nullValue(), writer.nullValue(), CanonicalJsonWriterError::None,
+                 "a valid retry completes the same pending member");
+    expectParity(counter.endObject(), writer.endObject(), CanonicalJsonWriterError::None,
+                 "container close accounting matches output");
+    expectParity(counter.finish(), writer.finish(), CanonicalJsonWriterError::None,
+                 "final-LF accounting matches output");
+    expectations.expect(counter.bytesWritten() == 0 && counter.written().empty() &&
+                            counter.bytesRequired() == writer.bytesWritten(),
+                        "count-only mode allocates or writes no destination storage");
+}
+
+void testCountingLimitFailuresAreTransactional(Expectations& expectations) {
+    auto depthCounter = CanonicalJsonWriter::counting(
+        {.maximumDepth = 2, .maximumValues = 4, .maximumContainerEntries = 4});
+    expectSuccess(expectations, depthCounter.beginArray(), "counted depth-one array begins");
+    expectSuccess(expectations, depthCounter.beginArray(), "counted depth-two array begins");
+    const auto beforeDepthFailure = depthCounter.bytesRequired();
+    expectError(expectations, depthCounter.nullValue(),
+                CanonicalJsonWriterError::DepthLimitExceeded,
+                "counting enforces the configured depth limit");
+    expectations.expect(depthCounter.bytesRequired() == beforeDepthFailure,
+                        "a counted depth failure changes no size or stack state");
+    expectSuccess(expectations, depthCounter.endArray(),
+                  "the inner counted array closes after depth failure");
+    expectSuccess(expectations, depthCounter.endArray(),
+                  "the outer counted array closes after depth failure");
+    expectSuccess(expectations, depthCounter.finish(), "the depth-limited count finishes");
+
+    auto valueCounter = CanonicalJsonWriter::counting(
+        {.maximumDepth = 4, .maximumValues = 2, .maximumContainerEntries = 4});
+    expectSuccess(expectations, valueCounter.beginArray(), "counted value-limited array begins");
+    expectSuccess(expectations, valueCounter.nullValue(), "the counted child reaches the limit");
+    const auto beforeValueFailure = valueCounter.bytesRequired();
+    expectError(expectations, valueCounter.booleanValue(true),
+                CanonicalJsonWriterError::ValueLimitExceeded,
+                "counting enforces the configured value limit");
+    expectations.expect(valueCounter.bytesRequired() == beforeValueFailure,
+                        "a counted value failure changes no measured state");
+    expectSuccess(expectations, valueCounter.endArray(),
+                  "the counted array closes after value failure");
+    expectSuccess(expectations, valueCounter.finish(), "the value-limited count finishes");
+
+    auto memberCounter = CanonicalJsonWriter::counting(
+        {.maximumDepth = 4, .maximumValues = 4, .maximumContainerEntries = 1});
+    expectSuccess(expectations, memberCounter.beginObject(),
+                  "counted member-limited object begins");
+    expectSuccess(expectations, memberCounter.memberName("one"), "its only member begins");
+    expectSuccess(expectations, memberCounter.nullValue(), "its only member completes");
+    const auto beforeMemberFailure = memberCounter.bytesRequired();
+    expectError(expectations, memberCounter.memberName("two"),
+                CanonicalJsonWriterError::ContainerLimitExceeded,
+                "counting enforces the configured member limit");
+    expectations.expect(memberCounter.bytesRequired() == beforeMemberFailure,
+                        "a counted member failure changes no measured object state");
+    expectSuccess(expectations, memberCounter.endObject(),
+                  "the counted object closes after member failure");
+    expectSuccess(expectations, memberCounter.finish(), "the member-limited count finishes");
+
+    constexpr std::string_view invalidUtf8{"\xED\xA0\x80", 3};
+    auto utf8Counter = CanonicalJsonWriter::counting();
+    expectError(expectations, utf8Counter.stringValue(invalidUtf8),
+                CanonicalJsonWriterError::InvalidUtf8,
+                "counting validates string tokens even without a destination");
+    expectations.expect(utf8Counter.bytesRequired() == 0,
+                        "invalid UTF-8 cannot contribute fictitious counted bytes");
+    expectSuccess(expectations, utf8Counter.stringValue("ok"),
+                  "a valid string follows a counted UTF-8 failure");
+    expectSuccess(expectations, utf8Counter.finish(), "the recovered UTF-8 count finishes");
+
+    auto invalidCounter = CanonicalJsonWriter::counting(
+        {.maximumDepth = bloom::project::kCanonicalJsonMaximumDepth + 1,
+         .maximumValues = bloom::project::kCanonicalJsonMaximumValues,
+         .maximumContainerEntries = bloom::project::kCanonicalJsonMaximumContainerEntries});
+    expectError(expectations, invalidCounter.nullValue(), CanonicalJsonWriterError::InvalidLimits,
+                "counting cannot raise the fixed implementation ceilings");
+    expectations.expect(invalidCounter.bytesRequired() == 0,
+                        "invalid count limits cannot create partial measured output");
 }
 
 void testGoldenLayout(Expectations& expectations) {
@@ -252,7 +486,8 @@ void testCapacityIsTransactional(Expectations& expectations) {
     const auto scalar = scalarWriter.stringValue("four");
     expectations.expect(
         !scalar && scalar.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
-            scalar.requiredCapacity() == 6 && scalarWriter.bytesWritten() == 0 &&
+            scalar.requiredCapacity() == 6 && scalarWriter.bytesRequired() == 0 &&
+            scalarWriter.bytesWritten() == 0 &&
             std::ranges::all_of(scalarOutput,
                                 [](const char character) { return character == sentinel; }),
         "a capacity failure reports the exact requirement and writes no token");
@@ -265,6 +500,7 @@ void testCapacityIsTransactional(Expectations& expectations) {
     const auto member = memberWriter.memberName("a-name-too-long");
     expectations.expect(
         !member && member.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
+            memberWriter.bytesRequired() == beforeMember &&
             memberWriter.bytesWritten() == beforeMember && memberOutput.front() == '{' &&
             std::ranges::all_of(memberOutput.begin() + 1, memberOutput.end(),
                                 [](const char character) { return character == sentinel; }),
@@ -275,6 +511,7 @@ void testCapacityIsTransactional(Expectations& expectations) {
     const auto value = memberWriter.stringValue("too-long");
     expectations.expect(!value &&
                             value.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
+                            memberWriter.bytesRequired() == beforeValue &&
                             memberWriter.bytesWritten() == beforeValue,
                         "a value capacity failure preserves the pending-member state");
     expectSuccess(expectations, memberWriter.nullValue(),
@@ -285,6 +522,7 @@ void testCapacityIsTransactional(Expectations& expectations) {
     expectations.expect(!finish &&
                             finish.error() == CanonicalJsonWriterError::OutputCapacityExceeded &&
                             finish.requiredCapacity() == beforeFinalLf + 1 &&
+                            memberWriter.bytesRequired() == beforeFinalLf &&
                             memberWriter.bytesWritten() == beforeFinalLf,
                         "a missing final-LF byte is reported without changing output");
 }
@@ -437,6 +675,10 @@ void testInvalidLimits(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
+    testCountingMatchesWritingForEveryToken(expectations);
+    testCountingEmptyContainersAndScalarRoots(expectations);
+    testCountingSharesStateAndValidation(expectations);
+    testCountingLimitFailuresAreTransactional(expectations);
     testGoldenLayout(expectations);
     testEmptyAndRootValues(expectations);
     testGrammarAndRecovery(expectations);

@@ -65,13 +65,21 @@ class [[nodiscard]] CanonicalJsonWriterResult final {
     CanonicalJsonWriterError error_ = CanonicalJsonWriterError::None;
 };
 
-// Writes one complete canonical JSON value into caller-owned storage. The writer uses a fixed
-// depth stack and never allocates. Known-schema object ordering remains the caller's
-// responsibility: memberName() preserves call order exactly and performs no sorting.
+// Writes or counts one complete canonical JSON value with the same fixed state machine. Both modes
+// use a fixed depth stack and never allocate. Destination capacity is intentionally a write-only
+// concern; all grammar, token, resource-limit, and size-overflow validation is shared. Known-schema
+// object ordering remains the caller's responsibility: memberName() preserves call order exactly
+// and performs no sorting.
 class CanonicalJsonWriter final {
   public:
     explicit CanonicalJsonWriter(std::span<char> output, CanonicalJsonWriterLimits limits =
                                                              CanonicalJsonWriterLimits{}) noexcept;
+
+    // Count-only mode validates the same operation sequence and tokens as write mode while touching
+    // no destination or applying a destination-capacity limit. After a successful finish(),
+    // bytesRequired() is the exact span size for a second pass.
+    [[nodiscard]] static CanonicalJsonWriter
+    counting(CanonicalJsonWriterLimits limits = CanonicalJsonWriterLimits{}) noexcept;
 
     CanonicalJsonWriter(const CanonicalJsonWriter&) = delete;
     CanonicalJsonWriter& operator=(const CanonicalJsonWriter&) = delete;
@@ -101,13 +109,28 @@ class CanonicalJsonWriter final {
     // Completes the document with exactly one LF. A second call or any later write is invalid.
     [[nodiscard]] CanonicalJsonWriterResult finish() noexcept;
 
-    [[nodiscard]] std::size_t bytesWritten() const noexcept { return offset_; }
+    [[nodiscard]] bool isCounting() const noexcept { return mode_ == Mode::Count; }
+    // Before a successful finish this is the logical byte count accepted so far, not a complete
+    // document size. In write mode it equals bytesWritten(). If a write operation fails for
+    // capacity, the space that operation needed is result.requiredCapacity().
+    [[nodiscard]] std::size_t bytesRequired() const noexcept { return offset_; }
+    [[nodiscard]] std::size_t bytesWritten() const noexcept { return isCounting() ? 0 : offset_; }
     [[nodiscard]] std::span<const char> written() const noexcept {
-        return {output_.data(), offset_};
+        return isCounting() ? std::span<const char>{}
+                            : std::span<const char>{output_.data(), offset_};
     }
     [[nodiscard]] bool isFinished() const noexcept { return finished_; }
 
   private:
+    enum class Mode : std::uint8_t {
+        Write,
+        Count,
+    };
+
+    struct CountOnlyTag final {};
+
+    explicit CanonicalJsonWriter(CountOnlyTag, CanonicalJsonWriterLimits limits) noexcept;
+
     enum class ContainerKind : std::uint8_t {
         Object,
         Array,
@@ -143,6 +166,7 @@ class CanonicalJsonWriter final {
     std::size_t valueCount_ = 0;
     bool rootWritten_ = false;
     bool finished_ = false;
+    Mode mode_ = Mode::Write;
 };
 
 static_assert(std::is_trivially_copyable_v<CanonicalJsonWriterLimits>);
