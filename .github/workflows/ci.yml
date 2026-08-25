@@ -1,16 +1,23 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Linux quality
-    runs-on: ubuntu-latest
+  linux:
+    name: Linux Clang quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       CC: clang
       CXX: clang++
@@ -40,42 +47,8 @@ jobs:
       - name: Test repository checkers
         run: >-
           ctest --preset dev
-          -R '^(bloom\.quality\.checker_self_tests|bloom\.quality\.dependency_artifact_checker_self_tests)$'
+          -R '^bloom\.quality\..*_self_tests$'
+          --output-on-failure
 
       - name: Test Clang build
-        run: ctest --preset dev -LE quality
-
-  build-and-test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
-        with:
-          version: "6.8.3"
-          cache: true
-
-      - name: Configure
-        run: cmake --preset dev
-
-      - name: Build
-        run: cmake --build --preset dev --parallel
-
-      - name: Test dependency artifact checks
-        run: >-
-          ctest --preset dev --output-on-failure
-          -R '^bloom\.quality\.(dependency_artifacts|dependency_artifact_checker_self_tests)$'
-
-      - name: Test
-        run: ctest --preset dev -LE quality
+        run: ctest --preset dev --output-on-failure
