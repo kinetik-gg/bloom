@@ -138,8 +138,7 @@ a typed report. Each facet has one preservation state:
 
 The report covers at least pixels, precision, color, alpha association, channel names/roles, data
 window, display window, pixel aspect, compression, metadata, and external dependencies. Every
-non-exact facet carries a stable code, source/target values, artist-facing explanation, and whether
-the preset permits it.
+non-exact facet carries a stable code, source/target values, and whether the preset permits it.
 
 Analysis has two explicit stages. A deterministic typed report attempt may describe `Missing` or
 `Unsupported` inputs and remain useful to Jobs, scripting, headless clients, and the UI without
@@ -148,6 +147,74 @@ identity exists and, for PNG, a matching expected OCIO revision and validated ca
 `DisplayProcessorIdentity` exist. Approval requires both that digest and all eleven derived
 permission bits. Bloom never invents an empty PNG display identity or a placeholder process
 identity merely to hash a failure report.
+
+### Analyzer And Owning Report Contract
+
+Version 1 has two public preset-specific analyzer entry points:
+`analyzePngRgba8SrgbV1(PngRgba8SrgbAnalysisInputV1)` and
+`analyzeFlatExrRgba32fLinRec709SceneV1(FlatExrRgba32fLinRec709SceneAnalysisInputV1)`. There is no
+public entry point that accepts a preset enum plus a union of optional fields. The PNG input contains
+its expected 32-byte OCIO revision as a required value and its typed color-resolution result; the
+EXR input contains neither field. Absence of the PNG expected revision is therefore an
+input-construction failure, not a report facet. This shape prevents a caller from constructing PNG
+without its structural dependencies or attaching PNG-only state to EXR.
+
+Both inputs carry one typed process source. Its `Ready` arm owns or retains the immutable process
+frame from which the source descriptor is derived. Its `Missing` arm still contains a validated
+`Rgba32fImageDescriptor`, but states that the immutable pixel payload or semantic identity is not
+available. The source descriptor is never optional and is never invented from target defaults.
+Process `Missing` changes only the Pixels facet to `Missing`, `process-frame.missing`; windows,
+pixel aspect, precision, color, alpha, channels, compression, metadata, and dependencies continue
+to derive independently from the known source descriptor and their own typed inputs.
+
+Analyzer inputs use only these closed states:
+
+| Input | Version 1 states | Derivation |
+| --- | --- | --- |
+| process | `Ready`, `Missing` | `Missing` affects only Pixels as specified above |
+| adapter | `Qualified`, `Unavailable` | `Unavailable` produces external `adapter.unavailable`; capability states `Development` and `Unqualified` are mapped to this input state before analysis |
+| compression | `Available`, `Unavailable` | `Unavailable` changes only Compression to `compression.unavailable` |
+| other output dependency | `Available`, `Missing` | `Missing` contributes external `dependency.missing` |
+| PNG color resolution | `Ready`, `Missing`, `Changed`, `Invalid`, `MissingResource`, `UnsupportedVersion` | non-ready states map respectively to `ocio.missing`, `ocio.changed`, `ocio.invalid`, `ocio.resource-missing`, and `ocio.version-unsupported` on Color and contribute external `dependency.missing` |
+
+An enum value outside these sets, an invalid source descriptor, or another structurally impossible
+combination fails analyzer construction. A resolved PNG configuration whose helper, processor, or
+execution provider cannot run is an adapter-execution failure: Color keeps its `Ready` nominal
+tuple while External Dependencies uses `adapter.unavailable`. Configuration-resolution failures
+retain their exact `ocio.*` Color code and contribute `dependency.missing`; they are not rewritten
+as adapter failures.
+
+The analyzer generates a non-default-constructible, move-only `OutputAnalysisReportV1`. It owns an
+immutable fixed set of eleven semantic assessments and bounded descriptor storage; each source or
+target descriptor is at most 1024 ASCII bytes and the twenty-two descriptors together contain at
+most `22528` bytes. It exposes a borrowed report view only from `const&`; the rvalue view overload is
+deleted. It also exposes its derived permission mask and approvability by value. There is no public
+mutable assessment access, general report builder, or constructor that accepts caller-chosen
+state/code/permission tuples. Long-lived UI, Jobs, Python, and headless consumers retain exactly
+`std::shared_ptr<const OutputAnalysisReportV1>`.
+
+Localized explanations and suggested actions are mapped from preset, facet, and stable code outside
+the semantic report. They are neither retained by `OutputAnalysisReportV1` nor serialized into its
+digest. Every generated owning report validates its own borrowed view with the closed validator
+before it is returned or shared. A nonapprovable but valid report is a successful analysis attempt;
+allocation failure, invalid input, or a generated-report invariant failure are typed analyzer
+failures and never publish a partial report.
+
+Facet derivation is independent except for the declared external-dependency aggregation. Its exact
+precedence is `resource.limit-exceeded` over `adapter.unavailable` over `dependency.missing` over the
+nominal PNG `png.ocio-external-reference` or EXR Exact tuple. `dependency.missing` includes a
+non-`Ready` PNG color resolution and an explicitly missing other output dependency. Window and
+pixel-aspect failures remain independently truthful; in particular, `window.out-of-range` and
+`resource.limit-exceeded` may coexist. The generic `*.unsupported` codes remain accepted by the
+version 1 validator for the frozen wire vocabulary, but these preset-specific analyzers cannot emit
+them until a future typed source or target contract represents the corresponding unsupported case.
+
+Analyzer tests exhaust both nominal presets; every closed input state and invalid enum; Ready and
+Missing process sources with a retained descriptor; exact-limit and over-limit dimensions and pixel
+counts; PNG color-code mapping; adapter, compression, and other-dependency isolation; every external
+precedence edge; coexistence of window and resource failures; allocation and internal-invariant
+failure without partial publication; move/view/shared-ownership lifetimes; self-validation; and the
+unchanged digest golden vectors.
 
 Canonical ordering and serialization produce an `OutputAnalysisDigest`. A caller cannot reduce this
 to `acceptLoss = true`. Publication requires an immutable request that binds the exact digest the
@@ -179,8 +246,8 @@ Facet IDs are `1` pixels, `2` precision, `3` color, `4` alpha association, `5` c
 external dependencies. A facet record is `u8(facetId)`, `u8(state)`, `u8(presetPermits)`, then
 `text(stableCode)`, `text(canonicalSourceDescriptor)`, and `text(canonicalTargetDescriptor)`.
 State values in table order above are `1` through `7`; `presetPermits` is exactly `0` or `1`.
-Localized artist explanations and suggested actions remain in the report but are excluded from the
-approval digest, so changing UI language cannot change semantic approval.
+Localized artist explanations and suggested actions are mapped outside the semantic report and are
+excluded from the approval digest, so changing UI language cannot change semantic approval.
 
 An `Exact` facet uses the empty stable-code string; every other state requires a non-empty stable
 code from this closed version 1 vocabulary:
