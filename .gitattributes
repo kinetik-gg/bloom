@@ -1,0 +1,4 @@
+# Digest-bound dependency artifacts must never be line-ending normalized or otherwise rewritten:
+# the intake contract binds their exact bytes to SHA-256 records.
+dependencies/unicode/** -text
+dependencies/licenses/** -text
