@@ -4,10 +4,11 @@ Status: accepted
 
 Implementation status: synchronous Qt-free ownership, editable/degraded/preserved-read-only state,
 immutable document access, command forwarding, clean revision, dirty state, application-owned
-runtime session identity, checked Open/path generations, sealed Save/Save-As path authority, and
-generation-scoped publication-intent-ordered savepoint acceptance are implemented. Save-As path
-authority is exclusive and supports typed abandonment. Asynchronous Open/Save, atomic content
-installation, round-trip state, unsaved continuations, and complete result handling remain pending.
+runtime session identity, checked content-bound Open/path generations, sealed Save/Save-As path
+authority, and generation-scoped publication-intent-ordered savepoint acceptance are implemented.
+Save-As path authority is exclusive and supports typed abandonment. Asynchronous Open/Save, atomic
+content installation, round-trip state, unsaved continuations, and complete result handling remain
+pending.
 
 Updated: 2026-08-25
 
@@ -142,8 +143,9 @@ files. Admission performs these steps:
 
 1. resolve any current unsaved-change intent
 2. increment the desired `OpenIntentGeneration`
-3. capture `ProjectSessionId` and `SessionResultAcceptanceGeneration`, plus document revision for
-   decoded content or the immutable content token for preserved read-only content
+3. capture `ProjectSessionId`, `SessionResultAcceptanceGeneration`, installed content kind, and the
+   command stack's exact tracked revision for decoded content; preserved read-only content carries
+   no fabricated document revision
 4. submit a task containing only the chosen path, limits, cancellation/progress channels, and
    captured value identities
 
@@ -152,14 +154,18 @@ successful worker result installs only when all of these remain true:
 
 - its `OpenIntentGeneration` is still desired
 - the captured `ProjectSessionId` and `SessionResultAcceptanceGeneration` still match
-- decoded current content still has the revision captured after unsaved resolution, or preserved
-  read-only content still has the captured immutable token
+- the installed content kind still matches, and decoded current content still has the exact command
+  stack revision captured after unsaved resolution; preserved read-only content remains bound by
+  its runtime session and acceptance generation without a decoded revision
 - the result is fully validated and has a supported editable or preserved-read-only outcome
 - the application is not already in final runtime shutdown
 
 Editing the current project while Open runs is allowed. Such an edit makes the revision check fail;
 Bloom keeps the current project and reports that Open was not installed because the current project
 changed. It never silently discards the edit and never freezes the authoring UI for background I/O.
+No-op and rejected commands retain the revision and therefore do not spuriously invalidate Open.
+Undo and redo issue newer monotonic revisions, so returning to artistically identical content never
+revives an intent captured against an older state.
 
 Failure, cancellation, supersession, malformed input, unavailable memory, or an unsupported major
 version leaves the active document, command history, path, selection, time, preview, and dirty state
@@ -376,6 +382,9 @@ current time remain UI/session concerns. They consume project-session state but 
 ## Required Verification
 
 - Open A then Open B with reverse completion installs only B
+- successful, no-op, rejected, undo, and redo command outcomes preserve or invalidate a decoded
+  Open intent solely according to its exact tracked revision; preserved read-only intent carries no
+  decoded revision
 - edit during Open, failed Open, cancelled Open, and malformed Open leave all active state unchanged
 - successful Open rebinds every projection coherently and clears history, selection, time, and old
   preview publication

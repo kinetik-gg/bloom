@@ -70,6 +70,7 @@ using bloom::host::DecodedProjectSessionRequest;
 using bloom::host::DecodedProjectSnapshotStatus;
 using bloom::host::NewProjectSessionRequest;
 using bloom::host::OpenIntentAdmissionStatus;
+using bloom::host::OpenIntentCapture;
 using bloom::host::ProjectDisplayPath;
 using bloom::host::ProjectSession;
 using bloom::host::ProjectSessionCommandStatus;
@@ -85,6 +86,14 @@ using bloom::host::SessionResultAcceptanceAdvanceStatus;
 
 static_assert(!std::is_copy_constructible_v<ProjectSessionIdentitySource>);
 static_assert(!std::is_move_constructible_v<ProjectSessionIdentitySource>);
+static_assert(std::is_nothrow_default_constructible_v<OpenIntentCapture>);
+static_assert(!OpenIntentCapture{}.isValid());
+static_assert(noexcept(std::declval<const OpenIntentCapture&>().contentKind()));
+static_assert(noexcept(std::declval<const OpenIntentCapture&>().decodedRevision()));
+static_assert(
+    !std::is_constructible_v<OpenIntentCapture, bloom::host::SessionResultAcceptanceCapture,
+                             bloom::host::OpenIntentGeneration, ProjectSessionContentKind,
+                             std::optional<bloom::document::Revision>>);
 
 [[nodiscard]] CommandStatus commandStatus(const bloom::host::ProjectSessionCommandResult& result) {
     if (!result.command.has_value()) {
@@ -276,6 +285,8 @@ void testGenerationCapturesAndSubsetPredicates(Expectations& expectations) {
         resultCapture.isValid() && plainSave.isValid() &&
             plainSave.kind() == SessionPathIntentKind::ExistingPath && firstOpen && firstSaveAs &&
             firstOpen.capture().generation().value() == 2 &&
+            firstOpen.capture().contentKind() == ProjectSessionContentKind::DecodedDocument &&
+            firstOpen.capture().decodedRevision() == currentRevision(session) &&
             firstSaveAs.capture().generation().value() == 2 &&
             firstSaveAs.capture().kind() == SessionPathIntentKind::ReplacementPath &&
             !plainWhileReplacementPending.isValid() &&
@@ -332,6 +343,81 @@ void testGenerationCapturesAndSubsetPredicates(Expectations& expectations) {
             session.capturePlainSavePathIntent().isValid(),
         "installed-content replacement cancels pending path authority and invalidates old "
         "captures");
+}
+
+void testOpenIntentBindsExactContent(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto session = newSession(expectations, identitySource);
+    const auto initialAdmission = session.admitOpenIntent();
+    if (!initialAdmission) {
+        expectations.expect(false, "the decoded Open binding fixture admits its initial intent");
+        return;
+    }
+    const auto initial = initialAdmission.capture();
+    expectations.expect(initial.contentKind() == ProjectSessionContentKind::DecodedDocument &&
+                            initial.decodedRevision() == currentRevision(session) &&
+                            session.isDesiredOpenIntent(initial),
+                        "a decoded Open intent captures its exact command-stack revision");
+
+    Transaction noChange("No-op while Open", currentRevision(session));
+    noChange.emplace<SetProjectName>("Project");
+    const auto noChangeResult = session.execute(std::move(noChange));
+    expectations.expect(noChangeResult.completed() &&
+                            commandStatus(noChangeResult) == CommandStatus::NoChange &&
+                            session.isDesiredOpenIntent(initial) &&
+                            initial.decodedRevision() == currentRevision(session),
+                        "an idempotent edit leaves the exact decoded Open binding desired");
+
+    Transaction rejected("Rejected while Open", currentRevision(session));
+    rejected.emplace<SetCompositionName>(bloom::document::CompositionId::fromRaw(999), "Missing");
+    const auto rejectedResult = session.execute(std::move(rejected));
+    expectations.expect(rejectedResult.completed() &&
+                            commandStatus(rejectedResult) == CommandStatus::Rejected &&
+                            session.isDesiredOpenIntent(initial) &&
+                            initial.decodedRevision() == currentRevision(session),
+                        "a rejected edit leaves the exact decoded Open binding desired");
+
+    const auto successful = session.execute(rename("Changed while Open", session));
+    expectations.expect(successful.changed() && !session.isDesiredOpenIntent(initial) &&
+                            initial.decodedRevision().has_value() &&
+                            *initial.decodedRevision() < currentRevision(session),
+                        "a successful edit invalidates the captured decoded Open content");
+
+    const auto editedAdmission = session.admitOpenIntent();
+    if (!editedAdmission) {
+        expectations.expect(false, "the edited Open binding fixture admits a new intent");
+        return;
+    }
+    const auto edited = editedAdmission.capture();
+    const auto editedRevision = currentRevision(session);
+    expectations.expect(edited.decodedRevision() == editedRevision &&
+                            session.isDesiredOpenIntent(edited),
+                        "a newer Open binds to the newly edited revision");
+
+    const auto undoResult = session.undo();
+    const auto undoRevision = currentRevision(session);
+    expectations.expect(
+        undoResult.changed() && projectName(session) == "Project" &&
+            undoRevision > editedRevision && !session.isDesiredOpenIntent(edited),
+        "undo restores artist content with a newer revision and cannot revive an older Open");
+
+    const auto undoneAdmission = session.admitOpenIntent();
+    if (!undoneAdmission) {
+        expectations.expect(false, "the undone Open binding fixture admits a new intent");
+        return;
+    }
+    const auto undone = undoneAdmission.capture();
+    const auto redoResult = session.redo();
+    expectations.expect(
+        undone.decodedRevision() == undoRevision && redoResult.changed() &&
+            currentRevision(session) > undoRevision && !session.isDesiredOpenIntent(undone),
+        "redo advances monotonically and invalidates an intent captured after undo");
+
+    auto other = newSession(expectations, identitySource);
+    const auto otherOpen = other.admitOpenIntent();
+    expectations.expect(otherOpen && !session.isDesiredOpenIntent(otherOpen.capture()) &&
+                            !other.isDesiredOpenIntent(undone),
+                        "content bindings never cross runtime project sessions");
 }
 
 void testGenerationExhaustionBoundaries(Expectations& expectations) {
@@ -396,7 +482,10 @@ void testGenerationExhaustionBoundaries(Expectations& expectations) {
     const auto afterOpenExhaustion = openSession.stateSnapshot();
     expectations.expect(
         finalOpen && finalOpen.capture().generation().value() == maximum &&
+            finalOpen.capture().contentKind() == ProjectSessionContentKind::DecodedDocument &&
+            finalOpen.capture().decodedRevision() == currentRevision(openSession) &&
             exhaustedOpen.status() == OpenIntentAdmissionStatus::RuntimeIdentityExhausted &&
+            openSession.isDesiredOpenIntent(finalOpen.capture()) &&
             afterOpenExhaustion.resultAcceptanceGeneration ==
                 beforeOpenExhaustion.resultAcceptanceGeneration &&
             afterOpenExhaustion.openIntentGeneration == beforeOpenExhaustion.openIntentGeneration &&
@@ -843,6 +932,18 @@ void testPreservedReadOnlyState(Expectations& expectations,
                                 SessionPathIntentAbandonStatus::ReadOnly,
                         "preserved content cannot manufacture a native Save or Save As intent");
 
+    const auto firstOpen = session.admitOpenIntent();
+    const auto secondOpen = session.admitOpenIntent();
+    expectations.expect(
+        firstOpen && secondOpen &&
+            firstOpen.capture().contentKind() == ProjectSessionContentKind::PreservedReadOnly &&
+            !firstOpen.capture().decodedRevision().has_value() &&
+            secondOpen.capture().contentKind() == ProjectSessionContentKind::PreservedReadOnly &&
+            !secondOpen.capture().decodedRevision().has_value() &&
+            !session.isDesiredOpenIntent(firstOpen.capture()) &&
+            session.isDesiredOpenIntent(secondOpen.capture()),
+        "preserved Open intent binds to read-only content without fabricating a revision");
+
     Transaction blocked("Blocked edit");
     blocked.emplace<SetProjectName>("Must not apply");
     expectations.expect(session.execute(std::move(blocked)).status ==
@@ -964,16 +1065,18 @@ void testMoveAndLifetimeSafety(Expectations& expectations,
             !original.matchesPathIntent(
                 pathCapture), // NOLINT(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
         "a moved-from session exposes only invalid captures and cannot accept prior work");
-    expectations.expect(moved.isValid() && projectName(moved) == "Before move" &&
-                            moved.stateSnapshot().undoLabel == "Owned label" &&
-                            beforeMove.undoLabel == "Owned label" &&
-                            moved.stateSnapshot().projectSessionId == beforeMove.projectSessionId &&
-                            moved.stateSnapshot().newestAcceptedPublicationIntent ==
-                                beforeMove.newestAcceptedPublicationIntent &&
-                            moved.matchesResultAcceptance(acceptanceCapture) &&
-                            moved.isDesiredOpenIntent(openCapture) &&
-                            moved.matchesPathIntent(pathCapture),
-                        "moving preserves identity, generations, history, and captured authority");
+    expectations.expect(
+        moved.isValid() && projectName(moved) == "Before move" &&
+            moved.stateSnapshot().undoLabel == "Owned label" &&
+            beforeMove.undoLabel == "Owned label" &&
+            moved.stateSnapshot().projectSessionId == beforeMove.projectSessionId &&
+            moved.stateSnapshot().newestAcceptedPublicationIntent ==
+                beforeMove.newestAcceptedPublicationIntent &&
+            openCapture.contentKind() == ProjectSessionContentKind::DecodedDocument &&
+            openCapture.decodedRevision() == beforeMove.currentRevision &&
+            moved.matchesResultAcceptance(acceptanceCapture) &&
+            moved.isDesiredOpenIntent(openCapture) && moved.matchesPathIntent(pathCapture),
+        "moving preserves identity, generations, history, and captured authority");
     expectations.expect(moved.undo().changed() && projectName(moved) == "Project",
                         "the moved command stack remains bound to its heap-owned document");
 }
@@ -986,6 +1089,7 @@ int main() {
     try {
         testIdentitySourceAndExactExhaustion(expectations);
         testGenerationCapturesAndSubsetPredicates(expectations);
+        testOpenIntentBindsExactContent(expectations);
         testGenerationExhaustionBoundaries(expectations);
         testNewProjectBaselineAndSnapshots(expectations, identitySource);
         testDirtySavepointBranching(expectations, identitySource);
