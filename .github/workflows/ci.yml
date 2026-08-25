@@ -38,7 +38,9 @@ jobs:
         run: cmake --build --preset dev --parallel
 
       - name: Test repository checkers
-        run: ctest --preset dev -R '^bloom\.quality\.checker_self_tests$'
+        run: >-
+          ctest --preset dev
+          -R '^(bloom\.quality\.checker_self_tests|bloom\.quality\.dependency_artifact_checker_self_tests)$'
 
       - name: Test Clang build
         run: ctest --preset dev -LE quality
@@ -69,6 +71,11 @@ jobs:
 
       - name: Build
         run: cmake --build --preset dev --parallel
+
+      - name: Test dependency artifact checks
+        run: >-
+          ctest --preset dev --output-on-failure
+          -R '^bloom\.quality\.(dependency_artifacts|dependency_artifact_checker_self_tests)$'
 
       - name: Test
         run: ctest --preset dev -LE quality

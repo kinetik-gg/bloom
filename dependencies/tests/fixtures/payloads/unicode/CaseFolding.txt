@@ -1,0 +1,1 @@
+Synthetic CaseFolding fixture; not Unicode Character Database data.

@@ -18,6 +18,12 @@ profiles remain unqualified until they pass the gates below. The version 1 artif
 identity, resource, and qualification rules below are frozen; production component values and
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
+Implementation status: the two exact Draft 2020-12 schema artifacts and an offline checker for
+checked-in synthetic contract fixtures are implemented. That checker is deliberately not a
+production lock or prefix validator: reviewed Unicode 15.1 bootstrap/collision data, complete
+prefix filesystem inventory with no-follow/hardlink/link-chain evidence, and a trusted qualified
+identity capability remain pending with production intake.
+
 ## Repository Shape
 
 The dependency implementation should enter the repository as one cohesive boundary:

@@ -67,6 +67,25 @@ if(Python3_Interpreter_FOUND)
         TIMEOUT 30
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
+    bloom_add_test(
+        NAME bloom.quality.dependency_artifacts
+        COMMAND
+            ${bloom_python_command}
+            "${PROJECT_SOURCE_DIR}/scripts/check_dependency_artifacts.py"
+            --root
+            "${PROJECT_SOURCE_DIR}"
+        LABELS quality schema dependencies
+        TIMEOUT 30
+    )
+    bloom_add_test(
+        NAME bloom.quality.dependency_artifact_checker_self_tests
+        COMMAND
+            ${bloom_python_command}
+            "${PROJECT_SOURCE_DIR}/tests/test_dependency_artifact_checks.py"
+        LABELS quality schema dependencies unit
+        TIMEOUT 30
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
 
     add_custom_target(
         bloom-hygiene-check
@@ -99,12 +118,23 @@ if(Python3_Interpreter_FOUND)
         VERBATIM
     )
     add_custom_target(
+        bloom-dependency-artifact-check
+        COMMAND
+            ${bloom_python_command}
+            "${PROJECT_SOURCE_DIR}/scripts/check_dependency_artifacts.py"
+            --root
+            "${PROJECT_SOURCE_DIR}"
+        COMMENT "Checking dependency schema and synthetic canonical artifacts"
+        VERBATIM
+    )
+    add_custom_target(
         bloom-quality-check
         DEPENDS
             bloom-format-check
             bloom-hygiene-check
             bloom-architecture-check
             bloom-project-schema-check
+            bloom-dependency-artifact-check
     )
 else()
     message(

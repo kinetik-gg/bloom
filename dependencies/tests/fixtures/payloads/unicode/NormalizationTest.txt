@@ -1,0 +1,1 @@
+Synthetic NormalizationTest fixture; not Unicode Character Database data.

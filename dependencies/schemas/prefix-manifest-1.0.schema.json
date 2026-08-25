@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kinetik:bloom:schema:dependency-prefix-manifest:1.0",
+  "title": "Bloom Dependency Prefix Manifest 1.0",
+  "$comment": "scripts/check_dependency_artifacts.py checks copied-lock equality and logical evidence in synthetic fixtures only; it does not qualify a production prefix or inspect a filesystem.",
+  "type": "object",
+  "required": ["format", "schemaVersion", "lockIdentity", "profile", "unicodeProfile", "components", "capabilities", "cmakePackages", "installedFiles", "qualificationResults"],
+  "properties": {
+    "format": {"const": "org.kinetik.bloom.dependencies.prefix"},
+    "schemaVersion": {"$ref": "dependency-lock-1.0.schema.json#/$defs/fixedVersion"},
+    "lockIdentity": {"$ref": "dependency-lock-1.0.schema.json#/$defs/digest"},
+    "profile": {"$ref": "dependency-lock-1.0.schema.json#/$defs/profile"},
+    "unicodeProfile": {"$ref": "dependency-lock-1.0.schema.json#/$defs/unicodeProfile"},
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/componentResult"}
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": {"$ref": "#/$defs/capability"}
+    },
+    "cmakePackages": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/cmakePackage"}
+    },
+    "installedFiles": {
+      "type": "array",
+      "maxItems": 200000,
+      "items": {"$ref": "#/$defs/installedPath"}
+    },
+    "qualificationResults": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/qualificationResult"}
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "componentResult": {
+      "type": "object",
+      "required": ["name", "version", "sourceArchiveSha256", "sourceCommit", "patches", "buildOptionsIdentity"],
+      "properties": {
+        "name": {"$ref": "dependency-lock-1.0.schema.json#/$defs/identifier"},
+        "version": {"$ref": "dependency-lock-1.0.schema.json#/$defs/boundedString"},
+        "sourceArchiveSha256": {"$ref": "dependency-lock-1.0.schema.json#/$defs/digest"},
+        "sourceCommit": {"$ref": "dependency-lock-1.0.schema.json#/$defs/nullableBoundedString"},
+        "patches": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "dependency-lock-1.0.schema.json#/$defs/patch"}
+        },
+        "buildOptionsIdentity": {"$ref": "dependency-lock-1.0.schema.json#/$defs/digest"}
+      },
+      "unevaluatedProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "providerComponent"],
+      "properties": {
+        "id": {"$ref": "dependency-lock-1.0.schema.json#/$defs/identifier"},
+        "providerComponent": {"$ref": "dependency-lock-1.0.schema.json#/$defs/identifier"}
+      },
+      "unevaluatedProperties": false
+    },
+    "cmakeTarget": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[!#-:<-\\[\\]-~]+$"
+    },
+    "cmakePackage": {
+      "type": "object",
+      "required": ["name", "version", "configPath", "targets"],
+      "properties": {
+        "name": {"$ref": "dependency-lock-1.0.schema.json#/$defs/boundedString"},
+        "version": {"$ref": "dependency-lock-1.0.schema.json#/$defs/boundedString"},
+        "configPath": {"$ref": "dependency-lock-1.0.schema.json#/$defs/portablePath"},
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/cmakeTarget"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "nullableIdentifier": {
+      "anyOf": [
+        {"$ref": "dependency-lock-1.0.schema.json#/$defs/identifier"},
+        {"type": "null"}
+      ]
+    },
+    "nullableUint64": {
+      "anyOf": [
+        {"$ref": "dependency-lock-1.0.schema.json#/$defs/uint64"},
+        {"type": "null"}
+      ]
+    },
+    "nullableDigest": {
+      "anyOf": [
+        {"$ref": "dependency-lock-1.0.schema.json#/$defs/digest"},
+        {"type": "null"}
+      ]
+    },
+    "installedPath": {
+      "type": "object",
+      "required": ["path", "type", "component", "role", "size", "sha256", "permissions", "linkTarget"],
+      "properties": {
+        "path": {"$ref": "dependency-lock-1.0.schema.json#/$defs/portablePath"},
+        "type": {"enum": ["regular-file", "directory", "symbolic-link"]},
+        "component": {"$ref": "#/$defs/nullableIdentifier"},
+        "role": {"enum": ["directory", "library", "executable", "plugin", "data", "cmake-package", "license", "notice", "source", "qualification-evidence"]},
+        "size": {"$ref": "#/$defs/nullableUint64"},
+        "sha256": {"$ref": "#/$defs/nullableDigest"},
+        "permissions": {"enum": ["none", "regular", "executable"]},
+        "linkTarget": {
+          "anyOf": [
+            {"$ref": "dependency-lock-1.0.schema.json#/$defs/portablePath"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "qualificationResult": {
+      "type": "object",
+      "required": ["gateId", "status", "evidence", "completedAt"],
+      "properties": {
+        "gateId": {"$ref": "dependency-lock-1.0.schema.json#/$defs/identifier"},
+        "status": {"enum": ["passed", "failed", "not-applicable"]},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8192,
+          "items": {"$ref": "dependency-lock-1.0.schema.json#/$defs/artifactReference"}
+        },
+        "completedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

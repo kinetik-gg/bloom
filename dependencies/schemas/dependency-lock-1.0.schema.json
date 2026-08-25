@@ -1,0 +1,471 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kinetik:bloom:schema:dependency-lock:1.0",
+  "title": "Bloom Dependency Lock 1.0",
+  "$comment": "scripts/check_dependency_artifacts.py checks exact schema bytes and synthetic contract fixtures only; production acceptance additionally requires the reviewed Unicode bootstrap and repository evidence validator.",
+  "type": "object",
+  "required": ["format", "schemaVersion", "unicodeProfile", "profiles", "components"],
+  "properties": {
+    "format": {"const": "org.kinetik.bloom.dependencies.lock"},
+    "schemaVersion": {"$ref": "#/$defs/fixedVersion"},
+    "unicodeProfile": {"$ref": "#/$defs/unicodeProfile"},
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/profile"}
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/component"}
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "uint32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "uint64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "sourceDateEpoch": {"type": "integer", "minimum": 0, "maximum": 253402300799},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "boundedString": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "asciiIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[ -~]+$"
+    },
+    "nullableBoundedString": {
+      "anyOf": [
+        {"$ref": "#/$defs/boundedString"},
+        {"type": "null"}
+      ]
+    },
+    "dottedVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[0-9]+(?:\\.[0-9]+)*$"
+    },
+    "nullableDottedVersion": {
+      "anyOf": [
+        {"$ref": "#/$defs/dottedVersion"},
+        {"type": "null"}
+      ]
+    },
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*[\\\\\\u0000-\\u001f\\u007f<>:\"|?*])[^/]+(?:/[^/]+)*$"
+    },
+    "artifactReference": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/portablePath"},
+        "sha256": {"$ref": "#/$defs/digest"}
+      },
+      "unevaluatedProperties": false
+    },
+    "fixedVersion": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {"const": 1},
+        "minor": {"const": 0}
+      },
+      "unevaluatedProperties": false
+    },
+    "unicodeFile": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "enum": [
+            "UnicodeData.txt",
+            "CompositionExclusions.txt",
+            "DerivedNormalizationProps.txt",
+            "CaseFolding.txt",
+            "NormalizationTest.txt"
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/digest"}
+      },
+      "unevaluatedProperties": false
+    },
+    "unicodeProfile": {
+      "type": "object",
+      "required": ["version", "sourceUrl", "archiveSha256", "files"],
+      "properties": {
+        "version": {"const": "15.1.0"},
+        "sourceUrl": {"$ref": "#/$defs/boundedString"},
+        "archiveSha256": {"$ref": "#/$defs/digest"},
+        "files": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {"$ref": "#/$defs/unicodeFile"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["triple", "operatingSystem", "architecture", "minimumOsVersion"],
+      "properties": {
+        "triple": {"$ref": "#/$defs/boundedString"},
+        "operatingSystem": {"enum": ["linux", "macos", "windows"]},
+        "architecture": {"enum": ["x86_64", "aarch64"]},
+        "minimumOsVersion": {"$ref": "#/$defs/nullableDottedVersion"}
+      },
+      "unevaluatedProperties": false
+    },
+    "abiFlag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[!#-:<-\\[\\]-~]+$"
+    },
+    "consumerAbi": {
+      "type": "object",
+      "required": [
+        "cxxStandard",
+        "compilerFamily",
+        "compilerAbi",
+        "standardLibrary",
+        "standardLibraryAbi",
+        "cxxRuntime",
+        "cxxRuntimeAbi",
+        "cxxRuntimeLinkage",
+        "platformRuntime",
+        "platformRuntimeAbi",
+        "exceptions",
+        "rtti",
+        "libstdcxxCxx11Abi",
+        "msvcRuntime",
+        "msvcIteratorDebugLevel",
+        "windowsSdk",
+        "windowsSdkVersion",
+        "appleSdk",
+        "appleSdkVersion",
+        "appleDeploymentTarget",
+        "abiFlags"
+      ],
+      "properties": {
+        "cxxStandard": {"const": 20},
+        "compilerFamily": {"enum": ["gcc", "clang", "apple-clang", "msvc", "clang-cl"]},
+        "compilerAbi": {"$ref": "#/$defs/asciiIdentity"},
+        "standardLibrary": {"enum": ["libstdc++", "libc++", "msvc-stl"]},
+        "standardLibraryAbi": {"$ref": "#/$defs/asciiIdentity"},
+        "cxxRuntime": {"enum": ["libgcc", "compiler-rt", "msvc"]},
+        "cxxRuntimeAbi": {"$ref": "#/$defs/asciiIdentity"},
+        "cxxRuntimeLinkage": {"enum": ["dynamic", "static"]},
+        "platformRuntime": {"enum": ["glibc", "musl", "ucrt", "macos-libsystem"]},
+        "platformRuntimeAbi": {"$ref": "#/$defs/asciiIdentity"},
+        "exceptions": {"type": "boolean"},
+        "rtti": {"type": "boolean"},
+        "libstdcxxCxx11Abi": {"enum": [0, 1, null]},
+        "msvcRuntime": {
+          "enum": ["dynamic-release", "dynamic-debug", "static-release", "static-debug", null]
+        },
+        "msvcIteratorDebugLevel": {"enum": [0, 1, 2, null]},
+        "windowsSdk": {
+          "anyOf": [
+            {"const": "windows-sdk"},
+            {"type": "null"}
+          ]
+        },
+        "windowsSdkVersion": {"$ref": "#/$defs/nullableDottedVersion"},
+        "appleSdk": {
+          "anyOf": [
+            {"const": "macosx"},
+            {"type": "null"}
+          ]
+        },
+        "appleSdkVersion": {"$ref": "#/$defs/nullableDottedVersion"},
+        "appleDeploymentTarget": {"$ref": "#/$defs/nullableDottedVersion"},
+        "abiFlags": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/abiFlag"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "toolIdentity": {
+      "type": "object",
+      "required": ["name", "version", "identity"],
+      "properties": {
+        "name": {"$ref": "#/$defs/boundedString"},
+        "version": {"$ref": "#/$defs/boundedString"},
+        "identity": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["cmake", "generator", "buildTool", "compiler", "linker", "standardLibrary", "sdk"],
+      "properties": {
+        "cmake": {"$ref": "#/$defs/toolIdentity"},
+        "generator": {"$ref": "#/$defs/toolIdentity"},
+        "buildTool": {"$ref": "#/$defs/toolIdentity"},
+        "compiler": {"$ref": "#/$defs/toolIdentity"},
+        "linker": {"$ref": "#/$defs/toolIdentity"},
+        "standardLibrary": {"$ref": "#/$defs/toolIdentity"},
+        "sdk": {"$ref": "#/$defs/toolIdentity"}
+      },
+      "unevaluatedProperties": false
+    },
+    "environmentVariable": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"},
+        "value": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "required": ["profileId", "sourceDateEpoch", "variables"],
+      "properties": {
+        "profileId": {"$ref": "#/$defs/identifier"},
+        "sourceDateEpoch": {"$ref": "#/$defs/sourceDateEpoch"},
+        "variables": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/environmentVariable"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "qualificationGate": {
+      "type": "object",
+      "required": ["gateId", "disposition", "reason"],
+      "properties": {
+        "gateId": {"$ref": "#/$defs/identifier"},
+        "disposition": {"enum": ["required", "not-applicable"]},
+        "reason": {"$ref": "#/$defs/nullableBoundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "target", "buildConfiguration", "consumerAbi", "toolchain", "environment", "qualificationGates"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "target": {"$ref": "#/$defs/target"},
+        "buildConfiguration": {"enum": ["debug", "release"]},
+        "consumerAbi": {"$ref": "#/$defs/consumerAbi"},
+        "toolchain": {"$ref": "#/$defs/toolchain"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "qualificationGates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/qualificationGate"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["kind", "evidence", "identity", "issuer", "policy"],
+      "properties": {
+        "kind": {"enum": ["detached-signature", "sigstore-bundle", "signed-tag"]},
+        "evidence": {"$ref": "#/$defs/artifactReference"},
+        "identity": {"$ref": "#/$defs/boundedString"},
+        "issuer": {"$ref": "#/$defs/nullableBoundedString"},
+        "policy": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["url", "archiveSha256", "commit", "provenancePolicy", "provenanceReview", "provenance"],
+      "properties": {
+        "url": {"$ref": "#/$defs/boundedString"},
+        "archiveSha256": {"$ref": "#/$defs/digest"},
+        "commit": {"$ref": "#/$defs/nullableBoundedString"},
+        "provenancePolicy": {"enum": ["required", "not-published"]},
+        "provenanceReview": {"$ref": "#/$defs/artifactReference"},
+        "provenance": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/provenance"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "license": {
+      "type": "object",
+      "required": ["spdxExpression", "licenseFiles", "copyrightFiles", "noticeFiles", "sourceObligation", "modified", "reviewRecord", "reviewedAt"],
+      "properties": {
+        "spdxExpression": {"$ref": "#/$defs/boundedString"},
+        "licenseFiles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/artifactReference"}
+        },
+        "copyrightFiles": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/artifactReference"}
+        },
+        "noticeFiles": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/artifactReference"}
+        },
+        "sourceObligation": {"enum": ["none", "ship-corresponding-source", "ship-source-offer"]},
+        "modified": {"type": "boolean"},
+        "reviewRecord": {"$ref": "#/$defs/artifactReference"},
+        "reviewedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+      },
+      "unevaluatedProperties": false
+    },
+    "patch": {
+      "type": "object",
+      "required": ["path", "sha256", "applyOrder", "reason"],
+      "properties": {
+        "path": {"$ref": "#/$defs/portablePath"},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "applyOrder": {"$ref": "#/$defs/uint32"},
+        "reason": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["name", "relationship"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "relationship": {"enum": ["build", "link", "runtime-plugin", "vendored"]}
+      },
+      "unevaluatedProperties": false
+    },
+    "cmakeOption": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,255}$"},
+        "value": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "featureDecision": {
+      "type": "object",
+      "required": ["id", "state", "reason"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "state": {"enum": ["enabled", "disabled"]},
+        "reason": {"$ref": "#/$defs/boundedString"}
+      },
+      "unevaluatedProperties": false
+    },
+    "conformanceFixtureSet": {
+      "type": "object",
+      "required": ["id", "artifact"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "artifact": {"$ref": "#/$defs/artifactReference"}
+      },
+      "unevaluatedProperties": false
+    },
+    "profileBuild": {
+      "type": "object",
+      "required": ["profileId", "linkage", "cmakeOptions", "featureDecisions", "capabilities", "shippingRoles", "conformanceFixtureSets"],
+      "properties": {
+        "profileId": {"$ref": "#/$defs/identifier"},
+        "linkage": {"enum": ["dynamic", "static", "header-only", "executable", "data-only"]},
+        "cmakeOptions": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/cmakeOption"}
+        },
+        "featureDecisions": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/featureDecision"}
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 65536,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "shippingRoles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"enum": ["library", "executable", "plugin", "data", "cmake-package", "license", "notice", "source"]}
+        },
+        "conformanceFixtureSets": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/conformanceFixtureSet"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "vulnerability": {
+      "type": "object",
+      "required": ["id", "disposition", "record"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "disposition": {"enum": ["not-affected", "mitigated", "accepted-risk"]},
+        "record": {"$ref": "#/$defs/artifactReference"}
+      },
+      "unevaluatedProperties": false
+    },
+    "securityReview": {
+      "type": "object",
+      "required": ["reviewedAt", "record", "vulnerabilities"],
+      "properties": {
+        "reviewedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "record": {"$ref": "#/$defs/artifactReference"},
+        "vulnerabilities": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/vulnerability"}
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "component": {
+      "type": "object",
+      "required": ["name", "version", "source", "license", "patches", "dependencies", "profileBuilds", "securityReview"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "version": {"$ref": "#/$defs/boundedString"},
+        "source": {"$ref": "#/$defs/source"},
+        "license": {"$ref": "#/$defs/license"},
+        "patches": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/patch"}
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {"$ref": "#/$defs/dependency"}
+        },
+        "profileBuilds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/profileBuild"}
+        },
+        "securityReview": {"$ref": "#/$defs/securityReview"}
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

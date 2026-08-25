@@ -1,0 +1,1 @@
+Synthetic UnicodeData fixture; not Unicode Character Database data.
