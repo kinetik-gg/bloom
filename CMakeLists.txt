@@ -25,6 +25,7 @@ add_subdirectory(src/project)
 add_subdirectory(src/render)
 add_subdirectory(src/runtime)
 add_subdirectory(src/color)
+add_subdirectory(src/output)
 add_subdirectory(src/commands)
 add_subdirectory(src/host)
 
