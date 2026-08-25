@@ -1,5 +1,6 @@
 #include <bloom/project/canonical_decimal.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -169,6 +170,135 @@ parseSigned(const std::string_view text, const CanonicalDecimalField field) noex
     }
 
     return cursor == text.size();
+}
+
+// The exact decimal significand of 2^-1075, the halfway boundary between zero and the least
+// positive binary64 subnormal. This lets the dependency-free reader distinguish finite underflow
+// from overflow when std::from_chars reports result_out_of_range. Equality rounds to even zero.
+constexpr std::string_view kHalfMinimumBinary64SubnormalDigits =
+    "2470328229206232720882843964341106861825299013071623822127928412503377536351043759326499"
+    "1818081799618989828234772285886546332835517796989819938739800539093906315035659515570226"
+    "3922908583924491051844359318028499365361525003193704576782492193656236698636584807570015"
+    "8576926990370631192827955855133292783433840935197801553124659726357957462276646527282722"
+    "0056374006485499977096599470454020828166226237857393450736339007967761930577506740176324"
+    "6736009689513405355374585166611342237666786041621596804619144672918403005300575308490487"
+    "6539171138659164623952491262365388187963623937328042389101867234849766823508986338858792"
+    "5628302755995657524455507255189313690836254779186948667994968324049705821028513185451396"
+    "213837722826145437693412532098591327667236328125";
+static_assert(kHalfMinimumBinary64SubnormalDigits.size() == 752);
+
+constexpr std::int64_t kDecimalExponentSaturation = 1'000'000;
+
+[[nodiscard]] std::int64_t saturatedDecimalExponent(const std::string_view text,
+                                                    const std::size_t exponentMarker) noexcept {
+    if (exponentMarker == std::string_view::npos) {
+        return 0;
+    }
+
+    std::size_t cursor = exponentMarker + 1;
+    bool negative = false;
+    if (text[cursor] == '+' || text[cursor] == '-') {
+        negative = text[cursor] == '-';
+        ++cursor;
+    }
+
+    std::int64_t magnitude = 0;
+    for (; cursor < text.size(); ++cursor) {
+        if (magnitude >= kDecimalExponentSaturation) {
+            break;
+        }
+        const auto digit = static_cast<std::int64_t>(text[cursor] - '0');
+        magnitude = std::min(kDecimalExponentSaturation, magnitude * 10 + digit);
+    }
+    return negative ? -magnitude : magnitude;
+}
+
+[[nodiscard]] std::int64_t saturatedPositionExponent(const std::size_t integerDigits,
+                                                     const std::size_t leadingZeroDigits) noexcept {
+    if (integerDigits > leadingZeroDigits) {
+        const auto magnitude = integerDigits - leadingZeroDigits - 1;
+        return magnitude >= static_cast<std::size_t>(kDecimalExponentSaturation)
+                   ? kDecimalExponentSaturation
+                   : static_cast<std::int64_t>(magnitude);
+    }
+
+    const auto magnitude = leadingZeroDigits - integerDigits + 1;
+    return magnitude >= static_cast<std::size_t>(kDecimalExponentSaturation)
+               ? -kDecimalExponentSaturation
+               : -static_cast<std::int64_t>(magnitude);
+}
+
+[[nodiscard]] constexpr std::int64_t saturatedAddExponent(const std::int64_t left,
+                                                          const std::int64_t right) noexcept {
+    if (right > 0 && left > kDecimalExponentSaturation - right) {
+        return kDecimalExponentSaturation;
+    }
+    if (right < 0 && left < -kDecimalExponentSaturation - right) {
+        return -kDecimalExponentSaturation;
+    }
+    return left + right;
+}
+
+[[nodiscard]] bool isAtOrBelowHalfMinimumBinary64Subnormal(const std::string_view text) noexcept {
+    const std::size_t signOffset = text.front() == '-' ? 1U : 0U;
+    const auto exponentMarker = text.find_first_of("eE", signOffset);
+    const auto mantissaEnd =
+        exponentMarker == std::string_view::npos ? text.size() : exponentMarker;
+    const auto decimalPoint = text.find('.', signOffset);
+    const auto integerEnd = decimalPoint != std::string_view::npos && decimalPoint < mantissaEnd
+                                ? decimalPoint
+                                : mantissaEnd;
+    const auto integerDigits = integerEnd - signOffset;
+
+    std::size_t leadingZeroDigits = 0;
+    bool foundNonzero = false;
+    for (std::size_t cursor = signOffset; cursor < mantissaEnd; ++cursor) {
+        const char character = text[cursor];
+        if (character == '.') {
+            continue;
+        }
+        if (character != '0') {
+            foundNonzero = true;
+            break;
+        }
+        ++leadingZeroDigits;
+    }
+    if (!foundNonzero) {
+        return true;
+    }
+
+    const auto scientificExponent =
+        saturatedAddExponent(saturatedDecimalExponent(text, exponentMarker),
+                             saturatedPositionExponent(integerDigits, leadingZeroDigits));
+    constexpr std::int64_t halfMinimumScientificExponent = -324;
+    if (scientificExponent != halfMinimumScientificExponent) {
+        return scientificExponent < halfMinimumScientificExponent;
+    }
+
+    std::size_t thresholdIndex = 0;
+    bool significantDigitsStarted = false;
+    for (std::size_t cursor = signOffset; cursor < mantissaEnd; ++cursor) {
+        const char character = text[cursor];
+        if (character == '.') {
+            continue;
+        }
+        if (!significantDigitsStarted && character == '0') {
+            continue;
+        }
+        significantDigitsStarted = true;
+
+        const char thresholdDigit = thresholdIndex < kHalfMinimumBinary64SubnormalDigits.size()
+                                        ? kHalfMinimumBinary64SubnormalDigits[thresholdIndex]
+                                        : '0';
+        if (character != thresholdDigit) {
+            return character < thresholdDigit;
+        }
+        ++thresholdIndex;
+    }
+
+    // Exhausting the input after an equal prefix means its implicit trailing decimal digits are
+    // zero, so it is equal to or below the complete threshold.
+    return true;
 }
 
 template <std::size_t Capacity>
@@ -478,7 +608,7 @@ CanonicalFloat64TextResult formatCanonicalFloat64(const double value) noexcept {
     return CanonicalFloat64TextResult::success(result);
 }
 
-CanonicalFloat64Result parseCanonicalFloat64(const std::string_view text) noexcept {
+CanonicalFloat64Result parseKnownFloat64(const std::string_view text) noexcept {
     if (!validateJsonNumberLexicalForm(text)) {
         return CanonicalFloat64Result::failure(CanonicalDecimalError::InvalidLexicalForm,
                                                CanonicalDecimalField::Value);
@@ -488,6 +618,10 @@ CanonicalFloat64Result parseCanonicalFloat64(const std::string_view text) noexce
     const auto conversion =
         std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
     if (conversion.ec == std::errc::result_out_of_range) {
+        if (isAtOrBelowHalfMinimumBinary64Subnormal(text)) {
+            return CanonicalFloat64Result::success(
+                std::copysign(0.0, text.front() == '-' ? -1.0 : 1.0));
+        }
         return CanonicalFloat64Result::failure(CanonicalDecimalError::OutOfRange,
                                                CanonicalDecimalField::Value);
     }
@@ -499,13 +633,21 @@ CanonicalFloat64Result parseCanonicalFloat64(const std::string_view text) noexce
         return CanonicalFloat64Result::failure(CanonicalDecimalError::NonFinite,
                                                CanonicalDecimalField::Value);
     }
+    return CanonicalFloat64Result::success(value);
+}
 
-    const auto canonical = formatCanonicalFloat64(value);
+CanonicalFloat64Result parseCanonicalFloat64(const std::string_view text) noexcept {
+    const auto parsed = parseKnownFloat64(text);
+    if (!parsed) {
+        return parsed;
+    }
+
+    const auto canonical = formatCanonicalFloat64(*parsed.value());
     if (!canonical || canonical.value()->view() != text) {
         return CanonicalFloat64Result::failure(CanonicalDecimalError::NonCanonical,
                                                CanonicalDecimalField::Value);
     }
-    return CanonicalFloat64Result::success(value);
+    return parsed;
 }
 
 } // namespace bloom::project

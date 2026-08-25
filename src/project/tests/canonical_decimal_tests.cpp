@@ -301,6 +301,75 @@ void testCanonicalFloat64(Expectations& expectations) {
                         "Float64 formatting rejects infinity and NaN");
 }
 
+void testKnownFloat64(Expectations& expectations) {
+    struct Fixture final {
+        std::string_view text;
+        std::uint64_t bits;
+    };
+    constexpr Fixture spellings[] = {
+        {"0", 0x0000000000000000ULL},
+        {"-0", 0x8000000000000000ULL},
+        {"0e+999999", 0x0000000000000000ULL},
+        {"-0.000e-999999", 0x8000000000000000ULL},
+        {"1", 0x3ff0000000000000ULL},
+        {"1.00", 0x3ff0000000000000ULL},
+        {"1E+0", 0x3ff0000000000000ULL},
+        {"0.0000010", 0x3eb0c6f7a0b5ed8dULL},
+        {"1.7976931348623157e308", 0x7fefffffffffffffULL},
+        {"-1.7976931348623157E+308", 0xffefffffffffffffULL},
+        {"1e-324", 0x0000000000000000ULL},
+        {"-1e-324", 0x8000000000000000ULL},
+        {"1e-999999", 0x0000000000000000ULL},
+        {"-1e-999999", 0x8000000000000000ULL},
+        {"3e-324", 0x0000000000000001ULL},
+    };
+    for (const auto& fixture : spellings) {
+        const auto parsed = bloom::project::parseKnownFloat64(fixture.text);
+        expectations.expect(parsed && std::bit_cast<std::uint64_t>(*parsed.value()) == fixture.bits,
+                            "known Float64 parsing accepts finite RFC 8259 spellings");
+    }
+
+    constexpr std::string_view halfMinimumDigits =
+        "2470328229206232720882843964341106861825299013071623822127928412503377536351043759326499"
+        "1818081799618989828234772285886546332835517796989819938739800539093906315035659515570226"
+        "3922908583924491051844359318028499365361525003193704576782492193656236698636584807570015"
+        "8576926990370631192827955855133292783433840935197801553124659726357957462276646527282722"
+        "0056374006485499977096599470454020828166226237857393450736339007967761930577506740176324"
+        "6736009689513405355374585166611342237666786041621596804619144672918403005300575308490487"
+        "6539171138659164623952491262365388187963623937328042389101867234849766823508986338858792"
+        "5628302755995657524455507255189313690836254779186948667994968324049705821028513185451396"
+        "213837722826145437693412532098591327667236328125";
+
+    const std::string exactHalf = std::string(halfMinimumDigits) + "e-1075";
+    const std::string aboveHalf = std::string(halfMinimumDigits) + "1e-1076";
+    std::string belowHalf(halfMinimumDigits);
+    --belowHalf.back();
+    belowHalf += "9e-1076";
+
+    const auto exact = bloom::project::parseKnownFloat64(exactHalf);
+    const auto above = bloom::project::parseKnownFloat64(aboveHalf);
+    const auto below = bloom::project::parseKnownFloat64(belowHalf);
+    expectations.expect(exact && std::bit_cast<std::uint64_t>(*exact.value()) == 0,
+                        "the exact half-minimum subnormal tie rounds to even zero");
+    expectations.expect(above && std::bit_cast<std::uint64_t>(*above.value()) == 1,
+                        "a decimal immediately above the half-minimum boundary rounds upward");
+    expectations.expect(below && std::bit_cast<std::uint64_t>(*below.value()) == 0,
+                        "a decimal immediately below the half-minimum boundary rounds to zero");
+
+    for (const std::string_view invalid :
+         {"", "+1", ".1", "1.", "01", "--1", "1e", "1e+", " 1", "1 "}) {
+        expectFailure(expectations, bloom::project::parseKnownFloat64(invalid),
+                      CanonicalDecimalError::InvalidLexicalForm, CanonicalDecimalField::Value,
+                      "known Float64 parsing rejects non-RFC-8259 lexical forms");
+    }
+    for (const std::string_view overflow :
+         {"1e309", "-1e309", "1.7976931348623159e308", "9e999999"}) {
+        expectFailure(expectations, bloom::project::parseKnownFloat64(overflow),
+                      CanonicalDecimalError::OutOfRange, CanonicalDecimalField::Value,
+                      "known Float64 parsing rejects values that round to infinity");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -312,5 +381,6 @@ int main() {
     testPositiveRatios(expectations);
     testFormattingAndRoundTrips(expectations);
     testCanonicalFloat64(expectations);
+    testKnownFloat64(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

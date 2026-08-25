@@ -141,6 +141,10 @@ parseCanonicalPixelAspectRatio(std::string_view numerator, std::string_view deno
 
 [[nodiscard]] CanonicalDecimalText formatCanonicalUInt64(std::uint64_t value) noexcept;
 [[nodiscard]] CanonicalDecimalText formatCanonicalInt64(std::int64_t value) noexcept;
+// Known Float64 fields accept every RFC 8259 number spelling that rounds to a finite IEEE 754
+// binary64 value. Unlike the canonical parser, this reader permits alternate spellings and exact
+// underflow to signed zero; canonical writing normalizes the result.
+[[nodiscard]] CanonicalFloat64Result parseKnownFloat64(std::string_view text) noexcept;
 [[nodiscard]] CanonicalFloat64Result parseCanonicalFloat64(std::string_view text) noexcept;
 [[nodiscard]] CanonicalFloat64TextResult formatCanonicalFloat64(double value) noexcept;
 
