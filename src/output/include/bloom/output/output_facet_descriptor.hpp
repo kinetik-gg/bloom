@@ -7,6 +7,8 @@
 
 namespace bloom::output {
 
+inline constexpr std::size_t kOutputFacetDescriptorV1MaximumBytes = 1024;
+
 // These are the distinct descriptor shapes used by the source and target sides of the two
 // version-1 output presets. Absent is deliberately explicit: no other schema accepts an empty
 // descriptor.
@@ -48,6 +50,7 @@ enum class OutputFacetDescriptorErrorCode : std::uint8_t {
     DuplicateKey,
     OutOfOrderKey,
     MissingKey,
+    DescriptorTooLong,
     InvalidValueTag,
     InvalidBoolean,
     InvalidSignedDecimal,

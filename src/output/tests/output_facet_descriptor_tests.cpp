@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <source_location>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -370,6 +371,21 @@ void testInvalidSchema(Expectations& expectations) {
                         "the public success factory fails closed for an unknown value tag");
 }
 
+void testDescriptorByteLimit(Expectations& expectations) {
+    std::string maximumDescriptor = "profile=id:";
+    maximumDescriptor.append(
+        output::kOutputFacetDescriptorV1MaximumBytes - maximumDescriptor.size(), 'a');
+    expectations.expect(
+        output::validateOutputFacetDescriptorV1(Schema::Metadata, maximumDescriptor).hasValue(),
+        "a descriptor at the version-one byte limit remains valid");
+
+    maximumDescriptor.push_back('a');
+    expectations.expect(
+        hasError(output::validateOutputFacetDescriptorV1(Schema::Metadata, maximumDescriptor),
+                 Error::DescriptorTooLong, output::kOutputFacetDescriptorV1MaximumBytes),
+        "the first byte beyond the version-one descriptor limit is reported distinctly");
+}
+
 } // namespace
 
 int main() {
@@ -382,5 +398,6 @@ int main() {
     testChannelShapeAndLexicalIndices(expectations);
     testUtf8HexBoundary(expectations);
     testInvalidSchema(expectations);
+    testDescriptorByteLimit(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

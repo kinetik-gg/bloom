@@ -803,6 +803,10 @@ validateOutputFacetDescriptorV1(const OutputFacetDescriptorSchemaV1 schema,
         static_cast<std::uint8_t>(OutputFacetDescriptorSchemaV1::ExternalDependencies)) {
         return failure(OutputFacetDescriptorErrorCode::InvalidSchema, 0);
     }
+    if (descriptor.size() > kOutputFacetDescriptorV1MaximumBytes) {
+        return failure(OutputFacetDescriptorErrorCode::DescriptorTooLong,
+                       kOutputFacetDescriptorV1MaximumBytes);
+    }
     if (schema == OutputFacetDescriptorSchemaV1::Absent) {
         return descriptor.empty() ? OutputFacetDescriptorValidation::success()
                                   : failure(OutputFacetDescriptorErrorCode::ExpectedAbsent, 0);
