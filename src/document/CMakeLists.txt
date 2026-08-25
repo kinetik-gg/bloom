@@ -4,6 +4,7 @@ target_sources(
     bloom_document
     PRIVATE
         animation.cpp
+        color_settings.cpp
         document.cpp
         extension_records.cpp
         graph.cpp
@@ -17,6 +18,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/document/animation.hpp
+            include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
             include/bloom/document/extension_records.hpp
@@ -77,5 +79,14 @@ if(BUILD_TESTING)
         NAME bloom.document.persisted-text
         COMMAND bloom_document_persisted_text_test
         LABELS unit persistence text
+    )
+
+    add_executable(bloom_document_color_settings_test tests/color_settings_tests.cpp)
+    target_link_libraries(bloom_document_color_settings_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_color_settings_test)
+    bloom_add_test(
+        NAME bloom.document.color-settings
+        COMMAND bloom_document_color_settings_test
+        LABELS unit persistence color
     )
 endif()
