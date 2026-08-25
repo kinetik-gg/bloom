@@ -5,8 +5,10 @@ Status: accepted
 Implementation status: the allocation-free Process Pixel Stream and Process-Frame Semantic
 Identity version 1 codecs, cancellable owning semantic-identity preparer, closed facet-descriptor
 grammar and validator, preset-specific owning OutputAnalysis analyzer/report, streaming analysis
-digest, and portable golden vectors are implemented. Preset preparation, PNG/OpenEXR adapters,
-staged-format verification, and end-to-end publication remain pending.
+digest, preset-specific bound-analysis products, the module-private Output Semantic Identity version
+1 streaming serializer/preparer, and portable golden vectors are implemented. Preset pixel
+conversion, production verifier-product issuance, PNG/OpenEXR adapters, staged-format verification,
+and end-to-end publication remain pending.
 
 Updated: 2026-08-25
 

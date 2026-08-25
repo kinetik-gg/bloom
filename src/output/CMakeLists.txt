@@ -3,12 +3,16 @@ add_library(bloom_output STATIC)
 target_sources(
     bloom_output
     PRIVATE
+        bound_output_analysis.cpp
         output_analysis.cpp
         output_analysis_analyzer.cpp
         output_analysis_contract.cpp
         output_analysis_digest.cpp
         output_facet_descriptor.cpp
         output_analysis_numeric.cpp
+        output_semantic_identity.cpp
+        output_semantic_identity_numeric.cpp
+        output_semantic_identity_ownership.cpp
         process_frame_semantic_identity.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -108,6 +112,25 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.output.analysis_digest
         COMMAND bloom_output_analysis_digest_test
+        LABELS unit output identity serialization
+    )
+
+    add_executable(
+        bloom_output_semantic_identity_test
+        tests/output_semantic_identity_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_semantic_identity_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_semantic_identity_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_semantic_identity_test)
+    bloom_add_test(
+        NAME bloom.output.semantic_identity
+        COMMAND bloom_output_semantic_identity_test
         LABELS unit output identity serialization
     )
 endif()
