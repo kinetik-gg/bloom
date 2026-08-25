@@ -2,7 +2,10 @@
 
 Status: accepted
 
-Implementation status: pending
+Implementation status: the allocation-free Process Pixel Stream and Process-Frame Semantic
+Identity version 1 codecs, validation, and portable golden vectors are implemented. OutputAnalysis,
+facet reports and descriptors, preset preparation, PNG/OpenEXR adapters, staged-format
+verification, and end-to-end publication remain pending.
 
 Updated: 2026-08-25
 

@@ -47,10 +47,14 @@ Bloom currently has:
   to one active plus one newest pending request
 - bounded Project I/O memory accounting, allocation-free canonical integer/rational and Base64
   codecs, and a portable streaming SHA-256 identity primitive
+- normative Draft 2020-12 manifest and complete writable document `1.0` schema artifacts with
+  dependency-free mutation checks
 - inclusive allocator high-water preservation across every durable namespace and project-global
   opaque extension envelopes with typed subjects and explicit reference policies
 - a bounded application-wide publication coordinator and synchronous Qt-free `ProjectSession`
   ownership with immutable snapshots, command history, clean revision, and dirty state
+- a portable, allocation-free process-pixel digest and Process-Frame Semantic Identity version 1
+  codec whose canonical bytes exclude execution-provider provenance
 
 The local Batch 3 checkpoint is implemented and has been launched. Add Solid remains synchronized
 through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now compiles immutable
@@ -352,8 +356,9 @@ Implementation status: canonical object-ID, allocator, signed-integer, JSON-`uin
 rational, positive-ratio, strict padded Base64, UTF-8 JSON-string, and bounded canonical-layout
 primitives are implemented with adversarial tests. Canonical manifest encoding, its Draft 2020-12
 schema artifact, and manifest requirement shape/order and exact project coverage validation are
-also implemented. Float64, parsing/DOM, the document schema and writer, and golden document fixtures
-remain pending.
+also implemented. The complete writable document `1.0` Draft 2020-12 schema artifact and strict
+artifact checker are implemented. Float64, parsing/DOM, the document writer, instance validation,
+and golden document fixtures remain pending.
 
 - implement the accepted complete `manifest.json` and `document.json` shapes and JSON Schema
   dialect without reopening their wire semantics
@@ -480,7 +485,9 @@ default, project-qualified OCIO boundary, preservation analysis, and semantic-de
 PNG/flat-EXR publication contracts are accepted implementation contracts in
 [`architecture/color-management.md`](architecture/color-management.md) and
 [`architecture/frame-output.md`](architecture/frame-output.md). Dependency implementations and
-qualification remain pending.
+qualification remain pending. The portable Process Pixel Stream and Process-Frame Semantic Identity
+version 1 codecs and golden vectors are implemented; analysis, preset conversion, file adapters,
+and semantic verification remain pending.
 
 Implement:
 
