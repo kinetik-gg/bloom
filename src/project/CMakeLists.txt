@@ -12,6 +12,7 @@ target_sources(
         canonical_json_string_detail.hpp
         canonical_json_writer.cpp
         canonical_manifest.cpp
+        document_decode.cpp
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
@@ -29,6 +30,7 @@ target_sources(
             include/bloom/project/canonical_json_string.hpp
             include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/canonical_manifest.hpp
+            include/bloom/project/document_decode.hpp
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
@@ -72,6 +74,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.canonical_document
         COMMAND bloom_project_canonical_document_test
+        LABELS unit project persistence document
+    )
+
+    add_executable(bloom_project_document_decode_test tests/document_decode_tests.cpp)
+    target_link_libraries(bloom_project_document_decode_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_document_decode_test)
+    bloom_add_test(
+        NAME bloom.project.document_decode
+        COMMAND bloom_project_document_decode_test
         LABELS unit project persistence document
     )
 
