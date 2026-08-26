@@ -207,9 +207,14 @@ struct ProductionFixture final {
 };
 
 void testAbsentLockAndGoldenConstants(const Path& repositoryRoot, Expectations& expectations) {
-    const auto result = dependency::validateProductionLock(repositoryRoot);
-    expectations.expect(!result.present && result.identity.empty(),
+    const ProductionFixture absentFixture{repositoryRoot};
+    const auto absent = dependency::validateProductionLock(absentFixture.temporary.root());
+    expectations.expect(!absent.present && absent.identity.empty(),
                         "absent production lock reports absence as success without identity");
+    const auto repository = dependency::validateProductionLock(repositoryRoot);
+    expectations.expect(repository.present && repository.identity.starts_with("sha256:") &&
+                            repository.identity.size() == 7 + 64,
+                        "the reviewed repository lock validates with a well-formed identity");
     expectations.expect(dependency::kProductionLockRepositoryPath ==
                             std::string_view("dependencies/dependencies.lock.json"),
                         "production mode binds exactly the contract lock path");

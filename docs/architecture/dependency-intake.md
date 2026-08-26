@@ -18,14 +18,20 @@ profiles remain unqualified until they pass the gates below. The version 1 artif
 identity, resource, and qualification rules below are frozen; production component values and
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
-Implementation status: the two exact Draft 2020-12 schema artifacts and an offline checker for
-checked-in synthetic contract fixtures are implemented. The dependency-only superbuild root
-exists with its first recipe: yyjson 0.12.0 builds offline from a digest-verified archive into a
-staging prefix with library-only feature minimization, and its acquisition provenance and license
-records are reviewed in `dependencies/licenses/yyjson/`. No prefix is qualified: the production
-lock, the production lock/prefix validator, reviewed Unicode 15.1 bootstrap/collision data,
-complete prefix filesystem inventory with no-follow/hardlink/link-chain evidence, a trusted
-qualified identity capability, and qualified-mode CMake consumption remain pending.
+Implementation status: the two exact Draft 2020-12 schema artifacts, the offline checker for
+synthetic contract fixtures, and production lock validation are implemented — including the
+reviewed Unicode 15.1 bootstrap tables with two-source digest equality, repository-artifact
+digest binding, and an ASCII-strict v1 string tightening that defers NFC machinery. The reviewed
+production lock exists with its first component: yyjson 0.12.0, whose superbuild recipe builds
+offline from the digest-verified archive into a staging prefix with library-only feature
+minimization; acquisition provenance, license review, and security review records are bound by
+digest in `dependencies/licenses/yyjson/`. `cmake/BloomDependencyPrefix.cmake` implements
+explicit `qualified`/`developer-system` consumption with restricted package search and the
+ABI-relevant toolchain-agreement subset, exercised in CI by a qualified-mode smoke consumer.
+Still pending: the production prefix manifest and its validator (with complete filesystem
+inventory and no-follow/hardlink/link-chain evidence), a trusted qualified identity capability,
+full Unicode collision data behind the ASCII tightening, exact tool-identity capture at the
+qualify phase, and mode-absence enforcement once the first in-tree target consumes a package.
 
 ## Repository Shape
 

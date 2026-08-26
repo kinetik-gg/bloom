@@ -3,11 +3,12 @@
 # networking disabled, and installs them into a staging prefix that the normal Bloom build
 # consumes. The application build tree never runs ExternalProject or FetchContent.
 #
-# Intake staging note: this superbuild currently pins each component's URL and SHA-256 directly
-# in its recipe. The reviewed production lock at dependencies/dependencies.lock.json becomes the
-# single authority for these values when the production lock validator lands; recipes then read
-# the lock instead of declaring literals. Until a qualified prefix exists, prefixes produced here
-# are development artifacts and must not be treated as qualified.
+# The reviewed production lock at dependencies/dependencies.lock.json is the authority for every
+# component's source URL, digest, and option set; the offline dependency-artifact checker
+# validates it, including that recipes and lock agree is a human-review obligation until recipes
+# read the lock mechanically. Prefixes produced here are consumed through
+# cmake/BloomDependencyPrefix.cmake; they are not fully qualified until the qualify phase writes
+# and validates the production prefix manifest.
 cmake_minimum_required(VERSION 3.25)
 
 project(BloomDependencySuperbuild LANGUAGES C CXX)
