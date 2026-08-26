@@ -17,6 +17,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CTest)
 include(BloomQuality)
 include(BloomWarnings)
+include(BloomDependencyPrefix)
+
+# Dependency-prefix consumption is implemented, so an explicit mode is required: 'qualified'
+# validates the reviewed lock and resolves dependency packages only from the superbuild prefix;
+# 'developer-system' iterates against host packages and is labeled Unqualified. CI, release,
+# package, and conformance builds use qualified mode.
+bloom_consume_dependency_prefix()
 
 bloom_configure_quality_tools()
 

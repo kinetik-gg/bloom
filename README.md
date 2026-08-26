@@ -54,6 +54,10 @@ The desktop development build requires:
 - Ninja
 - Qt 6.8 or newer with Qt Widgets
 
+Every build selects an explicit dependency mode. The `dev` preset uses `developer-system` mode
+(host packages, labeled Unqualified); the CI preset uses `qualified` mode, which validates the
+reviewed dependency lock and resolves dependency packages only from the superbuild prefix:
+
 ```sh
 cmake --preset dev
 cmake --build --preset dev
@@ -62,10 +66,17 @@ ctest --preset dev
 
 On Linux, the development executable is written to `build/dev/apps/bloom/Bloom`.
 
-The repository also provides a Qt-free Linux CI preset for core and quality checks:
+The repository also provides a Qt-free Linux CI preset for core and quality checks. It expects
+the dependency prefix at `build/dependency-prefix` (a one-time step per checkout, rerun after a
+lock change) and the toolchain named by the dependency lock:
 
 ```sh
-cmake --preset ci-linux-native
+cmake -S dependencies/superbuild -B build/dependency-superbuild \
+    -DBLOOM_DEPENDENCY_PREFIX="$PWD/build/dependency-prefix" \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build/dependency-superbuild
+
+CC=clang CXX=clang++ cmake --preset ci-linux-native
 cmake --build --preset ci-linux-native
 ctest --preset ci-linux-native
 ```

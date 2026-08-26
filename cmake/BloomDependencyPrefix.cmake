@@ -94,15 +94,28 @@ function(bloom_consume_dependency_prefix)
             "is the authority; use developer-system mode for local iteration.")
     endif()
 
-    # Restrict package resolution to the validated prefix. No host fallback, no registries, no
-    # network-backed discovery.
-    set(CMAKE_PREFIX_PATH "${BLOOM_DEPENDENCY_PREFIX}" PARENT_SCOPE)
-    set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON PARENT_SCOPE)
-    set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF PARENT_SCOPE)
-    set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY OFF PARENT_SCOPE)
-    set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH OFF PARENT_SCOPE)
-    set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH OFF PARENT_SCOPE)
     set(BLOOM_DEPENDENCY_MODE_LABEL "Qualified-pending-manifest" PARENT_SCOPE)
     message(STATUS "Bloom dependencies: qualified mode against ${BLOOM_DEPENDENCY_PREFIX} "
         "(production lock present; full validation is enforced by the offline checker).")
+endfunction()
+
+# Resolves one qualified dependency package. Search restriction is per-package rather than
+# build-global so Bloom's separately governed boundaries (Qt discovery under ADR 0014) remain
+# untouched: in qualified mode the package resolves only from the validated prefix with
+# registries and default paths disabled; developer-system mode resolves from the host and stays
+# labeled Unqualified.
+function(bloom_find_dependency package)
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF)
+        set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY OFF)
+        find_package(${package} REQUIRED CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}"
+            NO_DEFAULT_PATH)
+    elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
+        find_package(${package} REQUIRED CONFIG)
+    else()
+        message(FATAL_ERROR
+            "bloom_find_dependency(${package}) requires bloom_consume_dependency_prefix() to have "
+            "accepted an explicit BLOOM_DEPENDENCY_MODE first.")
+    endif()
 endfunction()

@@ -14,7 +14,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "BUILD_TESTING": "ON"
+        "BUILD_TESTING": "ON",
+        "BLOOM_DEPENDENCY_MODE": "developer-system"
       }
     },
     {
@@ -26,7 +27,9 @@
         "BLOOM_BUILD_DESKTOP": "OFF",
         "BLOOM_ENABLE_CLANG_TIDY": "ON",
         "BLOOM_ENABLE_TEST_CLANG_TIDY": "ON",
-        "BLOOM_LLVM_TOOLCHAIN_MAJOR": "22"
+        "BLOOM_LLVM_TOOLCHAIN_MAJOR": "22",
+        "BLOOM_DEPENDENCY_MODE": "qualified",
+        "BLOOM_DEPENDENCY_PREFIX": "${sourceDir}/build/dependency-prefix"
       }
     }
   ],
