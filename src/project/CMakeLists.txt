@@ -1,3 +1,5 @@
+bloom_find_dependency(yyjson)
+
 add_library(bloom_project STATIC)
 
 target_sources(
@@ -13,6 +15,7 @@ target_sources(
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
+        strict_json_dom.cpp
         strict_json_preflight.cpp
         strict_json_preflight.hpp
         unknown_json_number.cpp
@@ -29,11 +32,13 @@ target_sources(
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
+            include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
 target_link_libraries(bloom_project PUBLIC bloom_core bloom_document)
+target_link_libraries(bloom_project PRIVATE yyjson::yyjson)
 bloom_enable_warnings(bloom_project)
 
 if(BUILD_TESTING)
@@ -100,6 +105,19 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.strict_json_preflight
         COMMAND bloom_project_strict_json_preflight_test
+        LABELS unit project persistence security
+    )
+
+    add_executable(bloom_project_strict_json_dom_test tests/strict_json_dom_tests.cpp)
+    target_include_directories(
+        bloom_project_strict_json_dom_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_strict_json_dom_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_strict_json_dom_test)
+    bloom_add_test(
+        NAME bloom.project.strict_json_dom
+        COMMAND bloom_project_strict_json_dom_test
         LABELS unit project persistence security
     )
 
