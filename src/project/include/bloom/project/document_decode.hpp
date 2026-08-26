@@ -2,9 +2,12 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 
 #include <array>
@@ -15,28 +18,36 @@
 #include <vector>
 
 // Typed decode of the document.json envelope from a parsed strict JSON DOM (see
-// docs/architecture/project-format.md, "Canonical Document Shape", "Project And Composition", and
-// "Project Color Settings And OCIO Reference"). This is the schema-specific validation layer the
-// format contract requires: a generic JSON Schema validator can check structure and lexical
-// bounds, but only typed decode establishes canonical acceptance (exact member order, canonical
-// decimal/rational spellings, frozen v1 value domains, and cross-field agreement such as
-// portability/locator family).
+// docs/architecture/project-format.md, "Canonical Document Shape", "Project And Composition",
+// "Project Color Settings And OCIO Reference", "Parameters", "Animation", and "Canonical Graph").
+// This is the schema-specific validation layer the format contract requires: a generic JSON
+// Schema validator can check structure and lexical bounds, but only typed decode establishes
+// canonical acceptance (exact member order, canonical decimal/rational spellings, frozen v1 value
+// domains, and cross-field agreement such as portability/locator family).
 //
-// Scope (R1): the document envelope and its non-graph durable values only -- schemaVersion,
-// project id/name/colorSettings, and per-composition id/name/duration/format. Parameters,
-// animation curves, the canonical graph, idAllocation content, and extension records are not
-// decoded here; composition objects are matched only on their required id/name/duration/format
-// prefix so a real writer-produced document (which always continues with parameters,
-// animationCurves, graph) still decodes. idAllocation and extensions are checked only for
-// presence, position, and JSON kind. This module deliberately does not construct
-// bloom::document::Project or bloom::document::Document: reassembling the live model and
-// restoring the id allocator from idAllocation.highestIssued is a later slice. The unknown-member
-// round-trip overlay is also a later slice, so an unrecognized root member is a typed decode
-// error rather than being preserved.
+// Scope (R2): the document envelope and every durable value inside a composition -- schemaVersion,
+// project id/name/colorSettings, and per-composition id/name/duration/format/parameters/
+// animationCurves/graph. A composition object is now closed: it must contain exactly those seven
+// members in exact order, and an unrecognized or trailing member is a typed decode error. Within a
+// composition, cross-references are checked against records decoded elsewhere in that same
+// composition -- a parameter binding's parameterId, an animation-curve source's curveId, and every
+// edge/Layer Output/Layer Stack/compositionOutput node id must each name a record this module
+// itself decoded; an unresolved reference is DanglingReference. Cross-composition and
+// project-level references (e.g. a future extension-record subject) remain out of scope.
+// idAllocation content and extension records are still checked only for presence, position, and
+// JSON kind. This module deliberately does not construct bloom::document::Project or
+// bloom::document::Document: reassembling the live model (which additionally enforces
+// document-construction invariants such as expected node/schema bindings, Layer Stack membership,
+// and cycle freedom -- see bloom::document::CanonicalGraph::validate()) and restoring the id
+// allocator from idAllocation.highestIssued is a later slice. The unknown-member round-trip
+// overlay is also a later slice, so an unrecognized root member is a typed decode error rather
+// than being preserved.
 //
 // Decoding constructs every typed value through its existing checked surface: canonical_decimal.hpp
-// parsers for decimal-string ids/rationals and canonical JSON-number uint32 fields,
-// core::RationalTime::create (via parseCanonicalRationalTime), core::PixelAspectRatio::create (via
+// parsers for decimal-string ids/rationals/int64s, canonical JSON-number uint32 fields, and known
+// Float64 members (parseKnownFloat64, which accepts every RFC 8259 spelling that rounds to a
+// finite binary64 value and rejects overflow to infinity); core::RationalTime::create (via
+// parseCanonicalRationalTime), core::PixelAspectRatio::create (via
 // parseCanonicalPositiveRatio/parseCanonicalPixelAspectRatio), bloom::document::FrameRate::create,
 // bloom::document::CompositionFormat::create, bloom::core::Sha256Digest::fromLowercaseHex, and
 // bloom::document::ColorSettings::validate()/OcioConfigReference::validate() for the OCIO
@@ -51,19 +62,59 @@
 
 namespace bloom::project {
 
-// One decoded composition's non-graph durable values.
+// One decoded composition's canonical graph's Layer Stack: the stable node id owning it, and its
+// entries in exact source order (Layer Stack entries are never canonically sorted; see
+// docs/architecture/project-format.md, "Canonical Graph"). Deliberately a plain mirror of
+// bloom::document::LayerStack rather than that class: LayerStack's constructor and append() apply
+// live-document invariants (duplicate slot/layer rejection) that are a later
+// document-construction concern, not this package's wire-shape decode.
+struct DecodedLayerStack final {
+    document::NodeId nodeId;
+    std::vector<document::LayerStackEntry> entries;
+
+    friend bool operator==(const DecodedLayerStack&, const DecodedLayerStack&) = default;
+};
+
+// One decoded composition's canonical graph. A plain mirror of bloom::document::CanonicalGraph
+// rather than that class: CanonicalGraph has no default constructor (it always owns a Layer Stack
+// node id) and its addNode()/addEdge()/addLayerOutput() apply live-document invariants
+// (schema-specific expected bindings, Layer Stack/Layer Output membership, cycle freedom, ...)
+// that are a later document-construction concern. bloom::document::NodeRecord, EdgeRecord, and
+// LayerOutputBoundary are plain aggregate structs with no such invariants in their own
+// construction, so they are reused directly.
+struct DecodedGraph final {
+    std::vector<document::NodeRecord> nodes;
+    std::vector<document::EdgeRecord> edges;
+    std::vector<document::LayerOutputBoundary> layerOutputs;
+    DecodedLayerStack layerStack;
+    document::OutputPortRef compositionOutput;
+
+    friend bool operator==(const DecodedGraph&, const DecodedGraph&) = default;
+};
+
+// One decoded composition's durable values.
 struct DecodedComposition final {
     document::CompositionId id;
     std::string name;
     core::RationalTime duration;
     document::CompositionFormat format;
+    // bloom::document::ParameterRecord and bloom::document::AnimationCurveRecord are plain
+    // aggregate/variant value types with no invariant-enforcing constructor of their own, so they
+    // are reused directly rather than through bloom::document::ParameterStore/AnimationCurveStore
+    // (whose insert() applies live-document invariants -- schema/value agreement, curve ownership,
+    // ... -- that are a later document-construction concern).
+    std::vector<document::ParameterRecord> parameters;
+    std::vector<document::AnimationCurveRecord> animationCurves;
+    DecodedGraph graph;
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };
 
-// The decoded document.json envelope's non-graph durable values. Deliberately not a
-// bloom::document::Project: reconstructing the live model (graph, parameters, animation curves,
-// extension records) and restoring the id allocator are out of scope for this package.
+// The decoded document.json envelope's durable values. Deliberately not a
+// bloom::document::Project: reconstructing the live model (restoring the id allocator, and
+// applying document-construction invariants beyond this module's wire-shape and
+// within-composition cross-reference checks) and decoding extension records are out of scope for
+// this package.
 struct DecodedDocumentEnvelope final {
     document::ProjectId projectId;
     std::string projectName;
@@ -112,10 +163,62 @@ enum class DocumentDecodeError : std::uint8_t {
     // product > 2^32, processColorSpaceId != "lin_rec709_scene", a built-in OCIO URI other than
     // the exact immutable identity, a malformed project-relative or external OCIO locator,
     // portability disagreeing with the locator family, an OCIO revision algorithm other than
-    // "sha256", or an OCIO context variable with an invalid name/value or an unsorted/duplicate
-    // name. These are reported through bloom::document::ColorSettings::validate() and
-    // OcioConfigReference::validate() rather than being re-implemented here.
+    // "sha256", an OCIO context variable with an invalid name/value or an unsorted/duplicate name,
+    // or a graph node schemaVersion of zero. These are reported through
+    // bloom::document::ColorSettings::validate()/OcioConfigReference::validate() or an inline
+    // domain check rather than being re-implemented as a dedicated typed error.
     DomainViolation,
+    // A constant value's numeric JSON number does not round to a finite binary64 value (exact
+    // overflow to infinity) or is otherwise not an accepted Float64 spelling.
+    InvalidFloat64,
+    // A constant int64 value's decimal-string spelling is non-canonical or does not fit int64.
+    InvalidInt64Value,
+    // A parameter source's `kind` discriminator is not "constant" or "animation-curve" -- for
+    // example the deferred "driver-binding" wire vocabulary (see
+    // docs/architecture/project-format.md, "Parameters").
+    UnsupportedParameterSource,
+    // A constant value's `kind` discriminator is not one of the seven known v1 value kinds.
+    InvalidConstantValueKind,
+    // Parameters are not sorted by strictly ascending numeric ParameterId.
+    UnsortedParameters,
+    // Two parameters declare the same numeric ParameterId.
+    DuplicateParameter,
+    // Animation curves are not sorted by strictly ascending numeric AnimationCurveId.
+    UnsortedAnimationCurves,
+    // Two animation curves declare the same numeric AnimationCurveId.
+    DuplicateAnimationCurve,
+    // An animation curve's `kind` discriminator is not "scalar" or "vec2".
+    InvalidAnimationCurveKind,
+    // An animation curve's keyframes array is empty.
+    EmptyKeyframes,
+    // Consecutive keyframes are not in strictly increasing exact rational time.
+    NonIncreasingKeyframeTime,
+    // A keyframe's `outgoingInterpolation` is not "hold" or "linear".
+    InvalidInterpolation,
+    // An animation curve's final keyframe interpolation is not canonical "linear".
+    FinalKeyframeNotLinear,
+    // Graph nodes are not sorted by strictly ascending numeric NodeId.
+    UnsortedNodes,
+    // Two graph nodes declare the same numeric NodeId.
+    DuplicateNode,
+    // A node's parameter bindings are not sorted by UTF-8 role then numeric ParameterId.
+    UnsortedBindings,
+    // Two parameter bindings on the same node declare the same role.
+    DuplicateBinding,
+    // Graph edges are not sorted by strictly ascending numeric EdgeId.
+    UnsortedEdges,
+    // Two graph edges declare the same numeric EdgeId.
+    DuplicateEdge,
+    // An edge destination's `kind` discriminator is not "node-input" or "layer-stack-input".
+    InvalidEdgeDestinationKind,
+    // Layer Output boundaries are not sorted by numeric LayerId then numeric NodeId.
+    UnsortedLayerOutputs,
+    // Two Layer Output boundaries declare the same (LayerId, NodeId) pair.
+    DuplicateLayerOutput,
+    // A parameter binding's parameterId, an animation-curve source's curveId, or an
+    // edge/Layer Output/Layer Stack/compositionOutput node id does not name a record decoded
+    // elsewhere in this same composition.
+    DanglingReference,
 };
 
 // A bounded diagnostic path to one JSON member, formatted as `/key/0/key`, mirroring

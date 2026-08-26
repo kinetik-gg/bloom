@@ -13,6 +13,8 @@ target_sources(
         canonical_json_writer.cpp
         canonical_manifest.cpp
         document_decode.cpp
+        document_decode_composition.cpp
+        document_decode_internal.hpp
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp

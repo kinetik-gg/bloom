@@ -1,5 +1,7 @@
 #include <bloom/project/document_decode.hpp>
 
+#include "document_decode_internal.hpp"
+
 #include <bloom/core/sha256.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_document.hpp>
@@ -18,35 +20,24 @@
 namespace bloom::project {
 
 namespace {
+// TU-local only: mapUInt32Error is never called outside detail::decodeUInt32Member's own
+// definition below, so unlike the primitives in document_decode_internal.hpp it keeps internal
+// linkage rather than becoming part of the cross-file decode seam.
+[[nodiscard]] DocumentDecodeError mapUInt32Error(const CanonicalDecimalError error) noexcept {
+    return error == CanonicalDecimalError::InvalidLexicalForm
+               ? DocumentDecodeError::InvalidJsonUInt32
+               : DocumentDecodeError::DomainViolation;
+}
+} // namespace
 
-using document::ColorSettings;
-using document::CompositionFormat;
-using document::CompositionId;
-using document::FrameRate;
-using document::OcioConfigLocator;
-using document::OcioConfigPortability;
-using document::OcioConfigReference;
-using document::OcioConfigRevision;
-using document::OcioContextVariable;
-using document::OcioRevisionAlgorithm;
-using document::ProjectId;
-using document::SchemaVersion;
+// ------------------------------------------------------------------------------------------
+// Shared decode plumbing (declared in document_decode_internal.hpp; also used by
+// document_decode_composition.cpp).
+// ------------------------------------------------------------------------------------------
 
-// Threads a first-failure-wins typed error and its exact member path through the recursive
-// decode walk, mirroring the WalkState/EmitState pattern used by the canonical document writer.
-struct DecodeState final {
-    DocumentDecodeError error = DocumentDecodeError::None;
-    std::string path;
+namespace detail {
 
-    void fail(const DocumentDecodeError newError, std::string newPath) noexcept {
-        if (error == DocumentDecodeError::None) {
-            error = newError;
-            path = std::move(newPath);
-        }
-    }
-};
-
-[[nodiscard]] std::string joinPath(const std::string& base, std::string_view segment) {
+std::string joinPath(const std::string& base, const std::string_view segment) {
     std::string result;
     result.reserve(base.size() + 1 + segment.size());
     result.append(base);
@@ -55,21 +46,18 @@ struct DecodeState final {
     return result;
 }
 
-[[nodiscard]] std::string joinPathIndex(const std::string& base, const std::size_t index) {
+std::string joinPathIndex(const std::string& base, const std::size_t index) {
     return joinPath(base, std::to_string(index));
 }
 
 // Checks that `object` is a JSON object whose leading members exactly match `expectedKeys` in
 // order, filling `outValues` with pointers to each matched member's value. When
 // `rejectExtraMembers` is true the object must contain exactly `expectedKeys.size()` members;
-// otherwise trailing members beyond the matched prefix are accepted without inspection (used for
-// composition, whose parameters/animationCurves/graph members are outside this package's scope
-// but always present in a writer-produced document).
-[[nodiscard]] bool matchOrderedMembers(const JsonValue& object,
-                                       const std::span<const std::string_view> expectedKeys,
-                                       const bool rejectExtraMembers, DecodeState& state,
-                                       const std::string& basePath,
-                                       std::vector<const JsonValue*>& outValues) {
+// otherwise trailing members beyond the matched prefix are accepted without inspection.
+bool matchOrderedMembers(const JsonValue& object,
+                         const std::span<const std::string_view> expectedKeys,
+                         const bool rejectExtraMembers, DecodeState& state,
+                         const std::string& basePath, std::vector<const JsonValue*>& outValues) {
     if (object.kind() != JsonValueKind::Object) {
         state.fail(DocumentDecodeError::WrongValueKind, basePath);
         return false;
@@ -102,19 +90,13 @@ struct DecodeState final {
     return true;
 }
 
-[[nodiscard]] DocumentDecodeError mapUInt32Error(const CanonicalDecimalError error) noexcept {
-    return error == CanonicalDecimalError::InvalidLexicalForm
-               ? DocumentDecodeError::InvalidJsonUInt32
-               : DocumentDecodeError::DomainViolation;
-}
-
-[[nodiscard]] DocumentDecodeError mapRationalError(const CanonicalDecimalError error) noexcept {
+DocumentDecodeError mapRationalError(const CanonicalDecimalError error) noexcept {
     return error == CanonicalDecimalError::NotReduced
                ? DocumentDecodeError::UnreducedRational
                : DocumentDecodeError::InvalidRationalComponent;
 }
 
-[[nodiscard]] std::string fieldPath(const std::string& base, const CanonicalDecimalField field) {
+std::string fieldPath(const std::string& base, const CanonicalDecimalField field) {
     switch (field) {
     case CanonicalDecimalField::Numerator:
         return joinPath(base, "numerator");
@@ -126,6 +108,129 @@ struct DecodeState final {
     }
     return base;
 }
+
+bool decodeStringMember(const JsonValue& value, DecodeState& state, const std::string& path,
+                        std::string_view& out) noexcept {
+    if (value.kind() != JsonValueKind::String) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto text = value.asString();
+    if (!text.has_value()) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    out = *text;
+    return true;
+}
+
+// asNumberToken()/asString() are documented to return a value whenever kind() already matches, but
+// that invariant is not visible to static analysis; every caller re-checks has_value() immediately
+// before dereferencing rather than trusting the prior kind() check alone.
+bool decodeUInt32Member(const JsonValue& value, DecodeState& state, const std::string& path,
+                        const std::uint32_t maximum, std::uint32_t& out) {
+    if (value.kind() != JsonValueKind::Number) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto token = value.asNumberToken();
+    if (!token.has_value()) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto parsed = parseCanonicalJsonUInt32(*token, maximum);
+    if (!parsed) {
+        state.fail(mapUInt32Error(parsed.error()), path);
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+// Reads an object's first member, requires it to be literally named "kind", and decodes its string
+// value as the discriminator for a branch the caller resolves afterward (constant value, parameter
+// source, edge destination, OCIO locator). The branch-specific full key set (and therefore whether
+// a mis-first key is "known elsewhere") is not knowable until `kindText` is read, so this cannot go
+// through matchOrderedMembers itself.
+bool decodeKindDiscriminator(const JsonValue& node, DecodeState& state, const std::string& path,
+                             std::string_view& kindText) {
+    if (node.kind() != JsonValueKind::Object) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto members = node.objectMembers();
+    const auto kindPath = joinPath(path, "kind");
+    if (members.empty()) {
+        state.fail(DocumentDecodeError::MissingMember, kindPath);
+        return false;
+    }
+    if (members[0].key() != "kind") {
+        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[0].key()));
+        return false;
+    }
+    return decodeStringMember(members[0].value(), state, kindPath, kindText);
+}
+
+namespace {
+[[nodiscard]] bool decodeRationalStrings(const JsonValue& node, DecodeState& state,
+                                         const std::string& path, std::string_view& numeratorText,
+                                         std::string_view& denominatorText) {
+    static constexpr std::array<std::string_view, 2> kKeys{"numerator", "denominator"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
+    if (!decodeStringMember(*members[0], state, joinPath(path, "numerator"), numeratorText)) {
+        return false;
+    }
+    return decodeStringMember(*members[1], state, joinPath(path, "denominator"), denominatorText);
+}
+} // namespace
+
+bool decodeRationalTimeValue(const JsonValue& node, DecodeState& state, const std::string& path,
+                             core::RationalTime& out) {
+    std::string_view numeratorText;
+    std::string_view denominatorText;
+    if (!decodeRationalStrings(node, state, path, numeratorText, denominatorText)) {
+        return false;
+    }
+    const auto parsed = parseCanonicalRationalTime(numeratorText, denominatorText);
+    if (!parsed) {
+        state.fail(mapRationalError(parsed.error()), fieldPath(path, parsed.field()));
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+} // namespace detail
+
+namespace {
+
+using detail::decodeKindDiscriminator;
+using detail::decodeObjectId;
+using detail::decodeRationalTimeValue;
+using detail::DecodeState;
+using detail::decodeStringMember;
+using detail::decodeUInt32Member;
+using detail::fieldPath;
+using detail::joinPath;
+using detail::joinPathIndex;
+using detail::mapRationalError;
+using detail::matchOrderedMembers;
+
+using document::ColorSettings;
+using document::CompositionFormat;
+using document::CompositionId;
+using document::FrameRate;
+using document::OcioConfigLocator;
+using document::OcioConfigPortability;
+using document::OcioConfigReference;
+using document::OcioConfigRevision;
+using document::OcioContextVariable;
+using document::OcioRevisionAlgorithm;
+using document::ProjectId;
+using document::SchemaVersion;
 
 // Translates a bloom::document::ValidationIssue path (dot/bracket notation, e.g.
 // "ocioConfig.contextVariables[3].name") into this module's slash-separated path convention
@@ -156,45 +261,6 @@ struct DecodeState final {
     return result;
 }
 
-[[nodiscard]] bool decodeStringMember(const JsonValue& value, DecodeState& state,
-                                      const std::string& path, std::string_view& out) noexcept {
-    if (value.kind() != JsonValueKind::String) {
-        state.fail(DocumentDecodeError::WrongValueKind, path);
-        return false;
-    }
-    const auto text = value.asString();
-    if (!text.has_value()) {
-        state.fail(DocumentDecodeError::WrongValueKind, path);
-        return false;
-    }
-    out = *text;
-    return true;
-}
-
-// asNumberToken()/asString() are documented to return a value whenever kind() already matches, but
-// that invariant is not visible to static analysis; every caller re-checks has_value() immediately
-// before dereferencing rather than trusting the prior kind() check alone.
-[[nodiscard]] bool decodeUInt32Member(const JsonValue& value, DecodeState& state,
-                                      const std::string& path, const std::uint32_t maximum,
-                                      std::uint32_t& out) {
-    if (value.kind() != JsonValueKind::Number) {
-        state.fail(DocumentDecodeError::WrongValueKind, path);
-        return false;
-    }
-    const auto token = value.asNumberToken();
-    if (!token.has_value()) {
-        state.fail(DocumentDecodeError::WrongValueKind, path);
-        return false;
-    }
-    const auto parsed = parseCanonicalJsonUInt32(*token, maximum);
-    if (!parsed) {
-        state.fail(mapUInt32Error(parsed.error()), path);
-        return false;
-    }
-    out = *parsed.value();
-    return true;
-}
-
 [[nodiscard]] bool decodeSchemaVersionField(const JsonValue& node, DecodeState& state,
                                             const std::string& path, SchemaVersion& out) {
     static constexpr std::array<std::string_view, 2> kKeys{"major", "minor"};
@@ -219,45 +285,36 @@ struct DecodeState final {
     return true;
 }
 
-[[nodiscard]] bool decodeRationalStrings(const JsonValue& node, DecodeState& state,
-                                         const std::string& path, std::string_view& numeratorText,
-                                         std::string_view& denominatorText) {
-    static constexpr std::array<std::string_view, 2> kKeys{"numerator", "denominator"};
-    std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
-        return false;
-    }
-    if (!decodeStringMember(*members[0], state, joinPath(path, "numerator"), numeratorText)) {
-        return false;
-    }
-    return decodeStringMember(*members[1], state, joinPath(path, "denominator"), denominatorText);
-}
-
 [[nodiscard]] bool decodeDuration(const JsonValue& node, DecodeState& state,
                                   const std::string& path, core::RationalTime& out) {
-    std::string_view numeratorText;
-    std::string_view denominatorText;
-    if (!decodeRationalStrings(node, state, path, numeratorText, denominatorText)) {
+    if (!decodeRationalTimeValue(node, state, path, out)) {
         return false;
     }
-    const auto parsed = parseCanonicalRationalTime(numeratorText, denominatorText);
-    if (!parsed) {
-        state.fail(mapRationalError(parsed.error()), fieldPath(path, parsed.field()));
-        return false;
-    }
-    if (parsed.value()->numerator() <= 0) {
+    if (out.numerator() <= 0) {
         state.fail(DocumentDecodeError::NonPositiveDuration, path);
         return false;
     }
-    out = *parsed.value();
     return true;
 }
 
 [[nodiscard]] bool decodePixelAspect(const JsonValue& node, DecodeState& state,
                                      const std::string& path, core::PixelAspectRatio& out) {
+    // decodePixelAspect/decodeFrameRate below intentionally re-decode their {numerator,denominator}
+    // pair through the domain-specific parseCanonicalPixelAspectRatio/parseCanonicalPositiveRatio
+    // surfaces rather than the general detail::decodeRationalTimeValue used by duration/keyframe
+    // time/rational constants: pixel aspect and frame rate additionally require an unsigned
+    // (never-negative) domain, which those two dedicated parsers enforce.
+    static constexpr std::array<std::string_view, 2> kKeys{"numerator", "denominator"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
     std::string_view numeratorText;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "numerator"), numeratorText)) {
+        return false;
+    }
     std::string_view denominatorText;
-    if (!decodeRationalStrings(node, state, path, numeratorText, denominatorText)) {
+    if (!decodeStringMember(*members[1], state, joinPath(path, "denominator"), denominatorText)) {
         return false;
     }
     const auto parsed = parseCanonicalPixelAspectRatio(numeratorText, denominatorText);
@@ -271,9 +328,17 @@ struct DecodeState final {
 
 [[nodiscard]] bool decodeFrameRate(const JsonValue& node, DecodeState& state,
                                    const std::string& path, FrameRate& out) {
+    static constexpr std::array<std::string_view, 2> kKeys{"numerator", "denominator"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
     std::string_view numeratorText;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "numerator"), numeratorText)) {
+        return false;
+    }
     std::string_view denominatorText;
-    if (!decodeRationalStrings(node, state, path, numeratorText, denominatorText)) {
+    if (!decodeStringMember(*members[1], state, joinPath(path, "denominator"), denominatorText)) {
         return false;
     }
     const auto parsed = parseCanonicalPositiveRatio(numeratorText, denominatorText);
@@ -352,25 +417,23 @@ struct DecodeState final {
     return true;
 }
 
+// A composition object is closed: exactly id/name/duration/format/parameters/animationCurves/graph
+// in exact order (see docs/architecture/project-format.md, "Project And Composition"). The
+// composition interior -- parameters, animationCurves, and the graph, plus the cross-reference
+// checks that span them -- is decoded by detail::decodeCompositionInterior in
+// document_decode_composition.cpp.
 [[nodiscard]] bool decodeComposition(const JsonValue& node, DecodeState& state,
                                      const std::string& path, DecodedComposition& out) {
-    static constexpr std::array<std::string_view, 4> kKeys{"id", "name", "duration", "format"};
+    static constexpr std::array<std::string_view, 7> kKeys{
+        "id", "name", "duration", "format", "parameters", "animationCurves", "graph"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, kKeys, false, state, path, members)) {
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
         return false;
     }
 
-    const auto idPath = joinPath(path, "id");
-    std::string_view idText;
-    if (!decodeStringMember(*members[0], state, idPath, idText)) {
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), out.id)) {
         return false;
     }
-    const auto idParsed = parseCanonicalObjectId(idText);
-    if (!idParsed) {
-        state.fail(DocumentDecodeError::InvalidId, idPath);
-        return false;
-    }
-    out.id = CompositionId::fromRaw(*idParsed.value());
 
     std::string_view nameText;
     if (!decodeStringMember(*members[1], state, joinPath(path, "name"), nameText)) {
@@ -381,27 +444,20 @@ struct DecodeState final {
     if (!decodeDuration(*members[2], state, joinPath(path, "duration"), out.duration)) {
         return false;
     }
-    return decodeFormat(*members[3], state, joinPath(path, "format"), out.format);
+    if (!decodeFormat(*members[3], state, joinPath(path, "format"), out.format)) {
+        return false;
+    }
+
+    return detail::decodeCompositionInterior(
+        *members[4], *members[5], *members[6], state, joinPath(path, "parameters"),
+        joinPath(path, "animationCurves"), joinPath(path, "graph"), out.parameters,
+        out.animationCurves, out.graph);
 }
 
 [[nodiscard]] bool decodeLocator(const JsonValue& node, DecodeState& state, const std::string& path,
                                  OcioConfigLocator& out) {
-    if (node.kind() != JsonValueKind::Object) {
-        state.fail(DocumentDecodeError::WrongValueKind, path);
-        return false;
-    }
-    const auto members = node.objectMembers();
-    const auto kindPath = joinPath(path, "kind");
-    if (members.empty()) {
-        state.fail(DocumentDecodeError::MissingMember, kindPath);
-        return false;
-    }
-    if (members[0].key() != "kind") {
-        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[0].key()));
-        return false;
-    }
     std::string_view kindText;
-    if (!decodeStringMember(members[0].value(), state, kindPath, kindText)) {
+    if (!decodeKindDiscriminator(node, state, path, kindText)) {
         return false;
     }
 
@@ -411,25 +467,18 @@ struct DecodeState final {
     } else if (kindText == "project-relative-ocioz") {
         secondKey = "path";
     } else {
-        state.fail(DocumentDecodeError::InvalidOcioLocatorKind, kindPath);
+        state.fail(DocumentDecodeError::InvalidOcioLocatorKind, joinPath(path, "kind"));
         return false;
     }
 
-    if (members.size() < 2) {
-        state.fail(DocumentDecodeError::MissingMember, joinPath(path, secondKey));
-        return false;
-    }
-    if (members[1].key() != secondKey) {
-        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[1].key()));
-        return false;
-    }
-    if (members.size() > 2) {
-        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[2].key()));
+    const std::array<std::string_view, 2> keys{"kind", secondKey};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
     }
 
     std::string_view valueText;
-    if (!decodeStringMember(members[1].value(), state, joinPath(path, secondKey), valueText)) {
+    if (!decodeStringMember(*members[1], state, joinPath(path, secondKey), valueText)) {
         return false;
     }
 
@@ -588,17 +637,9 @@ struct DecodeState final {
         return false;
     }
 
-    const auto idPath = joinPath(path, "id");
-    std::string_view idText;
-    if (!decodeStringMember(*members[0], state, idPath, idText)) {
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), out.projectId)) {
         return false;
     }
-    const auto idParsed = parseCanonicalObjectId(idText);
-    if (!idParsed) {
-        state.fail(DocumentDecodeError::InvalidId, idPath);
-        return false;
-    }
-    out.projectId = ProjectId::fromRaw(*idParsed.value());
 
     std::string_view nameText;
     if (!decodeStringMember(*members[1], state, joinPath(path, "name"), nameText)) {
@@ -678,9 +719,9 @@ DocumentDecodeResult DocumentDecodeResult::failure(const DocumentDecodeError err
 DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     static constexpr std::array<std::string_view, 4> kKeys{"schemaVersion", "project",
                                                            "idAllocation", "extensions"};
-    DecodeState state;
+    detail::DecodeState state;
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(root, kKeys, true, state, std::string{}, members)) {
+    if (!detail::matchOrderedMembers(root, kKeys, true, state, std::string{}, members)) {
         return DocumentDecodeResult::failure(state.error, state.path);
     }
 
