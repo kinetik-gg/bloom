@@ -8,8 +8,7 @@ project(BloomDependencyConsumptionSmoke LANGUAGES CXX)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/BloomDependencyPrefix.cmake")
 bloom_consume_dependency_prefix()
-
-find_package(yyjson REQUIRED CONFIG)
+bloom_find_dependency(yyjson)
 
 file(WRITE "${CMAKE_BINARY_DIR}/consume_smoke.cpp" [[
 #include <yyjson.h>
