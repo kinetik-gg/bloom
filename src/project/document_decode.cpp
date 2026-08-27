@@ -6,6 +6,8 @@
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_document.hpp>
+#include <bloom/project/round_trip_state.hpp>
+#include <bloom/project/unknown_json_number.hpp>
 
 #include <algorithm>
 #include <array>
@@ -52,14 +54,88 @@ std::string joinPathIndex(const std::string& base, const std::size_t index) {
     return joinPath(base, std::to_string(index));
 }
 
-// Checks that `object` is a JSON object whose leading members exactly match `expectedKeys` in
-// order, filling `outValues` with pointers to each matched member's value. When
-// `rejectExtraMembers` is true the object must contain exactly `expectedKeys.size()` members;
-// otherwise trailing members beyond the matched prefix are accepted without inspection.
+AttachmentScope::AttachmentScope(DecodeState& state, const std::string_view name) : state_(state) {
+    state.attachmentPath.push_back(RoundTripPathSegment::named(std::string(name)));
+}
+
+AttachmentScope::AttachmentScope(DecodeState& state, const RoundTripCollectionKind kind,
+                                 std::string identity)
+    : state_(state) {
+    state.attachmentPath.push_back(
+        RoundTripPathSegment::collectionElement(kind, std::move(identity)));
+}
+
+AttachmentScope::~AttachmentScope() { state_.attachmentPath.pop_back(); }
+
+namespace {
+// Recursively copies `value` (reachable only from an unknown additive member's own value -- never
+// a known schema field) into a bounded RetainedJsonValue, routing every JSON number through
+// parseUnknownJsonNumber (see docs/architecture/project-format.md, "Unknown JSON Numbers").
+// Object member order is preserved exactly as decoded: this content is opaque to Bloom's schema,
+// unlike the ascending-key ordering rule matchOrderedMembers itself enforces on the *trailing*
+// unknown members of a *known* schema object. Returns nullopt, having already called
+// state.requirePreservedReadOnly(UnknownNumberOutOfSubset, ...) with the exact offending path, the
+// first time a nested number falls outside the lossless subset.
+[[nodiscard]] std::optional<RetainedJsonValue>
+copyRetainedValue(const JsonValue& value, DecodeState& state, const std::string& path) {
+    switch (value.kind()) {
+    case JsonValueKind::Null:
+        return RetainedJsonValue{};
+    case JsonValueKind::Boolean:
+        return RetainedJsonValue(value.asBoolean().value_or(false));
+    case JsonValueKind::Number: {
+        const auto token = value.asNumberToken();
+        if (!token.has_value()) {
+            return RetainedJsonValue{};
+        }
+        const auto parsed = parseUnknownJsonNumber(*token);
+        if (!parsed) {
+            state.requirePreservedReadOnly(RoundTripPreservationReason::UnknownNumberOutOfSubset,
+                                           path);
+            return std::nullopt;
+        }
+        return RetainedJsonValue(*parsed.value());
+    }
+    case JsonValueKind::String:
+        return RetainedJsonValue(std::string(value.asString().value_or(std::string_view{})));
+    case JsonValueKind::Array: {
+        const auto source = value.arrayElements();
+        std::vector<RetainedJsonValue> elements;
+        elements.reserve(source.size());
+        for (std::size_t index = 0; index < source.size(); ++index) {
+            auto element = copyRetainedValue(source[index], state, joinPathIndex(path, index));
+            if (!element.has_value()) {
+                return std::nullopt;
+            }
+            elements.push_back(std::move(*element));
+        }
+        return RetainedJsonValue::makeArray(std::move(elements));
+    }
+    case JsonValueKind::Object: {
+        const auto source = value.objectMembers();
+        std::vector<RetainedJsonMember> members;
+        members.reserve(source.size());
+        for (const auto& member : source) {
+            auto memberValue =
+                copyRetainedValue(member.value(), state, joinPath(path, member.key()));
+            if (!memberValue.has_value()) {
+                return std::nullopt;
+            }
+            members.emplace_back(std::string(member.key()), std::move(*memberValue));
+        }
+        return RetainedJsonValue::makeObject(std::move(members));
+    }
+    }
+    return RetainedJsonValue{};
+}
+} // namespace
+
 bool matchOrderedMembers(const JsonValue& object,
                          const std::span<const std::string_view> expectedKeys,
                          const bool rejectExtraMembers, DecodeState& state,
-                         const std::string& basePath, std::vector<const JsonValue*>& outValues) {
+                         const std::string& basePath, std::vector<const JsonValue*>& outValues,
+                         std::vector<RetainedJsonMember>& outCapturedTrailing) {
+    outCapturedTrailing.clear();
     if (object.kind() != JsonValueKind::Object) {
         state.fail(DocumentDecodeError::WrongValueKind, basePath);
         return false;
@@ -84,10 +160,57 @@ bool matchOrderedMembers(const JsonValue& object,
         outValues.push_back(&members[index].value());
     }
 
-    if (rejectExtraMembers && members.size() > expectedKeys.size()) {
+    if (!rejectExtraMembers || members.size() <= expectedKeys.size()) {
+        return true;
+    }
+
+    // Trailing members beyond the matched prefix exist. Pre-RT1 behavior (and RT1's own exact
+    // {1,0} behavior): always a hard error, since a 1.0 writer never emits one.
+    if (state.documentMinor == 0 || state.roundTrip == nullptr) {
         state.fail(DocumentDecodeError::UnknownMember,
                    joinPath(basePath, members[expectedKeys.size()].key()));
         return false;
+    }
+
+    // RT1 (documentMinor > 0): capture every trailing member, requiring strictly ascending UTF-8
+    // key order (see "Canonical Document Shape": "Retained unknown additive members follow all
+    // known members of their object in ascending UTF-8 key order"). A duplicate key cannot
+    // actually reach this point -- the strict JSON reader already rejects a duplicate decoded
+    // object key before this module ever runs -- but a strict-ascending comparison also rejects an
+    // equal adjacent key, so this one check covers both halves of the contract's "reject unsorted
+    // or duplicate" requirement.
+    std::string_view previousKey;
+    bool hasPrevious = false;
+    for (std::size_t index = expectedKeys.size(); index < members.size(); ++index) {
+        const auto& member = members[index];
+        if (hasPrevious && !(previousKey < member.key())) {
+            state.fail(DocumentDecodeError::UnsortedUnknownMember,
+                       joinPath(basePath, member.key()));
+            return false;
+        }
+        previousKey = member.key();
+        hasPrevious = true;
+
+        auto retained = copyRetainedValue(member.value(), state, joinPath(basePath, member.key()));
+        if (!retained.has_value()) {
+            return false;
+        }
+        outCapturedTrailing.emplace_back(std::string(member.key()), std::move(*retained));
+    }
+    return true;
+}
+
+bool matchOrderedMembers(const JsonValue& object,
+                         const std::span<const std::string_view> expectedKeys,
+                         const bool rejectExtraMembers, DecodeState& state,
+                         const std::string& basePath, std::vector<const JsonValue*>& outValues) {
+    std::vector<RetainedJsonMember> captured;
+    if (!matchOrderedMembers(object, expectedKeys, rejectExtraMembers, state, basePath, outValues,
+                             captured)) {
+        return false;
+    }
+    if (!captured.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(captured));
     }
     return true;
 }
@@ -173,6 +296,17 @@ bool decodeKindDiscriminator(const JsonValue& node, DecodeState& state, const st
     return decodeStringMember(members[0].value(), state, kindPath, kindText);
 }
 
+bool failUnknownDiscriminator(DecodeState& state, std::string kindPath,
+                              const DocumentDecodeError exactVersionError) {
+    if (state.documentMinor > 0 && state.roundTrip != nullptr) {
+        state.requirePreservedReadOnly(RoundTripPreservationReason::UnknownDiscriminatorKind,
+                                       std::move(kindPath));
+    } else {
+        state.fail(exactVersionError, std::move(kindPath));
+    }
+    return false;
+}
+
 namespace {
 [[nodiscard]] bool decodeRationalStrings(const JsonValue& node, DecodeState& state,
                                          const std::string& path, std::string_view& numeratorText,
@@ -209,12 +343,14 @@ bool decodeRationalTimeValue(const JsonValue& node, DecodeState& state, const st
 
 namespace {
 
+using detail::AttachmentScope;
 using detail::decodeKindDiscriminator;
 using detail::decodeObjectId;
 using detail::decodeRationalTimeValue;
 using detail::DecodeState;
 using detail::decodeStringMember;
 using detail::decodeUInt32Member;
+using detail::failUnknownDiscriminator;
 using detail::fieldPath;
 using detail::joinPath;
 using detail::joinPathIndex;
@@ -410,12 +546,18 @@ using document::SchemaVersion;
     // through their checked static factories), so these locals are seeded with a valid factory
     // value and then overwritten by the decode below.
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
-    if (!decodePixelAspect(*members[2], state, joinPath(path, "pixelAspect"), pixelAspect)) {
-        return false;
+    {
+        const AttachmentScope pixelAspectScope(state, "pixelAspect");
+        if (!decodePixelAspect(*members[2], state, joinPath(path, "pixelAspect"), pixelAspect)) {
+            return false;
+        }
     }
     FrameRate frameRate = FrameRate::framesPerSecond24();
-    if (!decodeFrameRate(*members[3], state, joinPath(path, "frameRate"), frameRate)) {
-        return false;
+    {
+        const AttachmentScope frameRateScope(state, "frameRate");
+        if (!decodeFrameRate(*members[3], state, joinPath(path, "frameRate"), frameRate)) {
+            return false;
+        }
     }
 
     const auto created = CompositionFormat::create(width, height, pixelAspect, frameRate);
@@ -439,12 +581,23 @@ using document::SchemaVersion;
     static constexpr std::array<std::string_view, 7> kKeys{
         "id", "name", "duration", "format", "parameters", "animationCurves", "graph"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+    // A composition is a collection element (identity: numeric CompositionId), and that identity
+    // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
+    // shape's own trailing unknown members cannot be attached immediately; capture them here and
+    // attach once `id` and its AttachmentScope below exist.
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members, trailing)) {
         return false;
     }
 
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), out.id)) {
         return false;
+    }
+
+    const AttachmentScope compositionScope(state, RoundTripCollectionKind::Composition,
+                                           std::to_string(out.id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
     }
 
     std::string_view nameText;
@@ -453,11 +606,17 @@ using document::SchemaVersion;
     }
     out.name = std::string(nameText);
 
-    if (!decodeDuration(*members[2], state, joinPath(path, "duration"), out.duration)) {
-        return false;
+    {
+        const AttachmentScope durationScope(state, "duration");
+        if (!decodeDuration(*members[2], state, joinPath(path, "duration"), out.duration)) {
+            return false;
+        }
     }
-    if (!decodeFormat(*members[3], state, joinPath(path, "format"), out.format)) {
-        return false;
+    {
+        const AttachmentScope formatScope(state, "format");
+        if (!decodeFormat(*members[3], state, joinPath(path, "format"), out.format)) {
+            return false;
+        }
     }
 
     return detail::decodeCompositionInterior(
@@ -479,8 +638,8 @@ using document::SchemaVersion;
     } else if (kindText == "project-relative-ocioz") {
         secondKey = "path";
     } else {
-        state.fail(DocumentDecodeError::InvalidOcioLocatorKind, joinPath(path, "kind"));
-        return false;
+        return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                        DocumentDecodeError::InvalidOcioLocatorKind);
     }
 
     const std::array<std::string_view, 2> keys{"kind", secondKey};
@@ -535,6 +694,47 @@ using document::SchemaVersion;
     return true;
 }
 
+// Like matchOrderedMembers(..., rejectExtraMembers=true) above, but never captures a trailing
+// member even at documentMinor > 0: reserved for a closed shape inside an array the format
+// contract does not give a declared stable element identity (docs/architecture/project-format.md,
+// "Versions, Migrations, And Preservation": "An array without a declared identity cannot retain
+// unknown elements through an edit"). OCIO context variables are v1's only such shape -- every
+// other array element type has a fixed identity from the contract's list and goes through the
+// deferred seven-argument matchOrderedMembers() overload instead.
+[[nodiscard]] bool matchOrderedMembersClosed(const JsonValue& object,
+                                             const std::span<const std::string_view> expectedKeys,
+                                             DecodeState& state, const std::string& basePath,
+                                             std::vector<const JsonValue*>& outValues) {
+    if (object.kind() != JsonValueKind::Object) {
+        state.fail(DocumentDecodeError::WrongValueKind, basePath);
+        return false;
+    }
+    const auto members = object.objectMembers();
+    outValues.clear();
+    outValues.reserve(expectedKeys.size());
+    for (std::size_t index = 0; index < expectedKeys.size(); ++index) {
+        if (members.size() <= index) {
+            state.fail(DocumentDecodeError::MissingMember, joinPath(basePath, expectedKeys[index]));
+            return false;
+        }
+        if (members[index].key() != expectedKeys[index]) {
+            const bool knownElsewhere = std::find(expectedKeys.begin(), expectedKeys.end(),
+                                                  members[index].key()) != expectedKeys.end();
+            state.fail(knownElsewhere ? DocumentDecodeError::MemberOutOfOrder
+                                      : DocumentDecodeError::UnknownMember,
+                       joinPath(basePath, members[index].key()));
+            return false;
+        }
+        outValues.push_back(&members[index].value());
+    }
+    if (members.size() > expectedKeys.size()) {
+        state.fail(DocumentDecodeError::UnknownMember,
+                   joinPath(basePath, members[expectedKeys.size()].key()));
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool decodeContextVariables(const JsonValue& node, DecodeState& state,
                                           const std::string& path,
                                           std::vector<OcioContextVariable>& out) {
@@ -549,7 +749,11 @@ using document::SchemaVersion;
     for (std::size_t index = 0; index < elements.size(); ++index) {
         const auto elementPath = joinPathIndex(path, index);
         std::vector<const JsonValue*> members;
-        if (!matchOrderedMembers(elements[index], kKeys, true, state, elementPath, members)) {
+        // A context-variable array element has no member in the contract's fixed collection
+        // identity list (docs/architecture/project-format.md, "Array reconciliation identities
+        // are fixed"), so this closed shape never captures a trailing unknown member even at
+        // documentMinor > 0 (see matchOrderedMembersClosed's own comment above).
+        if (!matchOrderedMembersClosed(elements[index], kKeys, state, elementPath, members)) {
             return false;
         }
         std::string_view nameText;
@@ -574,16 +778,25 @@ using document::SchemaVersion;
         return false;
     }
 
-    if (!decodeSchemaVersionField(*members[0], state, joinPath(path, "schemaVersion"),
-                                  out.schemaVersion)) {
-        return false;
+    {
+        const AttachmentScope schemaVersionScope(state, "schemaVersion");
+        if (!decodeSchemaVersionField(*members[0], state, joinPath(path, "schemaVersion"),
+                                      out.schemaVersion)) {
+            return false;
+        }
     }
-    if (!decodeLocator(*members[1], state, joinPath(path, "locator"), out.locator)) {
-        return false;
+    {
+        const AttachmentScope locatorScope(state, "locator");
+        if (!decodeLocator(*members[1], state, joinPath(path, "locator"), out.locator)) {
+            return false;
+        }
     }
-    if (!decodeExpectedRevision(*members[2], state, joinPath(path, "expectedRevision"),
-                                out.expectedRevision)) {
-        return false;
+    {
+        const AttachmentScope expectedRevisionScope(state, "expectedRevision");
+        if (!decodeExpectedRevision(*members[2], state, joinPath(path, "expectedRevision"),
+                                    out.expectedRevision)) {
+            return false;
+        }
     }
 
     const auto portabilityPath = joinPath(path, "portability");
@@ -614,9 +827,12 @@ using document::SchemaVersion;
         return false;
     }
 
-    if (!decodeSchemaVersionField(*members[0], state, joinPath(path, "schemaVersion"),
-                                  out.schemaVersion)) {
-        return false;
+    {
+        const AttachmentScope schemaVersionScope(state, "schemaVersion");
+        if (!decodeSchemaVersionField(*members[0], state, joinPath(path, "schemaVersion"),
+                                      out.schemaVersion)) {
+            return false;
+        }
     }
 
     std::string_view processColorSpaceIdText;
@@ -626,8 +842,11 @@ using document::SchemaVersion;
     }
     out.processColorSpaceId = std::string(processColorSpaceIdText);
 
-    if (!decodeOcioConfig(*members[2], state, joinPath(path, "ocioConfig"), out.ocioConfig)) {
-        return false;
+    {
+        const AttachmentScope ocioConfigScope(state, "ocioConfig");
+        if (!decodeOcioConfig(*members[2], state, joinPath(path, "ocioConfig"), out.ocioConfig)) {
+            return false;
+        }
     }
 
     const auto validation = out.validate();
@@ -659,9 +878,12 @@ using document::SchemaVersion;
     }
     out.projectName = std::string(nameText);
 
-    if (!decodeColorSettings(*members[2], state, joinPath(path, "colorSettings"),
-                             out.colorSettings)) {
-        return false;
+    {
+        const AttachmentScope colorSettingsScope(state, "colorSettings");
+        if (!decodeColorSettings(*members[2], state, joinPath(path, "colorSettings"),
+                                 out.colorSettings)) {
+            return false;
+        }
     }
 
     const auto compositionsPath = joinPath(path, "compositions");
@@ -763,6 +985,7 @@ using document::SchemaVersion;
     if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
         return false;
     }
+    const AttachmentScope highestIssuedScope(state, "highestIssued");
     return decodeHighestIssued(*members[0], state, joinPath(path, "highestIssued"), out);
 }
 
@@ -859,8 +1082,8 @@ using document::SchemaVersion;
         return true;
     }
 
-    state.fail(DocumentDecodeError::InvalidExtensionTargetKind, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::InvalidExtensionTargetKind);
 }
 
 // `subject` is always present and is either JSON null or a typed target (see
@@ -880,20 +1103,34 @@ using document::SchemaVersion;
     return true;
 }
 
+// A host-table reference table entry is a collection element identified by its UTF-8 `key` (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "key for a host
+// reference-table entry"), scoped to its owning extension record.
 [[nodiscard]] bool decodeHostReference(const JsonValue& node, DecodeState& state,
                                        const std::string& path, ExtensionHostReference& out) {
     static constexpr std::array<std::string_view, 2> keys{"key", "target"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
     std::string_view keyText;
     if (!decodeStringMember(*members[0], state, joinPath(path, "key"), keyText)) {
         return false;
     }
+
+    const AttachmentScope hostReferenceScope(state, RoundTripCollectionKind::HostReference,
+                                             std::string(keyText));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     ExtensionTarget target;
-    if (!decodeExtensionTarget(*members[1], state, joinPath(path, "target"), target)) {
-        return false;
+    {
+        const AttachmentScope targetScope(state, "target");
+        if (!decodeExtensionTarget(*members[1], state, joinPath(path, "target"), target)) {
+            return false;
+        }
     }
     out.key = std::string(keyText);
     out.target = target;
@@ -958,15 +1195,18 @@ using document::SchemaVersion;
             return false;
         }
         SchemaVersion version;
-        if (!decodeSchemaVersionField(*members[2], state, joinPath(path, "version"), version)) {
-            return false;
+        {
+            const AttachmentScope versionScope(state, "version");
+            if (!decodeSchemaVersionField(*members[2], state, joinPath(path, "version"), version)) {
+                return false;
+            }
         }
         out = ExtensionOwnerRemapper{std::string(remapperIdText), version};
         return true;
     }
 
-    state.fail(DocumentDecodeError::InvalidReferencePolicyKind, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::InvalidReferencePolicyKind);
 }
 
 // `payload` is canonical RFC 4648 base64 (standard alphabet, required `=` padding, no whitespace);
@@ -1005,7 +1245,11 @@ using document::SchemaVersion;
         "id",      "ownerId",   "typeId",          "schemaVersion",
         "subject", "mediaType", "referencePolicy", "payload"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    // An extension record is a collection element (identity: numeric ExtensionRecordId); see
+    // decodeComposition's own comment above for why this closed shape's own trailing capture must
+    // be deferred until `id` is decoded.
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -1013,6 +1257,13 @@ using document::SchemaVersion;
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope extensionRecordScope(state, RoundTripCollectionKind::ExtensionRecord,
+                                               std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     std::string_view ownerIdText;
     if (!decodeStringMember(*members[1], state, joinPath(path, "ownerId"), ownerIdText)) {
         return false;
@@ -1022,22 +1273,31 @@ using document::SchemaVersion;
         return false;
     }
     SchemaVersion schemaVersion;
-    if (!decodeSchemaVersionField(*members[3], state, joinPath(path, "schemaVersion"),
-                                  schemaVersion)) {
-        return false;
+    {
+        const AttachmentScope schemaVersionScope(state, "schemaVersion");
+        if (!decodeSchemaVersionField(*members[3], state, joinPath(path, "schemaVersion"),
+                                      schemaVersion)) {
+            return false;
+        }
     }
     std::optional<ExtensionTarget> subject;
-    if (!decodeExtensionSubject(*members[4], state, joinPath(path, "subject"), subject)) {
-        return false;
+    {
+        const AttachmentScope subjectScope(state, "subject");
+        if (!decodeExtensionSubject(*members[4], state, joinPath(path, "subject"), subject)) {
+            return false;
+        }
     }
     std::string_view mediaTypeText;
     if (!decodeStringMember(*members[5], state, joinPath(path, "mediaType"), mediaTypeText)) {
         return false;
     }
     ExtensionReferencePolicy referencePolicy{NoExtensionReferences{}};
-    if (!decodeReferencePolicy(*members[6], state, joinPath(path, "referencePolicy"),
-                               referencePolicy)) {
-        return false;
+    {
+        const AttachmentScope referencePolicyScope(state, "referencePolicy");
+        if (!decodeReferencePolicy(*members[6], state, joinPath(path, "referencePolicy"),
+                                   referencePolicy)) {
+            return false;
+        }
     }
     OpaqueExtensionPayload payload;
     if (!decodePayload(*members[7], state, joinPath(path, "payload"), payload)) {
@@ -1109,24 +1369,69 @@ DocumentDecodePathText DocumentDecodePathText::from(const std::string_view text)
 DocumentDecodeResult DocumentDecodeResult::success(DecodedDocumentEnvelope envelope) {
     DocumentDecodeResult result;
     result.envelope_ = std::move(envelope);
-    result.error_ = DocumentDecodeError::None;
+    result.outcome_ = DocumentDecodeOutcome::Decoded;
+    result.classification_ = DocumentClassification::ExactSchemaV1_0;
+    return result;
+}
+
+DocumentDecodeResult DocumentDecodeResult::successWithRoundTrip(DecodedDocumentEnvelope envelope,
+                                                                RoundTripState roundTrip) {
+    DocumentDecodeResult result;
+    result.envelope_ = std::move(envelope);
+    result.roundTrip_ = std::move(roundTrip);
+    result.outcome_ = DocumentDecodeOutcome::Decoded;
+    result.classification_ = DocumentClassification::EditableWithRoundTrip;
     return result;
 }
 
 DocumentDecodeResult DocumentDecodeResult::failure(const DocumentDecodeError error,
                                                    const std::string_view path) {
     DocumentDecodeResult result;
+    result.outcome_ = DocumentDecodeOutcome::Failed;
     result.error_ = error;
     result.path_ = DocumentDecodePathText::from(path);
     return result;
 }
+
+DocumentDecodeResult
+DocumentDecodeResult::preservedReadOnlyRequired(const RoundTripPreservationReason reason,
+                                                const std::string_view path) {
+    DocumentDecodeResult result;
+    result.outcome_ = DocumentDecodeOutcome::PreservedReadOnlyRequired;
+    result.preservationReason_ = reason;
+    result.path_ = DocumentDecodePathText::from(path);
+    return result;
+}
+
+namespace {
+// Builds the right three-way DocumentDecodeResult once a decode step under an active
+// documentMinor > 0 capture pass has returned false: state.preservedReadOnlyRequired (set only by
+// copyRetainedValue's out-of-subset-number check or failUnknownDiscriminator) always takes
+// priority over state.error, since both DecodeState::fail() and requirePreservedReadOnly() are
+// first-wins and every site that sets either returns false immediately -- so in practice at most
+// one of the two is ever set for a given decode outcome, but checking preservedReadOnlyRequired
+// first keeps that priority explicit rather than assumed.
+[[nodiscard]] DocumentDecodeResult finishDecodeFailure(const detail::DecodeState& state) {
+    if (state.preservedReadOnlyRequired) {
+        return DocumentDecodeResult::preservedReadOnlyRequired(state.preservationReason,
+                                                               state.preservationPath);
+    }
+    return DocumentDecodeResult::failure(state.error, state.path);
+}
+} // namespace
 
 DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     static constexpr std::array<std::string_view, 4> kKeys{"schemaVersion", "project",
                                                            "idAllocation", "extensions"};
     detail::DecodeState state;
     std::vector<const JsonValue*> members;
-    if (!detail::matchOrderedMembers(root, kKeys, true, state, std::string{}, members)) {
+    // First pass: match only the exact-order prefix, not yet checking for a trailing member. The
+    // root object's own trailing-member capture eligibility depends on documentMinor, which is
+    // itself decoded from this pass's own result (members[0]) -- an unavoidable bootstrap order,
+    // mirrored below by a second pass once documentMinor/roundTrip are established (compare
+    // decodeAnimationCurve's own two-pass id/kind peek in document_decode_composition.cpp for the
+    // same "must read one member before the rest of this object's shape is known" pattern).
+    if (!detail::matchOrderedMembers(root, kKeys, false, state, std::string{}, members)) {
         return DocumentDecodeResult::failure(state.error, state.path);
     }
 
@@ -1134,25 +1439,52 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     if (!decodeSchemaVersionField(*members[0], state, "/schemaVersion", schemaVersion)) {
         return DocumentDecodeResult::failure(state.error, state.path);
     }
-    if (schemaVersion != kCanonicalDocumentSchemaVersionV1) {
+    // Unknown major versions are rejected without mutation regardless of minor (see
+    // docs/architecture/project-format.md, "Versions, Migrations, And Preservation"). Exactly
+    // {1,0} keeps the pre-RT1 exact-match behavior and never produces a RoundTripState; {1, minor
+    // > 0} is a same-major newer-minor document RT1 now decodes.
+    if (schemaVersion.major != kCanonicalDocumentSchemaVersionV1.major) {
         return DocumentDecodeResult::failure(DocumentDecodeError::DomainViolation,
                                              "/schemaVersion");
     }
 
-    DecodedDocumentEnvelope envelope;
-    if (!decodeProject(*members[1], state, "/project", envelope)) {
-        return DocumentDecodeResult::failure(state.error, state.path);
+    const bool isExactSchemaV1_0 = schemaVersion.minor == kCanonicalDocumentSchemaVersionV1.minor;
+    RoundTripState roundTrip;
+    if (!isExactSchemaV1_0) {
+        state.documentMinor = schemaVersion.minor;
+        state.roundTrip = &roundTrip;
     }
 
-    if (!decodeIdAllocation(*members[2], state, "/idAllocation", envelope.highWater)) {
-        return DocumentDecodeResult::failure(state.error, state.path);
+    // Second pass: re-check the root object's own shape now that documentMinor/roundTrip reflect
+    // the decoded schemaVersion, so a trailing unknown root member is captured (RT1) rather than
+    // hard-rejected exactly when documentMinor > 0.
+    if (!detail::matchOrderedMembers(root, kKeys, true, state, std::string{}, members)) {
+        return finishDecodeFailure(state);
+    }
+
+    DecodedDocumentEnvelope envelope;
+    {
+        const AttachmentScope projectScope(state, "project");
+        if (!decodeProject(*members[1], state, "/project", envelope)) {
+            return finishDecodeFailure(state);
+        }
+    }
+
+    {
+        const AttachmentScope idAllocationScope(state, "idAllocation");
+        if (!decodeIdAllocation(*members[2], state, "/idAllocation", envelope.highWater)) {
+            return finishDecodeFailure(state);
+        }
     }
 
     if (!decodeExtensionRecords(*members[3], state, "/extensions", envelope.extensionRecords)) {
-        return DocumentDecodeResult::failure(state.error, state.path);
+        return finishDecodeFailure(state);
     }
 
-    return DocumentDecodeResult::success(std::move(envelope));
+    if (isExactSchemaV1_0) {
+        return DocumentDecodeResult::success(std::move(envelope));
+    }
+    return DocumentDecodeResult::successWithRoundTrip(std::move(envelope), std::move(roundTrip));
 }
 
 } // namespace bloom::project

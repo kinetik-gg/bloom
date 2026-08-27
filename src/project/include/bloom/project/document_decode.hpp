@@ -9,6 +9,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 
 #include <array>
@@ -45,8 +46,25 @@
 // Layer Stack membership, cycle freedom, extension subject/reference-target existence -- see
 // bloom::document::CanonicalGraph::validate() and bloom::document::validateExtensionRecords() --
 // and restoring the id allocator from the decoded highWater) is bloom::project::reconstructDocument
-// in document_reconstruct.hpp. The unknown-member round-trip overlay is also a later slice, so an
-// unrecognized root member is a typed decode error rather than being preserved.
+// in document_reconstruct.hpp.
+//
+// RT1: unknown-additive-member capture for a same-major newer-minor document (schemaVersion
+// {1, minor > 0}) is implemented; the writer-side overlay that reconciles retained data back onto
+// a canonical rewrite remains a later slice (see docs/architecture/project-format.md, "Versions,
+// Migrations, And Preservation"). An exact {1,0} document keeps the original strict behavior: an
+// unrecognized member anywhere is a typed UnknownMember/MemberOutOfOrder decode error and no
+// RoundTripState is ever produced. A {1, minor > 0} document additionally accepts a trailing
+// unknown member on any closed object -- but only strictly after every known member of that same
+// object, in ascending UTF-8 key order -- and captures it into bloom::project::RoundTripState
+// (round_trip_state.hpp) keyed by its schema path or, for a collection element, the contract's
+// fixed stable identity. An unknown member positioned before or between known members remains a
+// hard decode error at every minor version: a conforming writer could not have produced it, so
+// RT1 does not attempt to preserve it. An unknown *discriminator* (e.g. a `kind` string outside a
+// closed vocabulary such as an OCIO locator/parameter-source/constant-value/animation-curve/
+// edge-destination/extension-target/reference-policy kind) and an unknown JSON number outside the
+// lossless subset in unknown_json_number.hpp are not decode errors either: they classify the
+// whole document as DocumentDecodeOutcome::PreservedReadOnlyRequired instead of producing a
+// DecodedDocumentEnvelope (see decodeDocumentEnvelope()'s three-way result below).
 //
 // Decoding constructs every typed value through its existing checked surface: canonical_decimal.hpp
 // parsers for decimal-string ids/rationals/int64s, canonical JSON-number uint32 fields, and known
@@ -251,6 +269,66 @@ enum class DocumentDecodeError : std::uint8_t {
     // An extension record's `payload` is not a canonical RFC 4648 standard-alphabet base64 spelling
     // with required `=` padding, correct length, and zero tail bits.
     InvalidBase64Payload,
+    // (RT1, minor > 0 only) A closed object's trailing unknown additive members are not in strictly
+    // ascending UTF-8 key order (or, structurally impossible through the strict JSON reader's own
+    // duplicate-key rejection, repeat a key) -- see docs/architecture/project-format.md, "Canonical
+    // Document Shape" and "Versions, Migrations, And Preservation": "retained unknown object
+    // members" sort by "UTF-8 key after known members". Such input could not have come from a
+    // conforming writer.
+    UnsortedUnknownMember,
+};
+
+// (RT1) Why a same-major newer-minor document could not be opened editable even though every
+// unknown member appeared in a position a conforming writer could have produced (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "unknown core
+// discriminators are never guessed").
+enum class RoundTripPreservationReason : std::uint8_t {
+    // No PreservedReadOnlyRequired outcome occurred; not a valid reason on its own.
+    None,
+    // A `kind` (or other closed-vocabulary discriminator) string did not match any family this
+    // schema major recognizes -- e.g. a future OCIO locator kind, parameter-source kind (a future
+    // driver declaration), constant-value kind, animation-curve kind, edge-destination kind,
+    // extension target/subject kind, or extension reference-policy kind. The discriminator string
+    // itself is core vocabulary, never captured as a retained value.
+    UnknownDiscriminatorKind,
+    // A JSON number reachable from an unknown additive member's value is outside the lossless
+    // editable subset in unknown_json_number.hpp (see docs/architecture/project-format.md,
+    // "Unknown JSON Numbers"): an out-of-range integer, a non-canonical exponent/decimal spelling,
+    // or a decimal that would round or normalize on rewrite.
+    UnknownNumberOutOfSubset,
+};
+
+// (RT1) The outcome of decoding a document.json envelope whose schemaVersion is {1, minor}: a
+// distinct classification from "hard decode error" for a same-major newer-minor document that is
+// structurally valid but cannot (yet, or ever, for that exact archive) be opened editable. See
+// docs/architecture/project-format.md, "Project I/O Boundary" (Editable/DegradedEditable/
+// PreservedReadOnly) -- this decode-layer enum is narrower: it only distinguishes whether this
+// module could construct a DecodedDocumentEnvelope at all, not the full application-level
+// editability determination (which also depends on unavailable-provider state this module never
+// sees).
+enum class DocumentDecodeOutcome : std::uint8_t {
+    // decodeDocumentEnvelope() found a typed decode error; error()/path() are valid.
+    Failed,
+    // A DecodedDocumentEnvelope was constructed; value() is non-null. classification()
+    // distinguishes an exact {1,0} document (no RoundTripState; roundTrip() is nullptr) from a
+    // same-major newer-minor document with only safely additive unknown members
+    // (EditableWithRoundTrip; roundTrip() is non-null, though it may be empty()).
+    Decoded,
+    // A same-major newer-minor document contains an unknown core discriminator or an unknown
+    // number outside the lossless subset. No DecodedDocumentEnvelope is constructed; value() is
+    // null. preservationReason()/path() are valid.
+    PreservedReadOnlyRequired,
+};
+
+enum class DocumentClassification : std::uint8_t {
+    // Not meaningful unless outcome() == Decoded.
+    None,
+    // schemaVersion is exactly {1, 0}; no unknown additive members are possible (the 1.0 writer
+    // never emits them) and no RoundTripState is produced.
+    ExactSchemaV1_0,
+    // schemaVersion is {1, minor > 0} and every unknown additive member encountered was safely
+    // captured; roundTrip() names the (possibly empty) retained state.
+    EditableWithRoundTrip,
 };
 
 // A bounded diagnostic path to one JSON member, formatted as `/key/0/key`, mirroring
@@ -271,30 +349,57 @@ class DocumentDecodePathText final {
     bool truncated_ = false;
 };
 
-// [[nodiscard]] failure-aware result. On success, value() names the decoded envelope; on
-// failure, error() names the typed cause and path() names the exact offending member.
+// [[nodiscard]] failure-aware result (RT1: now three-way, see DocumentDecodeOutcome above).
+// outcome() names which of the three shapes is populated:
+//   - Failed: error()/path() are valid.
+//   - Decoded: value() is non-null; classification() distinguishes ExactSchemaV1_0 (roundTrip()
+//     is nullptr) from EditableWithRoundTrip (roundTrip() is non-null).
+//   - PreservedReadOnlyRequired: value() is null; preservationReason()/path() are valid.
+// operator bool() keeps its pre-RT1 meaning ("a trusted envelope was constructed") so every
+// existing `if (!decoded)` / `if (decoded)` caller keeps working unchanged for the two outcomes
+// it already knew about; PreservedReadOnlyRequired is also "falsy" like Failed, since neither
+// produces value().
 class [[nodiscard]] DocumentDecodeResult final {
   public:
     [[nodiscard]] static DocumentDecodeResult success(DecodedDocumentEnvelope envelope);
+    [[nodiscard]] static DocumentDecodeResult successWithRoundTrip(DecodedDocumentEnvelope envelope,
+                                                                   RoundTripState roundTrip);
     [[nodiscard]] static DocumentDecodeResult failure(DocumentDecodeError error,
                                                       std::string_view path);
+    [[nodiscard]] static DocumentDecodeResult
+    preservedReadOnlyRequired(RoundTripPreservationReason reason, std::string_view path);
 
     [[nodiscard]] explicit operator bool() const noexcept {
-        return error_ == DocumentDecodeError::None;
+        return outcome_ == DocumentDecodeOutcome::Decoded;
     }
+    [[nodiscard]] DocumentDecodeOutcome outcome() const noexcept { return outcome_; }
+    [[nodiscard]] DocumentClassification classification() const noexcept { return classification_; }
     [[nodiscard]] DocumentDecodeError error() const noexcept { return error_; }
+    [[nodiscard]] RoundTripPreservationReason preservationReason() const noexcept {
+        return preservationReason_;
+    }
     [[nodiscard]] std::string_view path() const noexcept { return path_.view(); }
     [[nodiscard]] bool pathTruncated() const noexcept { return path_.truncated(); }
     [[nodiscard]] const DecodedDocumentEnvelope* value() const& noexcept {
         return envelope_.has_value() ? &*envelope_ : nullptr;
     }
     [[nodiscard]] const DecodedDocumentEnvelope* value() const&& = delete;
+    // Non-null only when classification() == EditableWithRoundTrip (may then still be empty()
+    // when the document had no unknown additive members at all).
+    [[nodiscard]] const RoundTripState* roundTrip() const& noexcept {
+        return roundTrip_.has_value() ? &*roundTrip_ : nullptr;
+    }
+    [[nodiscard]] const RoundTripState* roundTrip() const&& = delete;
 
   private:
     DocumentDecodeResult() = default;
 
     std::optional<DecodedDocumentEnvelope> envelope_;
+    std::optional<RoundTripState> roundTrip_;
+    DocumentDecodeOutcome outcome_ = DocumentDecodeOutcome::Failed;
+    DocumentClassification classification_ = DocumentClassification::None;
     DocumentDecodeError error_ = DocumentDecodeError::None;
+    RoundTripPreservationReason preservationReason_ = RoundTripPreservationReason::None;
     DocumentDecodePathText path_;
 };
 

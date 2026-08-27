@@ -19,6 +19,7 @@ target_sources(
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
+        round_trip_state.cpp
         strict_json_dom.cpp
         strict_json_preflight.cpp
         strict_json_preflight.hpp
@@ -38,6 +39,7 @@ target_sources(
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
+            include/bloom/project/round_trip_state.hpp
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
 )

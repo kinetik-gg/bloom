@@ -12,10 +12,13 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/project_io_memory.hpp>
+#include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/strict_json_dom.hpp>
+#include <bloom/project/unknown_json_number.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -31,11 +34,20 @@
 namespace {
 
 using bloom::project::DecodedDocumentEnvelope;
+using bloom::project::DocumentClassification;
 using bloom::project::DocumentDecodeError;
+using bloom::project::DocumentDecodeOutcome;
 using bloom::project::DocumentDecodeResult;
 using bloom::project::JsonValue;
 using bloom::project::ProjectIoOperationMemory;
+using bloom::project::RetainedJsonValue;
+using bloom::project::RetainedJsonValueKind;
+using bloom::project::RoundTripAttachmentPath;
+using bloom::project::RoundTripCollectionKind;
+using bloom::project::RoundTripPathSegment;
+using bloom::project::RoundTripPreservationReason;
 using bloom::project::StrictJsonDomResult;
+using bloom::project::UnknownJsonNumberKind;
 
 class Expectations final {
   public:
@@ -207,6 +219,50 @@ constexpr std::string_view kMinimalGraphJson =
 }
 
 // ---------------------------------------------------------------------------------------------
+// RT1 fixtures: schemaVersion {1, minor > 0} documents (see docs/architecture/project-format.md,
+// "Versions, Migrations, And Preservation"). documentJson() above always writes an exact-{1,0}
+// extensions-free skeleton; RT1's own fixtures additionally need a caller-chosen minor and,
+// sometimes, a non-empty extensions array, so this module adds its own skeleton builder rather
+// than complicating every existing R2/R3 call site above.
+// ---------------------------------------------------------------------------------------------
+
+constexpr std::string_view kSchemaVersion11 = R"({"major":1,"minor":1})";
+
+[[nodiscard]] std::string
+documentWithCompositionMinor1(const std::string_view compositionJsonText) {
+    return documentJson(kSchemaVersion11, R"("1")", R"("Untitled")", defaultColorSettingsJson(),
+                        compositionJsonText);
+}
+
+[[nodiscard]] std::string
+documentWithColorSettingsMinor1(const std::string_view colorSettingsJsonText) {
+    return documentJson(kSchemaVersion11, R"("1")", R"("Untitled")", colorSettingsJsonText,
+                        defaultCompositionJson());
+}
+
+// Like documentJson() above, but also lets the caller supply the extensions array body and its
+// matching idAllocation.highestIssued.extensionRecord high-water (documentJson() always writes an
+// empty extensions array with an all-zero high-water).
+[[nodiscard]] std::string documentWithExtensions(const std::string_view schemaVersionJson,
+                                                 const std::string_view extensionsArrayBody,
+                                                 const std::string_view extensionRecordHighWater) {
+    std::string result = "{\"schemaVersion\":";
+    result += schemaVersionJson;
+    result += R"(,"project":{"id":"1","name":"Untitled","colorSettings":)";
+    result += defaultColorSettingsJson();
+    result += R"(,"compositions":[)";
+    result += defaultCompositionJson();
+    result += R"(]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+              R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+              R"("driverBinding":"0","extensionRecord":")";
+    result += extensionRecordHighWater;
+    result += R"("}},"extensions":[)";
+    result += extensionsArrayBody;
+    result += "]}";
+    return result;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Decode helpers
 // ---------------------------------------------------------------------------------------------
 
@@ -228,8 +284,25 @@ void expectDecodeFailure(Expectations& expectations, const std::string& text,
                          const DocumentDecodeError expectedError,
                          const std::string_view expectedPath, const std::string_view message) {
     const auto decoded = decodeText(text);
+    expectations.expect(!decoded && decoded.outcome() == DocumentDecodeOutcome::Failed &&
+                            decoded.error() == expectedError && decoded.path() == expectedPath,
+                        message);
+}
+
+// RT1: asserts a same-major newer-minor document classifies PreservedReadOnlyRequired (an unknown
+// core discriminator or an unknown number outside the lossless subset -- see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "unknown core
+// discriminators are never guessed") rather than decoding or hard-failing. No
+// DecodedDocumentEnvelope or RoundTripState is produced for this outcome.
+void expectPreservedReadOnly(Expectations& expectations, const std::string& text,
+                             const RoundTripPreservationReason expectedReason,
+                             const std::string_view expectedPath, const std::string_view message) {
+    const auto decoded = decodeText(text);
     expectations.expect(
-        !decoded && decoded.error() == expectedError && decoded.path() == expectedPath, message);
+        !decoded && decoded.outcome() == DocumentDecodeOutcome::PreservedReadOnlyRequired &&
+            decoded.preservationReason() == expectedReason && decoded.path() == expectedPath &&
+            decoded.value() == nullptr && decoded.roundTrip() == nullptr,
+        message);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -654,11 +727,40 @@ void testRejectsProjectIdWrongKind(Expectations& expectations) {
 // Schema version
 // ---------------------------------------------------------------------------------------------
 
-void testRejectsSchemaVersionMinor11(Expectations& expectations) {
+// RT1: a same-major newer-minor document with no unknown additive members at all now decodes --
+// the pre-RT1 exact-{1,0}-only rejection is gone -- and classifies EditableWithRoundTrip with an
+// empty RoundTripState (see docs/architecture/project-format.md, "Versions, Migrations, And
+// Preservation": "a newer minor opens editable only when every unknown construct is additive,
+// bounded, and provably preservable" -- trivially true here since there is none).
+void testAcceptsSchemaVersionMinor11WithoutUnknownMembers(Expectations& expectations) {
     const std::string json = documentJson(R"({"major":1,"minor":1})", R"("1")", R"("Untitled")",
                                           defaultColorSettingsJson(), defaultCompositionJson());
-    expectDecodeFailure(expectations, json, DocumentDecodeError::DomainViolation, "/schemaVersion",
-                        "document schemaVersion 1.1 is rejected as not exactly 1.0");
+    const auto decoded = decodeText(json);
+    expectations.expect(decoded.outcome() == bloom::project::DocumentDecodeOutcome::Decoded &&
+                            static_cast<bool>(decoded) && decoded.value() != nullptr,
+                        "document schemaVersion 1.1 with no unknown members decodes");
+    expectations.expect(decoded.classification() ==
+                            bloom::project::DocumentClassification::EditableWithRoundTrip,
+                        "document schemaVersion 1.1 classifies EditableWithRoundTrip");
+    expectations.expect(decoded.roundTrip() != nullptr && decoded.roundTrip()->empty(),
+                        "document schemaVersion 1.1 with no unknown members has an empty "
+                        "RoundTripState");
+}
+
+// Exact {1,0} keeps the pre-RT1 behavior exactly: value() is populated but classification() is
+// ExactSchemaV1_0 and roundTrip() stays nullptr -- no RoundTripState is ever produced for an
+// exact-1.0 document (see docs/architecture/project-format.md, "Versions, Migrations, And
+// Preservation": "a document with schemaVersion {1, minor>0} may contain unknown additive
+// members; exactly {1,0} must NOT").
+void testExactSchemaV1_0ProducesNoRoundTripState(Expectations& expectations) {
+    const auto decoded = decodeText(baselineDocument());
+    expectations.expect(static_cast<bool>(decoded) && decoded.value() != nullptr,
+                        "the exact-1.0 baseline document decodes");
+    expectations.expect(decoded.classification() ==
+                            bloom::project::DocumentClassification::ExactSchemaV1_0,
+                        "the exact-1.0 baseline document classifies ExactSchemaV1_0");
+    expectations.expect(decoded.roundTrip() == nullptr,
+                        "the exact-1.0 baseline document produces no RoundTripState");
 }
 
 void testRejectsSchemaVersionMajor2(Expectations& expectations) {
@@ -1482,6 +1584,436 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
                         "rejected");
 }
 
+// ---------------------------------------------------------------------------------------------
+// RT1: unknown-additive-member capture for a same-major newer-minor document (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation" and
+// src/project/include/bloom/project/round_trip_state.hpp).
+// ---------------------------------------------------------------------------------------------
+
+// Builds a schemaVersion-{schemaVersionJson} document with an unknown trailing member on the
+// root, project, a composition, that composition's format, a graph node, a layer-stack entry, and
+// (via a non-empty extensions array) an extension record -- one member captured/rejected at every
+// attachment kind the task calls out by name. The extension record's high-water is set to match.
+[[nodiscard]] std::string everywhereUnknownsDocument(const std::string_view schemaVersionJson) {
+    const std::string extensionRecordJson =
+        R"({"id":"1","ownerId":"vendor.module","typeId":"vendor.module.record-type",)"
+        R"("schemaVersion":{"major":1,"minor":0},"subject":null,)"
+        R"("mediaType":"application/octet-stream","referencePolicy":{"kind":"none"},)"
+        R"("payload":"AA==","zzzExtExtra":1.5})";
+
+    const std::string graphJson =
+        R"({"nodes":[{"id":"1","typeId":"bloom.composition-output","schemaVersion":1,)"
+        R"("parameters":[],"zzzNodeExtra":null}],)"
+        R"("edges":[],"layerOutputs":[],)"
+        R"("layerStack":{"nodeId":"1","entries":[)"
+        R"({"slotId":"1","layerId":"1","zzzEntryExtra":"slot-note"}]},)"
+        R"("compositionOutput":{"nodeId":"1","port":"image"}})";
+
+    const std::string formatJson =
+        R"({"width":1920,"height":1080,"pixelAspect":{"numerator":"1","denominator":"1"},)"
+        R"("frameRate":{"numerator":"24","denominator":"1"},)"
+        R"("zzzFormatExtra":{"list":[1,2,"three",[4,5]],"note":"deep"}})";
+
+    const std::string compositionJsonText =
+        R"({"id":"1","name":"Comp","duration":{"numerator":"10","denominator":"1"},"format":)" +
+        formatJson + R"(,"parameters":[],"animationCurves":[],"graph":)" + graphJson +
+        R"(,"zzzCompExtra":true})";
+
+    std::string document = "{\"schemaVersion\":";
+    document += schemaVersionJson;
+    document += R"(,"project":{"id":"1","name":"Untitled","colorSettings":)";
+    document += defaultColorSettingsJson();
+    document += R"(,"compositions":[)";
+    document += compositionJsonText;
+    document +=
+        R"(],"zzzProjectExtra":"hello world"},)"
+        R"("idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+        R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+        R"("driverBinding":"0","extensionRecord":"1"}},)"
+        R"("extensions":[)";
+    document += extensionRecordJson;
+    document += R"(],"zzzFutureField":42})";
+    return document;
+}
+
+void testAcceptsMinor1WithUnknownMembersEverywhere(Expectations& expectations) {
+    const auto decoded = decodeText(everywhereUnknownsDocument(kSchemaVersion11));
+    expectations.expect(decoded.outcome() == DocumentDecodeOutcome::Decoded &&
+                            static_cast<bool>(decoded) && decoded.value() != nullptr,
+                        "a 1.1 document with unknown trailing members everywhere still decodes");
+    expectations.expect(
+        decoded.classification() == DocumentClassification::EditableWithRoundTrip,
+        "a 1.1 document with unknown trailing members classifies EditableWithRoundTrip");
+    if (decoded.roundTrip() == nullptr) {
+        expectations.expect(false, "RoundTripState is present for the everywhere-unknowns fixture");
+        return;
+    }
+    const auto& roundTrip = *decoded.roundTrip();
+    expectations.expect(roundTrip.size() == 7,
+                        "exactly seven attachment points were captured (root, project, "
+                        "composition, format, node, extension record, layer-stack entry)");
+
+    // root: a schema path is the empty attachment path.
+    {
+        const auto* members = roundTrip.find({});
+        expectations.expect(members != nullptr && members->size() == 1,
+                            "the root attachment point retained exactly one member");
+        if (members != nullptr && members->size() == 1) {
+            expectations.expect((*members)[0].key() == "zzzFutureField",
+                                "the root retained member's key is exact");
+            const auto& value = (*members)[0].value();
+            expectations.expect(value.kind() == RetainedJsonValueKind::Number &&
+                                    value.asNumber().kind() == UnknownJsonNumberKind::Integer &&
+                                    value.asNumber().integerValue() == 42,
+                                "the root retained member's lossless integer value decodes "
+                                "exactly");
+        }
+    }
+
+    // project
+    {
+        const RoundTripAttachmentPath path{RoundTripPathSegment::named("project")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(members != nullptr && members->size() == 1 &&
+                                (*members)[0].key() == "zzzProjectExtra" &&
+                                (*members)[0].value().kind() == RetainedJsonValueKind::String &&
+                                (*members)[0].value().asString() == "hello world",
+                            "the project attachment point retained its exact string member");
+    }
+
+    // composition: keyed by numeric CompositionId, never array position.
+    {
+        const RoundTripAttachmentPath path{
+            RoundTripPathSegment::named("project"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::Composition, "1")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(members != nullptr && members->size() == 1 &&
+                                (*members)[0].key() == "zzzCompExtra" &&
+                                (*members)[0].value().kind() == RetainedJsonValueKind::Boolean &&
+                                (*members)[0].value().asBoolean(),
+                            "the composition attachment point retained its exact boolean member");
+    }
+
+    // format: a singleton nested under its owning composition's identity. Its retained value is
+    // also this suite's deep-nested-subtree case: an object containing arrays, including a
+    // doubly-nested array.
+    {
+        const RoundTripAttachmentPath path{
+            RoundTripPathSegment::named("project"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::Composition, "1"),
+            RoundTripPathSegment::named("format")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(members != nullptr && members->size() == 1 &&
+                                (*members)[0].key() == "zzzFormatExtra",
+                            "the format attachment point retained its exact member key");
+        if (members != nullptr && members->size() == 1) {
+            const auto& value = (*members)[0].value();
+            expectations.expect(value.kind() == RetainedJsonValueKind::Object,
+                                "the format retained value is a nested object");
+            const auto* list = value.findMember("list");
+            const auto* note = value.findMember("note");
+            expectations.expect(list != nullptr && list->kind() == RetainedJsonValueKind::Array &&
+                                    list->elements().size() == 4,
+                                "the nested object's array member retained all four elements");
+            if (list != nullptr && list->elements().size() == 4) {
+                expectations.expect(
+                    list->elements()[0].kind() == RetainedJsonValueKind::Number &&
+                        list->elements()[0].asNumber().integerValue() == 1 &&
+                        list->elements()[1].kind() == RetainedJsonValueKind::Number &&
+                        list->elements()[1].asNumber().integerValue() == 2,
+                    "the nested array's leading integers retain their exact values");
+                expectations.expect(list->elements()[2].kind() == RetainedJsonValueKind::String &&
+                                        list->elements()[2].asString() == "three",
+                                    "the nested array's string element retains exactly");
+                const auto& innerArray = list->elements()[3];
+                expectations.expect(innerArray.kind() == RetainedJsonValueKind::Array &&
+                                        innerArray.elements().size() == 2 &&
+                                        innerArray.elements()[0].asNumber().integerValue() == 4 &&
+                                        innerArray.elements()[1].asNumber().integerValue() == 5,
+                                    "the doubly-nested array retains exactly");
+            }
+            expectations.expect(note != nullptr && note->kind() == RetainedJsonValueKind::String &&
+                                    note->asString() == "deep",
+                                "the nested object's string member retains exactly");
+        }
+    }
+
+    // node: keyed by numeric NodeId, nested under composition/graph.
+    {
+        const RoundTripAttachmentPath path{
+            RoundTripPathSegment::named("project"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::Composition, "1"),
+            RoundTripPathSegment::named("graph"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::Node, "1")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(members != nullptr && members->size() == 1 &&
+                                (*members)[0].key() == "zzzNodeExtra" &&
+                                (*members)[0].value().kind() == RetainedJsonValueKind::Null,
+                            "the node attachment point retained its exact null member");
+    }
+
+    // extension record: keyed by numeric ExtensionRecordId, directly off the document root (no
+    // owning composition).
+    {
+        const RoundTripAttachmentPath path{
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::ExtensionRecord, "1")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(
+            members != nullptr && members->size() == 1 && (*members)[0].key() == "zzzExtExtra" &&
+                (*members)[0].value().kind() == RetainedJsonValueKind::Number &&
+                (*members)[0].value().asNumber().kind() == UnknownJsonNumberKind::Float64,
+            "the extension record attachment point retained its exact float64 "
+            "member");
+        if (members != nullptr && members->size() == 1) {
+            const auto bits = (*members)[0].value().asNumber().float64Bits();
+            expectations.expect(bits.has_value() && *bits == std::bit_cast<std::uint64_t>(1.5),
+                                "the extension record's retained float64 bits are exact");
+        }
+    }
+
+    // layer-stack entry: keyed by LayerSlotId, nested under composition/graph/layerStack.
+    {
+        const RoundTripAttachmentPath path{
+            RoundTripPathSegment::named("project"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::Composition, "1"),
+            RoundTripPathSegment::named("graph"), RoundTripPathSegment::named("layerStack"),
+            RoundTripPathSegment::collectionElement(RoundTripCollectionKind::LayerStackEntry, "1")};
+        const auto* members = roundTrip.find(path);
+        expectations.expect(members != nullptr && members->size() == 1 &&
+                                (*members)[0].key() == "zzzEntryExtra" &&
+                                (*members)[0].value().kind() == RetainedJsonValueKind::String &&
+                                (*members)[0].value().asString() == "slot-note",
+                            "the layer-stack entry attachment point retained its exact string "
+                            "member");
+    }
+}
+
+// The exact same unknown members, unchanged, at exact schemaVersion {1,0}: the 1.0 writer never
+// emits an unknown additive member, so this still hard-rejects at the first one reached (the
+// root's own "zzzFutureField", since the root's own closed-shape check runs before project is
+// ever descended into).
+void testRejects1_0WithSameUnknownMembersEverywhere(Expectations& expectations) {
+    expectDecodeFailure(expectations, everywhereUnknownsDocument(kSchemaVersion10),
+                        DocumentDecodeError::UnknownMember, "/zzzFutureField",
+                        "the same everywhere-unknowns fixture at exact schemaVersion 1.0 is "
+                        "rejected at its first unknown member");
+}
+
+// An unknown major version is rejected without mutation regardless of minor or how many unknown
+// additive members the document also carries (see docs/architecture/project-format.md, "Versions,
+// Migrations, And Preservation": "unknown major versions are rejected without mutation").
+void testRejectsMajor2WithUnknownMembersEverywhere(Expectations& expectations) {
+    const auto decoded = decodeText(everywhereUnknownsDocument(R"({"major":2,"minor":1})"));
+    expectations.expect(!decoded && decoded.outcome() == DocumentDecodeOutcome::Failed &&
+                            decoded.error() == DocumentDecodeError::DomainViolation &&
+                            decoded.path() == "/schemaVersion" && decoded.value() == nullptr &&
+                            decoded.roundTrip() == nullptr,
+                        "an unrecognized major version 2 is rejected without constructing an "
+                        "envelope or RoundTripState even with unknown members present");
+}
+
+// An unknown member strictly before, or between, the known members of a closed object remains a
+// hard decode error at every minor version -- a conforming {1, minor>0} writer could never
+// produce one (see docs/architecture/project-format.md, "Canonical Document Shape": "Retained
+// unknown additive members follow all known members of their object").
+void testRejectsUnknownMemberBeforeOrBetweenKnownMembersIn1_1(Expectations& expectations) {
+    // before every known member of a composition object
+    {
+        const std::string composition = R"({"aaa":true,"id":"1","name":"Comp",)"
+                                        R"("duration":{"numerator":"10","denominator":"1"},)"
+                                        R"("format":{"width":1920,"height":1080,)"
+                                        R"("pixelAspect":{"numerator":"1","denominator":"1"},)"
+                                        R"("frameRate":{"numerator":"24","denominator":"1"}},)"
+                                        R"("parameters":[],"animationCurves":[],"graph":)" +
+                                        std::string(kMinimalGraphJson) + "}";
+        expectDecodeFailure(expectations, documentWithCompositionMinor1(composition),
+                            DocumentDecodeError::UnknownMember, "/project/compositions/0/aaa",
+                            "an unknown member before every known composition member is "
+                            "rejected in a 1.1 document");
+    }
+    // between two known root members (project, then idAllocation)
+    {
+        const std::string project =
+            std::string("{\"id\":\"1\",\"name\":\"Untitled\",\"colorSettings\":") +
+            defaultColorSettingsJson() + ",\"compositions\":[" + defaultCompositionJson() + "]}";
+        const std::string json = std::string("{\"schemaVersion\":") +
+                                 std::string(kSchemaVersion11) + ",\"project\":" + project +
+                                 R"(,"unknownMid":null,"idAllocation":{"highestIssued":)"
+                                 R"({"composition":"0","node":"0","edge":"0","layer":"0",)"
+                                 R"("layerSlot":"0","parameter":"0","animationCurve":"0",)"
+                                 R"("keyframe":"0","driverBinding":"0","extensionRecord":"0"}},)"
+                                 R"("extensions":[]})";
+        expectDecodeFailure(expectations, json, DocumentDecodeError::UnknownMember, "/unknownMid",
+                            "an unknown member between two known root members is rejected in a "
+                            "1.1 document");
+    }
+}
+
+// Trailing unknown members must themselves be in strictly ascending UTF-8 key order; a conforming
+// writer always emits them that way (see docs/architecture/project-format.md, "Canonical Document
+// Shape"). A literal duplicate trailing key cannot reach this module at all -- the strict JSON
+// reader already rejects a duplicate decoded object key structurally, before decodeDocumentEnvelope
+// ever runs -- so this exercises the reachable half of the contract's "reject unsorted or
+// duplicate" rule; the strict-ascending comparison this module performs also covers an equal
+// adjacent key, were one ever reachable.
+void testRejectsUnsortedTrailingUnknownMembers(Expectations& expectations) {
+    const std::string valid = compositionWithInterior("[]", "[]", std::string(kMinimalGraphJson));
+    const std::string composition = valid.substr(0, valid.size() - 1) + R"(,"zzzB":1,"zzzA":2})";
+    expectDecodeFailure(expectations, documentWithCompositionMinor1(composition),
+                        DocumentDecodeError::UnsortedUnknownMember, "/project/compositions/0/zzzA",
+                        "two trailing unknown composition members out of ascending key order "
+                        "are rejected in a 1.1 document");
+}
+
+// A context-variable array element has no member in the contract's fixed collection identity
+// list, so it never captures a trailing unknown member -- even at documentMinor > 0 (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "An array
+// without a declared identity cannot retain unknown elements through an edit").
+void testRejectsContextVariableTrailingMemberEvenAtMinor1(Expectations& expectations) {
+    const std::string colorSettings =
+        colorSettingsJson(kValidDigest, "builtin", R"({"name":"a","value":"1","extra":true})");
+    expectDecodeFailure(expectations, documentWithColorSettingsMinor1(colorSettings),
+                        DocumentDecodeError::UnknownMember,
+                        "/project/colorSettings/ocioConfig/contextVariables/0/extra",
+                        "a trailing unknown member on a context-variable entry is rejected even "
+                        "in a 1.1 document, because context variables have no declared identity");
+}
+
+// ---------------------------------------------------------------------------------------------
+// RT1: unknown core discriminators classify PreservedReadOnlyRequired rather than hard-failing or
+// being captured -- the discriminator string itself is core vocabulary, never a retained value
+// (see docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "unknown
+// core discriminators are never guessed").
+// ---------------------------------------------------------------------------------------------
+
+void testUnknownOcioLocatorKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string colorSettings =
+        R"({"schemaVersion":{"major":1,"minor":0},"processColorSpaceId":"lin_rec709_scene",)"
+        R"("ocioConfig":{"schemaVersion":{"major":1,"minor":0},)"
+        R"("locator":{"kind":"bogus-locator","uri":"whatever"},)"
+        R"("expectedRevision":{"algorithm":"sha256","digest":")" +
+        std::string(kValidDigest) + R"("},"portability":"builtin","contextVariables":[]}})";
+    expectPreservedReadOnly(expectations, documentWithColorSettingsMinor1(colorSettings),
+                            RoundTripPreservationReason::UnknownDiscriminatorKind,
+                            "/project/colorSettings/ocioConfig/locator/kind",
+                            "an unrecognized OCIO locator kind in a 1.1 document is "
+                            "PreservedReadOnlyRequired rather than a hard error");
+}
+
+void testUnknownParameterSourceKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string parameters =
+        R"([{"id":"1","schemaKey":"bloom.test","source":{"kind":"driver-binding",)"
+        R"("driverId":"1"}}])";
+    expectPreservedReadOnly(
+        expectations,
+        documentWithCompositionMinor1(
+            compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
+        RoundTripPreservationReason::UnknownDiscriminatorKind,
+        "/project/compositions/0/parameters/0/source/kind",
+        "the deferred 'driver-binding' parameter source kind in a 1.1 document is "
+        "PreservedReadOnlyRequired rather than a hard error");
+}
+
+void testUnknownConstantValueKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string parameters =
+        R"([{"id":"1","schemaKey":"bloom.test","source":{"kind":"constant",)"
+        R"("value":{"kind":"bogus-value","value":true}}}])";
+    expectPreservedReadOnly(
+        expectations,
+        documentWithCompositionMinor1(
+            compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
+        RoundTripPreservationReason::UnknownDiscriminatorKind,
+        "/project/compositions/0/parameters/0/source/value/kind",
+        "an unrecognized constant value kind in a 1.1 document is PreservedReadOnlyRequired "
+        "rather than a hard error");
+}
+
+void testUnknownAnimationCurveKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string curves = R"([{"id":"1","kind":"bogus-curve","keyframes":[]}])";
+    expectPreservedReadOnly(
+        expectations,
+        documentWithCompositionMinor1(
+            compositionWithInterior("[]", curves, std::string(kMinimalGraphJson))),
+        RoundTripPreservationReason::UnknownDiscriminatorKind,
+        "/project/compositions/0/animationCurves/0/kind",
+        "an unrecognized animation curve kind in a 1.1 document is PreservedReadOnlyRequired "
+        "rather than a hard error");
+}
+
+void testUnknownEdgeDestinationKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string graph =
+        R"({"nodes":[)"
+        R"({"id":"1","typeId":"bloom.composition-output","schemaVersion":1,"parameters":[]},)"
+        R"({"id":"2","typeId":"bloom.composition-output","schemaVersion":1,"parameters":[]}],)"
+        R"("edges":[)"
+        R"({"id":"1","source":{"nodeId":"1","port":"image"},)"
+        R"("destination":{"kind":"bogus-destination","nodeId":"2","port":"image"}}],)"
+        R"("layerOutputs":[],"layerStack":{"nodeId":"1","entries":[]},)"
+        R"("compositionOutput":{"nodeId":"1","port":"image"}})";
+    expectPreservedReadOnly(
+        expectations, documentWithCompositionMinor1(compositionWithInterior("[]", "[]", graph)),
+        RoundTripPreservationReason::UnknownDiscriminatorKind,
+        "/project/compositions/0/graph/edges/0/destination/kind",
+        "an unrecognized edge destination kind in a 1.1 document is PreservedReadOnlyRequired "
+        "rather than a hard error");
+}
+
+void testUnknownReferencePolicyKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string extensionRecordJson =
+        R"({"id":"1","ownerId":"vendor.module","typeId":"vendor.module.record-type",)"
+        R"("schemaVersion":{"major":1,"minor":0},"subject":null,)"
+        R"("mediaType":"application/octet-stream",)"
+        R"("referencePolicy":{"kind":"bogus-policy"},"payload":"AA=="})";
+    expectPreservedReadOnly(
+        expectations, documentWithExtensions(kSchemaVersion11, extensionRecordJson, "1"),
+        RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/referencePolicy/kind",
+        "an unrecognized extension reference-policy kind in a 1.1 document is "
+        "PreservedReadOnlyRequired rather than a hard error");
+}
+
+void testUnknownExtensionSubjectKindIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string extensionRecordJson =
+        R"({"id":"1","ownerId":"vendor.module","typeId":"vendor.module.record-type",)"
+        R"("schemaVersion":{"major":1,"minor":0},"subject":{"kind":"bogus-target","id":"1"},)"
+        R"("mediaType":"application/octet-stream","referencePolicy":{"kind":"none"},)"
+        R"("payload":"AA=="})";
+    expectPreservedReadOnly(
+        expectations, documentWithExtensions(kSchemaVersion11, extensionRecordJson, "1"),
+        RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/subject/kind",
+        "an unrecognized extension subject target kind in a 1.1 document is "
+        "PreservedReadOnlyRequired rather than a hard error");
+}
+
+// ---------------------------------------------------------------------------------------------
+// RT1: an unknown number outside the lossless editable subset also classifies
+// PreservedReadOnlyRequired instead of hard-failing (see
+// docs/architecture/project-format.md, "Unknown JSON Numbers").
+// ---------------------------------------------------------------------------------------------
+
+void testUnknownNumberOverflowIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string valid = compositionWithInterior("[]", "[]", std::string(kMinimalGraphJson));
+    const std::string composition = valid.substr(0, valid.size() - 1) + R"(,"zzzBigNumber":1e999})";
+    expectPreservedReadOnly(expectations, documentWithCompositionMinor1(composition),
+                            RoundTripPreservationReason::UnknownNumberOutOfSubset,
+                            "/project/compositions/0/zzzBigNumber",
+                            "an unknown trailing member number that overflows binary64 in a 1.1 "
+                            "document is PreservedReadOnlyRequired rather than a hard error");
+}
+
+void testUnknownNumberNonCanonicalSpellingIsPreservedReadOnlyAt1_1(Expectations& expectations) {
+    const std::string valid = compositionWithInterior("[]", "[]", std::string(kMinimalGraphJson));
+    // "1E5" is syntactically valid JSON but not Bloom's canonical lowercase-'e' Float64 spelling
+    // (compare unknown_json_number_tests.cpp's own "1E+21" NonCanonical fixture), so it falls
+    // outside the lossless unknown-number subset exactly like an out-of-range value does.
+    const std::string composition = valid.substr(0, valid.size() - 1) + R"(,"zzzOddNumber":1E5})";
+    expectPreservedReadOnly(expectations, documentWithCompositionMinor1(composition),
+                            RoundTripPreservationReason::UnknownNumberOutOfSubset,
+                            "/project/compositions/0/zzzOddNumber",
+                            "an unknown trailing member number with a non-canonical exponent "
+                            "spelling in a 1.1 document is PreservedReadOnlyRequired rather than "
+                            "a hard error");
+}
+
 } // namespace
 
 int main() try {
@@ -1498,7 +2030,8 @@ int main() try {
     testRejectsCompositionMissingFormat(expectations);
     testRejectsProjectIdWrongKind(expectations);
 
-    testRejectsSchemaVersionMinor11(expectations);
+    testAcceptsSchemaVersionMinor11WithoutUnknownMembers(expectations);
+    testExactSchemaV1_0ProducesNoRoundTripState(expectations);
     testRejectsSchemaVersionMajor2(expectations);
 
     testRejectsProjectIdSpellings(expectations);
@@ -1578,6 +2111,24 @@ int main() try {
     testRejectsDanglingLayerOutputNode(expectations);
     testRejectsDanglingLayerStackNode(expectations);
     testRejectsDanglingCompositionOutputNode(expectations);
+
+    testAcceptsMinor1WithUnknownMembersEverywhere(expectations);
+    testRejects1_0WithSameUnknownMembersEverywhere(expectations);
+    testRejectsMajor2WithUnknownMembersEverywhere(expectations);
+    testRejectsUnknownMemberBeforeOrBetweenKnownMembersIn1_1(expectations);
+    testRejectsUnsortedTrailingUnknownMembers(expectations);
+    testRejectsContextVariableTrailingMemberEvenAtMinor1(expectations);
+
+    testUnknownOcioLocatorKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownParameterSourceKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownConstantValueKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownAnimationCurveKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownEdgeDestinationKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownReferencePolicyKindIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownExtensionSubjectKindIsPreservedReadOnlyAt1_1(expectations);
+
+    testUnknownNumberOverflowIsPreservedReadOnlyAt1_1(expectations);
+    testUnknownNumberNonCanonicalSpellingIsPreservedReadOnlyAt1_1(expectations);
 
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " expectation(s) failed\n";

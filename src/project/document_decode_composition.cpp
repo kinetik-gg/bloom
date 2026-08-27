@@ -25,6 +25,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/canonical_decimal.hpp>
+#include <bloom/project/round_trip_state.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,12 +42,14 @@ namespace bloom::project {
 
 namespace {
 
+using detail::AttachmentScope;
 using detail::decodeKindDiscriminator;
 using detail::decodeObjectId;
 using detail::decodeRationalTimeValue;
 using detail::DecodeState;
 using detail::decodeStringMember;
 using detail::decodeUInt32Member;
+using detail::failUnknownDiscriminator;
 using detail::fieldPath;
 using detail::joinPath;
 using detail::joinPathIndex;
@@ -254,8 +257,8 @@ using document::Vec2Keyframe;
         return true;
     }
 
-    state.fail(DocumentDecodeError::InvalidConstantValueKind, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::InvalidConstantValueKind);
 }
 
 [[nodiscard]] bool decodeParameterSource(const JsonValue& node, DecodeState& state,
@@ -272,8 +275,11 @@ using document::Vec2Keyframe;
             return false;
         }
         ParameterValue value{};
-        if (!decodeConstantValue(*members[1], state, joinPath(path, "value"), value)) {
-            return false;
+        {
+            const AttachmentScope valueScope(state, "value");
+            if (!decodeConstantValue(*members[1], state, joinPath(path, "value"), value)) {
+                return false;
+            }
         }
         out = document::ConstantValueSource{std::move(value)};
         return true;
@@ -292,15 +298,19 @@ using document::Vec2Keyframe;
         return true;
     }
 
-    state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::UnsupportedParameterSource);
 }
 
+// A parameter record is a collection element (identity: numeric ParameterId); see
+// document_decode.cpp's decodeComposition for why a collection element's own trailing capture
+// must be deferred until its identity member is decoded.
 [[nodiscard]] bool decodeParameter(const JsonValue& node, DecodeState& state,
                                    const std::string& path, ParameterRecord& out) {
     static constexpr std::array<std::string_view, 3> keys{"id", "schemaKey", "source"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -308,13 +318,23 @@ using document::Vec2Keyframe;
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope parameterScope(state, RoundTripCollectionKind::Parameter,
+                                         std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     std::string_view schemaKeyText;
     if (!decodeStringMember(*members[1], state, joinPath(path, "schemaKey"), schemaKeyText)) {
         return false;
     }
     document::ParameterSource source;
-    if (!decodeParameterSource(*members[2], state, joinPath(path, "source"), source)) {
-        return false;
+    {
+        const AttachmentScope sourceScope(state, "source");
+        if (!decodeParameterSource(*members[2], state, joinPath(path, "source"), source)) {
+            return false;
+        }
     }
 
     out.id = id;
@@ -380,12 +400,16 @@ using document::Vec2Keyframe;
     return false;
 }
 
+// A keyframe is a collection element (identity: numeric KeyframeId); see decodeComposition's own
+// comment in document_decode.cpp for why a collection element's own trailing capture must be
+// deferred until its identity member is decoded.
 [[nodiscard]] bool decodeScalarKeyframe(const JsonValue& node, DecodeState& state,
                                         const std::string& path, ScalarKeyframe& out) {
     static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
                                                           "outgoingInterpolation"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -393,9 +417,19 @@ using document::Vec2Keyframe;
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     core::RationalTime time;
-    if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
-        return false;
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
+            return false;
+        }
     }
     double value = 0.0;
     if (!decodeFloat64Member(*members[2], state, joinPath(path, "value"), value)) {
@@ -419,7 +453,8 @@ using document::Vec2Keyframe;
     static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
                                                           "outgoingInterpolation"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -427,23 +462,36 @@ using document::Vec2Keyframe;
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     core::RationalTime time;
-    if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
-        return false;
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
+            return false;
+        }
     }
 
     const auto valuePath = joinPath(path, "value");
     static constexpr std::array<std::string_view, 2> valueKeys{"x", "y"};
     std::vector<const JsonValue*> valueMembers;
-    if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
-        return false;
-    }
     Vec2d value;
-    if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "x"), value.x)) {
-        return false;
-    }
-    if (!decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "y"), value.y)) {
-        return false;
+    {
+        const AttachmentScope valueScope(state, "value");
+        if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "x"), value.x)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "y"), value.y)) {
+            return false;
+        }
     }
 
     KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
@@ -514,6 +562,13 @@ template <typename Keyframe, typename DecodeOne>
         return false;
     }
 
+    // Unlike composition/parameter/node/edge/extensionRecord/keyframe above, an animation curve's
+    // identity (numeric AnimationCurveId) is already decoded from the id/kind prefix peek above,
+    // so its own AttachmentScope can be pushed before the full closed-shape match below and this
+    // collection element can use the ordinary six-argument (auto-attaching) matchOrderedMembers.
+    const AttachmentScope animationCurveScope(state, RoundTripCollectionKind::AnimationCurve,
+                                              std::to_string(id.value()));
+
     if (kindText == "scalar") {
         static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
         std::vector<const JsonValue*> members;
@@ -545,8 +600,8 @@ template <typename Keyframe, typename DecodeOne>
         return true;
     }
 
-    state.fail(DocumentDecodeError::InvalidAnimationCurveKind, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::InvalidAnimationCurveKind);
 }
 
 [[nodiscard]] bool decodeAnimationCurves(const JsonValue& node, DecodeState& state,
@@ -693,15 +748,19 @@ template <typename Keyframe, typename DecodeOne>
         return true;
     }
 
-    state.fail(DocumentDecodeError::InvalidEdgeDestinationKind, joinPath(path, "kind"));
-    return false;
+    return failUnknownDiscriminator(state, joinPath(path, "kind"),
+                                    DocumentDecodeError::InvalidEdgeDestinationKind);
 }
 
+// An edge is a collection element (identity: numeric EdgeId); see decodeComposition's own comment
+// in document_decode.cpp for why a collection element's own trailing capture must be deferred
+// until its identity member is decoded.
 [[nodiscard]] bool decodeEdge(const JsonValue& node, DecodeState& state, const std::string& path,
                               EdgeRecord& out) {
     static constexpr std::array<std::string_view, 3> keys{"id", "source", "destination"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -709,13 +768,27 @@ template <typename Keyframe, typename DecodeOne>
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope edgeScope(state, RoundTripCollectionKind::Edge,
+                                    std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     OutputPortRef source;
-    if (!decodeOutputPortRef(*members[1], state, joinPath(path, "source"), source)) {
-        return false;
+    {
+        const AttachmentScope sourceScope(state, "source");
+        if (!decodeOutputPortRef(*members[1], state, joinPath(path, "source"), source)) {
+            return false;
+        }
     }
     InputPortRef destination;
-    if (!decodeEdgeDestination(*members[2], state, joinPath(path, "destination"), destination)) {
-        return false;
+    {
+        const AttachmentScope destinationScope(state, "destination");
+        if (!decodeEdgeDestination(*members[2], state, joinPath(path, "destination"),
+                                   destination)) {
+            return false;
+        }
     }
 
     out.id = id;
@@ -788,17 +861,30 @@ template <typename Keyframe, typename DecodeOne>
     return true;
 }
 
+// A node's parameter binding is a collection element identified by its `role`, scoped to its
+// owning node (see docs/architecture/project-format.md, "Versions, Migrations, And Preservation":
+// "binding role within its node"). Its identity is one of its own known members, decoded only
+// after this closed shape's own match returns, so its own trailing capture must be deferred like
+// every other collection element's own shape.
 [[nodiscard]] bool decodeParameterBinding(const JsonValue& node, DecodeState& state,
                                           const std::string& path, ParameterBinding& out) {
     static constexpr std::array<std::string_view, 2> keys{"role", "parameterId"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
     std::string_view roleText;
     if (!decodeStringMember(*members[0], state, joinPath(path, "role"), roleText)) {
         return false;
     }
+
+    const AttachmentScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
+                                       std::string(roleText));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     ParameterId parameterId;
     if (!decodeObjectId(*members[1], state, joinPath(path, "parameterId"), parameterId)) {
         return false;
@@ -842,12 +928,16 @@ template <typename Keyframe, typename DecodeOne>
     return true;
 }
 
+// A node is a collection element (identity: numeric NodeId); see decodeComposition's own comment
+// in document_decode.cpp for why a collection element's own trailing capture must be deferred
+// until its identity member is decoded.
 [[nodiscard]] bool decodeNode(const JsonValue& node, DecodeState& state, const std::string& path,
                               NodeRecord& out) {
     static constexpr std::array<std::string_view, 4> keys{"id", "typeId", "schemaVersion",
                                                           "parameters"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -855,6 +945,13 @@ template <typename Keyframe, typename DecodeOne>
     if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
         return false;
     }
+
+    const AttachmentScope nodeScope(state, RoundTripCollectionKind::Node,
+                                    std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     std::string_view typeIdText;
     if (!decodeStringMember(*members[1], state, joinPath(path, "typeId"), typeIdText)) {
         return false;
@@ -933,12 +1030,17 @@ template <typename Keyframe, typename DecodeOne>
     return true;
 }
 
+// A Layer Output boundary is a collection element identified by `layerId` (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "layer ID for a
+// Layer Output"). `layerId` is its second member, so its own trailing capture must be deferred
+// until this closed shape's own match returns, like every other collection element's own shape.
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
     static constexpr std::array<std::string_view, 4> keys{"nodeId", "layerId", "name",
                                                           "outputPort"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
     NodeId nodeId;
@@ -948,6 +1050,12 @@ template <typename Keyframe, typename DecodeOne>
     LayerId layerId;
     if (!decodeObjectId(*members[1], state, joinPath(path, "layerId"), layerId)) {
         return false;
+    }
+
+    const AttachmentScope layerOutputScope(state, RoundTripCollectionKind::LayerOutput,
+                                           std::to_string(layerId.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
     }
     std::string_view nameText;
     if (!decodeStringMember(*members[2], state, joinPath(path, "name"), nameText)) {
@@ -1017,17 +1125,30 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     return true;
 }
 
+// A Layer Stack entry is a collection element identified by `slotId` (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "slot ID for a
+// Layer Stack entry"); see decodeComposition's own comment in document_decode.cpp for why a
+// collection element's own trailing capture must be deferred until its identity member is
+// decoded.
 [[nodiscard]] bool decodeLayerStackEntry(const JsonValue& node, DecodeState& state,
                                          const std::string& path, LayerStackEntry& out) {
     static constexpr std::array<std::string_view, 2> keys{"slotId", "layerId"};
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
     LayerSlotId slotId;
     if (!decodeObjectId(*members[0], state, joinPath(path, "slotId"), slotId)) {
         return false;
     }
+
+    const AttachmentScope layerStackEntryScope(state, RoundTripCollectionKind::LayerStackEntry,
+                                               std::to_string(slotId.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
     LayerId layerId;
     if (!decodeObjectId(*members[1], state, joinPath(path, "layerId"), layerId)) {
         return false;
@@ -1115,8 +1236,11 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     }
 
     const auto layerStackPath = joinPath(path, "layerStack");
-    if (!decodeLayerStack(*members[3], state, layerStackPath, out.layerStack)) {
-        return false;
+    {
+        const AttachmentScope layerStackScope(state, "layerStack");
+        if (!decodeLayerStack(*members[3], state, layerStackPath, out.layerStack)) {
+            return false;
+        }
     }
     if (!nodeExists(out.nodes, out.layerStack.nodeId)) {
         state.fail(DocumentDecodeError::DanglingReference, joinPath(layerStackPath, "nodeId"));
@@ -1124,8 +1248,12 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     }
 
     const auto compositionOutputPath = joinPath(path, "compositionOutput");
-    if (!decodeOutputPortRef(*members[4], state, compositionOutputPath, out.compositionOutput)) {
-        return false;
+    {
+        const AttachmentScope compositionOutputScope(state, "compositionOutput");
+        if (!decodeOutputPortRef(*members[4], state, compositionOutputPath,
+                                 out.compositionOutput)) {
+            return false;
+        }
     }
     if (!nodeExists(out.nodes, out.compositionOutput.nodeId)) {
         state.fail(DocumentDecodeError::DanglingReference,
@@ -1156,6 +1284,7 @@ bool decodeCompositionInterior(const JsonValue& parametersNode,
     if (!checkParameterCurveReferences(state, parametersPath, parameters, curves)) {
         return false;
     }
+    const AttachmentScope graphScope(state, "graph");
     return decodeGraph(graphNode, state, graphPath, parameters, graph);
 }
 
