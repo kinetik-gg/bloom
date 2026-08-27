@@ -3,6 +3,7 @@
 #include "document_decode_internal.hpp"
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_document.hpp>
 
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -110,7 +112,7 @@ std::string fieldPath(const std::string& base, const CanonicalDecimalField field
 }
 
 bool decodeStringMember(const JsonValue& value, DecodeState& state, const std::string& path,
-                        std::string_view& out) noexcept {
+                        std::string_view& out) {
     if (value.kind() != JsonValueKind::String) {
         state.fail(DocumentDecodeError::WrongValueKind, path);
         return false;
@@ -222,13 +224,23 @@ using detail::matchOrderedMembers;
 using document::ColorSettings;
 using document::CompositionFormat;
 using document::CompositionId;
+using document::ExtensionHostReference;
+using document::ExtensionHostReferenceTable;
+using document::ExtensionOwnerRemapper;
+using document::ExtensionRecord;
+using document::ExtensionRecordId;
+using document::ExtensionReferencePolicy;
+using document::ExtensionTarget;
 using document::FrameRate;
+using document::IdAllocatorHighWater;
+using document::NoExtensionReferences;
 using document::OcioConfigLocator;
 using document::OcioConfigPortability;
 using document::OcioConfigReference;
 using document::OcioConfigRevision;
 using document::OcioContextVariable;
 using document::OcioRevisionAlgorithm;
+using document::OpaqueExtensionPayload;
 using document::ProjectId;
 using document::SchemaVersion;
 
@@ -688,6 +700,399 @@ using document::SchemaVersion;
     return true;
 }
 
+// ------------------------------------------------------------------------------------------
+// idAllocation.highestIssued (docs/architecture/project-format.md, "Inclusive Allocator State")
+// ------------------------------------------------------------------------------------------
+
+// Unlike a typed object id (detail::decodeObjectId, [1-9][0-9]* only), an inclusive allocator
+// high-water value uses 0|[1-9][0-9]* -- zero is a valid "never issued" spelling -- so this decodes
+// through parseCanonicalAllocatorHighWater rather than parseCanonicalObjectId.
+[[nodiscard]] bool decodeAllocatorHighWaterMember(const JsonValue& value, DecodeState& state,
+                                                  const std::string& path, std::uint64_t& out) {
+    std::string_view text;
+    if (!decodeStringMember(value, state, path, text)) {
+        return false;
+    }
+    const auto parsed = parseCanonicalAllocatorHighWater(text);
+    if (!parsed) {
+        state.fail(DocumentDecodeError::InvalidAllocatorHighWater, path);
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+// The closed ten-member highestIssued object in exact order (see
+// docs/architecture/project-format.md, "Inclusive Allocator State"):
+// composition/node/edge/layer/layerSlot/parameter/animationCurve/
+// keyframe/driverBinding/extensionRecord.
+[[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
+                                       const std::string& path, IdAllocatorHighWater& out) {
+    static constexpr std::array<std::string_view, 10> kKeys{
+        "composition", "node",           "edge",     "layer",         "layerSlot",
+        "parameter",   "animationCurve", "keyframe", "driverBinding", "extensionRecord"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
+    if (!decodeAllocatorHighWaterMember(*members[0], state, joinPath(path, "composition"),
+                                        out.composition) ||
+        !decodeAllocatorHighWaterMember(*members[1], state, joinPath(path, "node"), out.node) ||
+        !decodeAllocatorHighWaterMember(*members[2], state, joinPath(path, "edge"), out.edge) ||
+        !decodeAllocatorHighWaterMember(*members[3], state, joinPath(path, "layer"), out.layer) ||
+        !decodeAllocatorHighWaterMember(*members[4], state, joinPath(path, "layerSlot"),
+                                        out.layerSlot) ||
+        !decodeAllocatorHighWaterMember(*members[5], state, joinPath(path, "parameter"),
+                                        out.parameter) ||
+        !decodeAllocatorHighWaterMember(*members[6], state, joinPath(path, "animationCurve"),
+                                        out.animationCurve) ||
+        !decodeAllocatorHighWaterMember(*members[7], state, joinPath(path, "keyframe"),
+                                        out.keyframe) ||
+        !decodeAllocatorHighWaterMember(*members[8], state, joinPath(path, "driverBinding"),
+                                        out.driverBinding)) {
+        return false;
+    }
+    return decodeAllocatorHighWaterMember(*members[9], state, joinPath(path, "extensionRecord"),
+                                          out.extensionRecord);
+}
+
+[[nodiscard]] bool decodeIdAllocation(const JsonValue& node, DecodeState& state,
+                                      const std::string& path, IdAllocatorHighWater& out) {
+    static constexpr std::array<std::string_view, 1> kKeys{"highestIssued"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+        return false;
+    }
+    return decodeHighestIssued(*members[0], state, joinPath(path, "highestIssued"), out);
+}
+
+// ------------------------------------------------------------------------------------------
+// extensions (docs/architecture/project-format.md, "Opaque Extension Envelope")
+// ------------------------------------------------------------------------------------------
+
+// A typed target {"kind": ..., "id": ...} used both by a record's `subject` (once null is ruled
+// out by the caller) and by a host-table reference `target`. Inverts extensionTargetKind's nine
+// wire strings from canonical_document.cpp exactly: project, composition, node, edge, layer,
+// layer-slot, parameter, animation-curve, keyframe.
+[[nodiscard]] bool decodeExtensionTarget(const JsonValue& node, DecodeState& state,
+                                         const std::string& path, ExtensionTarget& out) {
+    std::string_view kindText;
+    if (!decodeKindDiscriminator(node, state, path, kindText)) {
+        return false;
+    }
+    static constexpr std::array<std::string_view, 2> keys{"kind", "id"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+        return false;
+    }
+    const auto idPath = joinPath(path, "id");
+    if (kindText == "project") {
+        document::ProjectId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "composition") {
+        CompositionId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "node") {
+        document::NodeId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "edge") {
+        document::EdgeId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "layer") {
+        document::LayerId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "layer-slot") {
+        document::LayerSlotId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "parameter") {
+        document::ParameterId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "animation-curve") {
+        document::AnimationCurveId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "keyframe") {
+        document::KeyframeId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+
+    state.fail(DocumentDecodeError::InvalidExtensionTargetKind, joinPath(path, "kind"));
+    return false;
+}
+
+// `subject` is always present and is either JSON null or a typed target (see
+// docs/architecture/project-format.md, "Opaque Extension Envelope").
+[[nodiscard]] bool decodeExtensionSubject(const JsonValue& node, DecodeState& state,
+                                          const std::string& path,
+                                          std::optional<ExtensionTarget>& out) {
+    if (node.isNull()) {
+        out.reset();
+        return true;
+    }
+    ExtensionTarget target;
+    if (!decodeExtensionTarget(node, state, path, target)) {
+        return false;
+    }
+    out = target;
+    return true;
+}
+
+[[nodiscard]] bool decodeHostReference(const JsonValue& node, DecodeState& state,
+                                       const std::string& path, ExtensionHostReference& out) {
+    static constexpr std::array<std::string_view, 2> keys{"key", "target"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+        return false;
+    }
+    std::string_view keyText;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "key"), keyText)) {
+        return false;
+    }
+    ExtensionTarget target;
+    if (!decodeExtensionTarget(*members[1], state, joinPath(path, "target"), target)) {
+        return false;
+    }
+    out.key = std::string(keyText);
+    out.target = target;
+    return true;
+}
+
+// One of the three exact reference-policy shapes (see docs/architecture/project-format.md, "Opaque
+// Extension Envelope"): {"kind":"none"}, {"kind":"host-table","references":[...]}, or
+// {"kind":"owner-remapper","remapperId":...,"version":...}. Host-table reference ordering/duplicate
+// keys and every cross-reference target's existence are left to
+// bloom::document::validateExtensionRecords() during reconstruction, matching this module's
+// existing policy of deferring cross-collection/project-level invariants past wire-shape decode.
+[[nodiscard]] bool decodeReferencePolicy(const JsonValue& node, DecodeState& state,
+                                         const std::string& path, ExtensionReferencePolicy& out) {
+    std::string_view kindText;
+    if (!decodeKindDiscriminator(node, state, path, kindText)) {
+        return false;
+    }
+
+    if (kindText == "none") {
+        static constexpr std::array<std::string_view, 1> keys{"kind"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        out = NoExtensionReferences{};
+        return true;
+    }
+    if (kindText == "host-table") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "references"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        const auto referencesPath = joinPath(path, "references");
+        if (members[1]->kind() != JsonValueKind::Array) {
+            state.fail(DocumentDecodeError::WrongValueKind, referencesPath);
+            return false;
+        }
+        const auto elements = members[1]->arrayElements();
+        ExtensionHostReferenceTable table;
+        table.references.reserve(elements.size());
+        for (std::size_t index = 0; index < elements.size(); ++index) {
+            ExtensionHostReference reference;
+            if (!decodeHostReference(elements[index], state, joinPathIndex(referencesPath, index),
+                                     reference)) {
+                return false;
+            }
+            table.references.push_back(std::move(reference));
+        }
+        out = std::move(table);
+        return true;
+    }
+    if (kindText == "owner-remapper") {
+        static constexpr std::array<std::string_view, 3> keys{"kind", "remapperId", "version"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        std::string_view remapperIdText;
+        if (!decodeStringMember(*members[1], state, joinPath(path, "remapperId"), remapperIdText)) {
+            return false;
+        }
+        SchemaVersion version;
+        if (!decodeSchemaVersionField(*members[2], state, joinPath(path, "version"), version)) {
+            return false;
+        }
+        out = ExtensionOwnerRemapper{std::string(remapperIdText), version};
+        return true;
+    }
+
+    state.fail(DocumentDecodeError::InvalidReferencePolicyKind, joinPath(path, "kind"));
+    return false;
+}
+
+// `payload` is canonical RFC 4648 base64 (standard alphabet, required `=` padding, no whitespace);
+// decoded bytes are preserved exactly through canonical_base64.hpp's checked decode surface (see
+// docs/architecture/project-format.md, "Opaque Extension Envelope").
+[[nodiscard]] bool decodePayload(const JsonValue& node, DecodeState& state, const std::string& path,
+                                 OpaqueExtensionPayload& out) {
+    std::string_view encodedText;
+    if (!decodeStringMember(node, state, path, encodedText)) {
+        return false;
+    }
+    const auto decodedSize = canonicalBase64DecodedSize(encodedText);
+    if (!decodedSize) {
+        state.fail(DocumentDecodeError::InvalidBase64Payload, path);
+        return false;
+    }
+    std::vector<std::byte> bytes(*decodedSize.value());
+    const auto written = decodeCanonicalBase64(encodedText, bytes);
+    if (!written) {
+        state.fail(DocumentDecodeError::InvalidBase64Payload, path);
+        return false;
+    }
+    out = OpaqueExtensionPayload(std::move(bytes));
+    return true;
+}
+
+// The closed eight-member extension record shape in exact order (see
+// docs/architecture/project-format.md, "Opaque Extension Envelope"): id/ownerId/typeId/
+// schemaVersion/subject/mediaType/referencePolicy/payload. Lexical domain rules owned by the
+// document model (namespaced owner/type ID grammar, schema major nonzero, media type/host-reference
+// key structural-text bounds) are left to bloom::document::validateExtensionRecords() during
+// reconstruction, matching this module's existing policy for parameter schemaKey/node typeId/etc.
+[[nodiscard]] bool decodeExtensionRecord(const JsonValue& node, DecodeState& state,
+                                         const std::string& path, ExtensionRecord& out) {
+    static constexpr std::array<std::string_view, 8> keys{
+        "id",      "ownerId",   "typeId",          "schemaVersion",
+        "subject", "mediaType", "referencePolicy", "payload"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+        return false;
+    }
+
+    ExtensionRecordId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
+        return false;
+    }
+    std::string_view ownerIdText;
+    if (!decodeStringMember(*members[1], state, joinPath(path, "ownerId"), ownerIdText)) {
+        return false;
+    }
+    std::string_view typeIdText;
+    if (!decodeStringMember(*members[2], state, joinPath(path, "typeId"), typeIdText)) {
+        return false;
+    }
+    SchemaVersion schemaVersion;
+    if (!decodeSchemaVersionField(*members[3], state, joinPath(path, "schemaVersion"),
+                                  schemaVersion)) {
+        return false;
+    }
+    std::optional<ExtensionTarget> subject;
+    if (!decodeExtensionSubject(*members[4], state, joinPath(path, "subject"), subject)) {
+        return false;
+    }
+    std::string_view mediaTypeText;
+    if (!decodeStringMember(*members[5], state, joinPath(path, "mediaType"), mediaTypeText)) {
+        return false;
+    }
+    ExtensionReferencePolicy referencePolicy{NoExtensionReferences{}};
+    if (!decodeReferencePolicy(*members[6], state, joinPath(path, "referencePolicy"),
+                               referencePolicy)) {
+        return false;
+    }
+    OpaqueExtensionPayload payload;
+    if (!decodePayload(*members[7], state, joinPath(path, "payload"), payload)) {
+        return false;
+    }
+
+    out.id = id;
+    out.ownerId = std::string(ownerIdText);
+    out.typeId = std::string(typeIdText);
+    out.schemaVersion = schemaVersion;
+    out.subject = subject;
+    out.mediaType = std::string(mediaTypeText);
+    out.referencePolicy = std::move(referencePolicy);
+    out.payload = std::move(payload);
+    return true;
+}
+
+[[nodiscard]] bool decodeExtensionRecords(const JsonValue& node, DecodeState& state,
+                                          const std::string& path,
+                                          std::vector<ExtensionRecord>& out) {
+    if (node.kind() != JsonValueKind::Array) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto elements = node.arrayElements();
+    out.clear();
+    out.reserve(elements.size());
+    std::uint64_t previousId = 0;
+    bool hasPrevious = false;
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+        ExtensionRecord record;
+        const auto elementPath = joinPathIndex(path, index);
+        if (!decodeExtensionRecord(elements[index], state, elementPath, record)) {
+            return false;
+        }
+        const auto currentId = record.id.value();
+        if (hasPrevious) {
+            if (currentId == previousId) {
+                state.fail(DocumentDecodeError::DuplicateExtensionRecord,
+                           joinPath(elementPath, "id"));
+                return false;
+            }
+            if (currentId < previousId) {
+                state.fail(DocumentDecodeError::UnsortedExtensionRecords,
+                           joinPath(elementPath, "id"));
+                return false;
+            }
+        }
+        previousId = currentId;
+        hasPrevious = true;
+        out.push_back(std::move(record));
+    }
+    return true;
+}
+
 } // namespace
 
 DocumentDecodePathText DocumentDecodePathText::from(const std::string_view text) noexcept {
@@ -739,11 +1144,12 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
         return DocumentDecodeResult::failure(state.error, state.path);
     }
 
-    if (members[2]->kind() != JsonValueKind::Object) {
-        return DocumentDecodeResult::failure(DocumentDecodeError::WrongValueKind, "/idAllocation");
+    if (!decodeIdAllocation(*members[2], state, "/idAllocation", envelope.highWater)) {
+        return DocumentDecodeResult::failure(state.error, state.path);
     }
-    if (members[3]->kind() != JsonValueKind::Array) {
-        return DocumentDecodeResult::failure(DocumentDecodeError::WrongValueKind, "/extensions");
+
+    if (!decodeExtensionRecords(*members[3], state, "/extensions", envelope.extensionRecords)) {
+        return DocumentDecodeResult::failure(state.error, state.path);
     }
 
     return DocumentDecodeResult::success(std::move(envelope));
