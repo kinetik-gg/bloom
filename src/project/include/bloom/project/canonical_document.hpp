@@ -19,6 +19,11 @@ class Snapshot;
 
 namespace bloom::project {
 
+// Forward-declared only: CanonicalDocumentV1 below holds a plain observer pointer, so the
+// pointee's complete definition (round_trip_state.hpp) is not required by every translation unit
+// that merely names a CanonicalDocumentV1.
+class RoundTripState;
+
 inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 0};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
@@ -40,11 +45,30 @@ inline constexpr std::size_t kCanonicalDocumentNoIndex = static_cast<std::size_t
 // one nested sub-order at a time (node parameter bindings, curve keyframes). The required total is
 // measured from live collection sizes; store-ordered collections (animation curves, keyframes,
 // extension records) are re-sorted defensively through the same windows rather than trusted.
+// RT2 overlay input is threaded directly onto the plain request rather than a parallel struct:
+// every field below (snapshot, colorSettings, both scratch spans) is still required exactly once
+// per encode, an overlay rewrite needs no field a plain write does not already carry, and the
+// counting/write two-pass discipline (canonicalDocumentSize/encodeCanonicalDocument) already
+// takes one CanonicalDocumentV1 by const reference -- a parallel struct would only duplicate that
+// plumbing for no behavioral gain. `roundTrip` and `schemaMinor` both default to their plain-write
+// values (null, 0), so every existing call site compiles and behaves unchanged.
 struct CanonicalDocumentV1 final {
     const bloom::document::Snapshot* snapshot = nullptr;
     const bloom::document::ColorSettings* colorSettings = nullptr;
     std::span<char> payloadScratch{};
     std::span<std::size_t> sortScratch{};
+    // Optional RT2 overlay (see docs/architecture/project-format.md, "Versions, Migrations, And
+    // Preservation"). Null (the default) reproduces the plain v1.0 writer exactly: no attachment
+    // lookup is ever performed, byte-identical to every pre-RT2 golden. When non-null, every
+    // retained attachment point in *roundTrip is re-emitted after the last known member of its
+    // corresponding object, and `schemaMinor` should name the exact minor this state was captured
+    // against (a mismatched minor still encodes, but the result would not describe the schema
+    // version it claims). The pointee must outlive the call.
+    const RoundTripState* roundTrip = nullptr;
+    // The document schema minor to emit at the document root ({1, schemaMinor}). Defaults to 0
+    // (the only schema `1.0` writes before RT2). An overlay rewrite of a {1, minor > 0} document
+    // must pass that same minor back so the emitted schemaVersion matches what was opened.
+    std::uint32_t schemaMinor = 0;
 };
 
 struct CanonicalDocumentLimits final {
@@ -77,6 +101,13 @@ enum class CanonicalDocumentError : std::uint8_t {
     ContainerEntryCountExceeded,
     DocumentSizeExceeded,
     OutputCapacityExceeded,
+    // RT2: the supplied RoundTripState has at least one attachment-point entry the emission walk
+    // never visited (see docs/architecture/project-format.md, "Versions, Migrations, And
+    // Preservation": preserved intent is never silently discarded). Every entry in a RoundTripState
+    // produced by decoding *this exact* document is visited exactly once by construction; a
+    // leftover entry means the caller passed state captured against a different document (or a
+    // stale edit of this one) than the one actually being written.
+    RoundTripStateMismatch,
 };
 
 class [[nodiscard]] CanonicalDocumentSizeResult final {
