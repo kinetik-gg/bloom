@@ -54,8 +54,11 @@ struct DecodeState final {
                                        const std::string& basePath,
                                        std::vector<const JsonValue*>& outValues);
 
+// Not noexcept: DecodeState::fail() takes its path argument by value, so a failing call here copies
+// `path` into that by-value parameter -- an allocation that can throw std::bad_alloc. Marking this
+// noexcept while it allocates on the failure path would be an untruthful noexcept claim.
 [[nodiscard]] bool decodeStringMember(const JsonValue& value, DecodeState& state,
-                                      const std::string& path, std::string_view& out) noexcept;
+                                      const std::string& path, std::string_view& out);
 
 [[nodiscard]] bool decodeUInt32Member(const JsonValue& value, DecodeState& state,
                                       const std::string& path, std::uint32_t maximum,

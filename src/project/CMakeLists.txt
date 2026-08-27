@@ -15,6 +15,7 @@ target_sources(
         document_decode.cpp
         document_decode_composition.cpp
         document_decode_internal.hpp
+        document_reconstruct.cpp
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
@@ -33,6 +34,7 @@ target_sources(
             include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/canonical_manifest.hpp
             include/bloom/project/document_decode.hpp
+            include/bloom/project/document_reconstruct.hpp
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
@@ -85,6 +87,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.document_decode
         COMMAND bloom_project_document_decode_test
+        LABELS unit project persistence document
+    )
+
+    add_executable(bloom_project_document_reconstruct_test tests/document_reconstruct_tests.cpp)
+    target_link_libraries(bloom_project_document_reconstruct_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_document_reconstruct_test)
+    bloom_add_test(
+        NAME bloom.project.document_reconstruct
+        COMMAND bloom_project_document_reconstruct_test
         LABELS unit project persistence document
     )
 

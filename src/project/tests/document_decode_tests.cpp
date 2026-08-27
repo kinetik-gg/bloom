@@ -185,7 +185,9 @@ constexpr std::string_view kMinimalGraphJson =
     result += colorSettingsJsonText;
     result += ",\"compositions\":[";
     result += compositionsArrayBody;
-    result += "]},\"idAllocation\":{},\"extensions\":[]}";
+    result += R"(]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+              R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+              R"("driverBinding":"0","extensionRecord":"0"}},"extensions":[]})";
     return result;
 }
 

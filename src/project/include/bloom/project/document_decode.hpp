@@ -5,6 +5,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
@@ -34,14 +35,18 @@
 // edge/Layer Output/Layer Stack/compositionOutput node id must each name a record this module
 // itself decoded; an unresolved reference is DanglingReference. Cross-composition and
 // project-level references (e.g. a future extension-record subject) remain out of scope.
-// idAllocation content and extension records are still checked only for presence, position, and
-// JSON kind. This module deliberately does not construct bloom::document::Project or
-// bloom::document::Document: reassembling the live model (which additionally enforces
-// document-construction invariants such as expected node/schema bindings, Layer Stack membership,
-// and cycle freedom -- see bloom::document::CanonicalGraph::validate()) and restoring the id
-// allocator from idAllocation.highestIssued is a later slice. The unknown-member round-trip
-// overlay is also a later slice, so an unrecognized root member is a typed decode error rather
-// than being preserved.
+// idAllocation.highestIssued and every extension record are also fully decoded (R3): the closed
+// ten-member highestIssued object into document::IdAllocatorHighWater, and the extensions array --
+// sorted, duplicate-free by numeric ExtensionRecordId -- into document::ExtensionRecord values
+// (typed subject/target kinds, all three reference-policy shapes, and the base64 payload decoded
+// through canonical_base64.hpp). This module still deliberately does not construct
+// bloom::document::Project or bloom::document::Document: reassembling the live model (which
+// additionally enforces document-construction invariants such as expected node/schema bindings,
+// Layer Stack membership, cycle freedom, extension subject/reference-target existence -- see
+// bloom::document::CanonicalGraph::validate() and bloom::document::validateExtensionRecords() --
+// and restoring the id allocator from the decoded highWater) is bloom::project::reconstructDocument
+// in document_reconstruct.hpp. The unknown-member round-trip overlay is also a later slice, so an
+// unrecognized root member is a typed decode error rather than being preserved.
 //
 // Decoding constructs every typed value through its existing checked surface: canonical_decimal.hpp
 // parsers for decimal-string ids/rationals/int64s, canonical JSON-number uint32 fields, and known
@@ -111,15 +116,24 @@ struct DecodedComposition final {
 };
 
 // The decoded document.json envelope's durable values. Deliberately not a
-// bloom::document::Project: reconstructing the live model (restoring the id allocator, and
-// applying document-construction invariants beyond this module's wire-shape and
-// within-composition cross-reference checks) and decoding extension records are out of scope for
-// this package.
+// bloom::document::Project: reconstructing the live model (restoring the id allocator and applying
+// document-construction invariants beyond this module's wire-shape and within-composition
+// cross-reference checks) is bloom::project::reconstructDocument's job (see
+// document_reconstruct.hpp), not this module's. idAllocation.highestIssued and every extension
+// record are fully decoded here (R3): highWater mirrors document::IdAllocatorHighWater exactly, and
+// extensionRecords reuses document::ExtensionRecord directly -- like
+// ParameterRecord/NodeRecord/..., ExtensionRecord is a plain aggregate/variant value type with no
+// invariant-enforcing constructor of its own, so this module's decode only checks wire shape
+// (closed member order, canonical id/base64 spelling, sorted+unique record ids) and leaves
+// cross-reference/subject-existence/reference-policy target-existence checks to
+// bloom::document::Project::validate() during reconstruction.
 struct DecodedDocumentEnvelope final {
     document::ProjectId projectId;
     std::string projectName;
     document::ColorSettings colorSettings;
     std::vector<DecodedComposition> compositions;
+    document::IdAllocatorHighWater highWater;
+    std::vector<document::ExtensionRecord> extensionRecords;
 
     friend bool operator==(const DecodedDocumentEnvelope&,
                            const DecodedDocumentEnvelope&) = default;
@@ -219,6 +233,24 @@ enum class DocumentDecodeError : std::uint8_t {
     // edge/Layer Output/Layer Stack/compositionOutput node id does not name a record decoded
     // elsewhere in this same composition.
     DanglingReference,
+    // An idAllocation.highestIssued member's decimal-string spelling is non-canonical (leading
+    // zero, a `+`/`-` sign, non-digit characters) or out of uint64 range. Unlike InvalidId, zero is
+    // a valid high-water spelling here (see docs/architecture/project-format.md, "Inclusive
+    // Allocator State").
+    InvalidAllocatorHighWater,
+    // Extension records are not sorted by strictly ascending numeric ExtensionRecordId.
+    UnsortedExtensionRecords,
+    // Two extension records declare the same numeric ExtensionRecordId.
+    DuplicateExtensionRecord,
+    // An extension record subject's or a host-table reference target's `kind` discriminator is not
+    // one of the nine known v1 typed target kinds.
+    InvalidExtensionTargetKind,
+    // An extension record's `referencePolicy.kind` discriminator is not "none", "host-table", or
+    // "owner-remapper".
+    InvalidReferencePolicyKind,
+    // An extension record's `payload` is not a canonical RFC 4648 standard-alphabet base64 spelling
+    // with required `=` padding, correct length, and zero tail bits.
+    InvalidBase64Payload,
 };
 
 // A bounded diagnostic path to one JSON member, formatted as `/key/0/key`, mirroring

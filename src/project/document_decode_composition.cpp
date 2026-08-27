@@ -78,8 +78,13 @@ using document::Vec2AnimationCurve;
 using document::Vec2d;
 using document::Vec2Keyframe;
 
+// Not noexcept: DecodeState::fail() takes its path argument by value, so a failing call here copies
+// `path` into that by-value parameter -- an allocation that can throw std::bad_alloc. Marking this
+// noexcept while it allocates on the failure path would be an untruthful noexcept claim (the same
+// pattern fixed for detail::decodeStringMember in
+// document_decode_internal.hpp/document_decode.cpp).
 [[nodiscard]] bool decodeBooleanMember(const JsonValue& value, DecodeState& state,
-                                       const std::string& path, bool& out) noexcept {
+                                       const std::string& path, bool& out) {
     if (value.kind() != JsonValueKind::Boolean) {
         state.fail(DocumentDecodeError::WrongValueKind, path);
         return false;
