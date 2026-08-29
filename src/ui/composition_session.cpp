@@ -60,11 +60,31 @@ QString statusMessage(const commands::CommandResult& result) {
 CompositionSession::CompositionSession(document::Document& document,
                                        commands::CommandStack& commandStack,
                                        document::CompositionId compositionId, QObject* parent)
-    : QObject(parent), document_(document), commandStack_(commandStack),
+    : QObject(parent), document_(&document), commandStack_(&commandStack),
       snapshot_(document.snapshot()), compositionId_(compositionId) {
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = snapshot_.project().compositions().front().id();
     }
+}
+
+void CompositionSession::rebind(document::Document& document, commands::CommandStack& commandStack,
+                                const document::CompositionId compositionId) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    document_ = &document;
+    commandStack_ = &commandStack;
+    snapshot_ = document_->snapshot();
+    compositionId_ = compositionId;
+    currentTime_ = core::RationalTime::fromInteger(0);
+    selection_ = {};
+
+    // One coherent transition (docs/architecture/project-session.md, "Session Publication"):
+    // observers must never see a new document paired with stale selection/time/history, so every
+    // existing changed signal fires here, unconditionally, in this order.
+    emit snapshotChanged();
+    emit compositionChanged();
+    emit currentTimeChanged();
+    emit selectionChanged();
+    emit historyChanged();
 }
 
 const document::Snapshot& CompositionSession::snapshot() const noexcept { return snapshot_; }
@@ -367,7 +387,7 @@ bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d 
     commands::Transaction transaction("Add Solid Layer", snapshot_.revision());
     transaction.emplace<commands::AddSolidLayer>(compositionId_, name.toStdString(), color,
                                                  compositionCenter(*current));
-    const auto result = commandStack_.execute(std::move(transaction));
+    const auto result = commandStack_->execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
     if (!handleResult(result)) {
         return false;
@@ -388,7 +408,7 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text) 
     commands::Transaction transaction("Add Text Layer", snapshot_.revision());
     transaction.emplace<commands::AddTextLayer>(compositionId_, name.toStdString(),
                                                 text.toStdString(), compositionCenter(*current));
-    const auto result = commandStack_.execute(std::move(transaction));
+    const auto result = commandStack_->execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {
         return false;
@@ -484,19 +504,19 @@ bool CompositionSession::moveLayerBefore(const document::LayerSlotId slotId,
     return execute(std::move(transaction));
 }
 
-bool CompositionSession::canUndo() const noexcept { return commandStack_.canUndo(); }
+bool CompositionSession::canUndo() const noexcept { return commandStack_->canUndo(); }
 
-bool CompositionSession::canRedo() const noexcept { return commandStack_.canRedo(); }
+bool CompositionSession::canRedo() const noexcept { return commandStack_->canRedo(); }
 
 QString CompositionSession::undoLabel() const {
-    const auto label = commandStack_.undoLabel();
+    const auto label = commandStack_->undoLabel();
     return label.has_value()
                ? QString::fromUtf8(label->data(), static_cast<qsizetype>(label->size()))
                : QString{};
 }
 
 QString CompositionSession::redoLabel() const {
-    const auto label = commandStack_.redoLabel();
+    const auto label = commandStack_->redoLabel();
     return label.has_value()
                ? QString::fromUtf8(label->data(), static_cast<qsizetype>(label->size()))
                : QString{};
@@ -504,21 +524,21 @@ QString CompositionSession::redoLabel() const {
 
 bool CompositionSession::undo() {
     Q_ASSERT(QThread::currentThread() == thread());
-    return handleResult(commandStack_.undo());
+    return handleResult(commandStack_->undo());
 }
 
 bool CompositionSession::redo() {
     Q_ASSERT(QThread::currentThread() == thread());
-    return handleResult(commandStack_.redo());
+    return handleResult(commandStack_->redo());
 }
 
 bool CompositionSession::execute(commands::Transaction&& transaction) {
-    return handleResult(commandStack_.execute(std::move(transaction)));
+    return handleResult(commandStack_->execute(std::move(transaction)));
 }
 
 bool CompositionSession::handleResult(const commands::CommandResult& result) {
     const auto previousRevision = snapshot_.revision();
-    snapshot_ = document_.snapshot();
+    snapshot_ = document_->snapshot();
 
     if (!result.succeeded()) {
         const auto message = statusMessage(result);

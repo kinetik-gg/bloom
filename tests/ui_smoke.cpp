@@ -2,10 +2,12 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -413,16 +415,60 @@ int testMaximizeAndPersistence(const EditorRegistry& registry) {
 }
 
 int testMainWindow(const EditorRegistry& registry,
-                   bloom::ui::CompositionSession& compositionSession) {
-    bloom::ui::MainWindow window(registry, compositionSession);
-    if (!require(window.windowTitle() == "Bloom" && window.workspaceHost() != nullptr, 40)) {
+                   bloom::ui::CompositionSession& compositionSession,
+                   bloom::ui::ProjectHost& projectHost) {
+    bloom::ui::MainWindow window(registry, compositionSession, projectHost);
+    if (!require(window.workspaceHost() != nullptr, 40)) {
         return 40;
+    }
+    // Window title (decision 5): "name[*] — Bloom" via Qt's windowModified pattern, wired to the
+    // host's dirty signal and display path; a fresh untouched project shows "Untitled" and is not
+    // modified.
+    if (!require(window.windowTitle().contains("Bloom") &&
+                     window.windowTitle().contains("Untitled") && !window.isWindowModified(),
+                 71)) {
+        return 71;
     }
     if (!require(window.workspaceHost()->areaCount() == 5, 41)) {
         return 41;
     }
     if (!require(window.findChild<QStatusBar*>() == nullptr, 42)) {
         return 42;
+    }
+
+    // File menu actions exist and are wired (task U1, issue #72) -- a light check per this task's
+    // smoke-test scope: "don't force full dialog flows through smoke".
+    auto* newProjectAction = window.findChild<QAction*>("newProjectAction");
+    auto* openProjectAction = window.findChild<QAction*>("openProjectAction");
+    auto* saveProjectAction = window.findChild<QAction*>("saveProjectAction");
+    auto* saveProjectAsAction = window.findChild<QAction*>("saveProjectAsAction");
+    if (!require(newProjectAction != nullptr && openProjectAction != nullptr &&
+                     saveProjectAction != nullptr && saveProjectAsAction != nullptr,
+                 65)) {
+        return 65;
+    }
+    if (!require(!newProjectAction->shortcut().isEmpty() &&
+                     !openProjectAction->shortcut().isEmpty() &&
+                     !saveProjectAction->shortcut().isEmpty() &&
+                     !saveProjectAsAction->shortcut().isEmpty(),
+                 66)) {
+        return 66;
+    }
+    // A fresh, idle, editable project: New/Open/Save/Save As are all enabled (decision 3 only
+    // disables Save for read-only/busy content, and everything else only while busy).
+    if (!require(newProjectAction->isEnabled() && openProjectAction->isEnabled() &&
+                     saveProjectAction->isEnabled() && saveProjectAsAction->isEnabled(),
+                 67)) {
+        return 67;
+    }
+    // Triggering New on an untouched project never prompts and replaces ProjectHost's own session
+    // synchronously -- this exercises the action's wiring without a real dialog.
+    newProjectAction->trigger();
+    if (!require(!projectHost.isDirty() && !projectHost.isBusy(), 68)) {
+        return 68;
+    }
+    if (!require(window.workspaceHost()->areaCount() == 5, 69)) {
+        return 69;
     }
 
     auto* splitAction = window.findChild<QAction*>("splitAreaLeftRightAction");
@@ -514,5 +560,8 @@ int main(int argc, char* argv[]) {
     bloom::document::Document document(std::move(newProject.project));
     bloom::commands::CommandStack commandStack(document);
     bloom::ui::CompositionSession compositionSession(document, commandStack, compositionId);
-    return testMainWindow(registry, compositionSession);
+
+    bloom::runtime::TaskScheduler taskScheduler;
+    bloom::ui::ProjectHost projectHost(taskScheduler);
+    return testMainWindow(registry, compositionSession, projectHost);
 }

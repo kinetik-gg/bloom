@@ -85,6 +85,17 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool undo();
     [[nodiscard]] bool redo();
 
+    // Projection rebinding (task U1, issue #72): atomically swaps which document/command-stack
+    // this session projects, for use after ProjectHost replaces the live ProjectSession content
+    // (New/Open). Implements the UI-owned half of docs/architecture/project-session.md's "Session
+    // Publication" install list: clears selection/interaction state, resets current time to zero,
+    // selects `compositionId` (the caller's already-computed lowest valid CompositionId, or an
+    // invalid/default id when no composition exists -- see ProjectHost), and emits every existing
+    // changed signal so observers (preview controller, editors) see one coherent transition. The
+    // OLD document/command-stack are left completely untouched by this call.
+    void rebind(document::Document& document, commands::CommandStack& commandStack,
+                document::CompositionId compositionId);
+
   signals:
     void snapshotChanged();
     void compositionChanged();
@@ -106,8 +117,12 @@ class CompositionSession final : public QObject {
     void normalizeSelection();
     void reportUnavailable(const QString& message);
 
-    document::Document& document_;
-    commands::CommandStack& commandStack_;
+    // Pointers, not references (task U1, issue #72): rebind() must be able to atomically retarget
+    // which document/command-stack this session projects after ProjectHost replaces the live
+    // ProjectSession content. A reference member cannot be reseated; both are set at construction
+    // and by rebind(), and are never null while this object is alive.
+    document::Document* document_;
+    commands::CommandStack* commandStack_;
     document::Snapshot snapshot_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);

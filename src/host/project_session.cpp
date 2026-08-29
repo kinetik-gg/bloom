@@ -537,6 +537,11 @@ DecodedProjectSnapshotResult ProjectSession::decodedSnapshot() const {
     return DecodedProjectSnapshotResult(document_->snapshot());
 }
 
+std::pair<document::Document*, commands::CommandStack*>
+ProjectSession::liveDocumentAndStack() noexcept {
+    return {document_.get(), commandStack_.get()};
+}
+
 ProjectSessionCommandResult ProjectSession::execute(commands::Transaction transaction) {
     if (!isValid() || contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return unavailableCommandResult();
