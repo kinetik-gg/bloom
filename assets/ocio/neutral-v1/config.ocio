@@ -1,0 +1,26 @@
+ocio_profile_version: 2
+
+roles:
+  scene_linear: lin_rec709_scene
+  default: lin_rec709_scene
+
+displays:
+  srgb_rec709_display:
+    - !<View> {name: srgb_rec709_display, colorspace: srgb_rec709_display}
+
+active_displays: [srgb_rec709_display]
+active_views: [srgb_rec709_display]
+
+colorspaces:
+  - !<ColorSpace>
+    name: lin_rec709_scene
+    interop_id: lin_rec709_scene
+    bitdepth: 32f
+    isdata: false
+
+  - !<ColorSpace>
+    name: srgb_rec709_display
+    interop_id: srgb_rec709_display
+    bitdepth: 32f
+    isdata: false
+    from_scene_reference: !<ExponentWithLinearTransform> {gamma: 2.4, offset: 0.055, direction: inverse}

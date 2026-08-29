@@ -12,6 +12,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/host/bloom_neutral_profile.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
@@ -50,6 +51,19 @@ if(BUILD_TESTING)
         NAME bloom.host.project-session
         COMMAND bloom_host_project_session_test
         LABELS unit host project commands
+    )
+
+    # Offline drift guard for the immutable Bloom Neutral v1 built-in OCIO asset (issue #60):
+    # locates the repository root via --root exactly as tools/quality/dependency_artifact_checks'
+    # own bloom.quality.dependency_artifacts test does, rather than relying on an ambient working
+    # directory.
+    add_executable(bloom_host_bloom_neutral_profile_test tests/bloom_neutral_profile_tests.cpp)
+    target_link_libraries(bloom_host_bloom_neutral_profile_test PRIVATE bloom_host)
+    bloom_enable_warnings(bloom_host_bloom_neutral_profile_test)
+    bloom_add_test(
+        NAME bloom.host.bloom-neutral-profile
+        COMMAND bloom_host_bloom_neutral_profile_test --root "${PROJECT_SOURCE_DIR}"
+        LABELS unit host color quality
     )
 
     # Gated Linux-only exactly as bloom.project.staged_save is gated: this exercises a real

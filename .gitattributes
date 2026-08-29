@@ -2,3 +2,4 @@
 # the intake contract binds their exact bytes to SHA-256 records.
 dependencies/unicode/** -text
 dependencies/licenses/** -text
+assets/ocio/** -text
