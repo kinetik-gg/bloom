@@ -510,6 +510,126 @@ void testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(Expectations& expecta
                         "placeholder switch: Save/Save As re-enable for editable content");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Save a Copy from the read-only placeholder (task SC1, issue #77): open a preserved-read-only
+// archive -> the "Save a Copy…" action enables -> drive requestSaveCopy() through the SAME Save As
+// dialog seam to a temp target -> the published file byte-equals the retained original; the
+// session's stateSnapshot (content kind, generations, path) is identical before and after; opening
+// an editable archive afterward clears the retention and disables the action again.
+// ---------------------------------------------------------------------------------------------
+
+void testSaveCopyFromReadOnlyPlaceholder(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "save a copy: temp directory is available");
+        return;
+    }
+    const auto preservedPath = directory.path() / "preserved.bloom";
+    const auto copyTargetPath = directory.path() / "preserved-copy.bloom";
+    const auto editablePath = directory.path() / "editable.bloom";
+    const auto preservedBytes = buildManifestSidePreservedReadOnlyArchiveOrAbort();
+    writeFileOrAbort(preservedPath, preservedBytes);
+    writeFileOrAbort(editablePath, buildEditableArchiveBytesOrAbort());
+
+    EditorRegistry registry;
+    expectations.expect(registerStandInEditors(registry),
+                        "save a copy: the stand-in editors register");
+
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost projectHost(scheduler);
+    auto [initialDocument, initialCommandStack] = projectHost.liveDocumentAndStack();
+    if (initialDocument == nullptr || initialCommandStack == nullptr) {
+        expectations.expect(false,
+                            "save a copy: the fresh ProjectHost exposes a live document/stack");
+        return;
+    }
+    bloom::ui::CompositionSession compositionSession(*initialDocument, *initialCommandStack,
+                                                     projectHost.lowestCompositionId());
+
+    MainWindow window(registry, compositionSession, projectHost);
+    window.show();
+    QApplication::processEvents();
+
+    auto* saveCopyAction = window.findChild<QAction*>("saveProjectCopyAction");
+    expectations.expect(saveCopyAction != nullptr, "save a copy: the menu action exists");
+    if (saveCopyAction == nullptr) {
+        return;
+    }
+    expectations.expect(!saveCopyAction->isEnabled() && !projectHost.canSaveCopy(),
+                        "save a copy: disabled at baseline for a fresh editable project");
+
+    projectHost.beginOpen(preservedPath);
+    expectations.expect(waitUntilIdle(projectHost),
+                        "save a copy: the preserved-read-only open reaches a terminal state");
+    expectations.expect(projectHost.stateSnapshot().contentKind ==
+                            ProjectSessionContentKind::PreservedReadOnly,
+                        "save a copy: the installed content kind is PreservedReadOnly");
+    expectations.expect(saveCopyAction->isEnabled() && projectHost.canSaveCopy(),
+                        "save a copy: enabled once preserved-read-only content with retained "
+                        "bytes is installed");
+
+    const auto beforeSnapshot = projectHost.stateSnapshot();
+
+    bool copyDialogInvoked = false;
+    projectHost.setSaveAsPathProvider([&] {
+        copyDialogInvoked = true;
+        return std::optional(copyTargetPath);
+    });
+    int copyFinishedCount = 0;
+    bloom::ui::ProjectHostOperationOutcome copyOutcome =
+        bloom::ui::ProjectHostOperationOutcome::Failed;
+    QObject::connect(&projectHost, &ProjectHost::copyFinished,
+                     [&](const bloom::ui::ProjectHostOperationOutcome outcome, const QString&) {
+                         ++copyFinishedCount;
+                         copyOutcome = outcome;
+                     });
+
+    projectHost.requestSaveCopy();
+    expectations.expect(waitUntilIdle(projectHost),
+                        "save a copy: the async copy reaches a terminal state");
+    expectations.expect(copyDialogInvoked,
+                        "save a copy: requestSaveCopy() drove the SAME Save As dialog seam");
+    expectations.expect(copyFinishedCount == 1 &&
+                            copyOutcome == bloom::ui::ProjectHostOperationOutcome::Published,
+                        "save a copy: the copy publishes");
+    expectations.expect(std::filesystem::exists(copyTargetPath),
+                        "save a copy: the target file was written");
+
+    // Byte-exact copy: the published file equals the ORIGINAL source archive bytes read from disk.
+    std::ifstream publishedStream(copyTargetPath, std::ios::binary);
+    const std::string publishedText((std::istreambuf_iterator<char>(publishedStream)),
+                                    std::istreambuf_iterator<char>());
+    const std::string sourceText(reinterpret_cast<const char*>(preservedBytes.data()),
+                                 preservedBytes.size());
+    expectations.expect(publishedText == sourceText,
+                        "save a copy: the published file byte-equals the retained original");
+
+    // Session stateSnapshot is identical before/after (kind, generations, path): Save Copy never
+    // proposes ProjectSession changes.
+    const auto afterSnapshot = projectHost.stateSnapshot();
+    expectations.expect(
+        afterSnapshot.contentKind == beforeSnapshot.contentKind &&
+            afterSnapshot.resultAcceptanceGeneration == beforeSnapshot.resultAcceptanceGeneration &&
+            afterSnapshot.openIntentGeneration == beforeSnapshot.openIntentGeneration &&
+            afterSnapshot.pathIntentGeneration == beforeSnapshot.pathIntentGeneration &&
+            afterSnapshot.pathIntentKind == beforeSnapshot.pathIntentKind &&
+            afterSnapshot.displayPath == beforeSnapshot.displayPath,
+        "save a copy: session stateSnapshot (kind, generations, path) is identical before and "
+        "after");
+
+    // Retention is cleared once an editable open replaces the preserved-read-only content; the
+    // action disables again.
+    projectHost.beginOpen(editablePath);
+    expectations.expect(waitUntilIdle(projectHost),
+                        "save a copy: the editable reopen reaches a terminal state");
+    expectations.expect(projectHost.stateSnapshot().contentKind ==
+                            ProjectSessionContentKind::DecodedDocument,
+                        "save a copy: the reopened content kind is DecodedDocument");
+    expectations.expect(!saveCopyAction->isEnabled() && !projectHost.canSaveCopy(),
+                        "save a copy: disabled again once the preserved-read-only content is "
+                        "replaced (retention cleared)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -517,5 +637,6 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(expectations);
+    testSaveCopyFromReadOnlyPlaceholder(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

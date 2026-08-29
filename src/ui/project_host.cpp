@@ -93,6 +93,8 @@ ProjectHost::~ProjectHost() {
         save->requestCancellation();
     } else if (auto* open = std::get_if<host::AsyncSessionOpen>(&inFlight_)) {
         open->requestCancellation();
+    } else if (auto* copy = std::get_if<host::AsyncCopyPublication>(&inFlight_)) {
+        copy->requestCancellation();
     }
 }
 
@@ -111,6 +113,15 @@ bool ProjectHost::canSave() const {
     return snapshot.valid &&
            snapshot.contentKind == host::ProjectSessionContentKind::DecodedDocument &&
            snapshot.editability == host::DecodedProjectEditability::Editable;
+}
+
+bool ProjectHost::canSaveCopy() const {
+    if (!session_.has_value() || isBusy() || retainedArchiveBytes_.empty()) {
+        return false;
+    }
+    const auto snapshot = session_->stateSnapshot();
+    return snapshot.valid &&
+           snapshot.contentKind == host::ProjectSessionContentKind::PreservedReadOnly;
 }
 
 bool ProjectHost::isDirty() const {
@@ -274,6 +285,36 @@ void ProjectHost::promptAndBeginSaveAs() {
     beginSaveAs(std::move(*chosen));
 }
 
+void ProjectHost::requestSaveCopy() {
+    if (isBusy()) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("Another project operation is already in progress."));
+        return;
+    }
+    if (!canSaveCopy()) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("Save a Copy is not available for this project."));
+        return;
+    }
+    promptAndBeginSaveCopy();
+}
+
+void ProjectHost::promptAndBeginSaveCopy() {
+    // Reuses the SAME Save As dialog provider seam (decision 4: "same seam pattern for the file
+    // dialogs" / "do NOT add a third provider unless something genuinely breaks") -- Save Copy's
+    // dialog is presentation-identical to Save As's: choose a destination file.
+    if (!saveAsPathProvider_) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("No Save dialog is configured."));
+        return;
+    }
+    auto chosen = saveAsPathProvider_();
+    if (!chosen.has_value()) {
+        return; // The artist cancelled the dialog; not an error.
+    }
+    beginSaveCopy(std::move(*chosen));
+}
+
 void ProjectHost::beginSave() {
     if (isBusy() || !session_.has_value()) {
         emit saveFinished(ProjectHostOperationOutcome::Refused,
@@ -316,6 +357,15 @@ void ProjectHost::beginSaveAs(std::filesystem::path path) {
     startSave(std::move(path), advance.capture());
 }
 
+void ProjectHost::beginSaveCopy(std::filesystem::path path) {
+    if (isBusy() || !canSaveCopy()) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("Another project operation is already in progress."));
+        return;
+    }
+    startSaveCopy(std::move(path));
+}
+
 void ProjectHost::startSave(std::filesystem::path targetPath,
                             const host::SessionPathIntentCapture intent) {
     // Callers (beginSave()/beginSaveAs()) already checked isBusy()/session_.has_value(); these
@@ -348,6 +398,43 @@ void ProjectHost::startSave(std::filesystem::path targetPath,
         return;
     }
     inFlight_.emplace<host::AsyncSessionSave>(std::move(begun).takeHandle());
+    setActivity(ProjectHostActivity::Saving);
+    scheduleNextPoll();
+}
+
+void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
+    // Callers (requestSaveCopy()/beginSaveCopy()) already checked isBusy()/canSaveCopy(); repeated
+    // defensively, matching startSave()'s own precedent.
+    if (!canSaveCopy() || !publicationCoordinator_.has_value() ||
+        !artifactCoordinator_.has_value()) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("Another project operation is already in progress."));
+        return;
+    }
+    auto operation = makeOperation();
+    if (!operation.has_value()) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("Not enough memory is available to start this copy."));
+        return;
+    }
+    host::AsyncCopyPublicationRequest request{
+        .targetPath = targetPath,
+        .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
+        .expectedTarget = std::nullopt,
+        // Copied, never moved: retainedArchiveBytes_ must survive for a possible future Save Copy.
+        .bytes = retainedArchiveBytes_,
+        .limits = {},
+    };
+    auto begun =
+        host::beginCopyPublication(scheduler_, *publicationCoordinator_, *artifactCoordinator_,
+                                   std::move(request), std::move(*operation));
+    if (!begun) {
+        emit copyFinished(ProjectHostOperationOutcome::Refused,
+                          tr("The copy could not be started."));
+        return;
+    }
+    inFlight_.emplace<host::AsyncCopyPublication>(std::move(begun).takeHandle());
+    pendingCopyTargetPath_ = std::move(targetPath);
     setActivity(ProjectHostActivity::Saving);
     scheduleNextPoll();
 }
@@ -412,9 +499,16 @@ void ProjectHost::beginOpen(const std::filesystem::path& path) {
         return;
     }
 
+    // beginOpen() already owns the bytes it just read (task SC1, issue #77): stash a copy here,
+    // before `bytes` moves into beginSessionOpen(), so handleOpenResult() can retain them on an
+    // Installed+PreservedReadOnly outcome instead of dropping them. Dropped again unconditionally
+    // once that outcome is known (see handleOpenResult()).
+    pendingOpenArchiveBytes_ = bytes;
+
     auto begun = host::beginSessionOpen(*session_, scheduler_, std::move(bytes),
                                         std::move(displayPath), limits, std::move(*operation));
     if (!begun) {
+        pendingOpenArchiveBytes_.clear();
         emit openFinished(ProjectHostOperationOutcome::Refused,
                           tr("The open could not be started."));
         return;
@@ -439,6 +533,9 @@ void ProjectHost::replaceWithNewProject() {
         return;
     }
     session_.emplace(std::move(created).takeSession());
+    // A new project is always decoded, editable content -- never preserved-read-only -- so any
+    // previously retained original archive bytes no longer describe the installed content.
+    retainedArchiveBytes_.clear();
     emit sessionReplaced();
     emit dirtyStateChanged();
 }
@@ -477,6 +574,21 @@ void ProjectHost::poll() {
         setActivity(ProjectHostActivity::Idle);
         if (result.has_value()) {
             handleOpenResult(std::move(*result));
+        }
+        return;
+    }
+    if (auto* copy = std::get_if<host::AsyncCopyPublication>(&inFlight_)) {
+        if (!copy->isReady()) {
+            scheduleNextPoll();
+            return;
+        }
+        // Save Copy's tryComplete() takes no session -- it never proposes ProjectSession
+        // path/dirty changes (see requestSaveCopy()'s own comment).
+        auto result = copy->tryComplete();
+        inFlight_.emplace<std::monostate>();
+        setActivity(ProjectHostActivity::Idle);
+        if (result.has_value()) {
+            handleCopyResult(std::move(*result));
         }
         return;
     }
@@ -618,12 +730,81 @@ void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
     }
     }
 
+    // Retention (task SC1, issue #77): promote the pending bytes read for this open into
+    // retainedArchiveBytes_ only when they actually became the installed preserved-read-only
+    // content; drop them (never retain) for every other outcome, including a failed install --
+    // installed content, and therefore what may be retained for it, is unchanged in that case.
+    if (installed &&
+        result.attemptedContentKind() == host::ProjectSessionContentKind::PreservedReadOnly) {
+        retainedArchiveBytes_ = std::move(pendingOpenArchiveBytes_);
+    } else if (installed) {
+        retainedArchiveBytes_.clear();
+    }
+    pendingOpenArchiveBytes_.clear();
+
     emit dirtyStateChanged();
     emit openFinished(outcome, message);
 
     if (installed) {
         emit sessionReplaced();
     }
+}
+
+void ProjectHost::handleCopyResult(host::CopyPublicationResult result) {
+    // Save Copy never touches session state (docs/architecture/project-session.md: "Save Copy and
+    // frame export never propose ProjectSession path/dirty changes"): no dirtyStateChanged() or
+    // sessionReplaced() emission here, ever.
+    const auto targetName = QString::fromStdString(pendingCopyTargetPath_.filename().string());
+
+    if (!result) {
+        const auto* failure = result.failure();
+        if (failure != nullptr && failure->stage() == host::CopyPublicationStage::Cancelled) {
+            emit copyFinished(ProjectHostOperationOutcome::Cancelled,
+                              tr("The copy was cancelled."));
+            return;
+        }
+        emit copyFinished(ProjectHostOperationOutcome::Failed,
+                          tr("The copy failed before the file could be written."));
+        return;
+    }
+
+    const auto* publication = result.publication();
+    const auto publicationOutcome =
+        publication != nullptr
+            ? publication->outcome
+            : platform::StagedArtifactPublicationOutcome::FailedBeforePublication;
+    auto outcome = ProjectHostOperationOutcome::Failed;
+    QString message;
+    switch (publicationOutcome) {
+    case platform::StagedArtifactPublicationOutcome::Published:
+        outcome = ProjectHostOperationOutcome::Published;
+        message = tr("Saved a copy as %1.").arg(targetName);
+        break;
+    case platform::StagedArtifactPublicationOutcome::PublishedWithDurabilityWarning:
+        outcome = ProjectHostOperationOutcome::PublishedWithWarning;
+        message = tr("Saved a copy as %1, but a later durability step failed. Consider saving a "
+                     "copy again.")
+                      .arg(targetName);
+        break;
+    case platform::StagedArtifactPublicationOutcome::Superseded:
+        outcome = ProjectHostOperationOutcome::Superseded;
+        message = tr("This copy was superseded by a newer save to the same file.");
+        break;
+    case platform::StagedArtifactPublicationOutcome::CancelledBeforePublication:
+        outcome = ProjectHostOperationOutcome::Cancelled;
+        message = tr("The copy was cancelled.");
+        break;
+    case platform::StagedArtifactPublicationOutcome::ExternalModificationConflict:
+        outcome = ProjectHostOperationOutcome::ExternalConflict;
+        message = tr("The target file changed outside Bloom. Choose a different location or "
+                     "overwrite explicitly.");
+        break;
+    case platform::StagedArtifactPublicationOutcome::FailedBeforePublication:
+        outcome = ProjectHostOperationOutcome::Failed;
+        message = tr("The copy failed before the file could be written.");
+        break;
+    }
+    emit copyFinished(outcome, message);
 }
 
 std::optional<project::ProjectIoOperationMemory> ProjectHost::makeOperation() const {
