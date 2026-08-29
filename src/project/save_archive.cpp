@@ -1,5 +1,6 @@
 #include <bloom/project/save_archive.hpp>
 
+#include "reopen_chain_internal.hpp"
 #include "save_archive_internal.hpp"
 
 #include <bloom/document/document.hpp>
@@ -289,15 +290,66 @@ SaveArchiveResult SaveArchiveResult::failure(SaveArchiveFailure failureValue) {
     return result;
 }
 
-SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte> archive,
-                                                const SaveArchiveExpectedContent& expected,
-                                                const SaveArchiveLimits& limits,
-                                                ProjectIoOperationMemory operation) noexcept {
+namespace detail {
+
+ReopenChainResult ReopenChainResult::success(ReopenChainSuccess value) {
+    ReopenChainResult result;
+    result.outcome_ = ReopenChainOutcome::Success;
+    result.success_.emplace(std::move(value));
+    return result;
+}
+
+ReopenChainResult ReopenChainResult::failure(SaveArchiveFailure failureValue) {
+    ReopenChainResult result;
+    result.outcome_ = ReopenChainOutcome::Failed;
+    result.failure_.emplace(std::move(failureValue));
+    return result;
+}
+
+ReopenChainResult ReopenChainResult::manifestPreservationRequired(SaveArchiveErrorPath path) {
+    ReopenChainResult result;
+    result.outcome_ = ReopenChainOutcome::ManifestPreservationRequired;
+    result.manifestPreservation_.emplace(ReopenChainManifestPreservation{path});
+    return result;
+}
+
+ReopenChainResult
+ReopenChainResult::documentPreservedReadOnlyRequired(const RoundTripPreservationReason reason,
+                                                     SaveArchiveErrorPath path) {
+    ReopenChainResult result;
+    result.outcome_ = ReopenChainOutcome::DocumentPreservedReadOnlyRequired;
+    result.documentPreservation_.emplace(ReopenChainDocumentPreservation{reason, path});
+    return result;
+}
+
+SaveArchiveFailure ReopenChainResult::takeFailure() && {
+    if (!failure_.has_value()) {
+        return {};
+    }
+    return std::move(*failure_);
+}
+
+ReopenChainSuccess ReopenChainResult::takeSuccess() && {
+    if (!success_.has_value()) {
+        std::terminate();
+    }
+    return std::move(*success_);
+}
+
+// The shared reopen/decode/reconstruct/validate prefix. See reopen_chain_internal.hpp for the
+// exact stage list and the charge-transfer contract `ReopenChainSuccess` upholds. This is the
+// pre-split verifySaveArchive() body from ContainerRead through RequirementsValidation, unchanged
+// in logic, now returning its decoded/reconstructed state instead of falling straight into
+// save-only re-encode/byte-comparison.
+ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
+                                 const SaveArchiveLimits& limits,
+                                 const std::optional<document::SchemaVersion> capturedInputVersion,
+                                 const ProjectIoOperationMemory& operation) noexcept {
     auto stage = SaveArchiveStage::ContainerRead;
     try {
         auto reopened = readZipContainer(archive, limits.container, operation);
         if (!reopened) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage, SaveArchiveContainerReadFailure{reopened.error(), reopened.byteOffset()}));
         }
         const auto* entries = reopened.document();
@@ -306,7 +358,7 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         auto manifestDom =
             parseStrictJsonDom(entries->manifestBytes(), manifestJsonLimits(limits), operation);
         if (!manifestDom) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage,
                 SaveArchiveJsonParseFailure{manifestDom.error(), manifestDom.byteOffset(),
                                             SaveArchiveErrorPath::from(manifestDom.memberPath())}));
@@ -315,7 +367,7 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
 
         stage = SaveArchiveStage::DocumentParse;
         if (manifestValueCount >= limits.json.maximumValues) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage, SaveArchiveJsonParseFailure{.error = StrictJsonDomError::ValueLimitExceeded,
                                                    .byteOffset = 0,
                                                    .path = SaveArchiveErrorPath{}}));
@@ -324,7 +376,7 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         auto documentDom = parseStrictJsonDom(
             entries->documentBytes(), documentJsonLimits(limits, remainingValues), operation);
         if (!documentDom) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage,
                 SaveArchiveJsonParseFailure{documentDom.error(), documentDom.byteOffset(),
                                             SaveArchiveErrorPath::from(documentDom.memberPath())}));
@@ -335,12 +387,16 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         auto manifestReservation =
             reserveRepresentation(operation, entries->manifestBytes().size(), manifestValueCount);
         if (!manifestReservation.has_value()) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
         auto decodedManifest = decodeManifestEnvelope(manifestDom.document()->root());
+        if (decodedManifest.outcome() == ManifestDecodeOutcome::PreservationRequired) {
+            return ReopenChainResult::manifestPreservationRequired(
+                SaveArchiveErrorPath::from(decodedManifest.path()));
+        }
         if (!decodedManifest) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveManifestDecodeFailure{
                                               decodedManifest.outcome(), decodedManifest.error(),
                                               SaveArchiveErrorPath::from(decodedManifest.path())}));
@@ -349,26 +405,35 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         stage = SaveArchiveStage::VersionAgreement;
         const auto decodedDocumentVersion = documentRootVersion(documentDom.document()->root());
         const auto& manifestValue = *decodedManifest.value();
-        if (manifestValue.documentSchemaVersion != expected.documentSchemaVersion ||
-            (decodedDocumentVersion.has_value() &&
-             manifestValue.documentSchemaVersion != *decodedDocumentVersion)) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+        const bool disagreesWithCapturedInput =
+            capturedInputVersion.has_value() &&
+            manifestValue.documentSchemaVersion != *capturedInputVersion;
+        const bool disagreesWithDocumentRoot =
+            decodedDocumentVersion.has_value() &&
+            manifestValue.documentSchemaVersion != *decodedDocumentVersion;
+        if (disagreesWithCapturedInput || disagreesWithDocumentRoot) {
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage, SaveArchiveVersionAgreementFailure{
                            manifestValue.documentSchemaVersion,
                            decodedDocumentVersion.value_or(manifestValue.documentSchemaVersion),
-                           expected.documentSchemaVersion}));
+                           capturedInputVersion.value_or(manifestValue.documentSchemaVersion)}));
         }
 
         stage = SaveArchiveStage::DocumentDecode;
         auto decodeReservation =
             reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
         if (!decodeReservation.has_value()) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
         auto decodedDocument = decodeDocumentEnvelope(documentDom.document()->root());
+        if (decodedDocument.outcome() == DocumentDecodeOutcome::PreservedReadOnlyRequired) {
+            return ReopenChainResult::documentPreservedReadOnlyRequired(
+                decodedDocument.preservationReason(),
+                SaveArchiveErrorPath::from(decodedDocument.path()));
+        }
         if (!decodedDocument) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveDocumentDecodeFailure{
                                               decodedDocument.outcome(), decodedDocument.error(),
                                               decodedDocument.preservationReason(),
@@ -379,13 +444,12 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         auto reconstructionReservation =
             reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
         if (!reconstructionReservation.has_value()) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
         auto reconstructed = reconstructDocument(*decodedDocument.value());
         if (!reconstructed) {
-            return SaveArchiveVerificationResult::failure(
-                SaveArchiveFailure(stage, reconstructed.rejection()));
+            return ReopenChainResult::failure(SaveArchiveFailure(stage, reconstructed.rejection()));
         }
 
         // validateManifestRequirements() currently accepts only live Project truth, not the
@@ -396,17 +460,94 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
             operation, entries->manifestBytes().size() + entries->documentBytes().size(),
             manifestValueCount);
         if (!requirementsReservation.has_value()) {
-            return SaveArchiveVerificationResult::failure(
+            return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
         auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
         auto requirementValidation = validateManifestRequirements(reconstructedSnapshot.project(),
                                                                   manifestValue.requirements);
         if (!requirementValidation.ok()) {
-            return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            return ReopenChainResult::failure(SaveArchiveFailure(
                 stage, SaveArchiveRequirementsFailure{std::move(requirementValidation)}));
         }
         requirementsReservation.reset();
+
+        // Moves only the RoundTripState out of `decodedDocument` (via the one sanctioned move-out
+        // accessor this task adds to DocumentDecodeResult); `decodedDocument`'s own remaining
+        // members are not referenced again, so nothing else needs to survive this function.
+        auto roundTrip = std::move(decodedDocument).takeRoundTrip();
+
+        // Every reservation reserved above (except the already-released requirementsReservation)
+        // charges resident state that must keep charging after this function returns: `manifest`
+        // and `roundTrip` are copied/moved from `decodedManifest`/`decodedDocument`'s memory
+        // footprint (manifestReservation/decodeReservation), and `document` is the reconstructed
+        // model reconstructionReservation charges. Transferring them into ReopenChainSuccess -- not
+        // releasing them here -- is what "moving storage between stages transfers its charge"
+        // (docs/architecture/project-format.md, "Resource Limits") means for this boundary.
+        return ReopenChainResult::success(ReopenChainSuccess{
+            .zipRead = std::move(reopened),
+            .document = std::move(*reconstructed.value()),
+            .manifest = *decodedManifest.value(),
+            .documentRootVersion = decodedDocumentVersion,
+            .roundTrip = std::move(roundTrip),
+            .manifestReservation = std::move(*manifestReservation),
+            .decodeReservation = std::move(*decodeReservation),
+            .reconstructionReservation = std::move(*reconstructionReservation),
+        });
+    } catch (const std::bad_alloc&) {
+        return ReopenChainResult::failure(
+            SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
+    } catch (...) {
+        return ReopenChainResult::failure(
+            SaveArchiveFailure(stage, SaveArchiveUnexpectedFailure{}));
+    }
+}
+
+} // namespace detail
+
+SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte> archive,
+                                                const SaveArchiveExpectedContent& expected,
+                                                const SaveArchiveLimits& limits,
+                                                ProjectIoOperationMemory operation) noexcept {
+    // runReopenChain() takes `operation` by const reference (it never sinks a final move of its
+    // own), so this function's own `operation` stays intact for the re-encode stages below, which
+    // the shared chain does not run.
+    auto chainResult =
+        detail::runReopenChain(archive, limits, expected.documentSchemaVersion, operation);
+    if (chainResult.outcome() == detail::ReopenChainOutcome::Failed) {
+        return SaveArchiveVerificationResult::failure(std::move(chainResult).takeFailure());
+    }
+    if (chainResult.outcome() == detail::ReopenChainOutcome::ManifestPreservationRequired) {
+        // Folded into the same SaveArchiveManifestDecodeFailure shape pre-split verifySaveArchive()
+        // produced for this outcome (its ManifestDecodeOutcome::PreservationRequired branch never
+        // populated error(), so ManifestDecodeError::None here is exactly what
+        // decodedManifest.error() would have read).
+        const auto* preservation = chainResult.manifestPreservation();
+        return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            SaveArchiveStage::ManifestDecode,
+            SaveArchiveManifestDecodeFailure{
+                ManifestDecodeOutcome::PreservationRequired, ManifestDecodeError::None,
+                preservation != nullptr ? preservation->path : SaveArchiveErrorPath{}}));
+    }
+    if (chainResult.outcome() == detail::ReopenChainOutcome::DocumentPreservedReadOnlyRequired) {
+        // Folded into the same SaveArchiveDocumentDecodeFailure shape pre-split verifySaveArchive()
+        // produced for this outcome, for the same reason as above.
+        const auto* preservation = chainResult.documentPreservation();
+        return SaveArchiveVerificationResult::failure(SaveArchiveFailure(
+            SaveArchiveStage::DocumentDecode,
+            SaveArchiveDocumentDecodeFailure{
+                DocumentDecodeOutcome::PreservedReadOnlyRequired, DocumentDecodeError::None,
+                preservation != nullptr ? preservation->reason : RoundTripPreservationReason::None,
+                preservation != nullptr ? preservation->path : SaveArchiveErrorPath{}}));
+    }
+
+    auto stage = SaveArchiveStage::ManifestReencode;
+    try {
+        auto success = std::move(chainResult).takeSuccess();
+        const auto* entries = success.zipRead.document();
+        if (entries == nullptr) {
+            std::terminate();
+        }
 
         // Final use of `operation` in this function: every earlier stage above needed the shared
         // handle again for a later call, so those uses stayed copies (ProjectIoOperationMemory is a
@@ -415,13 +556,12 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         std::pmr::vector<char> manifestReencoded(&reencodeResource);
         std::pmr::vector<char> documentReencoded(&reencodeResource);
 
-        stage = SaveArchiveStage::ManifestReencode;
         const CanonicalManifestV1 manifestRequest{
             .format = kCanonicalManifestFormat,
-            .containerVersion = manifestValue.containerVersion,
-            .documentPath = manifestValue.documentPath,
-            .documentSchemaVersion = manifestValue.documentSchemaVersion,
-            .requirements = manifestValue.requirements,
+            .containerVersion = success.manifest.containerVersion,
+            .documentPath = success.manifest.documentPath,
+            .documentSchemaVersion = success.manifest.documentSchemaVersion,
+            .requirements = success.manifest.requirements,
         };
         if (auto failure =
                 encodeManifest(manifestRequest, limits.manifest, manifestReencoded, stage);
@@ -430,11 +570,13 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
         }
 
         stage = SaveArchiveStage::DocumentReencode;
+        auto reconstructedSnapshot = success.document.document->snapshot();
         const CanonicalDocumentV1 documentRequest{
             .snapshot = &reconstructedSnapshot,
-            .colorSettings = &reconstructed.value()->colorSettings,
-            .roundTrip = decodedDocument.roundTrip(),
-            .schemaMinor = decodedDocumentVersion.has_value() ? decodedDocumentVersion->minor : 0,
+            .colorSettings = &success.document.colorSettings,
+            .roundTrip = success.roundTrip.has_value() ? &*success.roundTrip : nullptr,
+            .schemaMinor =
+                success.documentRootVersion.has_value() ? success.documentRootVersion->minor : 0,
         };
         if (auto failure = encodeDocument(documentRequest, limits.document, &reencodeResource,
                                           documentReencoded, stage);
