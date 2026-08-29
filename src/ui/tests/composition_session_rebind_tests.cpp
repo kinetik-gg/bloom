@@ -4,12 +4,14 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QApplication>
 #include <QObject>
 
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <source_location>
@@ -20,6 +22,11 @@
 // CompositionSession::rebind() unit test (task U1, issue #72, frozen design decision 2): bind ->
 // select things -> rebind to a second document -> selection cleared, time zero, every changed
 // signal emitted exactly once, and the OLD document is left completely untouched.
+//
+// Also carries the R1/issue #75 constructor-fallback pin: CompositionSession's own constructor
+// falls back to a min-scan for the lowest CompositionId (mirroring
+// ProjectHost::lowestCompositionId()) when constructed with an absent id, rather than
+// compositions().front() (insertion order).
 
 namespace {
 
@@ -114,6 +121,79 @@ void testRebindClearsSelectionResetsTimeAndEmitsEverySignalOnce(Expectations& ex
                         "rebind: the OLD document's content is untouched by post-rebind activity");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Issue #75: a hand-built minimal composition (mirrors makeNewProject()'s own layer-stack ->
+// composition-output topology so Document's constructor validation passes) at a given
+// CompositionId, node/edge ids offset per-composition so project-wide uniqueness holds when two
+// of these share one Project.
+// ---------------------------------------------------------------------------------------------
+
+[[nodiscard]] bloom::document::Composition makeMinimalComposition(bloom::document::CompositionId id,
+                                                                  std::string name,
+                                                                  const std::uint64_t nodeIdBase) {
+    using bloom::document::EdgeId;
+    using bloom::document::NodeId;
+
+    const auto layerStackNodeId = NodeId::fromRaw(nodeIdBase);
+    const auto outputNodeId = NodeId::fromRaw(nodeIdBase + 1);
+    const auto edgeId = EdgeId::fromRaw(nodeIdBase);
+
+    bloom::document::CanonicalGraph graph(layerStackNodeId);
+    const bool topologyCreated =
+        graph.addNode({layerStackNodeId,
+                       std::string(bloom::document::kLayerStackNodeType),
+                       {},
+                       bloom::document::kLayerStackNodeSchemaVersion}) &&
+        graph.addNode({outputNodeId,
+                       std::string(bloom::document::kCompositionOutputNodeType),
+                       {},
+                       bloom::document::kCompositionOutputNodeSchemaVersion}) &&
+        graph.addEdge(
+            {edgeId,
+             {layerStackNodeId, std::string(bloom::document::kLayerStackOutputPort)},
+             bloom::document::NodeInputRef{
+                 outputNodeId, std::string(bloom::document::kCompositionOutputInputPort)}});
+    if (!topologyCreated) {
+        std::abort();
+    }
+    graph.setCompositionOutput(
+        {outputNodeId, std::string(bloom::document::kCompositionOutputOutputPort)});
+
+    return bloom::document::Composition(id, std::move(name), RationalTime::fromInteger(10),
+                                        std::move(graph));
+}
+
+void testConstructorFallbackPicksLowestCompositionIdNotInsertionOrder(Expectations& expectations) {
+    bloom::document::Project project(bloom::document::ProjectId::fromRaw(1),
+                                     "Fallback Fixture Project");
+
+    // Insertion order is [id 10, id 2] -- the OLD behavior (compositions().front()) would pick id
+    // 10; the fixed min-scan must pick id 2, the numerically lowest valid CompositionId.
+    const auto highId = bloom::document::CompositionId::fromRaw(10);
+    const auto lowId = bloom::document::CompositionId::fromRaw(2);
+    expectations.expect(
+        project.addComposition(makeMinimalComposition(highId, "High Id Composition", 1)),
+        "fallback fixture: the higher-id composition (inserted first) is added");
+    expectations.expect(
+        project.addComposition(makeMinimalComposition(lowId, "Low Id Composition", 10)),
+        "fallback fixture: the lower-id composition (inserted second) is added");
+    expectations.expect(project.compositions().size() == 2 &&
+                            project.compositions().front().id() == highId,
+                        "fallback fixture: insertion order really does differ from id order");
+
+    bloom::document::Document document(std::move(project));
+    bloom::commands::CommandStack commandStack(document);
+
+    // A bogus/absent CompositionId: composition() finds nullptr for it, so the constructor's
+    // fallback runs.
+    const auto bogusId = bloom::document::CompositionId::fromRaw(999);
+    CompositionSession session(document, commandStack, bogusId);
+
+    expectations.expect(session.compositionId() == lowId,
+                        "constructor fallback (#75): the lowest CompositionId wins over insertion "
+                        "order, not compositions().front()");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -121,5 +201,6 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testRebindClearsSelectionResetsTimeAndEmitsEverySignalOnce(expectations);
+    testConstructorFallbackPicksLowestCompositionIdNotInsertionOrder(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

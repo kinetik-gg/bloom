@@ -44,9 +44,14 @@ int main(int argc, char* argv[]) {
     // Projection rebinding (decision 2): every time ProjectHost replaces the live session content
     // (New or a successful Open install), rebind CompositionSession to whatever document/command-
     // stack pair is now live. A preserved-read-only install has no document/command-stack at all
-    // (liveDocumentAndStack() returns null); this build has no workspace surface for that content
-    // kind yet, so CompositionSession is deliberately left bound to its previous content rather
-    // than rebinding to nothing -- see the implementor's report for this known limitation.
+    // (liveDocumentAndStack() returns null), so this lambda intentionally skips rebinding and
+    // leaves CompositionSession bound to whatever it projected before. That skip is now
+    // intentional and safe rather than a known limitation (task R1, issue #74): MainWindow hides
+    // the entire editor workspace behind a presentation-level read-only placeholder page whenever
+    // ProjectHost's content kind is PreservedReadOnly (see MainWindow::updateContentSurface()), so
+    // the stale CompositionSession this lambda leaves bound is never shown to the artist. Returning
+    // to decoded content (a New or an editable Open) switches the workspace back into view and this
+    // lambda rebinds normally.
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
                      [&projectHost, &compositionSession] {
                          auto [document, commandStack] = projectHost.liveDocumentAndStack();

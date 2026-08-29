@@ -55,6 +55,23 @@ QString statusMessage(const commands::CommandResult& result) {
     return {static_cast<double>(format.width()) * 0.5, static_cast<double>(format.height()) * 0.5};
 }
 
+// The contract's "lowest valid CompositionId" (docs/architecture/project-session.md, "Session
+// Publication", item 5), mirroring ProjectHost::lowestCompositionId()'s own min-scan (issue #75:
+// this used to be `compositions().front().id()`, which is insertion order, not id order -- a
+// document whose compositions were inserted out of id order picked the wrong fallback
+// composition). Precondition: `project.compositions()` is non-empty; callers below only invoke
+// this after checking that.
+[[nodiscard]] document::CompositionId lowestCompositionId(const document::Project& project) {
+    const auto compositions = project.compositions();
+    auto lowest = compositions.front().id();
+    for (const auto& candidate : compositions) {
+        if (candidate.id().value() < lowest.value()) {
+            lowest = candidate.id();
+        }
+    }
+    return lowest;
+}
+
 } // namespace
 
 CompositionSession::CompositionSession(document::Document& document,
@@ -63,7 +80,7 @@ CompositionSession::CompositionSession(document::Document& document,
     : QObject(parent), document_(&document), commandStack_(&commandStack),
       snapshot_(document.snapshot()), compositionId_(compositionId) {
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
-        compositionId_ = snapshot_.project().compositions().front().id();
+        compositionId_ = lowestCompositionId(snapshot_.project());
     }
 }
 

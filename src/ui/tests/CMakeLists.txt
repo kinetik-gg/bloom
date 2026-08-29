@@ -23,6 +23,16 @@ add_executable(bloom_viewer_editor_test
     viewer_editor_tests.cpp
 )
 
+# Links ZLIB::ZLIB directly for its own trimmed hand-rolled ZIP-writer fixture (a preserved-
+# read-only archive builder) -- mirroring src/host/CMakeLists.txt's bloom_host_session_open_test,
+# which documents the same src-module tests/-directory boundary this duplicate exists to respect.
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+endif()
+add_executable(bloom_main_window_readonly_placeholder_test
+    main_window_readonly_placeholder_tests.cpp
+)
+
 target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
@@ -31,6 +41,7 @@ target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
 target_link_libraries(bloom_project_host_test PRIVATE bloom_ui)
 target_link_libraries(bloom_task_monitor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui)
+target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
@@ -39,6 +50,7 @@ bloom_enable_warnings(bloom_application_shutdown_test)
 bloom_enable_warnings(bloom_project_host_test)
 bloom_enable_warnings(bloom_task_monitor_test)
 bloom_enable_warnings(bloom_viewer_editor_test)
+bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
 
 include(BloomTesting)
 
@@ -102,6 +114,14 @@ bloom_add_test(
     NAME bloom.ui.viewer_editor
     COMMAND bloom_viewer_editor_test
     LABELS ui unit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.main_window_readonly_placeholder
+    COMMAND bloom_main_window_readonly_placeholder_test
+    LABELS ui integration host
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )

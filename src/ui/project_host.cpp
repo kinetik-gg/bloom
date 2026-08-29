@@ -600,13 +600,15 @@ void ProjectHost::handleOpenResult(host::SessionOpenResult result) {
             installed = true;
             outcome = ProjectHostOperationOutcome::Published;
             // A preserved-read-only install has no live document/command-stack at all (see
-            // liveDocumentAndStack()); this build has no workspace surface for that content kind
-            // (KNOWN LIMITATION -- see the implementor's report), so callers must not assume a
-            // Published open outcome always means an editable composition became available.
+            // liveDocumentAndStack()); callers must not assume a Published open outcome always
+            // means an editable composition became available. MainWindow (task R1, issue #74)
+            // handles this at the presentation level: it shows a read-only placeholder page
+            // instead of the editor workspace whenever the content kind is PreservedReadOnly (see
+            // MainWindow::updateContentSurface()), so this status-bar message stays short rather
+            // than duplicating the placeholder's own explanation.
             message =
                 result.attemptedContentKind() == host::ProjectSessionContentKind::PreservedReadOnly
-                    ? tr("Opened as preserved read-only content; this build has no editor for it "
-                         "yet.")
+                    ? tr("Opened as preserved read-only content.")
                     : tr("Project opened.");
         } else {
             outcome = ProjectHostOperationOutcome::Failed;
