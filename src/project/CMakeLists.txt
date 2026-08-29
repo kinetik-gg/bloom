@@ -1,4 +1,5 @@
 bloom_find_dependency(yyjson)
+bloom_find_dependency(libzip)
 
 add_library(bloom_project STATIC)
 
@@ -24,6 +25,9 @@ target_sources(
         strict_json_preflight.cpp
         strict_json_preflight.hpp
         unknown_json_number.cpp
+        zip_container.cpp
+        zip_container_preflight.cpp
+        zip_container_preflight.hpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -42,11 +46,12 @@ target_sources(
             include/bloom/project/round_trip_state.hpp
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
+            include/bloom/project/zip_container.hpp
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
 target_link_libraries(bloom_project PUBLIC bloom_core bloom_document)
-target_link_libraries(bloom_project PRIVATE yyjson::yyjson)
+target_link_libraries(bloom_project PRIVATE yyjson::yyjson libzip::zip)
 bloom_enable_warnings(bloom_project)
 
 if(BUILD_TESTING)
@@ -205,5 +210,36 @@ if(BUILD_TESTING)
         NAME bloom.project.io_memory_resource
         COMMAND bloom_project_io_memory_resource_test
         LABELS unit project persistence memory
+    )
+
+    add_executable(
+        bloom_project_zip_container_preflight_test
+        tests/zip_container_preflight_tests.cpp
+    )
+    target_include_directories(
+        bloom_project_zip_container_preflight_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_project_zip_container_preflight_test
+        PRIVATE bloom_project ZLIB::ZLIB
+    )
+    bloom_enable_warnings(bloom_project_zip_container_preflight_test)
+    bloom_add_test(
+        NAME bloom.project.zip_container_preflight
+        COMMAND bloom_project_zip_container_preflight_test
+        LABELS unit project persistence security
+    )
+
+    add_executable(bloom_project_zip_container_test tests/zip_container_tests.cpp)
+    target_link_libraries(
+        bloom_project_zip_container_test
+        PRIVATE bloom_project ZLIB::ZLIB
+    )
+    bloom_enable_warnings(bloom_project_zip_container_test)
+    bloom_add_test(
+        NAME bloom.project.zip_container
+        COMMAND bloom_project_zip_container_test
+        LABELS unit project persistence security
     )
 endif()
