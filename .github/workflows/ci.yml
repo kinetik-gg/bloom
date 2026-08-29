@@ -124,6 +124,9 @@ jobs:
 
       - name: Install Qt 6.8
         if: steps.cache-qt.outputs.cache-hit != 'true'
+        # Runs from the runner temp directory: aqt writes aqtinstall.log into its working
+        # directory, and a stray log in the workspace fails the repository hygiene check.
+        working-directory: ${{ runner.temp }}
         run: |
           python3 -m pip install --user aqtinstall==3.2.1
           python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
