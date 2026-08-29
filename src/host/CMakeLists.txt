@@ -6,6 +6,7 @@ target_sources(
         project_session.cpp
         publication_coordinator.cpp
         save_publication.cpp
+        session_save.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -13,6 +14,7 @@ target_sources(
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
+            include/bloom/host/session_save.hpp
 )
 
 target_compile_features(bloom_host PUBLIC cxx_std_20)
@@ -58,6 +60,17 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.host.save-publication
             COMMAND bloom_host_save_publication_test
+            LABELS unit host persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.host.save-publication is gated: saveProjectSession()
+        # drives the same real platform::StagedArtifactCoordinator.
+        add_executable(bloom_host_session_save_test tests/session_save_tests.cpp)
+        target_link_libraries(bloom_host_session_save_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_session_save_test)
+        bloom_add_test(
+            NAME bloom.host.session-save
+            COMMAND bloom_host_session_save_test
             LABELS unit host persistence security
         )
     endif()

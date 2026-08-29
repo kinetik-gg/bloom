@@ -78,15 +78,19 @@ const document::Snapshot& DecodedProjectSnapshotResult::snapshot() const& {
     return *snapshot_;
 }
 
-ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
-                               std::unique_ptr<document::Document> document,
-                               std::unique_ptr<commands::CommandStack> commandStack,
-                               const DecodedProjectEditability editability,
-                               const document::Revision cleanRevision,
-                               std::optional<ProjectDisplayPath> displayPath) noexcept
+ProjectSession::ProjectSession(
+    const ProjectSessionId projectSessionId, std::unique_ptr<document::Document> document,
+    std::unique_ptr<commands::CommandStack> commandStack,
+    const DecodedProjectEditability editability, const document::Revision cleanRevision,
+    std::optional<ProjectDisplayPath> displayPath,
+    std::optional<document::ColorSettings> colorSettings,
+    std::optional<project::RoundTripState> roundTrip, const std::uint32_t schemaMinor,
+    std::vector<project::ManifestRequirement> retainedRequirements) noexcept
     : projectSessionId_(projectSessionId), contentKind_(ProjectSessionContentKind::DecodedDocument),
       editability_(editability), displayPath_(std::move(displayPath)),
-      cleanRevision_(cleanRevision), document_(std::move(document)),
+      cleanRevision_(cleanRevision), colorSettings_(std::move(colorSettings)),
+      roundTrip_(std::move(roundTrip)), schemaMinor_(schemaMinor),
+      retainedRequirements_(std::move(retainedRequirements)), document_(std::move(document)),
       commandStack_(std::move(commandStack)), valid_(true) {}
 
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
@@ -107,6 +111,9 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
           std::exchange(other.newestAcceptedPublicationIntent_, PublicationIntentId{})),
       contentKind_(other.contentKind_), editability_(other.editability_),
       displayPath_(std::move(other.displayPath_)), cleanRevision_(other.cleanRevision_),
+      colorSettings_(std::move(other.colorSettings_)), roundTrip_(std::move(other.roundTrip_)),
+      schemaMinor_(std::exchange(other.schemaMinor_, std::uint32_t{0})),
+      retainedRequirements_(std::move(other.retainedRequirements_)),
       document_(std::move(other.document_)), commandStack_(std::move(other.commandStack_)),
       valid_(std::exchange(other.valid_, false)) {}
 
@@ -123,9 +130,16 @@ ProjectSessionCreateResult ProjectSession::createNew(ProjectSessionIdentitySourc
         if (!projectSessionId.has_value()) {
             return ProjectSessionCreateResult(ProjectSessionCreateStatus::RuntimeIdentityExhausted);
         }
+        // No colorSettings/roundTrip/schemaMinor/retainedRequirements: a brand-new project has no
+        // qualified color-settings default to synthesize (see color_settings.hpp's
+        // makeBloomNeutralColorSettingsV1(), which requires a real caller-supplied content-
+        // revision digest that no build profile currently wires up here). The resulting session
+        // is gated unsaveable-pending-color -- see
+        // SessionSaveInputStatus::ColorSettingsUnavailable.
         return ProjectSessionCreateResult(
             ProjectSession(*projectSessionId, std::move(document), std::move(commandStack),
-                           DecodedProjectEditability::Editable, cleanRevision, std::nullopt));
+                           DecodedProjectEditability::Editable, cleanRevision, std::nullopt,
+                           std::nullopt, std::nullopt, 0, {}));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);
     } catch (const std::logic_error&) {
@@ -137,6 +151,12 @@ ProjectSessionCreateResult
 ProjectSession::createDecoded(ProjectSessionIdentitySource& identitySource,
                               DecodedProjectSessionRequest request) {
     if (!isKnownEditability(request.editability)) {
+        return ProjectSessionCreateResult(ProjectSessionCreateStatus::InvalidDecodedProject);
+    }
+    // A roundTrip view with schemaMinor 0 cannot name the newer minor it was captured against
+    // (see canonical_document.hpp's CanonicalDocumentV1::schemaMinor comment): typed create
+    // failure rather than silently writing it back at {1, 0}.
+    if (request.roundTrip.has_value() && request.schemaMinor == 0) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::InvalidDecodedProject);
     }
     try {
@@ -155,7 +175,9 @@ ProjectSession::createDecoded(ProjectSessionIdentitySource& identitySource,
         }
         return ProjectSessionCreateResult(
             ProjectSession(*projectSessionId, std::move(document), std::move(commandStack),
-                           request.editability, cleanRevision, std::move(request.displayPath)));
+                           request.editability, cleanRevision, std::move(request.displayPath),
+                           std::move(request.colorSettings), std::move(request.roundTrip),
+                           request.schemaMinor, std::move(request.retainedRequirements)));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);
     } catch (const std::invalid_argument&) {
@@ -427,6 +449,33 @@ ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
     cleanRevision_ = publishedRevision;
     newestAcceptedPublicationIntent_ = publicationIntent;
     return ProjectSessionSavepointStatus::Accepted;
+}
+
+SessionSaveInputResult
+ProjectSession::captureSaveInput(const SessionPathIntentCapture intent) const {
+    if (!isValid()) {
+        return SessionSaveInputResult(SessionSaveInputStatus::InvalidSession);
+    }
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
+        return SessionSaveInputResult(SessionSaveInputStatus::ReadOnly);
+    }
+    if (!colorSettings_.has_value()) {
+        return SessionSaveInputResult(SessionSaveInputStatus::ColorSettingsUnavailable);
+    }
+    // Mirrors acceptSavepoint()'s own ExistingPath/no-displayPath check, but reported first and
+    // distinctly from StaleIntent: this is the ordinary pathless-plain-save shape (a
+    // capturePlainSavePathIntent() call on a pathless session always returns this exact invalid
+    // capture), not a generation mismatch, so callers get an actionable "route to Save As"
+    // diagnosis rather than a generic staleness report.
+    if (intent.kind() == SessionPathIntentKind::ExistingPath && !displayPath_.has_value()) {
+        return SessionSaveInputResult(SessionSaveInputStatus::PathRequired);
+    }
+    if (!matchesPathIntent(intent)) {
+        return SessionSaveInputResult(SessionSaveInputStatus::StaleIntent);
+    }
+    return SessionSaveInputResult(SessionSaveInput(
+        document_->snapshot(), *colorSettings_, roundTrip_.has_value() ? &*roundTrip_ : nullptr,
+        schemaMinor_, retainedRequirements_, displayPath_, intent, captureResultAcceptance()));
 }
 
 ProjectSessionCommandResult ProjectSession::unavailableCommandResult() const noexcept {

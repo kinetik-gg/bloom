@@ -1,12 +1,17 @@
 #include <bloom/host/project_session.hpp>
 
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/sha256.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/project/round_trip_state.hpp>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <source_location>
 #include <stdexcept>
@@ -83,6 +88,7 @@ using bloom::host::SessionPathIntentAbandonStatus;
 using bloom::host::SessionPathIntentAdvanceStatus;
 using bloom::host::SessionPathIntentKind;
 using bloom::host::SessionResultAcceptanceAdvanceStatus;
+using bloom::host::SessionSaveInputStatus;
 
 static_assert(!std::is_copy_constructible_v<ProjectSessionIdentitySource>);
 static_assert(!std::is_move_constructible_v<ProjectSessionIdentitySource>);
@@ -100,6 +106,13 @@ static_assert(
         throw std::logic_error("Expected a forwarded command result");
     }
     return result.command->status;
+}
+
+[[nodiscard]] bloom::document::ColorSettings neutralColorSettings() {
+    std::array<std::uint8_t, 32> digestBytes{};
+    std::iota(digestBytes.begin(), digestBytes.end(), std::uint8_t{0});
+    return bloom::document::makeBloomNeutralColorSettingsV1(
+        bloom::core::Sha256Digest::fromBytes(digestBytes));
 }
 
 [[nodiscard]] NewProjectSessionRequest newProjectRequest() {
@@ -132,6 +145,7 @@ decodedSessionWithPath(Expectations& expectations, ProjectSessionIdentitySource&
     }
     auto result = ProjectSession::createDecoded(identitySource,
                                                 {.project = std::move(created.project),
+                                                 .colorSettings = neutralColorSettings(),
                                                  .editability = DecodedProjectEditability::Editable,
                                                  .displayPath = std::move(path),
                                                  .persistedAllocatorHighWater = std::nullopt});
@@ -205,6 +219,7 @@ void testIdentitySourceAndExactExhaustion(Expectations& expectations) {
         "Decoded identity", "Main", bloom::core::RationalTime::fromInteger(5));
     auto secondResult = ProjectSession::createDecoded(
         identitySource, {.project = std::move(decodedProject.project),
+                         .colorSettings = neutralColorSettings(),
                          .editability = DecodedProjectEditability::Editable,
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = std::nullopt});
@@ -885,6 +900,7 @@ void testDegradedEditableAuthorization(Expectations& expectations,
     auto result = ProjectSession::createDecoded(
         identitySource, {
                             .project = std::move(createdProject.project),
+                            .colorSettings = neutralColorSettings(),
                             .editability = DecodedProjectEditability::DegradedEditable,
                             .displayPath = path,
                             .persistedAllocatorHighWater = std::nullopt,
@@ -979,6 +995,7 @@ void testInvalidConstruction(Expectations& expectations,
     bloom::document::Project invalidProject(bloom::document::ProjectId{}, "Invalid");
     expectations.expect(ProjectSession::createDecoded(
                             identitySource, {.project = std::move(invalidProject),
+                                             .colorSettings = neutralColorSettings(),
                                              .editability = DecodedProjectEditability::Editable,
                                              .displayPath = std::nullopt,
                                              .persistedAllocatorHighWater = std::nullopt})
@@ -990,6 +1007,7 @@ void testInvalidConstruction(Expectations& expectations,
     expectations.expect(
         ProjectSession::createDecoded(
             identitySource, {.project = std::move(unknownEditability.project),
+                             .colorSettings = neutralColorSettings(),
                              // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
                              .editability = static_cast<DecodedProjectEditability>(255),
                              .displayPath = std::nullopt,
@@ -1004,6 +1022,7 @@ void testInvalidConstruction(Expectations& expectations,
             identitySource,
             {
                 .project = std::move(insufficientHighWater.project),
+                .colorSettings = neutralColorSettings(),
                 .editability = DecodedProjectEditability::Editable,
                 .displayPath = std::nullopt,
                 .persistedAllocatorHighWater = bloom::document::IdAllocatorHighWater{},
@@ -1014,6 +1033,65 @@ void testInvalidConstruction(Expectations& expectations,
     expectations.expect(afterInvalid.lastIssuedSessionId == beforeInvalid.lastIssuedSessionId &&
                             afterInvalid.identityExhausted == beforeInvalid.identityExhausted,
                         "invalid construction never consumes a runtime session identity");
+}
+
+void testColorSettingsGatingAndRoundTripValidation(Expectations& expectations,
+                                                   ProjectSessionIdentitySource& identitySource) {
+    // createNew() has no color settings to synthesize (see color_settings.hpp's
+    // makeBloomNeutralColorSettingsV1(), which requires a real caller-supplied content-revision
+    // digest); such a session is gated unsaveable-pending-color.
+    auto session = newSession(expectations, identitySource);
+    const auto plainSave = session.capturePlainSavePathIntent();
+    expectations.expect(session.captureSaveInput(plainSave).status() ==
+                            SessionSaveInputStatus::ColorSettingsUnavailable,
+                        "a createNew session has no color settings and is gated "
+                        "unsaveable-pending-color");
+
+    // A decoded session's captureSaveInput carries the exact captured fields.
+    auto decoded = decodedSessionWithPath(expectations, identitySource, "capture.bloom");
+    const auto decodedIntent = decoded.capturePlainSavePathIntent();
+    const auto decodedCaptured = decoded.captureSaveInput(decodedIntent);
+    expectations.expect(static_cast<bool>(decodedCaptured) && decodedCaptured.value() != nullptr &&
+                            decodedCaptured.value()->revision() == currentRevision(decoded) &&
+                            decodedCaptured.value()->roundTrip() == nullptr &&
+                            decodedCaptured.value()->schemaMinor() == 0 &&
+                            decodedCaptured.value()->retainedRequirements().empty() &&
+                            decodedCaptured.value()->displayPath().has_value() &&
+                            decodedCaptured.value()->displayPath()->value() ==
+                                std::filesystem::path("capture.bloom") &&
+                            decodedCaptured.value()->pathIntent() == decodedIntent &&
+                            decodedCaptured.value()->resultAcceptance() ==
+                                decoded.captureResultAcceptance(),
+                        "captureSaveInput carries the exact captured save-input fields");
+
+    // ReadOnly for preserved content.
+    auto preservedResult =
+        ProjectSession::createPreservedReadOnly(identitySource, "preserved-capture.bloom");
+    expectations.expect(static_cast<bool>(preservedResult),
+                        "the preserved-capture fixture installs");
+    if (preservedResult) {
+        auto preserved = std::move(preservedResult).takeSession();
+        expectations.expect(preserved.captureSaveInput({}).status() ==
+                                SessionSaveInputStatus::ReadOnly,
+                            "preserved-read-only content cannot capture save input");
+    }
+
+    // A present roundTrip with schemaMinor 0 cannot name the newer minor it was captured
+    // against: typed create failure.
+    auto rtProject = bloom::document::makeNewProject("RT invalid", "Main",
+                                                     bloom::core::RationalTime::fromInteger(5));
+    bloom::project::RoundTripState roundTrip;
+    const auto invalidRoundTrip = ProjectSession::createDecoded(
+        identitySource, {.project = std::move(rtProject.project),
+                         .colorSettings = neutralColorSettings(),
+                         .editability = DecodedProjectEditability::Editable,
+                         .displayPath = std::nullopt,
+                         .persistedAllocatorHighWater = std::nullopt,
+                         .roundTrip = std::move(roundTrip),
+                         .schemaMinor = 0});
+    expectations.expect(invalidRoundTrip.status() ==
+                            ProjectSessionCreateStatus::InvalidDecodedProject,
+                        "a present roundTrip with schemaMinor 0 is a typed create failure");
 }
 
 void testMoveAndLifetimeSafety(Expectations& expectations,
@@ -1101,6 +1179,7 @@ int main() {
         testDegradedEditableAuthorization(expectations, identitySource);
         testPreservedReadOnlyState(expectations, identitySource);
         testInvalidConstruction(expectations, identitySource);
+        testColorSettingsGatingAndRoundTripValidation(expectations, identitySource);
         testMoveAndLifetimeSafety(expectations, identitySource);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected fixture exception: " << error.what() << '\n';
