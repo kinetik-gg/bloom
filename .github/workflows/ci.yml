@@ -80,3 +80,75 @@ jobs:
             -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix"
           cmake --build "${{ runner.temp }}/bloom-consume"
           "${{ runner.temp }}/bloom-consume/bloom_consume_smoke"
+
+  linux-desktop:
+    name: Linux Qt desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CC: clang-22
+      CXX: clang++-22
+      # Widgets tests run without a display server; the offscreen platform keeps them headless.
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install LLVM 22 quality tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build \
+            libgl-dev libegl-dev libfontconfig1-dev libxkbcommon-dev
+          llvm_key=$(mktemp)
+          trap 'rm -f "$llvm_key"' EXIT
+          curl --fail --silent --show-error --location \
+            https://apt.llvm.org/llvm-snapshot.gpg.key \
+            --output "$llvm_key"
+          primary_fingerprint=$(gpg --show-keys --with-colons "$llvm_key" | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$primary_fingerprint" = 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421
+          gpg --dearmor < "$llvm_key" | \
+            sudo tee /usr/share/keyrings/llvm-snapshot.gpg >/dev/null
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main' | \
+            sudo tee /etc/apt/sources.list.d/llvm-22.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes clang-22 clang-format-22 clang-tidy-22
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/qt
+          key: bloom-qt-6.8.3-linux-gcc-64
+
+      - name: Install Qt 6.8
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: |
+          python3 -m pip install --user aqtinstall==3.2.1
+          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
+            --outputdir "${{ runner.temp }}/qt"
+
+      - name: Cache dependency archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-dependency-archives-b16246f617b2a136c78d73e5e2647c6f1de1313e46678062985bdcf1f40bb75d
+
+      - name: Build dependency superbuild prefix
+        run: |
+          cmake -S dependencies/superbuild -B "${{ runner.temp }}/bloom-superbuild" -G Ninja \
+            -DBLOOM_DEPENDENCY_DOWNLOAD_DIR="${{ runner.temp }}/bloom-dependency-downloads" \
+            -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix"
+          cmake --build "${{ runner.temp }}/bloom-superbuild"
+
+      - name: Configure desktop build
+        run: |
+          cmake --preset ci-linux-desktop \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/6.8.3/gcc_64"
+
+      - name: Build desktop with clang-tidy
+        run: cmake --build --preset ci-linux-desktop --parallel
+
+      - name: Test desktop build
+        run: ctest --preset ci-linux-desktop --output-on-failure
