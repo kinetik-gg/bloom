@@ -8,6 +8,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
@@ -124,8 +125,9 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     auto* application = QCoreApplication::instance();
     application->installEventFilter(&shutdown);
 
+    ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::MainWindow window(registry, session);
+    ui::MainWindow window(registry, session, projectHost);
     window.resize(913, 577);
     QTemporaryDir settingsDirectory;
     QSettings settings(settingsDirectory.filePath(QStringLiteral("shutdown-state.ini")),

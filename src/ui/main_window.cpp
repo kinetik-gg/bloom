@@ -3,6 +3,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -13,9 +14,13 @@
 #include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPalette>
 #include <QSettings>
+#include <QStatusBar>
 #include <QStringList>
+
+#include <filesystem>
 
 namespace {
 
@@ -27,8 +32,8 @@ constexpr auto windowGeometryKey = "window/main/geometry";
 namespace bloom::ui {
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
-                       QWidget* parent)
-    : QMainWindow(parent), compositionSession_(compositionSession) {
+                       ProjectHost& projectHost, QWidget* parent)
+    : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -39,6 +44,33 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     createWorkspaceActions();
     updateEditActions();
     applyFoundationTheme();
+
+    connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
+    connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
+    connect(&projectHost_, &ProjectHost::activityChanged, this, &MainWindow::updateFileActions);
+    connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateFileActions);
+    connect(&projectHost_, &ProjectHost::saveFinished, this,
+            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+                if (outcome == ProjectHostOperationOutcome::Published) {
+                    statusBar()->showMessage(message, 4000);
+                    return;
+                }
+                QMessageBox::warning(this, tr("Save Project"), message);
+            });
+    connect(&projectHost_, &ProjectHost::openFinished, this,
+            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+                if (outcome == ProjectHostOperationOutcome::Published) {
+                    statusBar()->showMessage(message, 4000);
+                    return;
+                }
+                if (outcome == ProjectHostOperationOutcome::Cancelled) {
+                    statusBar()->clearMessage();
+                    return;
+                }
+                QMessageBox::warning(this, tr("Open Project"), message);
+            });
+    updateFileActions();
+    updateWindowTitle();
 }
 
 WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
@@ -67,12 +99,24 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if (shutdownRequested_) {
         return;
     }
-    shutdownRequested_ = true;
-    emit shutdownRequested();
+    if (projectHost_.isBusy()) {
+        // v1 simplification (no progress/cancellation UI in scope): a close request while a
+        // project I/O operation or an unsaved-change decision is already in flight is silently
+        // ignored; the artist retries once it finishes.
+        return;
+    }
+    projectHost_.confirmUnsavedChanges([this] {
+        if (shutdownRequested_) {
+            return;
+        }
+        shutdownRequested_ = true;
+        emit shutdownRequested();
+    });
 }
 
 void MainWindow::createMenus() {
-    menuBar()->addMenu("&File");
+    auto* fileMenu = menuBar()->addMenu("&File");
+    createFileMenu(*fileMenu);
     auto* editMenu = menuBar()->addMenu("&Edit");
     undoAction_ = editMenu->addAction("Undo");
     undoAction_->setObjectName("undoAction");
@@ -100,6 +144,70 @@ void MainWindow::updateEditActions() {
     redoAction_->setEnabled(compositionSession_.canRedo());
     undoAction_->setText(undoLabel.isEmpty() ? tr("Undo") : tr("Undo %1").arg(undoLabel));
     redoAction_->setText(redoLabel.isEmpty() ? tr("Redo") : tr("Redo %1").arg(redoLabel));
+}
+
+void MainWindow::createFileMenu(QMenu& fileMenu) {
+    newProjectAction_ = fileMenu.addAction("&New");
+    newProjectAction_->setObjectName("newProjectAction");
+    newProjectAction_->setShortcut(QKeySequence::New);
+    newProjectAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(newProjectAction_, &QAction::triggered, &projectHost_, &ProjectHost::newProject);
+
+    openProjectAction_ = fileMenu.addAction("&Open…");
+    openProjectAction_->setObjectName("openProjectAction");
+    openProjectAction_->setShortcut(QKeySequence::Open);
+    openProjectAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(openProjectAction_, &QAction::triggered, &projectHost_, &ProjectHost::requestOpen);
+
+    saveProjectAction_ = fileMenu.addAction("&Save");
+    saveProjectAction_->setObjectName("saveProjectAction");
+    saveProjectAction_->setShortcut(QKeySequence::Save);
+    saveProjectAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(saveProjectAction_, &QAction::triggered, &projectHost_, &ProjectHost::beginSave);
+
+    saveProjectAsAction_ = fileMenu.addAction("Save &As…");
+    saveProjectAsAction_->setObjectName("saveProjectAsAction");
+    saveProjectAsAction_->setShortcut(QKeySequence::SaveAs);
+    saveProjectAsAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(saveProjectAsAction_, &QAction::triggered, &projectHost_, &ProjectHost::requestSaveAs);
+
+    fileMenu.addSeparator();
+}
+
+void MainWindow::updateFileActions() {
+    const bool busy = projectHost_.isBusy();
+    newProjectAction_->setEnabled(!busy);
+    openProjectAction_->setEnabled(!busy);
+    saveProjectAction_->setEnabled(!busy && projectHost_.canSave());
+    saveProjectAsAction_->setEnabled(!busy && projectHost_.canSave());
+
+    switch (projectHost_.activity()) {
+    case ProjectHostActivity::Saving:
+        statusBar()->showMessage(tr("Saving…"));
+        break;
+    case ProjectHostActivity::Opening:
+        statusBar()->showMessage(tr("Opening…"));
+        break;
+    case ProjectHostActivity::ResolvingUnsavedChanges:
+        statusBar()->showMessage(tr("Waiting for a decision about unsaved changes…"));
+        break;
+    case ProjectHostActivity::Idle:
+        // Never force QMainWindow::statusBar() to lazily create a status bar just to clear a
+        // message that was never shown (e.g. at initial construction, before any project I/O has
+        // ever run): only clear one that already exists.
+        if (auto* bar = findChild<QStatusBar*>()) {
+            bar->clearMessage();
+        }
+        break;
+    }
+}
+
+void MainWindow::updateWindowTitle() {
+    const auto path = projectHost_.displayPath();
+    const QString name =
+        path.has_value() ? QString::fromStdString(path->filename().string()) : tr("Untitled");
+    setWindowTitle(QStringLiteral("%1[*] — Bloom").arg(name));
+    setWindowModified(projectHost_.isDirty());
 }
 
 void MainWindow::createWorkspaceSwitcher() {

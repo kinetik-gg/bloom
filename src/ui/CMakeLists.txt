@@ -13,6 +13,7 @@ target_sources(
         jobs_editor.cpp
         main_window.cpp
         node_editor.cpp
+        project_host.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
         viewer_editor.cpp
@@ -31,6 +32,7 @@ target_sources(
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/main_window.hpp
             include/bloom/ui/node_editor.hpp
+            include/bloom/ui/project_host.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/viewer_editor.hpp
@@ -38,9 +40,25 @@ target_sources(
 )
 
 target_compile_features(bloom_ui PUBLIC cxx_std_20)
+# bloom_host/bloom_platform/bloom_project (task U1, issue #72): ProjectHost (project_host.hpp) is
+# the application's File-menu composition root over bloom::host::ProjectSession -- it directly
+# constructs a bloom::platform::StagedArtifactCoordinator and a
+# bloom::project::ProjectIoMemoryCoordinator/ProjectIoOperationMemory, and its public signatures
+# carry bloom::host types (ProjectSessionStateSnapshot, SessionSaveResult, SessionOpenResult, ...).
+# No repository_checks.cpp kAllowedModuleDependencies edit was needed: src/ui is exempt from that
+# checker's module-dependency scan entirely (see isNonUiSource()/kKnownModules -- "ui" is never a
+# tracked module), matching AGENTS.md's "the UI is the application composition surface".
 target_link_libraries(
     bloom_ui
-    PUBLIC bloom_commands bloom_render bloom_runtime bloom_runtime_evaluator Qt6::Widgets
+    PUBLIC
+        bloom_commands
+        bloom_host
+        bloom_platform
+        bloom_project
+        bloom_render
+        bloom_runtime
+        bloom_runtime_evaluator
+        Qt6::Widgets
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler)
 bloom_enable_warnings(bloom_ui)

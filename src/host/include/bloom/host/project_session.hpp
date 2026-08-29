@@ -665,6 +665,18 @@ class ProjectSession final {
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] ProjectSessionStateSnapshot stateSnapshot() const;
     [[nodiscard]] DecodedProjectSnapshotResult decodedSnapshot() const;
+
+    // Design decision 2 (task U1, issue #72): the narrow UI-only "projection binding" seam. A UI
+    // projection (src/ui's CompositionSession::rebind()) needs raw, non-owning access to this
+    // session's CURRENTLY installed live document/command-stack pair so it can atomically rebind
+    // its own internal pointers after New/Open replaces session content -- without owning, copying,
+    // or otherwise duplicating that state. Both pointers are null for preserved-read-only or
+    // otherwise non-decoded content (mirrors decodedSnapshot()'s own NoDecodedDocument case).
+    // Mutation of the document stays exclusively with execute()/undo()/redo(); this accessor exists
+    // only so a UI projection can observe and bind to the CURRENT objects, never to bypass the
+    // command stack.
+    [[nodiscard]] std::pair<document::Document*, commands::CommandStack*>
+    liveDocumentAndStack() noexcept;
     [[nodiscard]] SessionResultAcceptanceCapture captureResultAcceptance() const noexcept;
     [[nodiscard]] SessionPathIntentCapture capturePlainSavePathIntent() const noexcept;
     [[nodiscard]] OpenIntentAdmissionResult admitOpenIntent() noexcept;

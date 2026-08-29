@@ -11,6 +11,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class EditorRegistry;
+class ProjectHost;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
@@ -19,7 +20,7 @@ class MainWindow final : public QMainWindow {
 
   public:
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
-               QWidget* parent = nullptr);
+               ProjectHost& projectHost, QWidget* parent = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -33,17 +34,25 @@ class MainWindow final : public QMainWindow {
 
   private:
     void createMenus();
+    void createFileMenu(QMenu& fileMenu);
     void createWorkspaceSwitcher();
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void createWorkspaceActions();
     void resetCompositingLayout();
     void updateEditActions();
     void updateWorkspaceActions();
+    void updateFileActions();
+    void updateWindowTitle();
     void applyFoundationTheme();
 
     CompositionSession& compositionSession_;
+    ProjectHost& projectHost_;
     QMenu* windowMenu_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
+    QAction* newProjectAction_ = nullptr;
+    QAction* openProjectAction_ = nullptr;
+    QAction* saveProjectAction_ = nullptr;
+    QAction* saveProjectAsAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* splitLeftRightAction_ = nullptr;
