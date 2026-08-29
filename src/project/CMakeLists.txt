@@ -22,6 +22,7 @@ target_sources(
         project_io_memory.cpp
         project_io_memory_resource.cpp
         round_trip_state.cpp
+        save_archive.cpp
         strict_json_dom.cpp
         strict_json_preflight.cpp
         strict_json_preflight.hpp
@@ -47,6 +48,7 @@ target_sources(
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
             include/bloom/project/round_trip_state.hpp
+            include/bloom/project/save_archive.hpp
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
             include/bloom/project/zip_container.hpp
@@ -269,6 +271,19 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.zip_container_writer
         COMMAND bloom_project_zip_container_writer_test
+        LABELS unit project persistence security
+    )
+
+    add_executable(bloom_project_save_archive_test tests/save_archive_tests.cpp)
+    target_include_directories(
+        bloom_project_save_archive_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_save_archive_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_save_archive_test)
+    bloom_add_test(
+        NAME bloom.project.save_archive
+        COMMAND bloom_project_save_archive_test
         LABELS unit project persistence security
     )
 endif()
