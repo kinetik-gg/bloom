@@ -243,7 +243,11 @@ array.
 
 ## Canonical JSON Primitives
 
-The reader accepts insignificant RFC 8259 whitespace and any object-member order. The writer emits
+The reader accepts insignificant RFC 8259 whitespace; typed decode requires known members in
+their exact canonical order, consistent with the exact-order shape sections and with the
+rejection of non-canonical spellings elsewhere in this contract — a reordered known member is a
+typed decode error, not input to silent normalization, and the retained-unknown-member rules
+depend on this order significance. The writer emits
 every non-empty object and array over multiple lines, with one member or array element block per
 level, two-space indentation, a single space after `:`, and commas only after non-final members or
 elements. Empty containers are `{}` and `[]`. Output uses LF line endings, one final LF, and no
