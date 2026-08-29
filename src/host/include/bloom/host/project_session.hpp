@@ -5,11 +5,14 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/id.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/project/manifest_requirements.hpp>
+#include <bloom/project/round_trip_state.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::host {
 
@@ -289,9 +293,25 @@ struct NewProjectSessionRequest final {
 
 struct DecodedProjectSessionRequest final {
     document::Project project;
+    // REQUIRED for a decoded session: the canonical writer (project::CanonicalDocumentV1) takes
+    // color settings as explicit caller input by contract -- bloom::document::Project does not
+    // itself own color settings. Unlike a brand-new project (see createNew()), a decoded project
+    // always has a real opened value to carry forward, so no synthesized default is needed here.
+    document::ColorSettings colorSettings;
     DecodedProjectEditability editability = DecodedProjectEditability::Editable;
     std::optional<ProjectDisplayPath> displayPath;
     std::optional<document::IdAllocatorHighWater> persistedAllocatorHighWater;
+    // Present only for a same-major newer-minor (schema {1, minor > 0}) decoded document (see
+    // docs/architecture/project-format.md, "Versions, Migrations, And Preservation"); absent for
+    // an exact-{1,0} decoded document. project::RoundTripState is move-only, which makes this
+    // whole request move-only. A request with roundTrip present and schemaMinor == 0 is a typed
+    // create failure (see createDecoded()).
+    std::optional<project::RoundTripState> roundTrip = std::nullopt;
+    std::uint32_t schemaMinor = 0;
+    // Verbatim from the opened manifest's requirement set; empty for a new project using only
+    // foundation types and no extension-owned truth. The save chain recomputes node-type coverage
+    // at save time (project-format.md, "Manifest Shape"), so this is stored, never re-derived.
+    std::vector<project::ManifestRequirement> retainedRequirements{};
 };
 
 enum class ProjectSessionCreateStatus : std::uint8_t {
@@ -382,6 +402,111 @@ class [[nodiscard]] DecodedProjectSnapshotResult final {
     std::optional<document::Snapshot> snapshot_;
 };
 
+// Typed statuses for ProjectSession::captureSaveInput(). ColorSettingsUnavailable is not part of
+// docs/architecture/project-session.md's normative text; it exists because a session installed
+// through createNew() has no color settings and no qualified build-profile default currently
+// exists to synthesize one (see color_settings.hpp's makeBloomNeutralColorSettingsV1(), which
+// requires a real caller-supplied content-revision digest). Rather than inventing a default, a
+// createNew() session is gated unsaveable-pending-color until a decoded/installed session
+// supplies real color settings -- see the implementor's report for the full reasoning.
+enum class SessionSaveInputStatus : std::uint8_t {
+    Captured,
+    ReadOnly,
+    InvalidSession,
+    ColorSettingsUnavailable,
+    PathRequired,
+    StaleIntent,
+};
+
+// One immutable capture of everything a synchronous Save needs from a ProjectSession, per
+// docs/architecture/project-session.md's "Save Inputs And Intent". `roundTrip()` is a non-owning
+// view into the session's own installed project::RoundTripState (null when the session has none):
+// valid only while the originating ProjectSession stays alive and is not replaced with new
+// installed content, exactly as project::CanonicalDocumentV1::roundTrip documents for its own
+// pointee. The synchronous save flow in this slice satisfies that trivially (the session is a
+// caller-owned reference for the whole call); an asynchronous slice revisits this as the
+// contract's "immutable round-trip view" (project-session.md, "Save Inputs And Intent").
+class SessionSaveInput final {
+  public:
+    [[nodiscard]] const document::Snapshot& snapshot() const& noexcept { return snapshot_; }
+    const document::Snapshot& snapshot() const&& = delete;
+    [[nodiscard]] document::Revision revision() const noexcept { return snapshot_.revision(); }
+    [[nodiscard]] const document::ColorSettings& colorSettings() const& noexcept {
+        return colorSettings_;
+    }
+    const document::ColorSettings& colorSettings() const&& = delete;
+    // Non-owning; see the class comment above for the exact lifetime contract.
+    [[nodiscard]] const project::RoundTripState* roundTrip() const noexcept { return roundTrip_; }
+    [[nodiscard]] std::uint32_t schemaMinor() const noexcept { return schemaMinor_; }
+    [[nodiscard]] const std::vector<project::ManifestRequirement>&
+    retainedRequirements() const& noexcept {
+        return retainedRequirements_;
+    }
+    const std::vector<project::ManifestRequirement>& retainedRequirements() const&& = delete;
+    // Absent for a Save As replacement intent before its publication is accepted.
+    [[nodiscard]] const std::optional<ProjectDisplayPath>& displayPath() const& noexcept {
+        return displayPath_;
+    }
+    const std::optional<ProjectDisplayPath>& displayPath() const&& = delete;
+    [[nodiscard]] SessionPathIntentCapture pathIntent() const noexcept { return pathIntent_; }
+    [[nodiscard]] SessionResultAcceptanceCapture resultAcceptance() const noexcept {
+        return resultAcceptance_;
+    }
+
+    friend class ProjectSession;
+
+  private:
+    SessionSaveInput(document::Snapshot snapshot, document::ColorSettings colorSettings,
+                     const project::RoundTripState* roundTrip, std::uint32_t schemaMinor,
+                     std::vector<project::ManifestRequirement> retainedRequirements,
+                     std::optional<ProjectDisplayPath> displayPath,
+                     SessionPathIntentCapture pathIntent,
+                     SessionResultAcceptanceCapture resultAcceptance) noexcept
+        : snapshot_(std::move(snapshot)), colorSettings_(std::move(colorSettings)),
+          roundTrip_(roundTrip), schemaMinor_(schemaMinor),
+          retainedRequirements_(std::move(retainedRequirements)),
+          displayPath_(std::move(displayPath)), pathIntent_(pathIntent),
+          resultAcceptance_(resultAcceptance) {}
+
+    document::Snapshot snapshot_;
+    document::ColorSettings colorSettings_;
+    const project::RoundTripState* roundTrip_ = nullptr;
+    std::uint32_t schemaMinor_ = 0;
+    std::vector<project::ManifestRequirement> retainedRequirements_;
+    std::optional<ProjectDisplayPath> displayPath_;
+    SessionPathIntentCapture pathIntent_;
+    SessionResultAcceptanceCapture resultAcceptance_;
+};
+
+class [[nodiscard]] SessionSaveInputResult final {
+  public:
+    SessionSaveInputResult(SessionSaveInputResult&&) noexcept = default;
+    SessionSaveInputResult& operator=(SessionSaveInputResult&&) noexcept = default;
+    SessionSaveInputResult(const SessionSaveInputResult&) = delete;
+    SessionSaveInputResult& operator=(const SessionSaveInputResult&) = delete;
+    ~SessionSaveInputResult() = default;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status_ == SessionSaveInputStatus::Captured && input_.has_value();
+    }
+    [[nodiscard]] SessionSaveInputStatus status() const noexcept { return status_; }
+    [[nodiscard]] const SessionSaveInput* value() const& noexcept {
+        return input_.has_value() ? &*input_ : nullptr;
+    }
+    [[nodiscard]] const SessionSaveInput* value() const&& = delete;
+
+  private:
+    friend class ProjectSession;
+
+    explicit SessionSaveInputResult(const SessionSaveInputStatus status) noexcept
+        : status_(status) {}
+    explicit SessionSaveInputResult(SessionSaveInput input) noexcept
+        : status_(SessionSaveInputStatus::Captured), input_(std::move(input)) {}
+
+    SessionSaveInputStatus status_ = SessionSaveInputStatus::InvalidSession;
+    std::optional<SessionSaveInput> input_;
+};
+
 class ProjectSessionCreateResult;
 
 class ProjectSession final {
@@ -426,6 +551,12 @@ class ProjectSession final {
                     document::Revision publishedRevision,
                     std::optional<ProjectDisplayPath> publishedPath = std::nullopt);
 
+    // Captures everything a synchronous Save needs (see docs/architecture/project-session.md,
+    // "Save Inputs And Intent") without mutating the session. `intent` is normally either
+    // capturePlainSavePathIntent() or an advancePathIntentForSaveAs() capture. See
+    // SessionSaveInput's class comment for the returned round-trip pointer's lifetime contract.
+    [[nodiscard]] SessionSaveInputResult captureSaveInput(SessionPathIntentCapture intent) const;
+
   private:
     friend class ProjectSessionCreateResult;
     friend class ProjectSessionTestAccess;
@@ -433,7 +564,10 @@ class ProjectSession final {
     ProjectSession(ProjectSessionId projectSessionId, std::unique_ptr<document::Document> document,
                    std::unique_ptr<commands::CommandStack> commandStack,
                    DecodedProjectEditability editability, document::Revision cleanRevision,
-                   std::optional<ProjectDisplayPath> displayPath) noexcept;
+                   std::optional<ProjectDisplayPath> displayPath,
+                   std::optional<document::ColorSettings> colorSettings,
+                   std::optional<project::RoundTripState> roundTrip, std::uint32_t schemaMinor,
+                   std::vector<project::ManifestRequirement> retainedRequirements) noexcept;
     ProjectSession(ProjectSessionId projectSessionId,
                    ProjectDisplayPath preservedDisplayPath) noexcept;
 
@@ -456,6 +590,12 @@ class ProjectSession final {
     std::optional<DecodedProjectEditability> editability_;
     std::optional<ProjectDisplayPath> displayPath_;
     std::optional<document::Revision> cleanRevision_;
+    // Absent for a createNew() session: see SessionSaveInputStatus::ColorSettingsUnavailable's
+    // comment above. Always present for a createDecoded() session (required by that request).
+    std::optional<document::ColorSettings> colorSettings_;
+    std::optional<project::RoundTripState> roundTrip_;
+    std::uint32_t schemaMinor_ = 0;
+    std::vector<project::ManifestRequirement> retainedRequirements_;
     std::unique_ptr<document::Document> document_;
     std::unique_ptr<commands::CommandStack> commandStack_;
     bool valid_ = false;
