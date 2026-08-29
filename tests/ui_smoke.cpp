@@ -163,7 +163,10 @@ int testSplitCloseAndActivation(const EditorRegistry& registry) {
     dynamicComposite->setParent(liveEditor);
     QFocusEvent dynamicFocusEvent(QEvent::FocusIn, Qt::OtherFocusReason);
     QApplication::sendEvent(dynamicChild, &dynamicFocusEvent);
-    if (!require(host.activeArea() == viewer, 59)) {
+    const bool activeAreaAfterDynamicFocus = host.activeArea() == viewer;
+    delete dynamicChild;
+    delete dynamicComposite;
+    if (!require(activeAreaAfterDynamicFocus, 59)) {
         return 59;
     }
 
