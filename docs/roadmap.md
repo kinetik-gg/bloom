@@ -65,9 +65,14 @@ through Timeline, Nodes, Properties, command execution, and undo/redo. Bloom now
 composition snapshots, evaluates deterministic reference CPU pixels asynchronously, publishes only
 the current revision/generation, and exposes the work through swappable Viewer and Jobs editors.
 Batch 4's durable curves, authoring commands, exact sampler, CPU evaluator integration, exact
-session time, and one-active/one-newest preview gate are implemented. The 16 ms pointer cadence,
-timeline key projection, direct manipulation, and complete project persistence remain the next
-implementation slices.
+session time, and one-active/one-newest preview gate are implemented. Project persistence is now
+complete through the deterministic `.bloom` save/open pipeline: canonical encode/decode with
+round-trip preservation, the constrained container both directions, staged verified publication,
+session save/open with asynchronous execution, new-project Bloom Neutral color, a read-only
+surface with byte-exact Save Copy for preserved projects, and a File menu driving it all — gated
+by both required Linux CI jobs (native quality and Qt desktop). The 16 ms pointer cadence,
+timeline key projection, and direct manipulation remain the next implementation slices; from the
+format contract, migration fixtures and cross-platform publication parity remain future work.
 
 Linux native/core validation is the current automated merge gate. It does not establish desktop or
 platform parity. Before a feature is called cross-platform complete, its relevant shared, desktop,
