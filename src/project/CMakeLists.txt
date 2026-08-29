@@ -71,6 +71,14 @@ bloom_enable_warnings(bloom_project)
 if(BUILD_TESTING)
     include(BloomTesting)
     find_package(Threads REQUIRED)
+    # Several test targets below link ZLIB::ZLIB for deflate/CRC fixtures. In qualified mode the
+    # restricted libzip resolution already materializes that imported target via module-mode
+    # FindZLIB, but in developer-system mode a host libzip package config may satisfy its zlib
+    # dependency without ever creating it, and nothing else does -- the guard keeps both modes
+    # configuring while never re-resolving a target the qualified path already pinned.
+    if(NOT TARGET ZLIB::ZLIB)
+        find_package(ZLIB REQUIRED)
+    endif()
     add_executable(bloom_project_canonical_json_string_test tests/canonical_json_string_tests.cpp)
     target_include_directories(
         bloom_project_canonical_json_string_test
