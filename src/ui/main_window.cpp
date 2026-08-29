@@ -1,5 +1,6 @@
 #include <bloom/ui/main_window.hpp>
 
+#include <bloom/host/project_session.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
@@ -12,13 +13,16 @@
 #include <QCloseEvent>
 #include <QColor>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPalette>
 #include <QSettings>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
+#include <QVBoxLayout>
 
 #include <filesystem>
 
@@ -41,6 +45,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     createMenus();
     createWorkspaceSwitcher();
     createEditorLayout(editorRegistry);
+    createCentralStack();
     createWorkspaceActions();
     updateEditActions();
     applyFoundationTheme();
@@ -49,6 +54,11 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::activityChanged, this, &MainWindow::updateFileActions);
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateFileActions);
+    // Presentation-level read-only surface (task R1, issue #74): switch which central-stack page
+    // is authoritative every time ProjectHost replaces its installed content. Frozen design
+    // decision 1's wiring point -- "Switching happens on sessionReplaced() by asking the host's
+    // stateSnapshot()".
+    connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateContentSurface);
     connect(&projectHost_, &ProjectHost::saveFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 if (outcome == ProjectHostOperationOutcome::Published) {
@@ -71,9 +81,14 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
             });
     updateFileActions();
     updateWindowTitle();
+    updateContentSurface();
 }
 
 WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
+
+bool MainWindow::isShowingReadOnlyPlaceholder() const noexcept {
+    return centralStack_ != nullptr && centralStack_->currentWidget() == readOnlyPlaceholderPage_;
+}
 
 WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& settings) {
     const auto geometry = settings.value(windowGeometryKey).toByteArray();
@@ -210,6 +225,31 @@ void MainWindow::updateWindowTitle() {
     setWindowModified(projectHost_.isDirty());
 }
 
+void MainWindow::updateContentSurface() {
+    const auto snapshot = projectHost_.stateSnapshot();
+    const bool readOnly =
+        snapshot.contentKind == host::ProjectSessionContentKind::PreservedReadOnly;
+    if (!readOnly) {
+        centralStack_->setCurrentWidget(workspaceHost_);
+        return;
+    }
+
+    const auto path = projectHost_.displayPath();
+    const QString fileName =
+        path.has_value() ? QString::fromStdString(path->filename().string()) : tr("Untitled");
+    readOnlyPlaceholderFileNameLabel_->setText(fileName);
+    // Honest reason + options (frozen design decision 1): this file needs capabilities this Bloom
+    // cannot edit safely; it is opened read-only; editing and saving are disabled; a byte-exact
+    // Save Copy will be offered in a future update. No apology, no promise beyond what is true
+    // today.
+    readOnlyPlaceholderBodyLabel_->setText(
+        tr("“%1” uses capabilities this version of Bloom cannot edit safely, so it was "
+           "opened read-only. Editing and saving are disabled. A future update will offer Save "
+           "Copy to create a byte-exact copy of this file.")
+            .arg(fileName));
+    centralStack_->setCurrentWidget(readOnlyPlaceholderPage_);
+}
+
 void MainWindow::createWorkspaceSwitcher() {
     menuBar()->addSeparator();
 
@@ -228,9 +268,47 @@ void MainWindow::createWorkspaceSwitcher() {
 
 void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
     workspaceHost_ = new WorkspaceHost(editorRegistry, this);
-    setCentralWidget(workspaceHost_);
-
     resetCompositingLayout();
+}
+
+void MainWindow::createCentralStack() {
+    // The read-only placeholder (task R1, issue #74) is a QStackedWidget wrapping the existing
+    // central widget rather than any CompositionSession/ProjectHost surgery: WorkspaceHost is
+    // already MainWindow's one central widget with no panel-replacement seam of its own at this
+    // level, so a two-page stack is the smallest mechanism that lets MainWindow pick which page is
+    // authoritative for the current ProjectHost content kind while leaving WorkspaceHost, its
+    // layout, and CompositionSession completely untouched.
+    centralStack_ = new QStackedWidget(this);
+    centralStack_->addWidget(workspaceHost_);
+    readOnlyPlaceholderPage_ = createReadOnlyPlaceholderPage();
+    centralStack_->addWidget(readOnlyPlaceholderPage_);
+    centralStack_->setCurrentWidget(workspaceHost_);
+    setCentralWidget(centralStack_);
+}
+
+QWidget* MainWindow::createReadOnlyPlaceholderPage() {
+    auto* page = new QWidget(this);
+    page->setObjectName("readOnlyPlaceholderPage");
+
+    auto* heading = new QLabel(tr("Read-only project"), page);
+    heading->setObjectName("readOnlyPlaceholderHeading");
+
+    readOnlyPlaceholderFileNameLabel_ = new QLabel(page);
+    readOnlyPlaceholderFileNameLabel_->setObjectName("readOnlyPlaceholderFileName");
+
+    readOnlyPlaceholderBodyLabel_ = new QLabel(page);
+    readOnlyPlaceholderBodyLabel_->setObjectName("readOnlyPlaceholderBody");
+    readOnlyPlaceholderBodyLabel_->setWordWrap(true);
+    readOnlyPlaceholderBodyLabel_->setMaximumWidth(520);
+
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(48, 48, 48, 48);
+    layout->addStretch(1);
+    layout->addWidget(heading);
+    layout->addWidget(readOnlyPlaceholderFileNameLabel_);
+    layout->addWidget(readOnlyPlaceholderBodyLabel_);
+    layout->addStretch(2);
+    return page;
 }
 
 void MainWindow::resetCompositingLayout() {
@@ -332,6 +410,21 @@ void MainWindow::applyFoundationTheme() {
         }
         QLabel#editorPlaceholder {
             color: #777777;
+        }
+        QWidget#readOnlyPlaceholderPage {
+            background: #111111;
+        }
+        QLabel#readOnlyPlaceholderHeading {
+            color: #d7d7d7;
+            font-size: 20px;
+            font-weight: 600;
+        }
+        QLabel#readOnlyPlaceholderFileName {
+            color: #178ee6;
+            font-weight: 600;
+        }
+        QLabel#readOnlyPlaceholderBody {
+            color: #a0a0a0;
         }
         QComboBox {
             background: #1b1b1b;

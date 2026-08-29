@@ -4,8 +4,10 @@
 
 class QAction;
 class QCloseEvent;
+class QLabel;
 class QMenu;
 class QSettings;
+class QStackedWidget;
 
 namespace bloom::ui {
 
@@ -25,6 +27,12 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
     void saveApplicationState(QSettings& settings) const;
+    // Presentation-level read-only surface (task R1, issue #74): true exactly when the central
+    // QStackedWidget's current page is the read-only placeholder instead of the editor workspace
+    // -- i.e. the live ProjectHost content kind is PreservedReadOnly. Exposed so an offscreen test
+    // can assert the switch without depending on QWidget::isVisible(), which only reports
+    // correctly once the top-level window itself has been shown.
+    [[nodiscard]] bool isShowingReadOnlyPlaceholder() const noexcept;
 
   signals:
     void shutdownRequested();
@@ -37,18 +45,25 @@ class MainWindow final : public QMainWindow {
     void createFileMenu(QMenu& fileMenu);
     void createWorkspaceSwitcher();
     void createEditorLayout(const EditorRegistry& editorRegistry);
+    void createCentralStack();
+    QWidget* createReadOnlyPlaceholderPage();
     void createWorkspaceActions();
     void resetCompositingLayout();
     void updateEditActions();
     void updateWorkspaceActions();
     void updateFileActions();
     void updateWindowTitle();
+    void updateContentSurface();
     void applyFoundationTheme();
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
     QMenu* windowMenu_ = nullptr;
+    QStackedWidget* centralStack_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
+    QWidget* readOnlyPlaceholderPage_ = nullptr;
+    QLabel* readOnlyPlaceholderFileNameLabel_ = nullptr;
+    QLabel* readOnlyPlaceholderBodyLabel_ = nullptr;
     QAction* newProjectAction_ = nullptr;
     QAction* openProjectAction_ = nullptr;
     QAction* saveProjectAction_ = nullptr;
