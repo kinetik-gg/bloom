@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/host/copy_async_io.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/session_async_io.hpp>
@@ -15,12 +16,14 @@
 #include <QString>
 #include <QTimer>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace bloom::commands {
 class CommandStack;
@@ -104,6 +107,12 @@ class ProjectHost final : public QObject {
     // Not noexcept: each reads bloom::host::ProjectSession::stateSnapshot(), which copies
     // std::string undo/redo labels and is not itself noexcept.
     [[nodiscard]] bool canSave() const;
+    // Preserved-read-only content with retained original archive bytes, not busy (task SC1, issue
+    // #77). Save Copy is the only operation available on preserved-read-only content
+    // (docs/architecture/project-session.md: "A preserved-read-only project cannot run native Save
+    // or Save As; Save Copy stages, validates, and atomically publishes an asynchronous
+    // byte-for-byte copy").
+    [[nodiscard]] bool canSaveCopy() const;
     [[nodiscard]] bool isDirty() const;
     [[nodiscard]] bool isBusy() const noexcept;
     [[nodiscard]] ProjectHostActivity activity() const noexcept;
@@ -148,10 +157,22 @@ class ProjectHost final : public QObject {
     // dialog seam internally (session.capturePlainSavePathIntent()'s own PathRequired backs this --
     // asking the host here instead of duplicating the check in MainWindow).
     void beginSave();
+    // The "Save a Copy…" menu action's entry point (task SC1, issue #77): enabled only for
+    // preserved-read-only content with retained bytes (see canSaveCopy()); reuses the SAME Save As
+    // dialog provider seam (setSaveAsPathProvider()) rather than adding a third one. Drives
+    // beginCopyPublication() through the single-in-flight variant and poll loop, exactly as
+    // beginSave()/beginSaveAs() drive Save/Open. Never touches session state: Save Copy stages,
+    // validates, and atomically publishes an asynchronous byte-for-byte copy and never claims to
+    // rewrite or migrate the document (docs/architecture/project-session.md).
+    void requestSaveCopy();
     // Lower-level primitives (decision 1's literal list): begin the async op against an
     // already-known path. Public so tests can drive them directly, bypassing the dialog seams.
     void beginOpen(const std::filesystem::path& path);
     void beginSaveAs(std::filesystem::path path);
+    // Lower-level primitive mirroring beginOpen()/beginSaveAs(): begins Save Copy against an
+    // already-known target path, bypassing the Save As dialog seam. Public so tests can drive it
+    // directly.
+    void beginSaveCopy(std::filesystem::path path);
 
   signals:
     // Fires exactly once per successful New replace or successful Open install.
@@ -161,6 +182,10 @@ class ProjectHost final : public QObject {
     // Typed outcome + a display-ready message (never collapses Superseded/failed into success).
     void saveFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
     void openFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
+    // Honest copy outcome (task SC1, issue #77): published / superseded / conflict / failed; the
+    // success message names the target file. Never fired for a state that also changes
+    // dirtyStateChanged()/sessionReplaced() -- Save Copy never touches session state.
+    void copyFinished(bloom::ui::ProjectHostOperationOutcome outcome, QString message);
 
   private:
     void poll();
@@ -168,9 +193,12 @@ class ProjectHost final : public QObject {
     void setActivity(ProjectHostActivity activity);
     void replaceWithNewProject();
     void promptAndBeginSaveAs();
+    void promptAndBeginSaveCopy();
     void startSave(std::filesystem::path targetPath, host::SessionPathIntentCapture intent);
+    void startSaveCopy(std::filesystem::path targetPath);
     void handleSaveResult(host::SessionSaveResult result);
     void handleOpenResult(host::SessionOpenResult result);
+    void handleCopyResult(host::CopyPublicationResult result);
     [[nodiscard]] std::optional<project::ProjectIoOperationMemory> makeOperation() const;
     [[nodiscard]] bool hasDirtyDecodedContent() const;
 
@@ -181,7 +209,28 @@ class ProjectHost final : public QObject {
     std::optional<project::ProjectIoMemoryCoordinator> memoryCoordinator_;
     std::optional<host::ProjectSession> session_;
 
-    std::variant<std::monostate, host::AsyncSessionSave, host::AsyncSessionOpen> inFlight_;
+    // The application-owned bounded original archive for the currently installed preserved-read-
+    // only content (task SC1, issue #77): beginOpen() already owns the bytes it read for the
+    // Installed+PreservedReadOnly path, so this retains them instead of dropping them, rather than
+    // re-reading the source file on every Save a Copy. Plain std::vector, deliberately NOT
+    // PMR-charged through ProjectIoOperationMemory: the resident-budget contract covers the memory
+    // an in-flight Project I/O *operation* charges against its own bounded budget, not this
+    // longer-lived, application-owned retention -- which is itself bounded (at most one archive, no
+    // larger than the archive size limit) independently of any operation's budget. Cleared whenever
+    // installed content is replaced by anything other than a matching preserved-read-only open
+    // (New, a decoded/editable Open, or a failed-to-retain preserved-read-only open).
+    std::vector<std::byte> retainedArchiveBytes_;
+    // Holds the bytes read for an in-flight Open until handleOpenResult() knows whether to promote
+    // them into retainedArchiveBytes_ (Installed + PreservedReadOnly) or drop them (any other
+    // outcome); see beginOpen()'s own comment.
+    std::vector<std::byte> pendingOpenArchiveBytes_;
+    // The target path an in-flight Save Copy is publishing to, retained only to name the file in
+    // copyFinished()'s success message once the async operation completes.
+    std::filesystem::path pendingCopyTargetPath_;
+
+    std::variant<std::monostate, host::AsyncSessionSave, host::AsyncSessionOpen,
+                 host::AsyncCopyPublication>
+        inFlight_;
     QTimer pollTimer_;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
 

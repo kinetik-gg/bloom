@@ -79,6 +79,18 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                 }
                 QMessageBox::warning(this, tr("Open Project"), message);
             });
+    connect(&projectHost_, &ProjectHost::copyFinished, this,
+            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+                if (outcome == ProjectHostOperationOutcome::Published) {
+                    statusBar()->showMessage(message, 4000);
+                    return;
+                }
+                if (outcome == ProjectHostOperationOutcome::Cancelled) {
+                    statusBar()->clearMessage();
+                    return;
+                }
+                QMessageBox::warning(this, tr("Save a Copy"), message);
+            });
     updateFileActions();
     updateWindowTitle();
     updateContentSurface();
@@ -186,6 +198,12 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     saveProjectAsAction_->setShortcutContext(Qt::WindowShortcut);
     connect(saveProjectAsAction_, &QAction::triggered, &projectHost_, &ProjectHost::requestSaveAs);
 
+    // "Save a Copy…" (task SC1, issue #77): no default shortcut, placed right after Save As.
+    saveProjectCopyAction_ = fileMenu.addAction("Save a &Copy…");
+    saveProjectCopyAction_->setObjectName("saveProjectCopyAction");
+    connect(saveProjectCopyAction_, &QAction::triggered, &projectHost_,
+            &ProjectHost::requestSaveCopy);
+
     fileMenu.addSeparator();
 }
 
@@ -195,6 +213,7 @@ void MainWindow::updateFileActions() {
     openProjectAction_->setEnabled(!busy);
     saveProjectAction_->setEnabled(!busy && projectHost_.canSave());
     saveProjectAsAction_->setEnabled(!busy && projectHost_.canSave());
+    saveProjectCopyAction_->setEnabled(!busy && projectHost_.canSaveCopy());
 
     switch (projectHost_.activity()) {
     case ProjectHostActivity::Saving:
@@ -238,14 +257,15 @@ void MainWindow::updateContentSurface() {
     const QString fileName =
         path.has_value() ? QString::fromStdString(path->filename().string()) : tr("Untitled");
     readOnlyPlaceholderFileNameLabel_->setText(fileName);
-    // Honest reason + options (frozen design decision 1): this file needs capabilities this Bloom
-    // cannot edit safely; it is opened read-only; editing and saving are disabled; a byte-exact
-    // Save Copy will be offered in a future update. No apology, no promise beyond what is true
+    // Honest reason + options (frozen design decision 1, updated by task SC1/issue #77 now that
+    // Save a Copy is live rather than promised): this file needs capabilities this Bloom cannot
+    // edit safely; it is opened read-only; editing and saving are disabled; File → Save a Copy
+    // creates a byte-exact copy of this file today. No apology, no promise beyond what is true
     // today.
     readOnlyPlaceholderBodyLabel_->setText(
         tr("“%1” uses capabilities this version of Bloom cannot edit safely, so it was "
-           "opened read-only. Editing and saving are disabled. A future update will offer Save "
-           "Copy to create a byte-exact copy of this file.")
+           "opened read-only. Editing and saving are disabled. Use File → Save a Copy to create "
+           "a byte-exact copy of this file.")
             .arg(fileName));
     centralStack_->setCurrentWidget(readOnlyPlaceholderPage_);
 }

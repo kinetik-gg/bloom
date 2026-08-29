@@ -26,6 +26,7 @@ target_sources(
         round_trip_state.cpp
         save_archive.cpp
         save_archive_internal.hpp
+        staged_copy.cpp
         staged_save.cpp
         strict_json_dom.cpp
         strict_json_preflight.cpp
@@ -54,6 +55,7 @@ target_sources(
             include/bloom/project/project_io_memory_resource.hpp
             include/bloom/project/round_trip_state.hpp
             include/bloom/project/save_archive.hpp
+            include/bloom/project/staged_copy.hpp
             include/bloom/project/staged_save.hpp
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
@@ -326,6 +328,17 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.project.staged_save
             COMMAND bloom_project_staged_save_test
+            LABELS unit project persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.project.staged_save is gated: this exercises a real
+        # platform::StagedArtifactCoordinator over per-test temporary directories.
+        add_executable(bloom_project_staged_copy_test tests/staged_copy_tests.cpp)
+        target_link_libraries(bloom_project_staged_copy_test PRIVATE bloom_project)
+        bloom_enable_warnings(bloom_project_staged_copy_test)
+        bloom_add_test(
+            NAME bloom.project.staged_copy
+            COMMAND bloom_project_staged_copy_test
             LABELS unit project persistence security
         )
     endif()

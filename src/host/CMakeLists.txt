@@ -3,6 +3,8 @@ add_library(bloom_host STATIC)
 target_sources(
     bloom_host
     PRIVATE
+        copy_async_io.cpp
+        copy_publication.cpp
         project_session.cpp
         publication_coordinator.cpp
         save_publication.cpp
@@ -14,6 +16,8 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/host/bloom_neutral_profile.hpp
+            include/bloom/host/copy_async_io.hpp
+            include/bloom/host/copy_publication.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
@@ -130,6 +134,29 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.host.session-async-io
             COMMAND bloom_host_session_async_io_test
+            LABELS unit host persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.host.save-publication is gated: executeCopyPublication()
+        # drives the same real platform::StagedArtifactCoordinator.
+        add_executable(bloom_host_copy_publication_test tests/copy_publication_tests.cpp)
+        target_link_libraries(bloom_host_copy_publication_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_copy_publication_test)
+        bloom_add_test(
+            NAME bloom.host.copy-publication
+            COMMAND bloom_host_copy_publication_test
+            LABELS unit host persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.host.session-async-io is gated: drives
+        # beginCopyPublication() against the same real platform::StagedArtifactCoordinator over a
+        # real bloom::runtime::TaskScheduler with a real TaskExecutor::BlockingIo worker.
+        add_executable(bloom_host_copy_async_io_test tests/copy_async_io_tests.cpp)
+        target_link_libraries(bloom_host_copy_async_io_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_copy_async_io_test)
+        bloom_add_test(
+            NAME bloom.host.copy-async-io
+            COMMAND bloom_host_copy_async_io_test
             LABELS unit host persistence security
         )
     endif()

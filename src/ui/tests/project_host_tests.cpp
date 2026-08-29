@@ -146,6 +146,15 @@ void connectOpenCapture(ProjectHost& host, OutcomeCapture& capture) {
                      });
 }
 
+void connectCopyCapture(ProjectHost& host, OutcomeCapture& capture) {
+    QObject::connect(&host, &ProjectHost::copyFinished,
+                     [&capture](const ProjectHostOperationOutcome outcome, const QString& message) {
+                         ++capture.count;
+                         capture.outcome = outcome;
+                         capture.message = message;
+                     });
+}
+
 // ---------------------------------------------------------------------------------------------
 // New-project construction: valid session, clean, not dirty.
 // ---------------------------------------------------------------------------------------------
@@ -453,6 +462,41 @@ void testPathlessSaveRoutesToSaveAsDecision(Expectations& expectations) {
                         "pathless save: the display path is now the chosen Save As target");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Save a Copy is unavailable on ordinary editable content (task SC1, issue #77): canSaveCopy() is
+// false for a fresh new project, and requestSaveCopy() refuses without ever invoking the (shared)
+// Save As dialog seam or touching session state.
+// ---------------------------------------------------------------------------------------------
+
+void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    OutcomeCapture copyCapture;
+    connectCopyCapture(host, copyCapture);
+
+    expectations.expect(!host.canSaveCopy(),
+                        "Save Copy unavailable: a fresh editable project cannot Save a Copy");
+
+    bool dialogInvoked = false;
+    host.setSaveAsPathProvider([&] {
+        dialogInvoked = true;
+        return std::optional<std::filesystem::path>(std::filesystem::path("/tmp/unused.bloom"));
+    });
+
+    const auto before = host.stateSnapshot();
+    host.requestSaveCopy();
+    expectations.expect(copyCapture.count == 1 &&
+                            copyCapture.outcome == ProjectHostOperationOutcome::Refused,
+                        "Save Copy unavailable: requestSaveCopy() reports a typed Refused outcome");
+    expectations.expect(!dialogInvoked,
+                        "Save Copy unavailable: the dialog seam is never invoked for content that "
+                        "cannot Save a Copy");
+    const auto after = host.stateSnapshot();
+    expectations.expect(after.contentKind == before.contentKind && after.dirty == before.dirty,
+                        "Save Copy unavailable: session state is completely untouched by the "
+                        "refusal");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -467,5 +511,6 @@ int main(int argc, char** argv) {
     testUnsavedChangeDecisionSeamForNew(expectations);
     testUnsavedChangeDecisionSeamForOpen(expectations);
     testPathlessSaveRoutesToSaveAsDecision(expectations);
+    testSaveCopyUnavailableOnEditableContent(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
