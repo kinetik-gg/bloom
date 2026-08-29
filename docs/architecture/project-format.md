@@ -5,13 +5,15 @@ Status: accepted
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
 and schema checks, the normative document `1.0` schema artifact and checks, manifest requirement
-validation, durable allocator high-water state, opaque extension envelopes, and the Linux
-staged-artifact close/reopen verification foundation, and the version 1 canonical document
-writer over immutable snapshots with explicitly supplied color settings are implemented. Complete
-JSON parsing, ZIP, migration, unknown-member overlay, format-specific semantic verification, and
-cross-platform publication parity remain pending.
+validation, durable allocator high-water state, opaque extension envelopes, the Linux
+staged-artifact close/reopen verification foundation, the version 1 canonical document writer
+over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
+into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
+newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
+container reader and writer are implemented. Migration, format-specific semantic verification of
+the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-08-25
+Updated: 2026-08-29
 
 ## Purpose And Ownership
 
