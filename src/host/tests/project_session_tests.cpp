@@ -4,6 +4,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/bloom_neutral_profile.hpp>
 #include <bloom/project/round_trip_state.hpp>
 
 #include <array>
@@ -1037,15 +1038,29 @@ void testInvalidConstruction(Expectations& expectations,
 
 void testColorSettingsGatingAndRoundTripValidation(Expectations& expectations,
                                                    ProjectSessionIdentitySource& identitySource) {
-    // createNew() has no color settings to synthesize (see color_settings.hpp's
-    // makeBloomNeutralColorSettingsV1(), which requires a real caller-supplied content-revision
-    // digest); such a session is gated unsaveable-pending-color.
+    // createNew() installs the immutable Bloom Neutral v1 built-in color settings
+    // unconditionally (issue #60), so a createNew() session's captureSaveInput() never reaches
+    // ColorSettingsUnavailable. A pathless session still needs Save-As path authority to
+    // otherwise succeed (PathRequired is an orthogonal gate), so advancePathIntentForSaveAs()
+    // supplies that authority here to observe an actual Captured result end to end.
     auto session = newSession(expectations, identitySource);
-    const auto plainSave = session.capturePlainSavePathIntent();
-    expectations.expect(session.captureSaveInput(plainSave).status() ==
-                            SessionSaveInputStatus::ColorSettingsUnavailable,
-                        "a createNew session has no color settings and is gated "
-                        "unsaveable-pending-color");
+    const auto saveAs = session.advancePathIntentForSaveAs();
+    expectations.expect(static_cast<bool>(saveAs),
+                        "a createNew session can advance Save-As path authority");
+    const auto captured = session.captureSaveInput(saveAs.capture());
+    expectations.expect(captured.status() == SessionSaveInputStatus::Captured &&
+                            static_cast<bool>(captured) && captured.value() != nullptr,
+                        "a createNew session's captureSaveInput succeeds -- never "
+                        "ColorSettingsUnavailable");
+    if (captured.value() != nullptr) {
+        const auto expectedColorSettings = bloom::document::makeBloomNeutralColorSettingsV1(
+            bloom::host::kBloomNeutralV1ConfigDigest);
+        expectations.expect(captured.value()->colorSettings() == expectedColorSettings,
+                            "a createNew session installs exactly "
+                            "makeBloomNeutralColorSettingsV1(kBloomNeutralV1ConfigDigest)");
+        expectations.expect(captured.value()->colorSettings().validate().ok(),
+                            "a createNew session's installed ColorSettings passes validate()");
+    }
 
     // A decoded session's captureSaveInput carries the exact captured fields.
     auto decoded = decodedSessionWithPath(expectations, identitySource, "capture.bloom");

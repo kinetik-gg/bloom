@@ -1,6 +1,7 @@
 #include <bloom/host/project_session.hpp>
 
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/bloom_neutral_profile.hpp>
 
 #include <exception>
 #include <limits>
@@ -131,16 +132,17 @@ ProjectSessionCreateResult ProjectSession::createNew(ProjectSessionIdentitySourc
         if (!projectSessionId.has_value()) {
             return ProjectSessionCreateResult(ProjectSessionCreateStatus::RuntimeIdentityExhausted);
         }
-        // No colorSettings/roundTrip/schemaMinor/retainedRequirements: a brand-new project has no
-        // qualified color-settings default to synthesize (see color_settings.hpp's
-        // makeBloomNeutralColorSettingsV1(), which requires a real caller-supplied content-
-        // revision digest that no build profile currently wires up here). The resulting session
-        // is gated unsaveable-pending-color -- see
-        // SessionSaveInputStatus::ColorSettingsUnavailable.
+        // A brand-new project installs the immutable Bloom Neutral v1 built-in color settings
+        // (docs/architecture/color-management.md: "New version 1 projects use the immutable
+        // built-in configuration Bloom Neutral v1"), keyed by the reviewed, checked-in
+        // kBloomNeutralV1ConfigDigest constant (bloom_neutral_profile.hpp) -- no roundTrip,
+        // schemaMinor stays 0, and retainedRequirements stays empty, exactly as for any other
+        // freshly authored (not reopened) document.
         return ProjectSessionCreateResult(
             ProjectSession(*projectSessionId, std::move(document), std::move(commandStack),
                            DecodedProjectEditability::Editable, cleanRevision, std::nullopt,
-                           std::nullopt, std::nullopt, 0, {}));
+                           document::makeBloomNeutralColorSettingsV1(kBloomNeutralV1ConfigDigest),
+                           std::nullopt, 0, {}));
     } catch (const std::bad_alloc&) {
         return ProjectSessionCreateResult(ProjectSessionCreateStatus::ResourceUnavailable);
     } catch (const std::logic_error&) {

@@ -8,6 +8,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/host/bloom_neutral_profile.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/session_save.hpp>
@@ -643,6 +644,112 @@ void testFullCycleSessionFileSession(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// New-project color default full cycle (issue #60, the gap it exists to close): createNew() ->
+// edit -> Save As -> saveProjectSession() -> reopen the just-published bytes via
+// openSessionArchive() -> Installed. The decoded colorSettings must equal the Bloom Neutral v1
+// value exactly, proving the locator URI and expected-revision digest survive the full
+// save/decode/reconstruct/install cycle, not just in-memory construction.
+// ---------------------------------------------------------------------------------------------
+
+void testNewProjectFullCycleInstallsBloomNeutralColor(Expectations& expectations) {
+    TempDirectory directory;
+    ProjectSessionIdentitySource identitySource;
+    auto coordinator = makePublicationCoordinator(expectations);
+    auto artifacts = makeArtifactsCoordinator(expectations);
+    if (!directory.isValid() || !coordinator.has_value() || !artifacts.has_value()) {
+        expectations.expect(false, "new-project color cycle: fixture is available");
+        return;
+    }
+    const auto targetPath = directory.path() / "new-project-color.bloom";
+    const auto expectedColorSettings =
+        bloom::document::makeBloomNeutralColorSettingsV1(bloom::host::kBloomNeutralV1ConfigDigest);
+    expectations.expect(expectedColorSettings.validate().ok(),
+                        "new-project color cycle: the expected Bloom Neutral value itself "
+                        "passes validate()");
+
+    auto createResult = ProjectSession::createNew(
+        identitySource, {.projectName = "New Project Color",
+                         .compositionName = "Main",
+                         .duration = bloom::core::RationalTime::fromInteger(10),
+                         .format = {}});
+    expectations.expect(static_cast<bool>(createResult),
+                        "new-project color cycle: createNew() succeeds");
+    if (!createResult) {
+        return;
+    }
+    auto session = std::move(createResult).takeSession();
+    // createNew() installs the Bloom Neutral v1 color settings unconditionally -- never
+    // ColorSettingsUnavailable -- and captureSaveInput() carries it from the moment the session
+    // exists; see bloom.host.project-session's testColorSettingsGatingAndRoundTripValidation for
+    // that pre-save assertion. This test's own job is proving the value survives the full
+    // save/decode/reconstruct/install cycle below, not re-proving the in-memory default.
+
+    expectations.expect(session.execute(rename("Renamed New Project", session)).changed(),
+                        "new-project color cycle: the edit commits");
+
+    const auto saveAs = session.advancePathIntentForSaveAs();
+    expectations.expect(static_cast<bool>(saveAs),
+                        "new-project color cycle: Save As advances path authority");
+    if (!saveAs) {
+        return;
+    }
+    const SessionSaveRequest saveRequest{
+        .targetPath = targetPath,
+        .overwritePolicy = ArtifactOverwritePolicy::CreateOnly,
+        .expectedTarget = std::nullopt,
+        .limits = {},
+        .intent = saveAs.capture(),
+    };
+    auto saved =
+        saveProjectSession(session, *coordinator, *artifacts, saveRequest, makeOperation());
+    expectations.expect(static_cast<bool>(saved), "new-project color cycle: the save succeeds");
+    if (!saved) {
+        return;
+    }
+
+    const auto publishedBytes = readFile(targetPath);
+    expectations.expect(!publishedBytes.empty(),
+                        "new-project color cycle: the published file has bytes");
+
+    const auto reopenPath = ProjectDisplayPath::create(targetPath);
+    expectations.expect(reopenPath.has_value(),
+                        "new-project color cycle: the reopen display path constructs");
+    if (!reopenPath.has_value()) {
+        return;
+    }
+
+    auto reopened = openSessionArchive(session, asBytes(publishedBytes), reopenPath,
+                                       SaveArchiveLimits{}, makeOperation());
+    expectations.expect(static_cast<bool>(reopened) &&
+                            reopened.stage() == SessionOpenStage::Installation,
+                        "new-project color cycle: openSessionArchive installs the just-published "
+                        "bytes into the SAME session");
+    const auto* status = installedStatus(reopened);
+    expectations.expect(status != nullptr && *status == SessionInstallStatus::Installed,
+                        "new-project color cycle: the install outcome names Installed verbatim");
+
+    expectations.expect(projectName(session) == "Renamed New Project",
+                        "new-project color cycle: the reopened content matches what was "
+                        "actually published");
+
+    const auto plainIntent = session.capturePlainSavePathIntent();
+    const auto reopenedCaptured = session.captureSaveInput(plainIntent);
+    expectations.expect(
+        reopenedCaptured.status() == SessionSaveInputStatus::Captured &&
+            static_cast<bool>(reopenedCaptured) && reopenedCaptured.value() != nullptr,
+        "new-project color cycle: captureSaveInput succeeds on the reopened session");
+    if (reopenedCaptured.value() != nullptr) {
+        expectations.expect(
+            reopenedCaptured.value()->colorSettings() == expectedColorSettings,
+            "new-project color cycle: the reopened colorSettings equal "
+            "makeBloomNeutralColorSettingsV1(kBloomNeutralV1ConfigDigest) exactly -- locator URI "
+            "and expected digest survived the full save/decode/reconstruct/install cycle");
+        expectations.expect(reopenedCaptured.value()->colorSettings().validate().ok(),
+                            "new-project color cycle: the reopened colorSettings pass validate()");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Round-tripped newer minor survives session->file->session->file: a spliced {1,1} archive with
 // one unknown root member (built directly, mirroring open_archive_tests.cpp's
 // testOpenRoundTrippedNewerMinorRoundTrip fixture) is opened into a session, saved, reopened
@@ -1258,6 +1365,7 @@ int main() {
     Expectations expectations;
     try {
         testFullCycleSessionFileSession(expectations);
+        testNewProjectFullCycleInstallsBloomNeutralColor(expectations);
         testRoundTrippedNewerMinorSurvivesFullCycle(expectations);
         testEditDuringOpenRefusal(expectations);
         testStaleOpenIntent(expectations);

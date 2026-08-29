@@ -296,8 +296,10 @@ struct DecodedProjectSessionRequest final {
     document::Project project;
     // REQUIRED for a decoded session: the canonical writer (project::CanonicalDocumentV1) takes
     // color settings as explicit caller input by contract -- bloom::document::Project does not
-    // itself own color settings. Unlike a brand-new project (see createNew()), a decoded project
-    // always has a real opened value to carry forward, so no synthesized default is needed here.
+    // itself own color settings. A decoded project always has a real opened value to carry
+    // forward here, unlike a brand-new project (see createNew()), which always synthesizes the
+    // immutable Bloom Neutral v1 built-in default (color_settings.hpp's
+    // makeBloomNeutralColorSettingsV1()) rather than accepting caller input.
     document::ColorSettings colorSettings;
     DecodedProjectEditability editability = DecodedProjectEditability::Editable;
     std::optional<ProjectDisplayPath> displayPath;
@@ -404,12 +406,15 @@ class [[nodiscard]] DecodedProjectSnapshotResult final {
 };
 
 // Typed statuses for ProjectSession::captureSaveInput(). ColorSettingsUnavailable is not part of
-// docs/architecture/project-session.md's normative text; it exists because a session installed
-// through createNew() has no color settings and no qualified build-profile default currently
-// exists to synthesize one (see color_settings.hpp's makeBloomNeutralColorSettingsV1(), which
-// requires a real caller-supplied content-revision digest). Rather than inventing a default, a
-// createNew() session is gated unsaveable-pending-color until a decoded/installed session
-// supplies real color settings -- see the implementor's report for the full reasoning.
+// docs/architecture/project-session.md's normative text. Historically it existed because a
+// session installed through createNew() had no color settings and no qualified build-profile
+// default to synthesize one; createNew() now always installs the immutable Bloom Neutral v1
+// built-in color settings (see color_settings.hpp's makeBloomNeutralColorSettingsV1() and
+// bloom_neutral_profile.hpp's kBloomNeutralV1ConfigDigest, issue #60), so a createNew() session
+// no longer reaches this status in practice. The enumerator and its captureSaveInput() gate stay
+// in place -- colorSettings_ remains std::optional on ProjectSession, and any future construction
+// path that installs decoded content without color settings would still be refused here rather
+// than silently saved with an absent/invalid value.
 enum class SessionSaveInputStatus : std::uint8_t {
     Captured,
     ReadOnly,
@@ -703,8 +708,12 @@ class ProjectSession final {
     std::optional<DecodedProjectEditability> editability_;
     std::optional<ProjectDisplayPath> displayPath_;
     std::optional<document::Revision> cleanRevision_;
-    // Absent for a createNew() session: see SessionSaveInputStatus::ColorSettingsUnavailable's
-    // comment above. Always present for a createDecoded() session (required by that request).
+    // Present for a createNew() session (the immutable Bloom Neutral v1 built-in, installed
+    // unconditionally -- see project_session.cpp's createNew()) and always present for a
+    // createDecoded() session (required by that request). Stays std::optional -- see
+    // SessionSaveInputStatus::ColorSettingsUnavailable's comment above -- because
+    // captureSaveInput() must still refuse cleanly rather than save an absent value if some
+    // future construction path is added that does not supply one.
     std::optional<document::ColorSettings> colorSettings_;
     std::optional<project::RoundTripState> roundTrip_;
     std::uint32_t schemaMinor_ = 0;
