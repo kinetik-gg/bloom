@@ -1,5 +1,7 @@
 #include <bloom/project/save_archive.hpp>
 
+#include "save_archive_internal.hpp"
+
 #include <bloom/document/document.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
@@ -9,7 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -463,57 +467,146 @@ SaveArchiveVerificationResult verifySaveArchive(const std::span<const std::byte>
     }
 }
 
+SaveArchiveResult buildSaveArchive(const CanonicalManifestV1& manifest,
+                                   const CanonicalDocumentV1& document,
+                                   const SaveArchiveLimits& limits,
+                                   ProjectIoOperationMemory operation) noexcept {
+    auto outcome =
+        detail::buildSaveArchiveEntries(manifest, document, limits, std::move(operation));
+    if (!outcome) {
+        return SaveArchiveResult::failure(std::move(outcome).takeFailure());
+    }
+    return SaveArchiveResult::success(std::move(outcome).takeArchive());
+}
+
 SaveArchiveResult buildVerifiedSaveArchive(const CanonicalManifestV1& manifest,
                                            const CanonicalDocumentV1& document,
                                            const SaveArchiveLimits& limits,
                                            ProjectIoOperationMemory operation) noexcept {
+    // `operation` is a cheap shared_ptr-backed handle (see verifySaveArchive()'s own final-use
+    // comment above), so the copy passed to the shared build routine and the moved-from final use
+    // in the verifySaveArchive() call below are both safe.
+    auto outcome = detail::buildSaveArchiveEntries(manifest, document, limits, operation);
+    if (!outcome) {
+        return SaveArchiveResult::failure(std::move(outcome).takeFailure());
+    }
+
+    const auto expected = outcome.expectedContent(manifest.documentSchemaVersion);
+    auto verified =
+        verifySaveArchive(outcome.archiveBytes(), expected, limits, std::move(operation));
+    if (!verified) {
+        return SaveArchiveResult::failure(std::move(verified).takeFailure());
+    }
+    return SaveArchiveResult::success(std::move(outcome).takeArchive());
+}
+
+namespace detail {
+
+std::span<const std::byte> SaveArchiveBuiltEntries::manifestByteSpan() const noexcept {
+    return asBytes(manifestBytes);
+}
+
+std::span<const std::byte> SaveArchiveBuiltEntries::documentByteSpan() const noexcept {
+    return asBytes(documentBytes);
+}
+
+SaveArchiveFailure SaveArchiveBuildOutcome::takeFailure() && noexcept {
+    if (!failure.has_value()) {
+        std::terminate();
+    }
+    // operator*() (unlike value()) cannot throw, which is why it -- not value() -- is used on
+    // every already-checked access below: value()'s own always-noexcept-incompatible throwing
+    // contract trips bugprone-exception-escape even when, as here, the has_value() guard above
+    // makes the empty case provably unreachable.
+    return std::move(*failure);
+}
+
+ZipContainerWriteResult SaveArchiveBuildOutcome::takeArchive() && noexcept {
+    if (!archive.has_value()) {
+        std::terminate();
+    }
+    return std::move(*archive);
+}
+
+std::span<const std::byte> SaveArchiveBuildOutcome::archiveBytes() const& noexcept {
+    if (!archive.has_value()) {
+        std::terminate();
+    }
+    return archive->archive()->bytes();
+}
+
+SaveArchiveExpectedContent SaveArchiveBuildOutcome::expectedContent(
+    const document::SchemaVersion documentSchemaVersion) const& noexcept {
+    if (!entries.has_value()) {
+        std::terminate();
+    }
+    return SaveArchiveExpectedContent{
+        .manifestBytes = entries->manifestByteSpan(),
+        .documentBytes = entries->documentByteSpan(),
+        .documentSchemaVersion = documentSchemaVersion,
+    };
+}
+
+SaveArchiveBuildOutcome buildSaveArchiveEntries(const CanonicalManifestV1& manifest,
+                                                const CanonicalDocumentV1& document,
+                                                const SaveArchiveLimits& limits,
+                                                ProjectIoOperationMemory operation) noexcept {
     auto stage = SaveArchiveStage::ManifestEncode;
     try {
-        ProjectIoMemoryResource encodingResource(operation);
-        std::pmr::vector<char> manifestBytes(&encodingResource);
-        std::pmr::vector<char> documentBytes(&encodingResource);
+        // Heap-allocated so its address stays stable once SaveArchiveBuiltEntries is returned and
+        // moved by the caller (see save_archive_internal.hpp's file comment).
+        auto resource = std::make_unique<ProjectIoMemoryResource>(operation);
+        std::pmr::vector<char> manifestBytes(resource.get());
+        std::pmr::vector<char> documentBytes(resource.get());
 
         if (auto failure = encodeManifest(manifest, limits.manifest, manifestBytes, stage);
             failure.has_value()) {
-            return SaveArchiveResult::failure(std::move(*failure));
+            SaveArchiveBuildOutcome outcome;
+            outcome.failure = std::move(failure);
+            return outcome;
         }
 
         stage = SaveArchiveStage::DocumentEncode;
         if (auto failure =
-                encodeDocument(document, limits.document, &encodingResource, documentBytes, stage);
+                encodeDocument(document, limits.document, resource.get(), documentBytes, stage);
             failure.has_value()) {
-            return SaveArchiveResult::failure(std::move(*failure));
+            SaveArchiveBuildOutcome outcome;
+            outcome.failure = std::move(failure);
+            return outcome;
         }
 
         stage = SaveArchiveStage::ContainerWrite;
-        auto written = writeZipContainer(asBytes(manifestBytes), asBytes(documentBytes),
-                                         limits.container, operation);
-        if (!written) {
-            return SaveArchiveResult::failure(SaveArchiveFailure(
-                stage, SaveArchiveContainerWriteFailure{written.error(), written.entryInError()}));
-        }
-
-        const SaveArchiveExpectedContent expected{
-            .manifestBytes = asBytes(manifestBytes),
-            .documentBytes = asBytes(documentBytes),
-            .documentSchemaVersion = manifest.documentSchemaVersion,
-        };
-        // Final use of `operation` in this function: encodingResource above already holds its own
+        // Final use of `operation` in this function: `resource` above already holds its own
         // independent copy of the shared handle (constructed before this point), so moving the
         // local parameter away here is safe.
-        auto verified =
-            verifySaveArchive(written.archive()->bytes(), expected, limits, std::move(operation));
-        if (!verified) {
-            return SaveArchiveResult::failure(std::move(verified).takeFailure());
+        auto written = writeZipContainer(asBytes(manifestBytes), asBytes(documentBytes),
+                                         limits.container, std::move(operation));
+        if (!written) {
+            SaveArchiveBuildOutcome outcome;
+            outcome.failure = SaveArchiveFailure(
+                stage, SaveArchiveContainerWriteFailure{written.error(), written.entryInError()});
+            return outcome;
         }
-        return SaveArchiveResult::success(std::move(written));
+
+        SaveArchiveBuildOutcome outcome;
+        outcome.entries = SaveArchiveBuiltEntries{
+            .resource = std::move(resource),
+            .manifestBytes = std::move(manifestBytes),
+            .documentBytes = std::move(documentBytes),
+        };
+        outcome.archive = std::move(written);
+        return outcome;
     } catch (const std::bad_alloc&) {
-        return SaveArchiveResult::failure(
-            SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
+        SaveArchiveBuildOutcome outcome;
+        outcome.failure = SaveArchiveFailure(stage, SaveArchiveResourceExhausted{});
+        return outcome;
     } catch (...) {
-        return SaveArchiveResult::failure(
-            SaveArchiveFailure(stage, SaveArchiveUnexpectedFailure{}));
+        SaveArchiveBuildOutcome outcome;
+        outcome.failure = SaveArchiveFailure(stage, SaveArchiveUnexpectedFailure{});
+        return outcome;
     }
 }
+
+} // namespace detail
 
 } // namespace bloom::project
