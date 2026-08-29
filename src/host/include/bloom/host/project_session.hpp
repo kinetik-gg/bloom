@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,19 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+// Design decision 1 (task A1, issue #68): ProjectSession's round-trip state is an owning
+// std::shared_ptr<const project::RoundTripState> (nullable), not a std::optional<RoundTripState>.
+// A replacement install (installDecodedReplacement()) swaps the session's shared_ptr; any capture
+// already handed out by captureSaveInput() (SessionSaveInput::roundTripView()) holds its own
+// std::shared_ptr copy, so it keeps the OLD state alive independently of the session even across a
+// session-thread replacement -- this is what makes an async worker's captured view safe against a
+// concurrent Save As/Open install on the authoring thread (see session_async_io.hpp's "replacement
+// survives capture" contract). Public request/content types (DecodedProjectSessionRequest::
+// roundTrip, DecodedReplacementContent::roundTrip_) deliberately keep their existing
+// std::optional<project::RoundTripState> by-value shape -- ProjectSession itself wraps the value
+// into the shared owning pointer on install/create, so no other module needs to know about the
+// shared_ptr.
 
 namespace bloom::host {
 
@@ -425,13 +439,14 @@ enum class SessionSaveInputStatus : std::uint8_t {
 };
 
 // One immutable capture of everything a synchronous Save needs from a ProjectSession, per
-// docs/architecture/project-session.md's "Save Inputs And Intent". `roundTrip()` is a non-owning
-// view into the session's own installed project::RoundTripState (null when the session has none):
-// valid only while the originating ProjectSession stays alive and is not replaced with new
-// installed content, exactly as project::CanonicalDocumentV1::roundTrip documents for its own
-// pointee. The synchronous save flow in this slice satisfies that trivially (the session is a
-// caller-owned reference for the whole call); an asynchronous slice revisits this as the
-// contract's "immutable round-trip view" (project-session.md, "Save Inputs And Intent").
+// docs/architecture/project-session.md's "Save Inputs And Intent". Every member here is a self-
+// contained OWNING copy (snapshot/colorSettings/schemaMinor/retainedRequirements are by-value;
+// roundTripView() is a std::shared_ptr<const project::RoundTripState> copy -- see
+// project_session.hpp's design-decision-1 comment above): a SessionSaveInput is safe to move off
+// the authoring thread and outlive the ProjectSession it was captured from, including across a
+// later replacement install on that session. This IS the contract's "immutable round-trip view"
+// (project-session.md, "Save Inputs And Intent"), reused verbatim by both the synchronous save flow
+// (session_save.cpp) and the async save worker (session_async_io.cpp).
 class SessionSaveInput final {
   public:
     [[nodiscard]] const document::Snapshot& snapshot() const& noexcept { return snapshot_; }
@@ -441,8 +456,19 @@ class SessionSaveInput final {
         return colorSettings_;
     }
     const document::ColorSettings& colorSettings() const&& = delete;
-    // Non-owning; see the class comment above for the exact lifetime contract.
-    [[nodiscard]] const project::RoundTripState* roundTrip() const noexcept { return roundTrip_; }
+    // The owning shared view itself (nullable); copying it keeps the pointee alive independently
+    // of this SessionSaveInput and of the originating ProjectSession.
+    [[nodiscard]] const std::shared_ptr<const project::RoundTripState>&
+    roundTripView() const& noexcept {
+        return roundTrip_;
+    }
+    const std::shared_ptr<const project::RoundTripState>& roundTripView() const&& = delete;
+    // Derived raw pointer for project::CanonicalDocumentV1::roundTrip; valid for as long as this
+    // SessionSaveInput (or a roundTripView() copy taken from it) stays alive -- no longer tied to
+    // the originating ProjectSession's own lifetime.
+    [[nodiscard]] const project::RoundTripState* roundTrip() const noexcept {
+        return roundTrip_.get();
+    }
     [[nodiscard]] std::uint32_t schemaMinor() const noexcept { return schemaMinor_; }
     [[nodiscard]] const std::vector<project::ManifestRequirement>&
     retainedRequirements() const& noexcept {
@@ -463,20 +489,21 @@ class SessionSaveInput final {
 
   private:
     SessionSaveInput(document::Snapshot snapshot, document::ColorSettings colorSettings,
-                     const project::RoundTripState* roundTrip, std::uint32_t schemaMinor,
+                     std::shared_ptr<const project::RoundTripState> roundTrip,
+                     std::uint32_t schemaMinor,
                      std::vector<project::ManifestRequirement> retainedRequirements,
                      std::optional<ProjectDisplayPath> displayPath,
                      SessionPathIntentCapture pathIntent,
                      SessionResultAcceptanceCapture resultAcceptance) noexcept
         : snapshot_(std::move(snapshot)), colorSettings_(std::move(colorSettings)),
-          roundTrip_(roundTrip), schemaMinor_(schemaMinor),
+          roundTrip_(std::move(roundTrip)), schemaMinor_(schemaMinor),
           retainedRequirements_(std::move(retainedRequirements)),
           displayPath_(std::move(displayPath)), pathIntent_(pathIntent),
           resultAcceptance_(resultAcceptance) {}
 
     document::Snapshot snapshot_;
     document::ColorSettings colorSettings_;
-    const project::RoundTripState* roundTrip_ = nullptr;
+    std::shared_ptr<const project::RoundTripState> roundTrip_;
     std::uint32_t schemaMinor_ = 0;
     std::vector<project::ManifestRequirement> retainedRequirements_;
     std::optional<ProjectDisplayPath> displayPath_;
@@ -500,6 +527,19 @@ class [[nodiscard]] SessionSaveInputResult final {
         return input_.has_value() ? &*input_ : nullptr;
     }
     [[nodiscard]] const SessionSaveInput* value() const&& = delete;
+
+    // Moves the captured input out; valid only when status() == Captured (terminates otherwise,
+    // mirroring ProjectSessionCreateResult::takeSession()'s established pattern). Additive: the
+    // synchronous save flow never needed this (it kept `*this` alive for the call's duration and
+    // used value() alone), but the async save path (session_async_io.cpp) builds a self-contained
+    // owning capture that must outlive this result and the whole begin() call stack -- see this
+    // task's frozen design decision 2.
+    [[nodiscard]] SessionSaveInput takeValue() && noexcept {
+        if (!input_.has_value()) {
+            std::terminate();
+        }
+        return std::move(*input_);
+    }
 
   private:
     friend class ProjectSession;
@@ -673,13 +713,17 @@ class ProjectSession final {
     friend class ProjectSessionCreateResult;
     friend class ProjectSessionTestAccess;
 
+    // Not noexcept: wrapping a present `roundTrip` into the session's owning
+    // std::shared_ptr<const project::RoundTripState> (design decision 1) allocates a control block,
+    // which may throw std::bad_alloc. Both callers (createNew()/createDecoded()) already wrap their
+    // entire construction in a try/catch for exactly this reason.
     ProjectSession(ProjectSessionId projectSessionId, std::unique_ptr<document::Document> document,
                    std::unique_ptr<commands::CommandStack> commandStack,
                    DecodedProjectEditability editability, document::Revision cleanRevision,
                    std::optional<ProjectDisplayPath> displayPath,
                    std::optional<document::ColorSettings> colorSettings,
                    std::optional<project::RoundTripState> roundTrip, std::uint32_t schemaMinor,
-                   std::vector<project::ManifestRequirement> retainedRequirements) noexcept;
+                   std::vector<project::ManifestRequirement> retainedRequirements);
     ProjectSession(ProjectSessionId projectSessionId,
                    ProjectDisplayPath preservedDisplayPath) noexcept;
 
@@ -715,7 +759,11 @@ class ProjectSession final {
     // captureSaveInput() must still refuse cleanly rather than save an absent value if some
     // future construction path is added that does not supply one.
     std::optional<document::ColorSettings> colorSettings_;
-    std::optional<project::RoundTripState> roundTrip_;
+    // Owning, nullable, shared (design decision 1 -- see the file-level comment above): swapped
+    // wholesale on a replacement install; a shared_ptr copy already handed out by
+    // captureSaveInput() (SessionSaveInput::roundTripView()) keeps the OLD pointee alive
+    // independently of this member's own later reassignment.
+    std::shared_ptr<const project::RoundTripState> roundTrip_;
     std::uint32_t schemaMinor_ = 0;
     std::vector<project::ManifestRequirement> retainedRequirements_;
     // Present only for content installed via installDecodedReplacement() from a real opened

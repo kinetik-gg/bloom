@@ -28,10 +28,29 @@ namespace bloom::host {
 // either Opened or PreservedReadOnlyRequired, and this module attempted (or, for a pathless
 // PreservedReadOnlyRequired result, deliberately declined to attempt) an install*() call (see
 // SessionOpenResult::installOutcome()).
+// NotOpened (task A1, issue #68): the async open worker never produced a project::OpenArchiveResult
+// at all -- see SessionOpenResult::notOpened() and SessionOpenNotOpenedReason below. Unreachable
+// from the synchronous openSessionArchive() (which always calls project::openProjectArchive()
+// unconditionally once admission succeeds); reachable only from AsyncSessionOpen::tryComplete()
+// (session_async_io.cpp).
 enum class SessionOpenStage : std::uint8_t {
     Admission,
     Opening,
     Installation,
+    NotOpened,
+};
+
+// Why the async open worker never called project::openProjectArchive() at all (see
+// SessionOpenStage::NotOpened above). CancelledBeforeOpening: requestCancellation() (or an
+// entry-time scheduler cancellation) was observed before the worker began -- see
+// session_async_io.hpp's cancellation-bridge documentation for exactly what this covers.
+// WorkerUnexpectedFailure: the scheduler-level task itself never ran to completion (an exception
+// the runtime's own TypedTaskWork wrapper caught, or a scheduler state
+// AsyncSessionOpen::tryComplete cannot otherwise interpret) -- session untouched either way,
+// matching openingFailure()'s own "session untouched, no install*() call is ever made" contract.
+enum class SessionOpenNotOpenedReason : std::uint8_t {
+    CancelledBeforeOpening,
+    WorkerUnexpectedFailure,
 };
 
 // Wraps a thrown exception from ProjectSession::installDecodedReplacement()/
@@ -71,6 +90,8 @@ class [[nodiscard]] SessionOpenResult final {
     [[nodiscard]] static SessionOpenResult
     installation(SessionOpenInstallOutcome outcome, ProjectSessionContentKind attemptedContentKind,
                  std::optional<project::OpenArchivePreservedReadOnly> preservedReadOnly) noexcept;
+    // See SessionOpenStage::NotOpened/SessionOpenNotOpenedReason above; async-only.
+    [[nodiscard]] static SessionOpenResult notOpened(SessionOpenNotOpenedReason reason) noexcept;
 
     // True only for the single fully-succeeded path: Installation stage with a real
     // SessionInstallStatus::Installed outcome. Every other case -- including a wrapped install
@@ -122,6 +143,11 @@ class [[nodiscard]] SessionOpenResult final {
     }
     [[nodiscard]] const project::OpenArchivePreservedReadOnly* preservedReadOnly() const&& = delete;
 
+    // Valid only when stage() == NotOpened (async-only; see notOpened() above).
+    [[nodiscard]] std::optional<SessionOpenNotOpenedReason> notOpenedReason() const noexcept {
+        return notOpenedReason_;
+    }
+
   private:
     SessionOpenResult() = default;
 
@@ -131,7 +157,23 @@ class [[nodiscard]] SessionOpenResult final {
     SessionOpenInstallOutcome installOutcome_ = SessionInstallStatus::InvalidSession;
     std::optional<ProjectSessionContentKind> attemptedContentKind_;
     std::optional<project::OpenArchivePreservedReadOnly> preservedReadOnly_;
+    std::optional<SessionOpenNotOpenedReason> notOpenedReason_;
 };
+
+// Session-dependent installation step shared by the synchronous openSessionArchive() below and the
+// async open worker's completion (AsyncSessionOpen::tryComplete(), session_async_io.cpp) -- task A1
+// (issue #68), frozen design decision 2. Open's session-free "middle" is simply
+// project::openProjectArchive() itself (already session-free; no extraction needed there); this
+// function is the remaining session-dependent tail both callers share verbatim: classify `opened`'s
+// outcome (Opened / PreservedReadOnlyRequired / Failed) and compose it with
+// ProjectSession::installDecodedReplacement()/installPreservedReadOnlyReplacement() exactly as
+// openSessionArchive()'s own declaration documents. `displayPath` moves in unconditionally; a
+// PreservedReadOnlyRequired outcome without one is refused as typed InvalidContent without an
+// install*() call.
+[[nodiscard]] SessionOpenResult
+installOpenedArchiveResult(ProjectSession& session, OpenIntentCapture intent,
+                           project::OpenArchiveResult opened,
+                           std::optional<ProjectDisplayPath> displayPath) noexcept;
 
 // Pipeline: session.admitOpenIntent() -> project::openProjectArchive(archive, limits, operation) ->
 //   - Opened: build a DecodedReplacementContent from the OpenedArchive (editability is always

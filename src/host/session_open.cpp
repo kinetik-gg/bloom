@@ -31,6 +31,13 @@ SessionOpenResult SessionOpenResult::installation(
     return result;
 }
 
+SessionOpenResult SessionOpenResult::notOpened(const SessionOpenNotOpenedReason reason) noexcept {
+    SessionOpenResult result;
+    result.stage_ = SessionOpenStage::NotOpened;
+    result.notOpenedReason_ = reason;
+    return result;
+}
+
 namespace {
 
 // Both install*() calls below are the only non-noexcept composed surfaces in this pipeline (each
@@ -80,17 +87,10 @@ installPreservedReadOnlyAndReport(ProjectSession& session, const OpenIntentCaptu
 
 } // namespace
 
-SessionOpenResult openSessionArchive(ProjectSession& session, std::span<const std::byte> archive,
-                                     std::optional<ProjectDisplayPath> displayPath,
-                                     const project::SaveArchiveLimits& limits,
-                                     project::ProjectIoOperationMemory operation) noexcept {
-    const auto admission = session.admitOpenIntent();
-    if (!admission) {
-        return SessionOpenResult::admissionFailure(admission.status());
-    }
-    const auto intent = admission.capture();
-
-    auto opened = project::openProjectArchive(archive, limits, std::move(operation));
+SessionOpenResult
+installOpenedArchiveResult(ProjectSession& session, const OpenIntentCapture intent,
+                           project::OpenArchiveResult opened,
+                           std::optional<ProjectDisplayPath> displayPath) noexcept {
     if (opened.outcome() == project::OpenArchiveOutcome::Failed) {
         // Session untouched: no install*() call is ever made on this path.
         return SessionOpenResult::openingFailure(std::move(opened).takeFailure());
@@ -106,8 +106,8 @@ SessionOpenResult openSessionArchive(ProjectSession& session, std::span<const st
             // createPreservedReadOnly() requires a path too: a pathless preserved-read-only
             // install is refused here, without ever calling installPreservedReadOnlyReplacement()
             // (which requires a real ProjectDisplayPath by contract) -- session untouched. The
-            // caller still gets the preservation diagnostics verbatim (it retains `archive` for
-            // Save Copy per this module's file comment).
+            // caller still gets the preservation diagnostics verbatim (it retains the archive
+            // bytes for Save Copy per this module's file comment).
             return SessionOpenResult::installation(SessionInstallStatus::InvalidContent,
                                                    ProjectSessionContentKind::PreservedReadOnly,
                                                    diagnostics);
@@ -131,6 +131,19 @@ SessionOpenResult openSessionArchive(ProjectSession& session, std::span<const st
         // decision 2) -- every opened archive installs as fully Editable here.
         DecodedProjectEditability::Editable, std::move(displayPath), std::move(reservations));
     return installDecodedAndReport(session, intent, std::move(content));
+}
+
+SessionOpenResult openSessionArchive(ProjectSession& session, std::span<const std::byte> archive,
+                                     std::optional<ProjectDisplayPath> displayPath,
+                                     const project::SaveArchiveLimits& limits,
+                                     project::ProjectIoOperationMemory operation) noexcept {
+    const auto admission = session.admitOpenIntent();
+    if (!admission) {
+        return SessionOpenResult::admissionFailure(admission.status());
+    }
+    auto opened = project::openProjectArchive(archive, limits, std::move(operation));
+    return installOpenedArchiveResult(session, admission.capture(), std::move(opened),
+                                      std::move(displayPath));
 }
 
 } // namespace bloom::host

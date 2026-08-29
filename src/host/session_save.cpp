@@ -56,76 +56,39 @@ SessionSaveResult SessionSaveResult::publishedSavepointBookkeepingFailed(
     return result;
 }
 
-namespace {
-
-// The one allocation this module performs itself, ahead of executeSavePublication() (which is
-// already noexcept and reports its own allocation failures as a typed SavePublicationFailure): a
-// copy of the captured retained-requirements vector, kept alive for CanonicalManifestV1's span for
-// the duration of the executeSavePublication() call. A failure here is attributed to the
-// Publication stage at SavePublicationStage::None -- honestly "failed before the publication
-// pipeline was ever entered, while assembling its input" -- reusing SavePublicationFailure's own
-// resource-exhausted payload rather than inventing a fourth stage for one allocation.
-[[nodiscard]] SessionSaveResult assemblyResourceExhausted() noexcept {
-    return SessionSaveResult::publicationFailure(
-        SavePublicationFailure(SavePublicationStage::None, SavePublicationResourceExhausted{}),
-        std::nullopt);
-}
-
-} // namespace
-
-SessionSaveResult saveProjectSession(ProjectSession& session, PublicationCoordinator& coordinator,
-                                     platform::StagedArtifactCoordinator& artifacts,
-                                     const SessionSaveRequest& request,
-                                     project::ProjectIoOperationMemory operation) noexcept {
-    std::optional<SessionSaveInputResult> captured;
-    try {
-        captured.emplace(session.captureSaveInput(request.intent));
-    } catch (const std::bad_alloc&) {
-        return SessionSaveResult::captureFailure(SessionSaveResourceExhausted{});
-    } catch (...) {
-        return SessionSaveResult::captureFailure(SessionSaveUnexpectedFailure{});
-    }
-    if (!*captured) {
-        return SessionSaveResult::captureFailure(captured->status());
-    }
-    const auto* input = captured->value();
-    if (input == nullptr) {
-        // Unreachable: `*captured` above already proved status() == Captured, which guarantees
-        // value() is non-null (see SessionSaveInputResult::operator bool()). Handled anyway so
-        // this function's control flow stays provably total.
-        return SessionSaveResult::captureFailure(SessionSaveUnexpectedFailure{});
-    }
-
-    std::vector<project::ManifestRequirement> requirements;
-    try {
-        requirements = input->retainedRequirements();
-    } catch (const std::bad_alloc&) {
-        return assemblyResourceExhausted();
-    }
-
+SavePublicationResult executeSessionSaveMiddle(
+    PublicationCoordinator& coordinator, platform::StagedArtifactCoordinator& artifacts,
+    const SessionSaveOwningInput& input, PublicationAdmission* const preAdmitted,
+    const std::atomic_bool* const cancellationFlag,
+    project::ProjectIoOperationMemory operation) noexcept {
     const project::CanonicalManifestV1 manifest{
-        .documentSchemaVersion = {1, input->schemaMinor()},
-        .requirements = requirements,
+        .documentSchemaVersion = {1, input.capturedInput.schemaMinor()},
+        .requirements = input.capturedInput.retainedRequirements(),
     };
     const project::CanonicalDocumentV1 documentInput{
-        .snapshot = &input->snapshot(),
-        .colorSettings = &input->colorSettings(),
-        .roundTrip = input->roundTrip(),
-        .schemaMinor = input->schemaMinor(),
+        .snapshot = &input.capturedInput.snapshot(),
+        .colorSettings = &input.capturedInput.colorSettings(),
+        .roundTrip = input.capturedInput.roundTrip(),
+        .schemaMinor = input.capturedInput.schemaMinor(),
     };
     const SavePublicationRequest publicationRequest{
-        .targetPath = request.targetPath,
-        .overwritePolicy = request.overwritePolicy,
-        .expectedTarget = request.expectedTarget,
+        .targetPath = input.targetPath,
+        .overwritePolicy = input.overwritePolicy,
+        .expectedTarget = input.expectedTarget,
         .manifest = &manifest,
         .document = &documentInput,
-        .limits = request.limits,
-        .preAdmitted = request.preAdmitted,
-        .cancellationFlag = request.cancellationFlag,
+        .limits = input.limits,
+        .preAdmitted = preAdmitted,
+        .cancellationFlag = cancellationFlag,
     };
+    return executeSavePublication(coordinator, artifacts, publicationRequest, std::move(operation));
+}
 
-    auto publicationResult =
-        executeSavePublication(coordinator, artifacts, publicationRequest, std::move(operation));
+SessionSaveResult acceptSessionSavePublication(ProjectSession& session,
+                                               SavePublicationResult publicationResult,
+                                               const SessionPathIntentCapture intent,
+                                               const document::Revision capturedRevision,
+                                               const std::filesystem::path& targetPath) noexcept {
     if (!publicationResult) {
         return SessionSaveResult::publicationFailure(*publicationResult.failure(),
                                                      publicationResult.rejectDiagnostic());
@@ -144,11 +107,11 @@ SessionSaveResult saveProjectSession(ProjectSession& session, PublicationCoordin
 
     try {
         std::optional<ProjectDisplayPath> publishedPath;
-        if (request.intent.kind() == SessionPathIntentKind::ReplacementPath) {
-            publishedPath = ProjectDisplayPath::create(request.targetPath);
+        if (intent.kind() == SessionPathIntentKind::ReplacementPath) {
+            publishedPath = ProjectDisplayPath::create(targetPath);
         }
         const auto savepointStatus =
-            session.acceptSavepoint(request.intent, intentId, input->revision(), publishedPath);
+            session.acceptSavepoint(intent, intentId, capturedRevision, publishedPath);
         return SessionSaveResult::published(*publication, intentId, savepointStatus);
     } catch (const std::bad_alloc&) {
         // The file was already durably published (`*publication`/`intentId` are both still in
@@ -162,6 +125,38 @@ SessionSaveResult saveProjectSession(ProjectSession& session, PublicationCoordin
         return SessionSaveResult::publishedSavepointBookkeepingFailed(
             *publication, intentId, SessionSaveSavepointBookkeepingFailure::UnexpectedFailure);
     }
+}
+
+SessionSaveResult saveProjectSession(ProjectSession& session, PublicationCoordinator& coordinator,
+                                     platform::StagedArtifactCoordinator& artifacts,
+                                     const SessionSaveRequest& request,
+                                     project::ProjectIoOperationMemory operation) noexcept {
+    std::optional<SessionSaveOwningInput> owning;
+    try {
+        SessionSaveInputResult captured = session.captureSaveInput(request.intent);
+        if (!captured) {
+            return SessionSaveResult::captureFailure(captured.status());
+        }
+        owning.emplace(SessionSaveOwningInput{
+            .capturedInput = std::move(captured).takeValue(),
+            .targetPath = request.targetPath,
+            .overwritePolicy = request.overwritePolicy,
+            .expectedTarget = request.expectedTarget,
+            .limits = request.limits,
+        });
+    } catch (const std::bad_alloc&) {
+        return SessionSaveResult::captureFailure(SessionSaveResourceExhausted{});
+    } catch (...) {
+        return SessionSaveResult::captureFailure(SessionSaveUnexpectedFailure{});
+    }
+
+    const auto intent = owning->capturedInput.pathIntent();
+    const auto capturedRevision = owning->capturedInput.revision();
+    auto publicationResult =
+        executeSessionSaveMiddle(coordinator, artifacts, *owning, request.preAdmitted,
+                                 request.cancellationFlag, std::move(operation));
+    return acceptSessionSavePublication(session, std::move(publicationResult), intent,
+                                        capturedRevision, owning->targetPath);
 }
 
 } // namespace bloom::host
