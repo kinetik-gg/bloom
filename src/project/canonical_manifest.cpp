@@ -70,8 +70,8 @@ failure(const CanonicalManifestError error,
     if (manifest.documentPath != bloom::project::kCanonicalManifestDocumentPath) {
         return failure(CanonicalManifestError::InvalidDocumentPath);
     }
-    if (manifest.documentSchemaVersion !=
-        bloom::project::kCanonicalManifestDocumentSchemaVersionV1) {
+    if (manifest.documentSchemaVersion.major !=
+        bloom::project::kCanonicalManifestDocumentSchemaVersionV1.major) {
         return failure(CanonicalManifestError::InvalidDocumentSchemaVersion);
     }
     if (manifest.requirements.size() > limits.maximumRequirements) {

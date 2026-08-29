@@ -171,7 +171,12 @@ void testFixedConstantsAndSchemaVersions(Expectations& expectations) {
     manifest = {};
     manifest.documentSchemaVersion = {2, 0};
     expectError(manifest, CanonicalManifestError::InvalidDocumentSchemaVersion,
-                "the manifest v1 document schema is fixed");
+                "a document schema major other than one is rejected");
+    manifest = {};
+    manifest.documentSchemaVersion = {1, 1};
+    expectations.expect(
+        static_cast<bool>(bloom::project::canonicalManifestSize(manifest)),
+        "a same-major newer document minor is accepted for round-tripped document truth");
 }
 
 void testIdentifiersAndOrdering(Expectations& expectations) {
