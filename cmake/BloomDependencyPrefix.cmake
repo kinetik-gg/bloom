@@ -108,9 +108,40 @@ function(bloom_find_dependency package)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
         set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF)
         set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY OFF)
+
+        # zlib 1.3.2's static-only install ships a package config (ZLIBConfig.cmake) whose
+        # component loop unconditionally includes ZLIB-shared.cmake, which a static-only build
+        # never installs -- Config-mode zlib resolution fails hard with a missing-file error.
+        # Module-mode FindZLIB.cmake is the working route (same reasoning as
+        # dependencies/superbuild/projects/libzip.cmake, which builds libzip against this same
+        # static-only zlib for the identical reason). A qualified package's own exported config,
+        # such as libzip's, may call plain find_dependency(ZLIB ...) internally; that call is not
+        # restricted by this function's own NO_DEFAULT_PATH/PATHS below (find_dependency does not
+        # inherit them), so left alone it would either hit the broken component loop or silently
+        # resolve a host zlib. Force module-mode search rooted at the prefix for the duration of
+        # this call (function-scoped: never leaks to the caller) so any transitively pulled ZLIB
+        # resolves from the prefix's static archive.
+        set(ZLIB_ROOT "${BLOOM_DEPENDENCY_PREFIX}")
+        set(CMAKE_FIND_PACKAGE_PREFER_CONFIG OFF)
+
         find_package(${package} REQUIRED CONFIG
             PATHS "${BLOOM_DEPENDENCY_PREFIX}"
             NO_DEFAULT_PATH)
+
+        # Fail closed rather than silently linking an unqualified zlib into a qualified build: a
+        # transitive find_dependency(ZLIB) inside another package's config is not restricted by
+        # the NO_DEFAULT_PATH above, so nothing else stops module-mode search from falling through
+        # to a host zlib once the ZLIB_ROOT hint doesn't produce a match.
+        if(DEFINED ZLIB_LIBRARY AND NOT ZLIB_LIBRARY STREQUAL "")
+            cmake_path(IS_PREFIX BLOOM_DEPENDENCY_PREFIX "${ZLIB_LIBRARY}" NORMALIZE
+                bloom_zlib_under_prefix)
+            if(NOT bloom_zlib_under_prefix)
+                message(FATAL_ERROR
+                    "qualified mode: ZLIB resolved outside the dependency prefix "
+                    "(${ZLIB_LIBRARY}); a transitive dependency must never escape "
+                    "${BLOOM_DEPENDENCY_PREFIX}.")
+            endif()
+        endif()
     elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
         find_package(${package} REQUIRED CONFIG)
     else()
