@@ -114,6 +114,7 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
       colorSettings_(std::move(other.colorSettings_)), roundTrip_(std::move(other.roundTrip_)),
       schemaMinor_(std::exchange(other.schemaMinor_, std::uint32_t{0})),
       retainedRequirements_(std::move(other.retainedRequirements_)),
+      decodedContentReservations_(std::move(other.decodedContentReservations_)),
       document_(std::move(other.document_)), commandStack_(std::move(other.commandStack_)),
       valid_(std::exchange(other.valid_, false)) {}
 
@@ -358,6 +359,142 @@ ProjectSession::advanceResultAcceptanceForInstalledReplacement() noexcept {
     pathIntentKind_ = SessionPathIntentKind::ExistingPath;
     newestAcceptedPublicationIntent_ = {};
     return SessionResultAcceptanceAdvanceStatus::Advanced;
+}
+
+std::optional<SessionInstallStatus>
+ProjectSession::checkInstallAcceptanceGates(const OpenIntentCapture intent) const noexcept {
+    if (!isValid()) {
+        return SessionInstallStatus::InvalidSession;
+    }
+    // Gate 1 (StaleOpenIntent): the same runtime-session/generation/content-kind identity check
+    // isDesiredOpenIntent() performs, but WITHOUT that method's bundled content-revision leg. A
+    // literal isDesiredOpenIntent(intent) call cannot be used to drive this gate order: that method
+    // already folds the decoded-revision comparison into its single boolean (see
+    // testOpenIntentBindsExactContent in project_session_tests.cpp, which pins that a successful
+    // edit alone makes isDesiredOpenIntent() false), so an edit-during-Open would be
+    // indistinguishable from a superseded/stale Open admission and could never report
+    // RevisionChanged -- the exact status the task's edit-during-Open test requires. Splitting the
+    // check into three orthogonal gates (identity/generation, result-acceptance, content-revision)
+    // also makes AcceptanceMismatch genuinely reachable: installing a capture taken before a
+    // successful prior install has an unchanged OpenIntentGeneration (installation never advances
+    // that counter) but a stale SessionResultAcceptanceGeneration, so it is refused here at Gate 2,
+    // not Gate 1. isDesiredOpenIntent() itself is completely unchanged -- this is new, install-only
+    // logic living beside it, not a redefinition of existing frozen semantics.
+    if (!intent.isValid() || intent.generation() != openIntentGeneration_ ||
+        intent.contentKind() != contentKind_) {
+        return SessionInstallStatus::StaleOpenIntent;
+    }
+    // Gate 2 (AcceptanceMismatch).
+    if (!matchesResultAcceptance(intent.resultAcceptance())) {
+        return SessionInstallStatus::AcceptanceMismatch;
+    }
+    // Gate 3 (RevisionChanged): only meaningful for a session currently holding decoded content --
+    // Gate 1 already proved intent.contentKind() == contentKind_, and OpenIntentCapture's own
+    // invariant (hasValidContentBinding) guarantees a PreservedReadOnly capture carries no decoded
+    // revision, so preserved-read-only current content has nothing further to check here (matching
+    // docs/architecture/project-session.md's "Open Intent": "preserved read-only content remains
+    // bound by its runtime session and acceptance generation without a decoded revision").
+    if (contentKind_ == ProjectSessionContentKind::DecodedDocument &&
+        commandStack_->trackedRevision() != intent.decodedRevision()) {
+        return SessionInstallStatus::RevisionChanged;
+    }
+    return std::nullopt;
+}
+
+SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentCapture intent,
+                                                               DecodedReplacementContent content) {
+    if (const auto gate = checkInstallAcceptanceGates(intent)) {
+        return *gate;
+    }
+    // Mirrors createDecoded()'s own request validation exactly (isKnownEditability(), and the
+    // roundTrip/schemaMinor pairing check) -- a decoded install is otherwise the same kind of
+    // content createDecoded() accepts. See SessionInstallStatus::InvalidContent's comment.
+    if (content.document_ == nullptr || !isKnownEditability(content.editability_) ||
+        (content.roundTrip_.has_value() && content.schemaMinor_ == 0)) {
+        return SessionInstallStatus::InvalidContent;
+    }
+    // Both generations this method advances must be checked for exhaustion BEFORE the allocation
+    // below, so a RuntimeIdentityExhausted refusal never allocates and the strong exception
+    // guarantee (see this method's declaration comment) covers the whole method, not just the
+    // allocating step.
+    if (resultAcceptanceGeneration_.value() == std::numeric_limits<std::uint64_t>::max() ||
+        pathIntentGeneration_.value() == std::numeric_limits<std::uint64_t>::max()) {
+        return SessionInstallStatus::RuntimeIdentityExhausted;
+    }
+
+    // The one allocation this method performs: a fresh CommandStack bound to the new document.
+    // Constructed before any session-state mutation below, so a thrown std::bad_alloc here leaves
+    // the session completely untouched (strong exception guarantee).
+    auto freshStack = std::make_unique<commands::CommandStack>(*content.document_);
+
+    // Atomic installation (docs/architecture/project-session.md, "Session Publication").
+    const auto advanceStatus = advanceResultAcceptanceForInstalledReplacement();
+    if (advanceStatus != SessionResultAcceptanceAdvanceStatus::Advanced) {
+        // Unreachable in practice: the exhaustion boundary was already checked above under the
+        // same single-threaded synchronous call, so resultAcceptanceGeneration_ cannot have changed
+        // in between. Handled anyway so this method's control flow stays provably total.
+        return SessionInstallStatus::RuntimeIdentityExhausted;
+    }
+    // A pending Save As replacement phase is cancelled by installation (project-session.md, "Save
+    // Inputs And Intent": "Installing replacement session content also cancels a pending
+    // replacement phase"). advanceResultAcceptanceForInstalledReplacement() already reset
+    // pathIntentKind_ to ExistingPath; advancing the generation too keeps every session generation
+    // moving forward on a real content replacement (both the old plain-save and the old Save As
+    // capture are already stale from the resultAcceptance change alone -- matchesPathIntent()
+    // requires resultAcceptance equality -- so this generation advance is state hygiene, not load-
+    // bearing for that exclusion).
+    pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(pathIntentGeneration_.value() + 1);
+
+    document_ = std::move(content.document_);
+    commandStack_ = std::move(freshStack);
+    colorSettings_ = std::move(content.colorSettings_);
+    roundTrip_ = std::move(content.roundTrip_);
+    schemaMinor_ = content.schemaMinor_;
+    retainedRequirements_ = std::move(content.requirements_);
+    contentKind_ = ProjectSessionContentKind::DecodedDocument;
+    editability_ = content.editability_;
+    displayPath_ = std::move(content.displayPath_);
+    decodedContentReservations_ = std::move(content.reservations_);
+    cleanRevision_ = commandStack_->trackedRevision();
+
+    return SessionInstallStatus::Installed;
+}
+
+SessionInstallStatus
+ProjectSession::installPreservedReadOnlyReplacement(const OpenIntentCapture intent,
+                                                    ProjectDisplayPath displayPath) {
+    if (const auto gate = checkInstallAcceptanceGates(intent)) {
+        return *gate;
+    }
+    if (resultAcceptanceGeneration_.value() == std::numeric_limits<std::uint64_t>::max() ||
+        pathIntentGeneration_.value() == std::numeric_limits<std::uint64_t>::max()) {
+        return SessionInstallStatus::RuntimeIdentityExhausted;
+    }
+
+    // No allocating step in this variant (releasing document_/commandStack_/etc. and moving
+    // displayPath cannot throw), so the strong exception guarantee is trivially satisfied by the
+    // mutation order alone -- there is nothing that can throw partway through.
+    const auto advanceStatus = advanceResultAcceptanceForInstalledReplacement();
+    if (advanceStatus != SessionResultAcceptanceAdvanceStatus::Advanced) {
+        return SessionInstallStatus::RuntimeIdentityExhausted; // unreachable; see the sibling
+                                                               // method
+    }
+    pathIntentGeneration_ = SessionPathIntentGeneration::fromRaw(pathIntentGeneration_.value() + 1);
+
+    // Mirrors createPreservedReadOnly()'s internal state exactly.
+    document_.reset();
+    commandStack_.reset();
+    colorSettings_.reset();
+    roundTrip_.reset();
+    schemaMinor_ = 0;
+    retainedRequirements_.clear();
+    cleanRevision_.reset();
+    editability_.reset();
+    decodedContentReservations_.reset();
+    contentKind_ = ProjectSessionContentKind::PreservedReadOnly;
+    displayPath_ = std::move(displayPath);
+
+    return SessionInstallStatus::Installed;
 }
 
 bool ProjectSession::setGenerationsForTesting(
