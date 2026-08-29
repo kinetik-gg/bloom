@@ -17,6 +17,7 @@ target_sources(
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_reconstruct.cpp
+        manifest_decode.cpp
         manifest_requirements.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
@@ -41,6 +42,7 @@ target_sources(
             include/bloom/project/canonical_manifest.hpp
             include/bloom/project/document_decode.hpp
             include/bloom/project/document_reconstruct.hpp
+            include/bloom/project/manifest_decode.hpp
             include/bloom/project/manifest_requirements.hpp
             include/bloom/project/project_io_memory.hpp
             include/bloom/project/project_io_memory_resource.hpp
@@ -161,6 +163,15 @@ if(BUILD_TESTING)
         NAME bloom.project.manifest_requirements
         COMMAND bloom_project_manifest_requirements_test
         LABELS unit project persistence document
+    )
+
+    add_executable(bloom_project_manifest_decode_test tests/manifest_decode_tests.cpp)
+    target_link_libraries(bloom_project_manifest_decode_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_manifest_decode_test)
+    bloom_add_test(
+        NAME bloom.project.manifest_decode
+        COMMAND bloom_project_manifest_decode_test
+        LABELS unit project persistence manifest
     )
 
     add_executable(bloom_project_canonical_base64_test tests/canonical_base64_tests.cpp)
