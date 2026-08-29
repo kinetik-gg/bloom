@@ -31,6 +31,15 @@
         "BLOOM_DEPENDENCY_MODE": "qualified",
         "BLOOM_DEPENDENCY_PREFIX": "${sourceDir}/build/dependency-prefix"
       }
+    },
+    {
+      "name": "ci-linux-desktop",
+      "displayName": "Bloom Linux desktop CI",
+      "inherits": "ci-linux-native",
+      "binaryDir": "${sourceDir}/build/ci-linux-desktop",
+      "cacheVariables": {
+        "BLOOM_BUILD_DESKTOP": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -41,6 +50,10 @@
     {
       "name": "ci-linux-native",
       "configurePreset": "ci-linux-native"
+    },
+    {
+      "name": "ci-linux-desktop",
+      "configurePreset": "ci-linux-desktop"
     }
   ],
   "testPresets": [
@@ -54,6 +67,13 @@
     {
       "name": "ci-linux-native",
       "configurePreset": "ci-linux-native",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-linux-desktop",
+      "configurePreset": "ci-linux-desktop",
       "output": {
         "outputOnFailure": true
       }

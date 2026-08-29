@@ -35,7 +35,9 @@ void require(const bool condition, const std::string_view message) {
 [[nodiscard]] core::RationalTime time(const std::int64_t numerator,
                                       const std::int64_t denominator = 1) {
     const auto result = core::RationalTime::create(numerator, denominator);
-    require(result.has_value(), "test time must be valid");
+    if (!result.has_value()) {
+        fail("test time must be valid");
+    }
     return *result;
 }
 
@@ -56,8 +58,9 @@ struct LayerIds final {
         result.outputId<document::ParameterId>(commands::kAddSolidLayerPositionParameterOutput);
     const auto opacity =
         result.outputId<document::ParameterId>(commands::kAddSolidLayerOpacityParameterOutput);
-    require(result.changed() && layer.has_value() && position.has_value() && opacity.has_value(),
-            "solid layer command must expose its stable IDs");
+    if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value())) {
+        fail("solid layer command must expose its stable IDs");
+    }
     return {*layer, *position, *opacity};
 }
 
@@ -69,7 +72,9 @@ animateParameter(document::Document& document, commands::CommandStack& stack,
     transaction.emplace<commands::CreateAnimationForParameter>(compositionId, parameterId, time(0));
     const auto result = stack.execute(std::move(transaction));
     const auto curve = result.outputId<document::AnimationCurveId>(commands::kAnimationCurveOutput);
-    require(result.changed() && curve.has_value(), "animation command must expose its curve ID");
+    if (!(result.changed() && curve.has_value())) {
+        fail("animation command must expose its curve ID");
+    }
     return *curve;
 }
 

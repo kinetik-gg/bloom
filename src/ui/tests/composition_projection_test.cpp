@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -91,7 +92,7 @@ parameterForRole(const bloom::document::Composition& composition,
     }
 
     addSolidAction->trigger();
-    const auto firstLayer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto* firstLayer = std::get_if<document::LayerId>(&session.selection().primary);
     const auto firstSource =
         firstLayer == nullptr ? std::nullopt : session.directSourceNodeForLayer(*firstLayer);
     const auto* firstParameter = firstSource.has_value()
@@ -102,7 +103,7 @@ parameterForRole(const bloom::document::Composition& composition,
         firstParameter == nullptr ? std::nullopt : session.constantColorValue(firstParameter->id);
 
     addSolidAction->trigger();
-    const auto secondLayer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto* secondLayer = std::get_if<document::LayerId>(&session.selection().primary);
     const auto secondSource =
         secondLayer == nullptr ? std::nullopt : session.directSourceNodeForLayer(*secondLayer);
     const auto* secondParameter = secondSource.has_value()
@@ -123,7 +124,8 @@ parameterForRole(const bloom::document::Composition& composition,
 [[nodiscard]] bool runProjectionTest() {
     using namespace bloom;
     const auto format = document::CompositionFormat::create(64, 36);
-    if (!require(format.has_value(), "small projection format is valid")) {
+    if (!format.has_value()) {
+        (void)require(false, "small projection format is valid");
         return false;
     }
     auto newProject = document::makeNewProject("Projection Test", "Main",
@@ -208,18 +210,23 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto* composition = session.composition();
     if (!require(composition != nullptr, "active composition remains available") ||
         !require(composition->graph().layerStack().entries().size() == 1,
-                 "text command inserts one layer stack entry") ||
-        !require(std::holds_alternative<document::LayerId>(session.selection().primary),
-                 "new layer becomes the stable shared selection")) {
+                 "text command inserts one layer stack entry")) {
         return false;
     }
 
-    const auto layerId = std::get<document::LayerId>(session.selection().primary);
+    const auto* layerIdPtr = std::get_if<document::LayerId>(&session.selection().primary);
+    if (!require(layerIdPtr != nullptr, "new layer becomes the stable shared selection")) {
+        return false;
+    }
+    const auto layerId = *layerIdPtr;
     const auto boundaryNode = session.boundaryNodeForLayer(layerId);
     const auto directTextSource = session.directSourceNodeForLayer(layerId);
     auto* layerRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(0);
-    if (!require(boundaryNode.has_value(), "layer resolves to its graph boundary") ||
-        !require(directTextSource.has_value() && *directTextSource != *boundaryNode,
+    if (!boundaryNode.has_value()) {
+        (void)require(false, "layer resolves to its graph boundary");
+        return false;
+    }
+    if (!require(directTextSource.has_value() && *directTextSource != *boundaryNode,
                  "layer resolves only its direct content source") ||
         !require(layerRow != nullptr && layerRow->text(0) == QStringLiteral("Text 1") &&
                      layerRow->text(1) == QStringLiteral("Text"),
@@ -267,6 +274,10 @@ parameterForRole(const bloom::document::Composition& composition,
     }
 
     composition = session.composition();
+    if (!boundaryNode.has_value()) {
+        (void)require(false, "boundary node ID remains available for parameter lookup");
+        return false;
+    }
     const auto* positionParameter =
         parameterForRole(*composition, *boundaryNode, document::kPositionParameterRole);
     const auto* opacityParameter =
@@ -304,17 +315,22 @@ parameterForRole(const bloom::document::Composition& composition,
     addSolidAction->trigger();
     composition = session.composition();
     if (!require(composition != nullptr && composition->graph().layerStack().entries().size() == 2,
-                 "Solid menu action adds one structured layer") ||
-        !require(std::holds_alternative<document::LayerId>(session.selection().primary),
-                 "new solid becomes the primary layer selection")) {
+                 "Solid menu action adds one structured layer")) {
         return false;
     }
 
-    const auto solidLayerId = std::get<document::LayerId>(session.selection().primary);
+    const auto* solidLayerIdPtr = std::get_if<document::LayerId>(&session.selection().primary);
+    if (!require(solidLayerIdPtr != nullptr, "new solid becomes the primary layer selection")) {
+        return false;
+    }
+    const auto solidLayerId = *solidLayerIdPtr;
     const auto solidSourceNodeId = session.directSourceNodeForLayer(solidLayerId);
     auto* solidRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(1);
-    if (!require(solidSourceNodeId.has_value(), "solid layer has one exact direct source node") ||
-        !require(solidRow != nullptr && solidRow->text(0) == QStringLiteral("Solid 1") &&
+    if (!solidSourceNodeId.has_value()) {
+        (void)require(false, "solid layer has one exact direct source node");
+        return false;
+    }
+    if (!require(solidRow != nullptr && solidRow->text(0) == QStringLiteral("Solid 1") &&
                      solidRow->text(1) == QStringLiteral("Solid"),
                  "timeline derives Solid kind and default numbered name from project truth")) {
         return false;
@@ -367,10 +383,18 @@ parameterForRole(const bloom::document::Composition& composition,
                  "session can add an explicit HDR solid")) {
         return false;
     }
-    const auto hdrLayerId = std::get<document::LayerId>(session.selection().primary);
+    const auto* hdrLayerIdPtr = std::get_if<document::LayerId>(&session.selection().primary);
+    if (!require(hdrLayerIdPtr != nullptr,
+                 "explicit HDR solid becomes the primary layer selection")) {
+        return false;
+    }
+    const auto hdrLayerId = *hdrLayerIdPtr;
     const auto hdrSourceNodeId = session.directSourceNodeForLayer(hdrLayerId);
-    if (!require(hdrSourceNodeId.has_value() &&
-                     solidColorValue->text() == QStringLiteral("R -0.25  G 1.5  B 0.125  A 0.8"),
+    if (!hdrSourceNodeId.has_value()) {
+        (void)require(false, "HDR solid layer has one exact direct source node");
+        return false;
+    }
+    if (!require(solidColorValue->text() == QStringLiteral("R -0.25  G 1.5  B 0.125  A 0.8"),
                  "Properties preserves negative and HDR RGB without clipping") ||
         !require(session.undo(), "adding the HDR solid is undoable") ||
         !require(session.composition()->graph().layerStack().entries().size() == 2 &&
@@ -413,5 +437,11 @@ parameterForRole(const bloom::document::Composition& composition,
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
-    return runSolidPaletteTest() && runProjectionTest() ? 0 : 1;
+    try {
+        return runSolidPaletteTest() && runProjectionTest() ? 0 : 1;
+    } catch (const std::exception& error) {
+        std::cerr << "composition projection test failed with an exception: " << error.what()
+                  << '\n';
+        return 1;
+    }
 }

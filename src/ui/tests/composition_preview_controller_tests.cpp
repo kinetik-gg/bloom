@@ -236,8 +236,9 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
     firstRequest.release();
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "current revision becomes ready after the replaced Viewer is destroyed");
-    expectations.expect(controller.state().desiredIdentity->sourceRevision ==
-                            session.snapshot().revision(),
+    expectations.expect(controller.state().desiredIdentity.has_value() &&
+                            controller.state().desiredIdentity->sourceRevision ==
+                                session.snapshot().revision(),
                         "published frame identifies the active document revision");
     expectations.expect(!publishedReadyGenerations.empty() &&
                             std::ranges::all_of(publishedReadyGenerations,
@@ -302,6 +303,7 @@ void testNewestPendingRequestGate(Expectations& expectations) {
 
     expectations.expect(
         controller.state().activity == ui::PreviewActivity::Rendering &&
+            controller.state().desiredIdentity.has_value() &&
             controller.state().desiredIdentity->requestGeneration == newestGeneration &&
             !controller.state().taskId.has_value(),
         "the desired identity advances immediately while the newest request remains pending");
@@ -369,6 +371,7 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
     const auto generationBeforeTime = generation(controller.state());
     expectations.expect(session.setCurrentTime(*halfway) &&
                             generation(controller.state()) > generationBeforeTime &&
+                            controller.state().desiredIdentity.has_value() &&
                             controller.state().desiredIdentity->time == *halfway &&
                             session.snapshot().revision() == revisionBeforeTime,
                         "session time advances preview intent without dirtying the document");
@@ -384,11 +387,17 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
                         "an unchanged session time creates no preview churn");
 
     const auto firstFrame = controller.state().frame;
+    if (!controller.state().desiredIdentity.has_value()) {
+        expectations.expect(false, "desired identity is populated once the preview is ready");
+        reachQuiescence(controller, bridge, scheduler, expectations);
+        return;
+    }
     const auto revision = controller.state().desiredIdentity->sourceRevision;
     const auto firstGeneration = generation(controller.state());
     controller.requestRefresh();
     const auto secondGeneration = generation(controller.state());
-    expectations.expect(controller.state().desiredIdentity->sourceRevision == revision &&
+    expectations.expect(controller.state().desiredIdentity.has_value() &&
+                            controller.state().desiredIdentity->sourceRevision == revision &&
                             secondGeneration > firstGeneration &&
                             controller.state().activity == ui::PreviewActivity::Rendering &&
                             controller.state().freshness == ui::FrameFreshness::Stale &&
@@ -573,6 +582,7 @@ void testCompositionSwitchClearsPixels(Expectations& expectations) {
                             controller.state().freshness == ui::FrameFreshness::None &&
                             controller.state().frame == nullptr &&
                             session.currentTime() == core::RationalTime::fromInteger(0) &&
+                            controller.state().desiredIdentity.has_value() &&
                             controller.state().desiredIdentity->time ==
                                 core::RationalTime::fromInteger(0),
                         "composition switch resets time and clears pixels in one preview intent");
