@@ -12,6 +12,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/project/manifest_requirements.hpp>
+#include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/round_trip_state.hpp>
 
 #include <cstddef>
@@ -507,6 +508,96 @@ class [[nodiscard]] SessionSaveInputResult final {
     std::optional<SessionSaveInput> input_;
 };
 
+// Owns the three project::ProjectIoMemoryReservation charges an opened archive accrued for its
+// resident document/colorSettings/roundTrip/requirements state (see project::OpenedArchive's own
+// class comment: "Moving storage between stages transfers its charge"). A DecodedReplacementContent
+// carries this by value into ProjectSession::installDecodedReplacement(); on a successful install
+// ProjectSession keeps it for as long as the installed content stays resident (charge follows
+// residency -- see the task's frozen design decision 1), releasing it only when the session is
+// destroyed or replaced by a later installation. Deliberately opaque: nothing outside this module
+// inspects its members, it is only ever constructed once (from a real OpenedArchive, in
+// session_open.cpp) and moved along verbatim.
+class DecodedReplacementReservations final {
+  public:
+    DecodedReplacementReservations(
+        project::ProjectIoMemoryReservation manifestReservation,
+        project::ProjectIoMemoryReservation decodeReservation,
+        project::ProjectIoMemoryReservation reconstructionReservation) noexcept
+        : manifestReservation_(std::move(manifestReservation)),
+          decodeReservation_(std::move(decodeReservation)),
+          reconstructionReservation_(std::move(reconstructionReservation)) {}
+    DecodedReplacementReservations(DecodedReplacementReservations&&) noexcept = default;
+    DecodedReplacementReservations& operator=(DecodedReplacementReservations&&) noexcept = default;
+    DecodedReplacementReservations(const DecodedReplacementReservations&) = delete;
+    DecodedReplacementReservations& operator=(const DecodedReplacementReservations&) = delete;
+    ~DecodedReplacementReservations() = default;
+
+  private:
+    project::ProjectIoMemoryReservation manifestReservation_;
+    project::ProjectIoMemoryReservation decodeReservation_;
+    project::ProjectIoMemoryReservation reconstructionReservation_;
+};
+
+// Typed statuses for
+// ProjectSession::installDecodedReplacement()/installPreservedReadOnlyReplacement(). See
+// docs/architecture/project-session.md's "Session Publication" and "Open Intent" for the contract
+// this composes. RevisionChanged is the contract's edit-during-Open refusal: the decoded document
+// the session currently holds was edited (or undone/redone -- revisions are monotonic, so undo/redo
+// count as changes) after the Open intent was admitted, so the current project is kept.
+// InvalidContent covers a structurally unusable DecodedReplacementContent (a null document, an
+// unrecognized DecodedProjectEditability, or a RoundTripState paired with schemaMinor == 0 --
+// mirroring createDecoded()'s own request validation exactly, since a decoded install is otherwise
+// the same kind of content createDecoded() accepts).
+enum class SessionInstallStatus : std::uint8_t {
+    Installed,
+    InvalidSession,
+    StaleOpenIntent,
+    AcceptanceMismatch,
+    RevisionChanged,
+    InvalidContent,
+    RuntimeIdentityExhausted,
+};
+
+// Everything installDecodedReplacement() needs to replace a session's decoded content atomically
+// (see docs/architecture/project-session.md, "Session Publication"). Move-only
+// (unique_ptr<Document> and RoundTripState are each move-only, which makes this whole type
+// move-only). Mirrors project::OpenedArchive's shape one-to-one (see open_archive.hpp's file
+// comment) plus the two host-owned concerns OpenedArchive cannot determine on its own:
+// DecodedProjectEditability (this slice always installs Editable -- see session_open.cpp) and an
+// optional display path.
+class DecodedReplacementContent final {
+  public:
+    DecodedReplacementContent(std::unique_ptr<document::Document> document,
+                              document::ColorSettings colorSettings,
+                              std::optional<project::RoundTripState> roundTrip,
+                              std::uint32_t schemaMinor,
+                              std::vector<project::ManifestRequirement> requirements,
+                              DecodedProjectEditability editability,
+                              std::optional<ProjectDisplayPath> displayPath,
+                              std::optional<DecodedReplacementReservations> reservations) noexcept
+        : document_(std::move(document)), colorSettings_(std::move(colorSettings)),
+          roundTrip_(std::move(roundTrip)), schemaMinor_(schemaMinor),
+          requirements_(std::move(requirements)), editability_(editability),
+          displayPath_(std::move(displayPath)), reservations_(std::move(reservations)) {}
+    DecodedReplacementContent(DecodedReplacementContent&&) noexcept = default;
+    DecodedReplacementContent& operator=(DecodedReplacementContent&&) noexcept = default;
+    DecodedReplacementContent(const DecodedReplacementContent&) = delete;
+    DecodedReplacementContent& operator=(const DecodedReplacementContent&) = delete;
+    ~DecodedReplacementContent() = default;
+
+  private:
+    friend class ProjectSession;
+
+    std::unique_ptr<document::Document> document_;
+    document::ColorSettings colorSettings_;
+    std::optional<project::RoundTripState> roundTrip_;
+    std::uint32_t schemaMinor_ = 0;
+    std::vector<project::ManifestRequirement> requirements_;
+    DecodedProjectEditability editability_ = DecodedProjectEditability::Editable;
+    std::optional<ProjectDisplayPath> displayPath_;
+    std::optional<DecodedReplacementReservations> reservations_;
+};
+
 class ProjectSessionCreateResult;
 
 class ProjectSession final {
@@ -557,6 +648,22 @@ class ProjectSession final {
     // SessionSaveInput's class comment for the returned round-trip pointer's lifetime contract.
     [[nodiscard]] SessionSaveInputResult captureSaveInput(SessionPathIntentCapture intent) const;
 
+    // Atomically installs replacement session content from a successful Open (see
+    // docs/architecture/project-session.md's "Session Publication" and "Open Intent"). Acceptance
+    // is checked IN ORDER, all before any mutation -- see the .cpp file for the exact gate order
+    // and why it differs from a literal isDesiredOpenIntent() call. Not noexcept: constructing the
+    // fresh CommandStack the new content needs may throw std::bad_alloc; every allocation this
+    // method performs happens before its first mutation of session state, so a thrown exception
+    // leaves the session completely untouched (strong exception guarantee) -- see the .cpp file.
+    [[nodiscard]] SessionInstallStatus installDecodedReplacement(OpenIntentCapture intent,
+                                                                 DecodedReplacementContent content);
+    // Same acceptance gates as installDecodedReplacement(); on success the session's content
+    // becomes preserved-read-only at `displayPath`, mirroring createPreservedReadOnly()'s internal
+    // state (no document, no command stack, no color
+    // settings/round-trip/requirements/reservations).
+    [[nodiscard]] SessionInstallStatus
+    installPreservedReadOnlyReplacement(OpenIntentCapture intent, ProjectDisplayPath displayPath);
+
   private:
     friend class ProjectSessionCreateResult;
     friend class ProjectSessionTestAccess;
@@ -574,6 +681,12 @@ class ProjectSession final {
     [[nodiscard]] ProjectSessionCommandResult unavailableCommandResult() const noexcept;
     [[nodiscard]] SessionResultAcceptanceAdvanceStatus
     advanceResultAcceptanceForInstalledReplacement() noexcept;
+    // Shared install acceptance gates for installDecodedReplacement()/
+    // installPreservedReadOnlyReplacement(): std::nullopt means every gate passed (proceed);
+    // otherwise the returned status is the exact typed refusal to report. See the .cpp file for
+    // the gate order and its documented deviation from isDesiredOpenIntent()'s bundled boolean.
+    [[nodiscard]] std::optional<SessionInstallStatus>
+    checkInstallAcceptanceGates(OpenIntentCapture intent) const noexcept;
     [[nodiscard]] bool
     setGenerationsForTesting(SessionResultAcceptanceGeneration resultAcceptanceGeneration,
                              OpenIntentGeneration openIntentGeneration,
@@ -596,6 +709,10 @@ class ProjectSession final {
     std::optional<project::RoundTripState> roundTrip_;
     std::uint32_t schemaMinor_ = 0;
     std::vector<project::ManifestRequirement> retainedRequirements_;
+    // Present only for content installed via installDecodedReplacement() from a real opened
+    // archive (see DecodedReplacementReservations' class comment: charge follows residency).
+    // Absent for createNew()/createDecoded() sessions and for preserved-read-only content.
+    std::optional<DecodedReplacementReservations> decodedContentReservations_;
     std::unique_ptr<document::Document> document_;
     std::unique_ptr<commands::CommandStack> commandStack_;
     bool valid_ = false;

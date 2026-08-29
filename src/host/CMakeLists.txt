@@ -6,6 +6,7 @@ target_sources(
         project_session.cpp
         publication_coordinator.cpp
         save_publication.cpp
+        session_open.cpp
         session_save.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -14,6 +15,7 @@ target_sources(
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
+            include/bloom/host/session_open.hpp
             include/bloom/host/session_save.hpp
 )
 
@@ -71,6 +73,27 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.host.session-save
             COMMAND bloom_host_session_save_test
+            LABELS unit host persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.host.session-save is gated: openSessionArchive()'s own
+        # full-cycle tests drive saveProjectSession() over the same real
+        # platform::StagedArtifactCoordinator to produce a published file to reopen.
+        #
+        # Links ZLIB::ZLIB directly for its own trimmed hand-rolled ZIP-writer fixture (a
+        # preserved-read-only archive builder) -- mirroring src/project/CMakeLists.txt's own test
+        # targets that link ZLIB::ZLIB for the identical reason. src/project/CMakeLists.txt already
+        # ran (project is add_subdirectory'd before host) and defines this target when
+        # BUILD_TESTING is set, exactly as it is here; guarded anyway for robustness.
+        if(NOT TARGET ZLIB::ZLIB)
+            find_package(ZLIB REQUIRED)
+        endif()
+        add_executable(bloom_host_session_open_test tests/session_open_tests.cpp)
+        target_link_libraries(bloom_host_session_open_test PRIVATE bloom_host ZLIB::ZLIB)
+        bloom_enable_warnings(bloom_host_session_open_test)
+        bloom_add_test(
+            NAME bloom.host.session-open
+            COMMAND bloom_host_session_open_test
             LABELS unit host persistence security
         )
     endif()
