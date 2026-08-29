@@ -187,11 +187,53 @@ class [[nodiscard]] SessionSaveResult final {
     std::optional<SessionSaveSavepointBookkeepingFailure> savepointBookkeepingFailure_;
 };
 
-// Pipeline: session.captureSaveInput(request.intent) -> assemble one CanonicalManifestV1 (format/
-// containerVersion constants, documentSchemaVersion {1, schemaMinor}, the captured retained
-// requirements) and one CanonicalDocumentV1 (the captured snapshot, colorSettings, roundTrip,
-// schemaMinor) -> executeSavePublication() -> outcome handling exactly as documented on
-// SessionSaveResult's factory functions above.
+// ------------------------------------------------------------------------------------------------
+// Task A1 (issue #68), frozen design decision 2: "session-free middles" so the synchronous
+// saveProjectSession() below and the async save worker (session_async_io.cpp) drive the SAME code.
+// A SessionSaveOwningInput is a fully self-contained snapshot -- everything captureSaveInput() and
+// SessionSaveRequest's own by-value fields provide, with no remaining reference back to
+// ProjectSession or to the caller's request object -- so it can cross a thread boundary and outlive
+// the call that built it. `capturedInput` alone already owns the round-trip view (see
+// SessionSaveInput's class comment): a copy of the session's std::shared_ptr<const
+// project::RoundTripState>, kept alive independently of the session (design decision 1).
+// ------------------------------------------------------------------------------------------------
+struct SessionSaveOwningInput final {
+    SessionSaveInput capturedInput;
+    std::filesystem::path targetPath;
+    platform::ArtifactOverwritePolicy overwritePolicy =
+        platform::ArtifactOverwritePolicy::CreateOrReplace;
+    std::optional<platform::ArtifactTargetObservation> expectedTarget;
+    project::SaveArchiveLimits limits;
+};
+
+// The session-free save middle: manifest/document assembly (from `input.capturedInput`) ->
+// executeSavePublication(). Owns no session reference at all. `preAdmitted`/`cancellationFlag` are
+// forwarded verbatim to executeSavePublication(), exactly as SessionSaveRequest documents them --
+// for the async save worker, `cancellationFlag` is the executor-side atomic the scheduler's
+// CancellationToken is bridged onto (see session_async_io.hpp's cancellation-bridge documentation).
+// noexcept: mirrors executeSavePublication() itself; nothing this function does beyond that call
+// can throw (CanonicalManifestV1::requirements is a non-owning std::span over `input`'s own
+// already- owned vector).
+[[nodiscard]] SavePublicationResult executeSessionSaveMiddle(
+    PublicationCoordinator& coordinator, platform::StagedArtifactCoordinator& artifacts,
+    const SessionSaveOwningInput& input, PublicationAdmission* preAdmitted,
+    const std::atomic_bool* cancellationFlag, project::ProjectIoOperationMemory operation) noexcept;
+
+// The shared "accept" step: given a real SavePublicationResult reached via executeSessionSaveMiddle
+// (synchronously below, or from a completed async worker in session_async_io.cpp's
+// AsyncSessionSave::tryComplete()), decides the outcome and, on a published target, calls
+// session.acceptSavepoint() -- exactly saveProjectSession()'s own tail, factored out so the
+// synchronous entry point and the async completion drive identical logic. noexcept: mirrors
+// saveProjectSession()'s own top-level noexcept guarantee (acceptSavepoint() is wrapped
+// internally).
+[[nodiscard]] SessionSaveResult
+acceptSessionSavePublication(ProjectSession& session, SavePublicationResult publicationResult,
+                             SessionPathIntentCapture intent, document::Revision capturedRevision,
+                             const std::filesystem::path& targetPath) noexcept;
+
+// Pipeline: session.captureSaveInput(request.intent) -> build a SessionSaveOwningInput ->
+// executeSessionSaveMiddle() -> acceptSessionSavePublication() -- outcome handling exactly as
+// documented on SessionSaveResult's factory functions above.
 //
 // On Published/PublishedWithDurabilityWarning, acceptSavepoint() is called with `request.intent`,
 // the winning PublicationIntentId, the captured revision, and -- per the frozen design -- the
@@ -199,10 +241,10 @@ class [[nodiscard]] SessionSaveResult final {
 // acceptSavepoint()'s own path-authority contract). Save As abandonment on a non-published outcome
 // is deliberately left to the caller (session.abandonSaveAsIntent()); this function never calls it.
 //
-// noexcept top level: neither captureSaveInput() nor acceptSavepoint() is itself noexcept (both
-// can allocate -- copying document::ColorSettings/retained requirements, or a
+// noexcept top level: neither captureSaveInput() nor building the owning input is itself noexcept
+// (both can allocate -- copying document::ColorSettings/retained requirements/a
 // std::filesystem::path -- and are wrapped accordingly; see SessionSaveResourceExhausted above).
-// executeSavePublication() is already noexcept.
+// executeSessionSaveMiddle() and acceptSessionSavePublication() are already noexcept.
 [[nodiscard]] SessionSaveResult
 saveProjectSession(ProjectSession& session, PublicationCoordinator& coordinator,
                    platform::StagedArtifactCoordinator& artifacts,

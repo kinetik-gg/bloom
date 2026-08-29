@@ -79,20 +79,25 @@ const document::Snapshot& DecodedProjectSnapshotResult::snapshot() const& {
     return *snapshot_;
 }
 
-ProjectSession::ProjectSession(
-    const ProjectSessionId projectSessionId, std::unique_ptr<document::Document> document,
-    std::unique_ptr<commands::CommandStack> commandStack,
-    const DecodedProjectEditability editability, const document::Revision cleanRevision,
-    std::optional<ProjectDisplayPath> displayPath,
-    std::optional<document::ColorSettings> colorSettings,
-    std::optional<project::RoundTripState> roundTrip, const std::uint32_t schemaMinor,
-    std::vector<project::ManifestRequirement> retainedRequirements) noexcept
+ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
+                               std::unique_ptr<document::Document> document,
+                               std::unique_ptr<commands::CommandStack> commandStack,
+                               const DecodedProjectEditability editability,
+                               const document::Revision cleanRevision,
+                               std::optional<ProjectDisplayPath> displayPath,
+                               std::optional<document::ColorSettings> colorSettings,
+                               std::optional<project::RoundTripState> roundTrip,
+                               const std::uint32_t schemaMinor,
+                               std::vector<project::ManifestRequirement> retainedRequirements)
     : projectSessionId_(projectSessionId), contentKind_(ProjectSessionContentKind::DecodedDocument),
       editability_(editability), displayPath_(std::move(displayPath)),
       cleanRevision_(cleanRevision), colorSettings_(std::move(colorSettings)),
-      roundTrip_(std::move(roundTrip)), schemaMinor_(schemaMinor),
-      retainedRequirements_(std::move(retainedRequirements)), document_(std::move(document)),
-      commandStack_(std::move(commandStack)), valid_(true) {}
+      // Design decision 1: wrap the by-value optional into the session's owning shared view.
+      roundTrip_(roundTrip.has_value()
+                     ? std::make_shared<const project::RoundTripState>(std::move(*roundTrip))
+                     : nullptr),
+      schemaMinor_(schemaMinor), retainedRequirements_(std::move(retainedRequirements)),
+      document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {}
 
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
                                ProjectDisplayPath preservedDisplayPath) noexcept
@@ -424,10 +429,16 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
         return SessionInstallStatus::RuntimeIdentityExhausted;
     }
 
-    // The one allocation this method performs: a fresh CommandStack bound to the new document.
-    // Constructed before any session-state mutation below, so a thrown std::bad_alloc here leaves
-    // the session completely untouched (strong exception guarantee).
+    // The allocations this method performs: a fresh CommandStack bound to the new document, and
+    // (design decision 1) wrapping a present content.roundTrip_ into the session's owning
+    // std::shared_ptr<const project::RoundTripState>. Both happen before any session-state mutation
+    // below, so a thrown std::bad_alloc here leaves the session completely untouched (strong
+    // exception guarantee).
     auto freshStack = std::make_unique<commands::CommandStack>(*content.document_);
+    auto sharedRoundTrip =
+        content.roundTrip_.has_value()
+            ? std::make_shared<const project::RoundTripState>(std::move(*content.roundTrip_))
+            : nullptr;
 
     // Atomic installation (docs/architecture/project-session.md, "Session Publication").
     const auto advanceStatus = advanceResultAcceptanceForInstalledReplacement();
@@ -450,7 +461,7 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
     document_ = std::move(content.document_);
     commandStack_ = std::move(freshStack);
     colorSettings_ = std::move(content.colorSettings_);
-    roundTrip_ = std::move(content.roundTrip_);
+    roundTrip_ = std::move(sharedRoundTrip);
     schemaMinor_ = content.schemaMinor_;
     retainedRequirements_ = std::move(content.requirements_);
     contentKind_ = ProjectSessionContentKind::DecodedDocument;
@@ -612,9 +623,12 @@ ProjectSession::captureSaveInput(const SessionPathIntentCapture intent) const {
     if (!matchesPathIntent(intent)) {
         return SessionSaveInputResult(SessionSaveInputStatus::StaleIntent);
     }
-    return SessionSaveInputResult(SessionSaveInput(
-        document_->snapshot(), *colorSettings_, roundTrip_.has_value() ? &*roundTrip_ : nullptr,
-        schemaMinor_, retainedRequirements_, displayPath_, intent, captureResultAcceptance()));
+    // roundTrip_ is copied (shared_ptr copy, not the pointee) into the returned SessionSaveInput --
+    // see design decision 1: the capture keeps the CURRENT round-trip state alive independently of
+    // this session, even across a later replacement install on this same session.
+    return SessionSaveInputResult(
+        SessionSaveInput(document_->snapshot(), *colorSettings_, roundTrip_, schemaMinor_,
+                         retainedRequirements_, displayPath_, intent, captureResultAcceptance()));
 }
 
 ProjectSessionCommandResult ProjectSession::unavailableCommandResult() const noexcept {

@@ -6,6 +6,7 @@ target_sources(
         project_session.cpp
         publication_coordinator.cpp
         save_publication.cpp
+        session_async_io.cpp
         session_open.cpp
         session_save.cpp
     PUBLIC
@@ -16,6 +17,7 @@ target_sources(
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
+            include/bloom/host/session_async_io.hpp
             include/bloom/host/session_open.hpp
             include/bloom/host/session_save.hpp
 )
@@ -26,8 +28,15 @@ target_compile_features(bloom_host PUBLIC cxx_std_20)
 # CanonicalDocumentV1/SaveArchiveLimits/StagedSaveFailure, ArtifactOverwritePolicy/
 # ArtifactTargetObservation/StagedArtifactCoordinator/StagedArtifactPublicationResult) in its
 # public signatures, so anything including that header needs both modules' headers visible too.
+# bloom_runtime is PUBLIC for the identical reason: include/bloom/host/session_async_io.hpp (task
+# A1, issue #68 -- async session Save/Open over the blocking-I/O lane) declares AsyncSessionSave/
+# AsyncSessionOpen/beginSessionSave()/beginSessionOpen() carrying bloom::runtime::TaskScheduler/
+# TaskHandle/TaskSubmissionStatus in its public signatures. The {"host", "runtime"} module
+# dependency this introduces is already present in
+# tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist (no
+# allowlist edit was needed for this task).
 target_link_libraries(bloom_host PUBLIC bloom_commands bloom_core bloom_document bloom_project
-                                        bloom_platform)
+                                        bloom_platform bloom_runtime)
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)
@@ -108,6 +117,19 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.host.session-open
             COMMAND bloom_host_session_open_test
+            LABELS unit host persistence security
+        )
+
+        # Gated Linux-only exactly as bloom.host.session-save/session-open are gated: drives
+        # beginSessionSave()/beginSessionOpen() (session_async_io.cpp, task A1, issue #68) against
+        # the same real platform::StagedArtifactCoordinator over a real bloom::runtime::TaskScheduler
+        # with a real TaskExecutor::BlockingIo worker.
+        add_executable(bloom_host_session_async_io_test tests/session_async_io_tests.cpp)
+        target_link_libraries(bloom_host_session_async_io_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_session_async_io_test)
+        bloom_add_test(
+            NAME bloom.host.session-async-io
+            COMMAND bloom_host_session_async_io_test
             LABELS unit host persistence security
         )
     endif()
