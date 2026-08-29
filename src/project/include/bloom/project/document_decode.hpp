@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Typed decode of the document.json envelope from a parsed strict JSON DOM (see
@@ -390,6 +391,19 @@ class [[nodiscard]] DocumentDecodeResult final {
         return roundTrip_.has_value() ? &*roundTrip_ : nullptr;
     }
     [[nodiscard]] const RoundTripState* roundTrip() const&& = delete;
+    // Move-only companion to roundTrip() above, for a caller that must own the retained
+    // RoundTripState past this result's own lifetime instead of merely observing it (see
+    // bloom::project::detail::runReopenChain in reopen_chain_internal.hpp / save_archive.cpp: the
+    // production Open path installs this into a long-lived result rather than cloning it --
+    // RoundTripState is deliberately move-only precisely so a caller cannot casually duplicate
+    // opaque retained payload data). Additive: every existing caller keeps using the const*
+    // roundTrip() accessor above unchanged. Mirrors this codebase's other move-out takeX() &&
+    // idiom (e.g. SaveArchiveVerificationResult::takeFailure() in save_archive.hpp). Moves whatever
+    // is held -- nullopt when classification() is not EditableWithRoundTrip -- and never throws
+    // (RoundTripState's move constructor is noexcept).
+    [[nodiscard]] std::optional<RoundTripState> takeRoundTrip() && noexcept {
+        return std::move(roundTrip_);
+    }
 
   private:
     DocumentDecodeResult() = default;
