@@ -23,6 +23,8 @@ target_sources(
         project_io_memory_resource.cpp
         round_trip_state.cpp
         save_archive.cpp
+        save_archive_internal.hpp
+        staged_save.cpp
         strict_json_dom.cpp
         strict_json_preflight.cpp
         strict_json_preflight.hpp
@@ -49,6 +51,7 @@ target_sources(
             include/bloom/project/project_io_memory_resource.hpp
             include/bloom/project/round_trip_state.hpp
             include/bloom/project/save_archive.hpp
+            include/bloom/project/staged_save.hpp
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
             include/bloom/project/zip_container.hpp
@@ -56,7 +59,12 @@ target_sources(
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
-target_link_libraries(bloom_project PUBLIC bloom_core bloom_document)
+# bloom_platform is PUBLIC (not PRIVATE, despite the allowed dependency edge being unqualified):
+# include/bloom/project/staged_save.hpp declares stageSaveArchive() taking a
+# platform::StagedArtifactLease& in its public signature, so anything that includes that header
+# needs bloom_platform's headers visible too. Every other bloom_project header stays
+# platform-free; only this one new public header drives the PUBLIC requirement.
+target_link_libraries(bloom_project PUBLIC bloom_core bloom_document bloom_platform)
 target_link_libraries(bloom_project PRIVATE yyjson::yyjson libzip::zip)
 bloom_enable_warnings(bloom_project)
 
@@ -286,4 +294,15 @@ if(BUILD_TESTING)
         COMMAND bloom_project_save_archive_test
         LABELS unit project persistence security
     )
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(bloom_project_staged_save_test tests/staged_save_tests.cpp)
+        target_link_libraries(bloom_project_staged_save_test PRIVATE bloom_project)
+        bloom_enable_warnings(bloom_project_staged_save_test)
+        bloom_add_test(
+            NAME bloom.project.staged_save
+            COMMAND bloom_project_staged_save_test
+            LABELS unit project persistence security
+        )
+    endif()
 endif()

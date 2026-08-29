@@ -224,10 +224,28 @@ class [[nodiscard]] SaveArchiveResult final {
 verifySaveArchive(std::span<const std::byte> archive, const SaveArchiveExpectedContent& expected,
                   const SaveArchiveLimits& limits, ProjectIoOperationMemory operation) noexcept;
 
+// Encodes the captured manifest/document values and writes the two-entry archive; does NOT verify
+// it by reopening/decoding/reconstructing/re-encoding (see buildVerifiedSaveArchive() for that).
+// On success transfers ownership of the still-charged archive buffer into the result. The input's
+// scratch spans are not used: this composition allocates and charges exact scratch requirements
+// through `operation`.
+//
+// This is the build half that stageSaveArchive() (bloom/project/staged_save.hpp) pipelines over a
+// platform::StagedArtifactLease instead: staged execution verifies the staged/read-back bytes
+// rather than the in-memory ones, so it does not call buildVerifiedSaveArchive() here.
+[[nodiscard]] SaveArchiveResult buildSaveArchive(const CanonicalManifestV1& manifest,
+                                                 const CanonicalDocumentV1& document,
+                                                 const SaveArchiveLimits& limits,
+                                                 ProjectIoOperationMemory operation) noexcept;
+
 // Encodes the captured values, writes the archive, reopens it through verifySaveArchive(), and on
 // success transfers ownership of the still-charged archive buffer into the result. The input's
 // scratch spans are not used: this composition allocates and charges exact scratch requirements
 // through `operation` for both the captured and reconstructed writes.
+//
+// Implemented as buildSaveArchive()'s shared build step (see save_archive_internal.hpp) followed by
+// verifySaveArchive() over the in-memory archive; this is a pure refactor and its behavior is
+// unchanged from before the split.
 [[nodiscard]] SaveArchiveResult
 buildVerifiedSaveArchive(const CanonicalManifestV1& manifest, const CanonicalDocumentV1& document,
                          const SaveArchiveLimits& limits,
