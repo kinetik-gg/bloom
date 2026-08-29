@@ -28,6 +28,7 @@ target_sources(
         zip_container.cpp
         zip_container_preflight.cpp
         zip_container_preflight.hpp
+        zip_container_writer.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -47,6 +48,7 @@ target_sources(
             include/bloom/project/strict_json_dom.hpp
             include/bloom/project/unknown_json_number.hpp
             include/bloom/project/zip_container.hpp
+            include/bloom/project/zip_container_writer.hpp
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
@@ -240,6 +242,22 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.zip_container
         COMMAND bloom_project_zip_container_test
+        LABELS unit project persistence security
+    )
+
+    add_executable(bloom_project_zip_container_writer_test tests/zip_container_writer_tests.cpp)
+    target_include_directories(
+        bloom_project_zip_container_writer_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_project_zip_container_writer_test
+        PRIVATE bloom_project ZLIB::ZLIB
+    )
+    bloom_enable_warnings(bloom_project_zip_container_writer_test)
+    bloom_add_test(
+        NAME bloom.project.zip_container_writer
+        COMMAND bloom_project_zip_container_writer_test
         LABELS unit project persistence security
     )
 endif()
