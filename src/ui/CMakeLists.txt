@@ -16,6 +16,8 @@ target_sources(
         project_host.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
+        timeline_frame_math.cpp
+        timeline_ruler.cpp
         viewer_editor.cpp
         workspace_host.cpp
     PUBLIC
@@ -35,6 +37,8 @@ target_sources(
             include/bloom/ui/project_host.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/timeline_frame_math.hpp
+            include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/workspace_host.hpp
 )

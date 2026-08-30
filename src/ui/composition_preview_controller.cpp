@@ -71,7 +71,11 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCurrentTimeChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
-    requestPreview(true);
+    interactiveCadenceTimer_.setSingleShot(true);
+    interactiveCadenceTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&interactiveCadenceTimer_, &QTimer::timeout, this,
+            &CompositionPreviewController::flushCadence);
+    requestPreview(true, PreviewRequestKind::Visible);
 }
 
 CompositionPreviewController::~CompositionPreviewController() { cancelAndDetachActive(); }
@@ -85,14 +89,14 @@ bool CompositionPreviewController::isShuttingDown() const noexcept { return shut
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
-        requestPreview(false);
+        requestPreview(false, PreviewRequestKind::Visible);
     }
 }
 
 void CompositionPreviewController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
-        requestPreview(true);
+        requestPreview(true, PreviewRequestKind::Visible);
     }
 }
 
@@ -106,7 +110,40 @@ void CompositionPreviewController::handleCurrentTimeChanged() {
         state_.desiredIdentity->time == session_.currentTime()) {
         return;
     }
-    requestPreview(false);
+    // Every current-time change advances the desired request generation (docs/architecture/
+    // animation-and-time.md, "Session Time And Scrubbing"); which priority it advances at depends
+    // on whether the change came from an armed Interactive gesture (see beginInteractiveScrub()) or
+    // a discrete change such as typed time entry, key selection, or document refresh.
+    requestPreview(false, interactiveTimeChangeArmed_ ? PreviewRequestKind::Interactive
+                                                      : PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::beginInteractiveScrub() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    interactiveTimeChangeArmed_ = true;
+}
+
+void CompositionPreviewController::notifyScrubEnded() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    interactiveTimeChangeArmed_ = false;
+    if (!interactiveCadenceTimer_.isActive()) {
+        // Either nothing is pending, or the active-request gate is already holding the newest
+        // pending request (it will submit once the active task reaches terminal) -- the gate is
+        // untouched either way.
+        return;
+    }
+    interactiveCadenceTimer_.stop();
+    flushCadence();
+}
+
+void CompositionPreviewController::flushCadence() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!pending_.has_value() || active_.has_value()) {
+        return;
+    }
+    PendingRequest request = std::move(*pending_);
+    pending_.reset();
+    submitPreview(std::move(request), state_.frame);
 }
 
 void CompositionPreviewController::beginShutdown() {
@@ -117,6 +154,8 @@ void CompositionPreviewController::beginShutdown() {
 
     shuttingDown_ = true;
     disconnect(&session_, nullptr, this, nullptr);
+    interactiveCadenceTimer_.stop();
+    interactiveTimeChangeArmed_ = false;
     pending_.reset();
     cancelAndDetachActive();
 
@@ -129,7 +168,8 @@ void CompositionPreviewController::beginShutdown() {
     publish(std::move(cancelled));
 }
 
-void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame) {
+void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
+                                                  const PreviewRequestKind kind) {
     Q_ASSERT(QThread::currentThread() == thread());
 
     const document::Snapshot snapshot = session_.snapshot();
@@ -142,6 +182,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
     }
 
     if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        interactiveCadenceTimer_.stop();
         pending_.reset();
         if (active_.has_value()) {
             active_->handle.cancel();
@@ -174,6 +215,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
 
     const auto publishTerminal = [this, &desiredIdentity,
                                   &retainedFrame](const PreviewActivity activity, QString message) {
+        interactiveCadenceTimer_.stop();
         pending_.reset();
         if (active_.has_value()) {
             active_->handle.cancel();
@@ -209,18 +251,37 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame)
 
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
-                                  .pixelStorageByteLimit = settings_.pixelStorageByteLimit};
+                                  .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
+                                  .kind = kind};
 
     if (active_.has_value()) {
         active_->handle.cancel();
         // The cancelled handle remains the admission gate until its terminal result is observed.
+        // Cadence is irrelevant beneath this gate: it delays SUBMISSION, and this request cannot
+        // submit before the active task reaches terminal regardless of kind or timer state.
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
         taskUiBridge_.wake();
         return;
     }
 
-    Q_ASSERT(!pending_.has_value());
+    if (kind == PreviewRequestKind::Interactive) {
+        // No active task is gating submission, but the trailing cadence still is: hold this as the
+        // newest pending request (superseding any earlier one still waiting out the same window)
+        // and let the cadence timer -- or notifyScrubEnded()'s bypass -- perform the submission.
+        pending_.emplace(std::move(pendingRequest));
+        publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
+        if (!interactiveCadenceTimer_.isActive()) {
+            interactiveCadenceTimer_.start(
+                static_cast<int>(settings_.interactiveTrailingCadence.count()));
+        }
+        return;
+    }
+
+    // Visible bypasses the cadence entirely: any Interactive request still waiting out its window
+    // is superseded immediately.
+    interactiveCadenceTimer_.stop();
+    pending_.reset();
     submitPreview(std::move(pendingRequest), std::move(retainedFrame));
 }
 
@@ -230,12 +291,15 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     Q_ASSERT(!active_.has_value());
 
     const auto desiredIdentity = pendingRequest.desiredIdentity;
+    const auto priority = pendingRequest.kind == PreviewRequestKind::Interactive
+                              ? runtime::TaskPriority::Interactive
+                              : runtime::TaskPriority::Visible;
 
     runtime::TaskRequest request(
         "Render composition preview",
         {.kind = runtime::TaskOwnerKind::Composition,
          .id = runtime::TaskOwnerId::fromRaw(desiredIdentity.compositionId.value())},
-        runtime::TaskPriority::Visible);
+        priority);
     request.coalescingKey = "bloom.preview.render";
     request.sourceVersion = {
         .documentRevision = desiredIdentity.sourceRevision.value(),
@@ -326,7 +390,8 @@ void CompositionPreviewController::consumeReadyResult() {
         return;
     }
     if (!liveSessionMatches(completed.desiredIdentity)) {
-        requestPreview(session_.compositionId() != completed.desiredIdentity.compositionId);
+        requestPreview(session_.compositionId() != completed.desiredIdentity.compositionId,
+                       PreviewRequestKind::Visible);
         return;
     }
 

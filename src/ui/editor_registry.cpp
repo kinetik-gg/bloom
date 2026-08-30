@@ -41,7 +41,9 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                "bloom.nodes", "Nodes",
                [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&
            addEditor("bloom.timeline", "Timeline",
-                     [&session](QWidget* parent) { return new TimelineEditor(session, parent); }) &&
+                     [&session, &previewController](QWidget* parent) {
+                         return new TimelineEditor(session, previewController, parent);
+                     }) &&
            addEditor("bloom.media", "Media",
                      [&session](QWidget* parent) { return new MediaEditor(session, parent); }) &&
            addEditor("bloom.properties", "Properties",

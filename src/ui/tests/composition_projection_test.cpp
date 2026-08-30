@@ -83,7 +83,15 @@ parameterForRole(const bloom::document::Composition& composition,
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
-    ui::TimelineEditor timeline(session);
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::TimelineEditor timeline(session, previewController);
     auto* addSolidAction = timeline.findChild<QAction*>("addSolidLayerAction");
     if (!require(addSolidAction != nullptr &&
                      addSolidAction->toolTip().contains(QStringLiteral("reference-linear-sRGB")),
@@ -113,12 +121,18 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto secondColor =
         secondParameter == nullptr ? std::nullopt : session.constantColorValue(secondParameter->id);
 
-    return require(firstColor == core::Color4d{0.62, 0.08, 0.04, 1.0},
-                   "first built-in solid uses the warm proof color") &&
-           require(secondColor == core::Color4d{0.04, 0.20, 0.72, 1.0},
-                   "second built-in solid uses a clearly distinct cool proof color") &&
-           require(firstColor != secondColor,
-                   "consecutive built-in solids make layer ordering visually distinguishable");
+    const bool paletteOk =
+        require(firstColor == core::Color4d{0.62, 0.08, 0.04, 1.0},
+                "first built-in solid uses the warm proof color") &&
+        require(secondColor == core::Color4d{0.04, 0.20, 0.72, 1.0},
+                "second built-in solid uses a clearly distinct cool proof color") &&
+        require(firstColor != secondColor,
+                "consecutive built-in solids make layer ordering visually distinguishable");
+
+    previewController.beginShutdown();
+    taskUiBridge.beginShutdown();
+    return paletteOk && require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+                                "solid palette fixture reaches scheduler quiescence");
 }
 
 [[nodiscard]] bool runProjectionTest() {
@@ -156,7 +170,7 @@ parameterForRole(const bloom::document::Composition& composition,
                  "foundation registration exposes five replaceable editor types")) {
         return false;
     }
-    ui::TimelineEditor timeline(session);
+    ui::TimelineEditor timeline(session, previewController);
     ui::NodeGraphEditor nodes(session);
     ui::PropertiesEditor properties(session);
     [[maybe_unused]] ui::MediaEditor media(session);
