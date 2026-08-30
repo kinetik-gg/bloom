@@ -31,6 +31,7 @@ target_sources(
     PRIVATE
         compile_diagnostics.cpp
         compiled_plan.cpp
+        curve_compilation.cpp
         node_definition_registry.cpp
         snapshot_compiler.cpp
         snapshot_compiler_lowering.ipp
@@ -40,6 +41,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/compiled_plan.hpp
+            include/bloom/runtime/curve_compilation.hpp
             include/bloom/runtime/node_definition_registry.hpp
             include/bloom/runtime/snapshot_compiler.hpp
 )

@@ -5,6 +5,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/curve_compilation.hpp>
 
 #include <algorithm>
 #include <cmath>

@@ -25,6 +25,7 @@
 #include <QCoreApplication>
 #include <QRectF>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -238,8 +239,101 @@ void testDrivenAndAnimatedParameterRejections() {
             "the driven rejection leaves no interaction");
 }
 
-void testAnimatedParameterExactKeyOnlyAndCommitUpdatesTheKey() {
-    auto newProject = document::makeNewProject("Animated Gesture", "Main", time(10));
+// D1's relaxation (issue #86, task E1; docs/architecture/animation-and-time.md): an animated
+// position with NO exact key at the current time now begins from the exact sampled interpolated
+// base instead of refusing with the former AnimatedWithoutExactKey rejection. Commit still goes
+// through executePositionCommand() -> SetKeyframeAtTime(), which INSERTS a key at the current time
+// since none exists there yet.
+void testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt() {
+    auto newProject = document::makeNewProject("Animated Sampled Base", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack, compositionId, document::Vec2d{3.0, 4.0});
+    const auto format = document.snapshot().project().findComposition(compositionId)->format();
+    const auto mapping = makeMapping(QRectF(0.0, 0.0, 100.0, 100.0), format);
+
+    commands::Transaction animate("Animate position", document.snapshot().revision());
+    animate.emplace<commands::CreateAnimationForParameter>(compositionId, ids.position, time(0));
+    const auto animateResult = stack.execute(std::move(animate));
+    const auto curveId =
+        animateResult.outputId<document::AnimationCurveId>(commands::kAnimationCurveOutput);
+    require(animateResult.changed() && curveId.has_value(), "position becomes animated");
+    if (!curveId.has_value()) {
+        return;
+    }
+
+    // A second exact key at t=10 gives a genuinely interpolated midpoint at t=5 (factor exactly
+    // 0.5, endpoints chosen so Linear Mix is exact in binary64: (3,4) -> (8,14) -> (13,24)),
+    // exercising the sampled base rather than degenerating to a single-key clamp.
+    commands::Transaction insertSecond("Insert second position key",
+                                       document.snapshot().revision());
+    insertSecond.emplace<commands::InsertVec2Keyframe>(compositionId, *curveId, time(10),
+                                                       document::Vec2d{13.0, 24.0});
+    require(stack.execute(std::move(insertSecond)).changed(), "fixture inserts a second exact key");
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    require(session.setCurrentTime(time(5)), "session moves to a time between the two keys");
+
+    require(!session.beginPositionInteraction(mapping).has_value(),
+            "an animated position with no exact key at the current time now begins (D1's "
+            "relaxation), rather than refusing");
+    const auto freshOverride = session.positionInteractionOverride();
+    require(freshOverride.has_value(), "an active interaction always reports an override");
+    if (freshOverride.has_value()) {
+        const auto* value = std::get_if<document::Vec2d>(&freshOverride->value);
+        require(value != nullptr && *value == document::Vec2d{8.0, 14.0},
+                "begin freezes the exact Linear-interpolated base at the current time (halfway "
+                "between (3,4) and (13,24))");
+    }
+
+    session.updatePositionInteraction(10.0, 0.0);
+    const auto revisionBeforeCommit = session.snapshot().revision();
+    require(session.commitPositionInteraction(), "commit succeeds for the sampled-base gesture");
+    require(session.snapshot().revision().value() == revisionBeforeCommit.value() + 1,
+            "commit is exactly one transaction");
+
+    const auto* curve = session.composition()->animationCurves().findVec2(*curveId);
+    require(curve != nullptr && curve->keyframes.size() == 3,
+            "commit INSERTS a new key at the current time rather than mutating an existing one");
+    if (curve == nullptr || curve->keyframes.size() != 3) {
+        return;
+    }
+    const auto inserted =
+        std::ranges::find(curve->keyframes, time(5), &document::Vec2Keyframe::time);
+    require(inserted != curve->keyframes.end() &&
+                inserted->value == document::Vec2d{8.0 + 10.0 / 100.0 * format.width(), 14.0},
+            "the inserted key holds the sampled-base-plus-displacement value at the exact current "
+            "time");
+    const auto seed = std::ranges::find(curve->keyframes, time(0), &document::Vec2Keyframe::time);
+    const auto second =
+        std::ranges::find(curve->keyframes, time(10), &document::Vec2Keyframe::time);
+    require(seed != curve->keyframes.end() && seed->value == document::Vec2d{3.0, 4.0} &&
+                second != curve->keyframes.end() && second->value == document::Vec2d{13.0, 24.0},
+            "the curve's other two keys are untouched by the insert");
+
+    require(session.undo(), "the sampled-base commit undoes cleanly");
+    curve = session.composition()->animationCurves().findVec2(*curveId);
+    require(curve != nullptr && curve->keyframes.size() == 2,
+            "undo removes EXACTLY the inserted key, restoring the original two");
+    if (curve != nullptr) {
+        const auto seedAfterUndo =
+            std::ranges::find(curve->keyframes, time(0), &document::Vec2Keyframe::time);
+        const auto secondAfterUndo =
+            std::ranges::find(curve->keyframes, time(10), &document::Vec2Keyframe::time);
+        require(seedAfterUndo != curve->keyframes.end() &&
+                    seedAfterUndo->value == document::Vec2d{3.0, 4.0} &&
+                    secondAfterUndo != curve->keyframes.end() &&
+                    secondAfterUndo->value == document::Vec2d{13.0, 24.0},
+                "undo leaves the curve's other keys exactly as they were");
+    }
+}
+
+// Regression on D1's original had-a-key behavior (issue #86, task E1): when the playhead DOES sit
+// exactly on a key, commit must still update that SAME key rather than insert a second one.
+void testAnimatedParameterExactKeyStillUpdatesThatKey() {
+    auto newProject = document::makeNewProject("Animated Exact Key", "Main", time(10));
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack stack(document);
@@ -259,18 +353,8 @@ void testAnimatedParameterExactKeyOnlyAndCommitUpdatesTheKey() {
 
     ui::CompositionSession session(document, stack, compositionId);
     session.selectLayer(ids.layer);
-
-    // No exact key at the current time (currentTime_ defaults to zero, matching the seeded key --
-    // move off it first).
-    require(session.setCurrentTime(time(5)), "session moves off the seeded key's time");
-    require(session.beginPositionInteraction(mapping) ==
-                ui::PositionInteractionRejection::AnimatedWithoutExactKey,
-            "an animated position with no exact key at the current time refuses the gesture rather "
-            "than guess an interpolated base value");
-    require(!session.positionInteractionActive(), "the refusal leaves no active interaction");
-
-    // Back on the seeded key: the gesture proceeds and commit updates that exact key.
-    require(session.setCurrentTime(time(0)), "session returns to the seeded key's exact time");
+    require(session.currentTime() == time(0),
+            "the session's default current time already sits exactly on the seeded key's time");
     require(!session.beginPositionInteraction(mapping).has_value(),
             "an animated position with an exact key at the current time begins");
     session.updatePositionInteraction(10.0, 0.0);
@@ -435,7 +519,8 @@ int main(int argc, char** argv) {
     testDisplacementMathNonSquareNegativeAndBaseTotal();
     testBeginRejectionsAndFreezing();
     testDrivenAndAnimatedParameterRejections();
-    testAnimatedParameterExactKeyOnlyAndCommitUpdatesTheKey();
+    testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt();
+    testAnimatedParameterExactKeyStillUpdatesThatKey();
     testCommitIsExactlyOneTransactionAndUndoRestoresExactPriorValue();
     testZeroMoveCommitsNothing();
     testCancelClearsState();

@@ -6,6 +6,8 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/curve_compilation.hpp>
 
 #include <QThread>
 
@@ -610,6 +612,45 @@ bool CompositionSession::moveSelectedKeyframe(const core::RationalTime newTime) 
     return execute(std::move(transaction));
 }
 
+bool CompositionSession::insertKeyframeAtTime(const document::AnimationCurveId curveId,
+                                              const core::RationalTime time) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr) {
+        return false;
+    }
+    const auto parameterId = parameterForCurve(curveId);
+    const auto* parameter =
+        parameterId.has_value() ? current->parameters().find(*parameterId) : nullptr;
+    if (parameter == nullptr) {
+        return false;
+    }
+    const auto sample = sampleParameterValue(*parameter, time);
+    if (!sample.has_value()) {
+        return false;
+    }
+
+    commands::Transaction transaction("Insert Keyframe", snapshot_.revision());
+    if (const auto* scalar = std::get_if<double>(&*sample)) {
+        transaction.emplace<commands::InsertScalarKeyframe>(compositionId_, curveId, time, *scalar);
+    } else if (const auto* vector = std::get_if<document::Vec2d>(&*sample)) {
+        transaction.emplace<commands::InsertVec2Keyframe>(compositionId_, curveId, time, *vector);
+    } else {
+        return false;
+    }
+
+    const auto result = commandStack_->execute(std::move(transaction));
+    const auto keyframeId = result.outputId<document::KeyframeId>(commands::kKeyframeOutput);
+    if (!handleResult(result)) {
+        return false;
+    }
+    if (keyframeId.has_value()) {
+        // One-truth selection swap, same as every other select* method (K1's precedent).
+        selectKeyframe(curveId, *keyframeId);
+    }
+    return true;
+}
+
 bool CompositionSession::positionInteractionActive() const noexcept {
     return positionInteraction_.has_value();
 }
@@ -650,25 +691,17 @@ CompositionSession::beginPositionInteraction(PositionInteractionMapping mapping)
             return PositionInteractionRejection::NoResolvablePosition;
         }
         baseValue = *value;
-    } else if (const auto* animationSource =
-                   std::get_if<document::AnimationCurveSource>(&position->source)) {
-        // CompositionSession cannot sample runtime's exact rational interpolation, so an animated
-        // position only resolves a base value when the playhead sits exactly on a key (docs/
-        // architecture/animation-and-time.md; see PositionInteractionRejection::
-        // AnimatedWithoutExactKey).
-        const auto* current = composition();
-        const auto* curve = current == nullptr
-                                ? nullptr
-                                : current->animationCurves().findVec2(animationSource->curveId);
-        if (curve == nullptr) {
+    } else if (std::holds_alternative<document::AnimationCurveSource>(position->source)) {
+        // D1's relaxation (issue #86, task E1; docs/architecture/animation-and-time.md): the base
+        // value for an animated position is its exact sampled value at the current session time,
+        // whether or not an exact key sits there. sampleParameterValue() compiles the curve
+        // (decision 1) and samples it (the existing runtime::sampleAnimationCurve()) synchronously.
+        const auto sample = sampleParameterValue(*position, currentTime_);
+        const auto* vector = sample.has_value() ? std::get_if<document::Vec2d>(&*sample) : nullptr;
+        if (vector == nullptr) {
             return PositionInteractionRejection::NoResolvablePosition;
         }
-        const auto exactKey = std::ranges::find_if(
-            curve->keyframes, [this](const auto& key) { return key.time == currentTime_; });
-        if (exactKey == curve->keyframes.end()) {
-            return PositionInteractionRejection::AnimatedWithoutExactKey;
-        }
-        baseValue = exactKey->value;
+        baseValue = *vector;
     } else {
         return PositionInteractionRejection::DrivenParameter;
     }
@@ -889,6 +922,39 @@ CompositionSession::parameterForCurve(const document::AnimationCurveId curveId) 
         if (source != nullptr && source->curveId == curveId) {
             return parameter.id;
         }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::variant<double, document::Vec2d>>
+CompositionSession::sampleParameterValue(const document::ParameterRecord& parameter,
+                                         const core::RationalTime time) const {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return std::nullopt;
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    if (source == nullptr) {
+        // Only for animation-sourced parameters (decision 2); constant/driven callers keep their
+        // existing paths (constantValue()/constantVec2Value(), the explicit driven-refusal
+        // branches).
+        return std::nullopt;
+    }
+    if (const auto* scalarCurve = current->animationCurves().findScalar(source->curveId)) {
+        const auto sample =
+            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*scalarCurve), time);
+        if (!sample || !sample.value.has_value()) {
+            return std::nullopt;
+        }
+        return std::variant<double, document::Vec2d>(*sample.value);
+    }
+    if (const auto* vec2Curve = current->animationCurves().findVec2(source->curveId)) {
+        const auto sample =
+            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*vec2Curve), time);
+        if (!sample || !sample.value.has_value()) {
+            return std::nullopt;
+        }
+        return std::variant<double, document::Vec2d>(*sample.value);
     }
     return std::nullopt;
 }
