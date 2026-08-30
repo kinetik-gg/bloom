@@ -204,11 +204,14 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
         [&firstRequest, &invocationCount, pipeline = fixture.pipeline](
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
-            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();
             }
-            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
         });
     auto* viewer = new ui::ViewerEditor(session, controller);
 
@@ -268,10 +271,12 @@ void testNewestPendingRequestGate(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [&firstRequest, &invocationMutex, &invokedGenerations, &inFlight, &maximumInFlight,
-         pipeline = fixture.pipeline](const document::Snapshot& snapshot,
-                                      const runtime::PreviewRequestIdentity& desiredIdentity,
-                                      const std::size_t pixelStorageByteLimit,
-                                      runtime::TaskContext& context) mutable {
+         pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             const int concurrent = inFlight.fetch_add(1) + 1;
             int previousMaximum = maximumInFlight.load();
             while (concurrent > previousMaximum &&
@@ -286,7 +291,8 @@ void testNewestPendingRequestGate(Expectations& expectations) {
             if (invocationIndex == 0) {
                 firstRequest.enterAndWait();
             }
-            auto result = pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            auto result = pipeline(snapshot, desiredIdentity, pixelStorageByteLimit,
+                                   interactionOverride, context);
             --inFlight;
             return result;
         });
@@ -370,9 +376,12 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
         [&invocationCount, pipeline = fixture.pipeline](
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
-            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             ++invocationCount;
-            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
         },
         settings);
 
@@ -447,11 +456,14 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
         [&firstRequest, &invocationCount, pipeline = fixture.pipeline](
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
-            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();
             }
-            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
         },
         settings);
 
@@ -525,9 +537,12 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
         [&invocationCount, pipeline = fixture.pipeline](
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
-            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             ++invocationCount;
-            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
         });
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
@@ -610,10 +625,13 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
         [&outcome, &slowFailure, pipeline = fixture.pipeline](
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
-            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            const std::size_t pixelStorageByteLimit,
+            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
             switch (outcome.load()) {
             case Outcome::Prepared:
-                return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+                return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit,
+                                interactionOverride, context);
             case Outcome::SlowFailed:
                 slowFailure.enterAndWait();
                 return PipelineResult::failed({.code = "bloom.preview.test-slow-failure",
@@ -643,7 +661,8 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
             case Outcome::Mismatch: {
                 auto mismatched = desiredIdentity;
                 ++mismatched.requestGeneration;
-                return pipeline(snapshot, mismatched, pixelStorageByteLimit, context);
+                return pipeline(snapshot, mismatched, pixelStorageByteLimit, interactionOverride,
+                                context);
             }
             }
             return PipelineResult::failed({.code = "bloom.preview.invalid-test-outcome",
