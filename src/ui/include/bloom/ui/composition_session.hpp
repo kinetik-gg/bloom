@@ -32,8 +32,24 @@ struct Vec2d;
 
 namespace bloom::ui {
 
-using SelectionTarget =
-    std::variant<std::monostate, document::LayerId, document::NodeId, document::ParameterId>;
+// A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
+// stores the stable KeyframeId; row index and screen position are presentation details"). curveId
+// is included because it, together with keyframeId, is exactly what DeleteKeyframe/
+// UpdateScalarKeyframe/UpdateVec2Keyframe are keyed by (src/commands/include/bloom/commands/
+// animation_operations.hpp) -- no command needs the owning ParameterId. The owning ParameterId (and
+// from it, the contextual layer) is instead derived on demand from curveId wherever something
+// genuinely needs it (CompositionSession::selectKeyframe() does this once, to populate
+// contextualLayer, the same way selectParameter() already derives it rather than caching it), so it
+// is deliberately NOT stored here.
+struct KeyframeSelection final {
+    document::AnimationCurveId curveId;
+    document::KeyframeId keyframeId;
+
+    friend bool operator==(const KeyframeSelection&, const KeyframeSelection&) = default;
+};
+
+using SelectionTarget = std::variant<std::monostate, document::LayerId, document::NodeId,
+                                     document::ParameterId, KeyframeSelection>;
 
 struct CompositionSelection {
     SelectionTarget primary;
@@ -108,6 +124,11 @@ class CompositionSession final : public QObject {
     void selectLayer(document::LayerId layerId);
     void selectNode(document::NodeId nodeId);
     void selectParameter(document::ParameterId parameterId);
+    // Selecting a keyframe REPLACES the primary selection like every other select* method (one
+    // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key
+    // reports unavailable and leaves the selection untouched, mirroring selectLayer/selectNode/
+    // selectParameter's own not-found handling.
+    void selectKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId);
 
     [[nodiscard]] const document::NodeRecord* selectedNode() const noexcept;
     [[nodiscard]] std::optional<document::LayerId> layerForNode(document::NodeId nodeId) const;
@@ -130,6 +151,18 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool
     moveLayerBefore(document::LayerSlotId slotId,
                     std::optional<document::LayerSlotId> beforeSlotId = std::nullopt);
+
+    // Keyframe delete/move gestures (issue #84; docs/architecture/animation-and-time.md). Command
+    // construction lives here, not in the widget -- the same "one place" precedent as
+    // executePositionCommand(). Both are a no-op false with no transaction and the selection intact
+    // when nothing is selected or the command layer refuses (e.g. DeleteKeyframe's final-key
+    // refusal, UpdateScalarKeyframe/UpdateVec2Keyframe's duplicate-time refusal).
+    [[nodiscard]] bool deleteSelectedKeyframe();
+    // Reads the selected key's EXISTING value/interpolation from the current snapshot and passes
+    // them unchanged with newTime (scalar vs Vec2d branch resolved once, here). A newTime exactly
+    // equal to the key's current exact time commits nothing and returns true (docs/architecture/
+    // animation-and-time.md's zero-move precedent, mirrored from commitPositionInteraction()).
+    [[nodiscard]] bool moveSelectedKeyframe(core::RationalTime newTime);
 
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). Session-only,
@@ -210,7 +243,16 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool executePositionCommand(document::ParameterId parameterId,
                                               core::RationalTime time, document::Vec2d value,
                                               const QString& commandLabel);
-    [[nodiscard]] bool selectionExists(const CompositionSelection& selection) const noexcept;
+    // Not noexcept (see keyframeSelectionExists()): the KeyframeSelection branch delegates to it.
+    [[nodiscard]] bool selectionExists(const CompositionSelection& selection) const;
+    // Not noexcept: std::visit over the AnimationCurveStore's curve-kind variant cannot be proven
+    // exception-free by clang-tidy's bugprone-exception-escape (the variant is never valueless in
+    // practice, but std::visit's contract still permits bad_variant_access).
+    [[nodiscard]] bool keyframeSelectionExists(const KeyframeSelection& selection) const;
+    [[nodiscard]] std::optional<document::ParameterId>
+    parameterForCurve(document::AnimationCurveId curveId) const noexcept;
+    [[nodiscard]] std::optional<document::LayerId>
+    contextualLayerForParameter(document::ParameterId parameterId) const;
     void normalizeSelection();
     void reportUnavailable(const QString& message);
     // Cancels an active position interaction whose frozen base revision no longer matches

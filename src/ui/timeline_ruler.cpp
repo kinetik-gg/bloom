@@ -9,7 +9,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
+#include <QApplication>
 #include <QFontMetrics>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -17,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -132,19 +133,31 @@ struct KeyEntry final {
 // TimelineKeyframeRow*` in the FILE_SET header) purely to type its row list, so this definition
 // must live directly in bloom::ui rather than in an anonymous namespace (which would make it a
 // distinct, unrelated type from the header's forward declaration). It does not declare Q_OBJECT (no
-// signals are needed; key selection is reported through a plain callback), keeping it free of moc.
+// signals are needed; selection is reported by calling straight into CompositionSession, which the
+// row already holds a reference to), keeping it free of moc.
+//
+// Press-drag-release gesture (issue #84, decision 3): press selects (existing); once the pointer
+// moves past QApplication::startDragDistance() from the press point, drag mode arms -- a
+// presentation-only ghost diamond at the snapped target frame (this row's own TimelineAxis, the
+// SAME pixel<->frame mapping the ruler scrub uses) with NO document mutation until release, which
+// executes exactly one CompositionSession::moveSelectedKeyframe() transaction. Escape mid-drag
+// cancels with no transaction and clears the ghost; grabKeyboard()/releaseKeyboard() bracket the
+// drag so a real Escape key press reaches this row regardless of focus.
 class TimelineKeyframeRow final : public QWidget {
   public:
     TimelineKeyframeRow(CompositionSession& session, QString label,
                         const document::AnimationCurveId curveId, const bool isVec2,
-                        const std::optional<document::KeyframeId>* selectedKeyframe,
-                        std::function<void(document::KeyframeId)> onKeySelected, QWidget* parent)
+                        QWidget* parent)
         : QWidget(parent), session_(session), label_(std::move(label)), curveId_(curveId),
-          isVec2_(isVec2), selectedKeyframe_(selectedKeyframe),
-          onKeySelected_(std::move(onKeySelected)) {
+          isVec2_(isVec2) {
         setFixedHeight(kKeyframeRowHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { update(); });
+        // The row set is memoized (TimelineKeyframePanel::rebuild()), so this row instance
+        // typically survives a selection change or a document edit that leaves its own curve
+        // intact -- it must repaint itself on both rather than rely on being recreated.
+        connect(&session_, &CompositionSession::selectionChanged, this, [this] { update(); });
+        connect(&session_, &CompositionSession::snapshotChanged, this, [this] { update(); });
     }
 
   protected:
@@ -168,15 +181,31 @@ class TimelineKeyframeRow final : public QWidget {
         painter.setPen(QPen(palette().color(QPalette::Highlight).lighter(150), 1.0));
         painter.drawLine(QPointF(playheadX, 0.0), QPointF(playheadX, height()));
 
+        const auto* keySelection = std::get_if<KeyframeSelection>(&session_.selection().primary);
         const qreal centerY = height() / 2.0;
         for (const auto& key : collectKeys()) {
             const qreal x = axis->pixelForTime(key.time);
-            const bool selected = selectedKeyframe_ != nullptr && selectedKeyframe_->has_value() &&
-                                  **selectedKeyframe_ == key.id;
+            const bool selected = keySelection != nullptr && keySelection->curveId == curveId_ &&
+                                  keySelection->keyframeId == key.id;
             const QColor fill = selected ? palette().color(QPalette::Highlight)
                                          : palette().color(QPalette::ButtonText);
             painter.setPen(QPen(fill.darker(140), 1.0));
             painter.setBrush(fill);
+            QPolygonF diamond;
+            diamond << QPointF(x, centerY - kKeyDiamondRadius)
+                    << QPointF(x + kKeyDiamondRadius, centerY)
+                    << QPointF(x, centerY + kKeyDiamondRadius)
+                    << QPointF(x - kKeyDiamondRadius, centerY);
+            painter.drawPolygon(diamond);
+        }
+
+        if (dragging_ && ghostTime_.has_value()) {
+            // Presentation-only: paint the snapped drag target, never mutate the document mid-drag.
+            const qreal x = axis->pixelForTime(*ghostTime_);
+            QColor ghostColor = palette().color(QPalette::Highlight);
+            ghostColor.setAlpha(150);
+            painter.setPen(QPen(ghostColor.darker(120), 1.5, Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
             QPolygonF diamond;
             diamond << QPointF(x, centerY - kKeyDiamondRadius)
                     << QPointF(x + kKeyDiamondRadius, centerY)
@@ -220,12 +249,84 @@ class TimelineKeyframeRow final : public QWidget {
                 closestDistance = distance;
             }
         }
-        if (closest.has_value() && onKeySelected_) {
-            onKeySelected_(*closest);
+        if (!closest.has_value()) {
+            return;
         }
+        session_.selectKeyframe(curveId_, *closest);
+        if (auto* panel = parentWidget()) {
+            // TimelineKeyframePanel accepts focus so a real Delete/Backspace press reaches it after
+            // a click selects a key.
+            panel->setFocus(Qt::MouseFocusReason);
+        }
+        pressedKeyId_ = closest;
+        pressPos_ = event->position();
+        dragging_ = false;
+        ghostTime_.reset();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!pressedKeyId_.has_value()) {
+            QWidget::mouseMoveEvent(event);
+            return;
+        }
+        const QPointF pos = event->position();
+        if (!dragging_) {
+            const QPointF delta = pos - pressPos_;
+            const int manhattan =
+                static_cast<int>(std::abs(delta.x())) + static_cast<int>(std::abs(delta.y()));
+            if (manhattan < QApplication::startDragDistance()) {
+                return;
+            }
+            dragging_ = true;
+            grabKeyboard();
+        }
+        const auto* composition = session_.composition();
+        if (composition == nullptr) {
+            return;
+        }
+        const auto axis = TimelineAxis::create(*composition, width());
+        if (!axis.has_value()) {
+            return;
+        }
+        const auto index = axis->frameIndexForPixel(static_cast<int>(pos.x()));
+        ghostTime_ = frameTimeForIndex(axis->frameRate, axis->duration, index);
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton || !pressedKeyId_.has_value()) {
+            QWidget::mouseReleaseEvent(event);
+            return;
+        }
+        if (dragging_) {
+            releaseKeyboard();
+            if (ghostTime_.has_value()) {
+                // Refusal (duplicate time / model rejection) commits nothing and keeps the
+                // selection; the ghost is cleared unconditionally below either way.
+                (void)session_.moveSelectedKeyframe(*ghostTime_);
+            }
+        }
+        endDrag();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        if (dragging_ && event->key() == Qt::Key_Escape) {
+            releaseKeyboard();
+            endDrag();
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
     }
 
   private:
+    void endDrag() {
+        dragging_ = false;
+        pressedKeyId_.reset();
+        ghostTime_.reset();
+        update();
+    }
+
     [[nodiscard]] std::vector<KeyEntry> collectKeys() const {
         std::vector<KeyEntry> entries;
         const auto* composition = session_.composition();
@@ -258,8 +359,10 @@ class TimelineKeyframeRow final : public QWidget {
     QString label_;
     document::AnimationCurveId curveId_;
     bool isVec2_;
-    const std::optional<document::KeyframeId>* selectedKeyframe_;
-    std::function<void(document::KeyframeId)> onKeySelected_;
+    bool dragging_ = false;
+    std::optional<document::KeyframeId> pressedKeyId_;
+    QPointF pressPos_;
+    std::optional<core::RationalTime> ghostTime_;
 };
 
 namespace {
@@ -423,6 +526,9 @@ TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidge
     : QWidget(parent), session_(session) {
     setObjectName("timelineKeyframePanel");
     setAccessibleName(tr("Animated parameter keys"));
+    // Accepts focus so a click-selected key (TimelineKeyframeRow::mousePressEvent focuses this
+    // panel) can be deleted with Delete/Backspace (issue #84, decision 2).
+    setFocusPolicy(Qt::StrongFocus);
     rowsLayout_ = new QVBoxLayout(this);
     rowsLayout_->setContentsMargins(0, 0, 0, 0);
     rowsLayout_->setSpacing(0);
@@ -434,63 +540,61 @@ TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidge
     rebuild();
 }
 
+void TimelineKeyframePanel::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+        // deleteSelectedKeyframe() is a no-op false (no transaction, selection intact) when
+        // nothing is selected or the command layer refuses (e.g. the curve's last key) -- the
+        // widget has nothing further to do beyond the existing projection updates either way.
+        (void)session_.deleteSelectedKeyframe();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
 void TimelineKeyframePanel::rebuild() {
+    const auto specs = collectAnimatedParameters(session_);
+    std::vector<document::AnimationCurveId> currentCurveIds;
+    currentCurveIds.reserve(specs.size());
+    for (const auto& spec : specs) {
+        currentCurveIds.push_back(spec.curveId);
+    }
+    if (currentCurveIds == lastCurveIds_) {
+        // The row SET is unchanged (e.g. a keyframe selection/move/delete that leaves the same
+        // curves in place) -- existing rows already repaint themselves off selectionChanged/
+        // snapshotChanged, so skip tearing them down. This also sidesteps a real hazard: a row's
+        // own click emits selectionChanged synchronously (CompositionSession::selectKeyframe()),
+        // and destroying that same row from inside its own mousePressEvent would be a use-after-
+        // free.
+        setVisible(!specs.empty());
+        return;
+    }
+    lastCurveIds_ = currentCurveIds;
+
     QLayoutItem* item = nullptr;
     while ((item = rowsLayout_->takeAt(0)) != nullptr) {
-        delete item->widget();
+        if (auto* widget = item->widget()) {
+            // setParent(nullptr) first: takeAt() only detaches the item from the LAYOUT, the
+            // widget stays a child of this panel (and so still visible to findChildren()) until
+            // reparented. deleteLater(), not delete, for the actual destruction: rebuild() can
+            // itself be reached (via selectionChanged) from a row's own mouse event handler when
+            // the row SET does change (e.g. selecting a keyframe on a newly-selected layer's first
+            // row); deferring destruction keeps that call stack safe even in that case.
+            widget->setParent(nullptr);
+            widget->deleteLater();
+        }
         delete item;
     }
     rows_.clear();
 
-    const auto specs = collectAnimatedParameters(session_);
     rows_.reserve(specs.size());
     for (const auto& spec : specs) {
-        auto* row = new TimelineKeyframeRow(
-            session_, spec.label, spec.curveId, spec.isVec2, &selectedKeyframe_,
-            [this](const document::KeyframeId id) { handleKeySelected(id); }, this);
+        auto* row = new TimelineKeyframeRow(session_, spec.label, spec.curveId, spec.isVec2, this);
         rowsLayout_->addWidget(row);
         rows_.push_back(row);
     }
 
-    pruneSelectionIfMissing();
     setVisible(!specs.empty());
-}
-
-void TimelineKeyframePanel::handleKeySelected(const document::KeyframeId id) {
-    if (selectedKeyframe_.has_value() && *selectedKeyframe_ == id) {
-        return;
-    }
-    selectedKeyframe_ = id;
-    for (auto* row : rows_) {
-        row->update();
-    }
-}
-
-void TimelineKeyframePanel::pruneSelectionIfMissing() {
-    if (!selectedKeyframe_.has_value()) {
-        return;
-    }
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        selectedKeyframe_.reset();
-        return;
-    }
-    for (const auto& record : composition->animationCurves().records()) {
-        if (const auto* scalar = std::get_if<document::ScalarAnimationCurve>(&record)) {
-            for (const auto& key : scalar->keyframes) {
-                if (key.id == *selectedKeyframe_) {
-                    return;
-                }
-            }
-        } else if (const auto* vec2 = std::get_if<document::Vec2AnimationCurve>(&record)) {
-            for (const auto& key : vec2->keyframes) {
-                if (key.id == *selectedKeyframe_) {
-                    return;
-                }
-            }
-        }
-    }
-    selectedKeyframe_.reset();
 }
 
 } // namespace bloom::ui

@@ -205,18 +205,27 @@ void CompositionSession::selectParameter(const document::ParameterId parameterId
         return;
     }
 
-    std::optional<document::LayerId> contextualLayer;
-    for (const auto& node : current->graph().nodes()) {
-        const auto binding = std::ranges::find_if(node.parameters, [parameterId](const auto& item) {
-            return item.parameterId == parameterId;
-        });
-        if (binding != node.parameters.end()) {
-            contextualLayer = layerForNode(node.id);
-            break;
-        }
+    CompositionSelection next{.primary = parameterId,
+                              .contextualLayer = contextualLayerForParameter(parameterId)};
+    if (selection_ != next) {
+        selection_ = next;
+        emit selectionChanged();
+    }
+}
+
+void CompositionSession::selectKeyframe(const document::AnimationCurveId curveId,
+                                        const document::KeyframeId keyframeId) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const KeyframeSelection target{curveId, keyframeId};
+    if (!keyframeSelectionExists(target)) {
+        reportUnavailable(QStringLiteral("The selected keyframe is no longer available"));
+        return;
     }
 
-    CompositionSelection next{.primary = parameterId, .contextualLayer = contextualLayer};
+    const auto parameterId = parameterForCurve(curveId);
+    const auto contextualLayer =
+        parameterId.has_value() ? contextualLayerForParameter(*parameterId) : std::nullopt;
+    CompositionSelection next{.primary = target, .contextualLayer = contextualLayer};
     if (selection_ != next) {
         selection_ = next;
         emit selectionChanged();
@@ -543,6 +552,64 @@ bool CompositionSession::moveLayerBefore(const document::LayerSlotId slotId,
     return execute(std::move(transaction));
 }
 
+bool CompositionSession::deleteSelectedKeyframe() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
+    if (keySelection == nullptr) {
+        return false;
+    }
+    commands::Transaction transaction("Delete Keyframe", snapshot_.revision());
+    transaction.emplace<commands::DeleteKeyframe>(compositionId_, keySelection->curveId,
+                                                  keySelection->keyframeId);
+    return execute(std::move(transaction));
+}
+
+bool CompositionSession::moveSelectedKeyframe(const core::RationalTime newTime) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
+    if (keySelection == nullptr) {
+        return false;
+    }
+    const auto* current = composition();
+    const auto* record =
+        current == nullptr ? nullptr : current->animationCurves().find(keySelection->curveId);
+    if (record == nullptr) {
+        return false;
+    }
+
+    commands::Transaction transaction("Move Keyframe", snapshot_.revision());
+    if (const auto* scalar = std::get_if<document::ScalarAnimationCurve>(record)) {
+        const auto key = std::ranges::find(scalar->keyframes, keySelection->keyframeId,
+                                           &document::ScalarKeyframe::id);
+        if (key == scalar->keyframes.end()) {
+            return false;
+        }
+        if (key->time == newTime) {
+            // Zero effective change commits nothing (docs/architecture/animation-and-time.md's
+            // zero-move precedent -- mirrors commitPositionInteraction()'s zero-move branch).
+            return true;
+        }
+        transaction.emplace<commands::UpdateScalarKeyframe>(compositionId_, keySelection->curveId,
+                                                            keySelection->keyframeId, newTime,
+                                                            key->value, key->outgoingInterpolation);
+    } else if (const auto* vec2 = std::get_if<document::Vec2AnimationCurve>(record)) {
+        const auto key = std::ranges::find(vec2->keyframes, keySelection->keyframeId,
+                                           &document::Vec2Keyframe::id);
+        if (key == vec2->keyframes.end()) {
+            return false;
+        }
+        if (key->time == newTime) {
+            return true;
+        }
+        transaction.emplace<commands::UpdateVec2Keyframe>(compositionId_, keySelection->curveId,
+                                                          keySelection->keyframeId, newTime,
+                                                          key->value, key->outgoingInterpolation);
+    } else {
+        return false;
+    }
+    return execute(std::move(transaction));
+}
+
 bool CompositionSession::positionInteractionActive() const noexcept {
     return positionInteraction_.has_value();
 }
@@ -773,7 +840,7 @@ CompositionSession::parameterForNode(const document::NodeRecord& node,
                                             : current->parameters().find(binding->parameterId);
 }
 
-bool CompositionSession::selectionExists(const CompositionSelection& selection) const noexcept {
+bool CompositionSession::selectionExists(const CompositionSelection& selection) const {
     const auto* current = composition();
     if (current == nullptr) {
         return false;
@@ -787,8 +854,60 @@ bool CompositionSession::selectionExists(const CompositionSelection& selection) 
     if (const auto* nodeId = std::get_if<document::NodeId>(&selection.primary)) {
         return current->graph().findNode(*nodeId) != nullptr;
     }
+    if (const auto* keySelection = std::get_if<KeyframeSelection>(&selection.primary)) {
+        return keyframeSelectionExists(*keySelection);
+    }
     const auto* parameterId = std::get_if<document::ParameterId>(&selection.primary);
     return parameterId != nullptr && current->parameters().find(*parameterId) != nullptr;
+}
+
+bool CompositionSession::keyframeSelectionExists(const KeyframeSelection& selection) const {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return false;
+    }
+    const auto* record = current->animationCurves().find(selection.curveId);
+    if (record == nullptr) {
+        return false;
+    }
+    return std::visit(
+        [&](const auto& curve) {
+            return std::ranges::any_of(
+                curve.keyframes, [&](const auto& key) { return key.id == selection.keyframeId; });
+        },
+        *record);
+}
+
+std::optional<document::ParameterId>
+CompositionSession::parameterForCurve(const document::AnimationCurveId curveId) const noexcept {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto& parameter : current->parameters().records()) {
+        const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+        if (source != nullptr && source->curveId == curveId) {
+            return parameter.id;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<document::LayerId>
+CompositionSession::contextualLayerForParameter(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto& node : current->graph().nodes()) {
+        const auto binding = std::ranges::find_if(node.parameters, [parameterId](const auto& item) {
+            return item.parameterId == parameterId;
+        });
+        if (binding != node.parameters.end()) {
+            return layerForNode(node.id);
+        }
+    }
+    return std::nullopt;
 }
 
 void CompositionSession::normalizeSelection() {
