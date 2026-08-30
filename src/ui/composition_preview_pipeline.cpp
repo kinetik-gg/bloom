@@ -154,7 +154,9 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
     return [&compiler, &evaluator, &displayPreparer](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
-               const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) {
+               const std::size_t pixelStorageByteLimit,
+               const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+               runtime::TaskContext& context) {
         using TaskResult = runtime::TaskResult<PreviewPreparationResultHandle>;
 
         if (context.isCancellationRequested()) {
@@ -172,9 +174,15 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
                                 .subphase = "Compiling the reachable composition graph",
                                 .completed = 0,
                                 .total = std::nullopt});
-        auto compileResult =
-            compiler.compile({.snapshot = snapshot, .compositionId = desiredIdentity.compositionId},
-                             context.cancellation());
+        // docs/architecture/animation-and-time.md, "Direct Manipulation And Preview Overrides":
+        // SnapshotCompileRequest carries zero or one typed parameter override; admission
+        // (revision/target/reachability/schema/kind/domain, then source kind) is entirely
+        // SnapshotCompiler's -- this only threads the override the controller already sourced from
+        // the session's active interaction.
+        auto compileResult = compiler.compile({.snapshot = snapshot,
+                                               .compositionId = desiredIdentity.compositionId,
+                                               .parameterOverride = interactionOverride},
+                                              context.cancellation());
         auto diagnostics = taskDiagnostics(compileResult);
 
         switch (compileResult.status) {

@@ -9,11 +9,15 @@
 #include <bloom/render/image_types.hpp>
 
 #include <QImage>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QResizeEvent>
 
 #include <algorithm>
 #include <limits>
+#include <variant>
 
 namespace bloom::ui {
 namespace {
@@ -127,6 +131,13 @@ void drawDiagnosticBanner(QPainter& painter, const QRectF& available, const QStr
     painter.drawText(banner.adjusted(10.0, 0.0, -10.0, 0.0), Qt::AlignCenter, visible);
 }
 
+// The composed-frame rectangle paintEvent() draws pixels into (see the identical expression
+// there); shared with currentMapping() so direct manipulation maps screen deltas against exactly
+// the rectangle the user sees.
+QRectF viewerFrame(const QWidget& widget) {
+    return QRectF(widget.rect()).adjusted(28.0, 28.0, -28.0, -28.0);
+}
+
 } // namespace
 
 QRectF fitDisplayRect(const QRectF& available, const render::ImageExtent extent,
@@ -158,6 +169,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     setAccessibleName(tr("Composition viewer"));
     setMinimumSize(220, 150);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it.
+    setFocusPolicy(Qt::StrongFocus);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             qOverload<>(&ViewerEditor::update));
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -166,6 +179,12 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             qOverload<>(&ViewerEditor::update));
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
         updatePreviewAccessibility();
+        // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
+        // (docs/architecture/animation-and-time.md); a mid-drag mapping change cancels the gesture
+        // rather than silently mis-mapping the rest of it.
+        if (dragActive_ && !mappingStillValid()) {
+            endDrag(false);
+        }
         update();
     });
     updatePreviewAccessibility();
@@ -176,7 +195,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), QColor(15, 16, 18));
 
-    const QRectF frame = QRectF(rect()).adjusted(28.0, 28.0, -28.0, -28.0);
+    const QRectF frame = viewerFrame(*this);
     painter.fillRect(frame, QColor(39, 41, 45));
     painter.setPen(QPen(QColor(77, 80, 87), 1.0));
     painter.drawRect(frame.adjusted(0.0, 0.0, -1.0, -1.0));
@@ -289,6 +308,137 @@ void ViewerEditor::updatePreviewAccessibility() {
     }
     setAccessibleDescription(
         tr("%1. %2. Reference display.").arg(preview.message, frameDescription));
+}
+
+std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
+    const auto& preview = previewController_.state();
+    const PreparedPreviewFrameHandle& frameHandle = preview.frame;
+    if (frameHandle == nullptr) {
+        return std::nullopt;
+    }
+    // A stale frame from another composition -- or an older revision of this one -- is never a
+    // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
+    // Overrides").
+    if (frameHandle->desiredIdentity().compositionId != session_.compositionId() ||
+        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision()) {
+        return std::nullopt;
+    }
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return std::nullopt;
+    }
+    const auto viewResult = frameHandle->displayBuffer().view();
+    if (!viewResult) {
+        return std::nullopt;
+    }
+    const auto view = *viewResult.value();
+    const auto descriptorResult = view.descriptor();
+    if (!descriptorResult.has_value()) {
+        return std::nullopt;
+    }
+    const auto descriptor = *descriptorResult;
+    const QRectF displayRect = fitDisplayRect(
+        viewerFrame(*this), descriptor.displayWindow().extent(), descriptor.pixelAspect());
+    if (displayRect.isEmpty()) {
+        return std::nullopt;
+    }
+    return PositionInteractionMapping{
+        .displayRect = displayRect,
+        .compositionFormat = composition->format(),
+        .resolution = frameHandle->desiredIdentity().resolution,
+        .pixelAspect = descriptor.pixelAspect(),
+        .displayDescriptor = descriptor,
+    };
+}
+
+bool ViewerEditor::mappingStillValid() const {
+    if (!activeMapping_.has_value()) {
+        return false;
+    }
+    const auto mapping = currentMapping();
+    return mapping.has_value() && *mapping == *activeMapping_;
+}
+
+void ViewerEditor::endDrag(const bool commit) {
+    dragActive_ = false;
+    activeMapping_.reset();
+    if (commit) {
+        (void)session_.commitPositionInteraction();
+    } else {
+        session_.cancelPositionInteraction();
+    }
+    // Reuses TimelineRuler's Interactive-cadence arming (docs/architecture/animation-and-time.md,
+    // "Session Time And Scrubbing"): bypasses any remaining trailing delay and disarms it.
+    previewController_.notifyScrubEnded();
+}
+
+void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton ||
+        !std::holds_alternative<document::LayerId>(session_.selection().primary)) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    auto mapping = currentMapping();
+    if (!mapping.has_value()) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    if (session_.beginPositionInteraction(*mapping).has_value()) {
+        // Typed rejection (no selection, no resolvable/animated-without-a-key/driven position, or
+        // an empty mapping): the drag simply never starts. No cursor/handle art communicates this
+        // in v1 -- the gesture itself is the whole slice.
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    dragActive_ = true;
+    dragOrigin_ = event->position();
+    activeMapping_ = mapping;
+    setFocus(Qt::MouseFocusReason);
+    previewController_.beginInteractiveScrub();
+    event->accept();
+}
+
+void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
+    if (!dragActive_) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    if (!mappingStillValid()) {
+        endDrag(false);
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+    // Total displacement from the ORIGINAL press point, not from the previous move -- base value
+    // plus TOTAL gesture displacement, never a chain of already-rounded intermediates (docs/
+    // architecture/animation-and-time.md).
+    const QPointF delta = event->position() - dragOrigin_;
+    session_.updatePositionInteraction(delta.x(), delta.y());
+    event->accept();
+}
+
+void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (!dragActive_ || event->button() != Qt::LeftButton) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+    endDrag(true);
+    event->accept();
+}
+
+void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (dragActive_ && event->key() == Qt::Key_Escape) {
+        endDrag(false);
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void ViewerEditor::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (dragActive_) {
+        endDrag(false);
+    }
 }
 
 } // namespace bloom::ui

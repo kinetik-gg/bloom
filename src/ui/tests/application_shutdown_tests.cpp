@@ -117,7 +117,7 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [&gate](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-                runtime::TaskContext&) {
+                const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
             gate.enterAndWait();
             return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });

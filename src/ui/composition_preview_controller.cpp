@@ -69,6 +69,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCompositionChanged);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
+    connect(&session_, &CompositionSession::positionInteractionChanged, this,
+            &CompositionPreviewController::handlePositionInteractionChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     interactiveCadenceTimer_.setSingleShot(true);
@@ -114,6 +116,20 @@ void CompositionPreviewController::handleCurrentTimeChanged() {
     // animation-and-time.md, "Session Time And Scrubbing"); which priority it advances at depends
     // on whether the change came from an armed Interactive gesture (see beginInteractiveScrub()) or
     // a discrete change such as typed time entry, key selection, or document refresh.
+    requestPreview(false, interactiveTimeChangeArmed_ ? PreviewRequestKind::Interactive
+                                                      : PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::handlePositionInteractionChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_) {
+        return;
+    }
+    // docs/architecture/animation-and-time.md: "Scrub, playback, and direct manipulation use
+    // Interactive priority". beginInteractiveScrub()'s arming flag already means exactly "an
+    // Interactive pointer gesture is driving preview-affecting signals right now" -- the Viewer
+    // arms it for a position-interaction gesture the same way TimelineRuler arms it for a scrub, so
+    // this reuses it rather than adding a duplicate boolean.
     requestPreview(false, interactiveTimeChangeArmed_ ? PreviewRequestKind::Interactive
                                                       : PreviewRequestKind::Visible);
 }
@@ -249,10 +265,18 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         return;
     }
 
+    // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
+    // animation-and-time.md), and are read fresh here -- never cached across requests.
+    std::optional<runtime::SnapshotParameterOverride> interactionOverride;
+    if (kind == PreviewRequestKind::Interactive) {
+        interactionOverride = session_.positionInteractionOverride();
+    }
+
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
-                                  .kind = kind};
+                                  .kind = kind,
+                                  .interactionOverride = interactionOverride};
 
     if (active_.has_value()) {
         active_->handle.cancel();
@@ -308,14 +332,17 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
 
     auto preparation = preparation_;
     const std::size_t pixelStorageByteLimit = pendingRequest.pixelStorageByteLimit;
+    const auto interactionOverride = pendingRequest.interactionOverride;
     auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
         std::move(request),
         [snapshot = std::move(pendingRequest.snapshot), desiredIdentity, pixelStorageByteLimit,
+         interactionOverride,
          preparation = std::move(preparation)](runtime::TaskContext& context) mutable {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
             }
-            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit,
+                               interactionOverride, context);
         });
 
     if (!submission.accepted()) {

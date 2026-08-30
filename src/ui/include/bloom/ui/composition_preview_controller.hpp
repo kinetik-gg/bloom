@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <QObject>
@@ -48,10 +49,15 @@ struct CompositionPreviewSettings final {
 
 using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPreviewFrame>;
 using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
+// The fourth parameter carries the session's active-interaction override (docs/architecture/
+// animation-and-time.md, "Direct Manipulation And Preview Overrides"): populated only for
+// Interactive requests built while a position interaction is armed, std::nullopt otherwise. It
+// rides straight into SnapshotCompileRequest::parameterOverride in
+// makeCompositionPreviewPipeline().
 using PreviewPreparationFunction =
     std::function<runtime::TaskResult<PreviewPreparationResultHandle>(
         const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-        runtime::TaskContext&)>;
+        const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&)>;
 
 enum class PreviewActivity : std::uint8_t {
     Rendering,
@@ -117,6 +123,9 @@ class CompositionPreviewController final : public QObject {
         runtime::PreviewRequestIdentity desiredIdentity;
         std::size_t pixelStorageByteLimit;
         PreviewRequestKind kind = PreviewRequestKind::Visible;
+        // Sourced fresh from the session at requestPreview() build time; never cached across
+        // requests (docs/architecture/animation-and-time.md).
+        std::optional<runtime::SnapshotParameterOverride> interactionOverride;
     };
 
     void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind);
@@ -126,6 +135,7 @@ class CompositionPreviewController final : public QObject {
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
+    void handlePositionInteractionChanged();
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
