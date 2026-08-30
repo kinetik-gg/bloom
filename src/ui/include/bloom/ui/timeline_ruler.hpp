@@ -4,9 +4,9 @@
 
 #include <QWidget>
 
-#include <optional>
 #include <vector>
 
+class QKeyEvent;
 class QVBoxLayout;
 
 namespace bloom::ui {
@@ -43,33 +43,39 @@ class TimelineRuler final : public QWidget {
 
 // One row per animated parameter of the current selection's layer (position/opacity only in
 // version 1 -- docs/architecture/animation-and-time.md, "Durable Type Model"): a name label plus a
-// key lane painting each key at its exact time. Clicking a key selects it.
+// key lane painting each key at its exact time. Clicking a key selects it; dragging past
+// QApplication::startDragDistance() moves it (a presentation-only ghost until release); Delete/
+// Backspace on the panel deletes the selected key.
 //
-// Selection-model finding: bloom::ui::CompositionSelection (composition_session.hpp) has no
-// keyframe concept -- its SelectionTarget variant covers only LayerId/NodeId/ParameterId. Per this
-// task's decision 3, key selection is therefore kept as TimelineEditor-local state here, keyed by
-// the durable KeyframeId, and survives a rebuild (curve edit, undo/redo) when the key still exists.
-// Unifying it into one primary/contextual selection truth across editors is left to the
-// direct-manipulation slice that consumes it.
+// Selection-model finding (issue #84): bloom::ui::CompositionSelection now carries a
+// bloom::ui::KeyframeSelection alternative (curveId + KeyframeId) as its primary selection, so this
+// panel no longer keeps a local selectedKeyframe_ -- it reads/writes CompositionSession::
+// selection()/selectKeyframe()/deleteSelectedKeyframe()/moveSelectedKeyframe(), the one
+// primary/contextual selection truth every other editor already shares (docs/roadmap.md's Batch-4
+// gate). Pruning a vanished key is likewise centralized: CompositionSession::normalizeSelection()
+// (run after every session-mediated execute/undo/redo) already invalidates any selection kind that
+// no longer resolves against the current snapshot, so this panel needs no local prune pass.
 class TimelineKeyframePanel final : public QWidget {
     Q_OBJECT
 
   public:
     explicit TimelineKeyframePanel(CompositionSession& session, QWidget* parent = nullptr);
 
-    [[nodiscard]] std::optional<document::KeyframeId> selectedKeyframe() const noexcept {
-        return selectedKeyframe_;
-    }
+  protected:
+    void keyPressEvent(QKeyEvent* event) override;
 
   private:
     void rebuild();
-    void handleKeySelected(document::KeyframeId id);
-    void pruneSelectionIfMissing();
 
     CompositionSession& session_;
     QVBoxLayout* rowsLayout_ = nullptr;
     std::vector<class TimelineKeyframeRow*> rows_;
-    std::optional<document::KeyframeId> selectedKeyframe_;
+    // Memoizes which curves currently have a row, so rebuild() only tears down/recreates widgets
+    // when the row SET actually changes (a different contextual layer, or a curve appearing/
+    // disappearing) rather than on every selectionChanged/snapshotChanged -- notably including the
+    // one a row's OWN click/drag emits via CompositionSession::selectKeyframe(). Without this, a
+    // key click would destroy the very row handling the mouse event that triggered it.
+    std::vector<document::AnimationCurveId> lastCurveIds_;
 };
 
 } // namespace bloom::ui
