@@ -6,7 +6,9 @@
 
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -22,11 +24,23 @@ class TaskUiBridge;
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
     std::size_t{512} * 1024U * 1024U;
 
+// docs/architecture/animation-and-time.md, "Session Time And Scrubbing": scrub, playback, and
+// direct manipulation submit at Interactive priority; discrete typed time entry, key selection,
+// and document refresh submit at Visible priority (today's only submission priority).
+enum class PreviewRequestKind : std::uint8_t {
+    Interactive,
+    Visible,
+};
+
 struct CompositionPreviewSettings final {
     runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
+    // The injectable 16 ms trailing cadence for Interactive requests (pointer storms): a burst of
+    // Interactive requests inside this window coalesces to only the newest, submitted once the
+    // window elapses. Tests inject a tiny interval; production keeps the default.
+    std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};
 
     friend bool operator==(const CompositionPreviewSettings&,
                            const CompositionPreviewSettings&) = default;
@@ -80,6 +94,15 @@ class CompositionPreviewController final : public QObject {
     void requestRefresh();
     void beginShutdown();
 
+    // Wired from the timeline's mouse-press (or any other Interactive-time-change gesture, e.g. a
+    // future playback transport): while armed, the currentTimeChanged-triggered request below
+    // submits at Interactive priority through the trailing cadence instead of Visible.
+    void beginInteractiveScrub();
+    // Wired from the timeline's mouse-release: disarms beginInteractiveScrub() and bypasses any
+    // remaining trailing-cadence delay, submitting the newest pending Interactive request
+    // immediately -- while still honoring the one-active/one-newest gate below.
+    void notifyScrubEnded();
+
   signals:
     void stateChanged();
 
@@ -93,9 +116,10 @@ class CompositionPreviewController final : public QObject {
         document::Snapshot snapshot;
         runtime::PreviewRequestIdentity desiredIdentity;
         std::size_t pixelStorageByteLimit;
+        PreviewRequestKind kind = PreviewRequestKind::Visible;
     };
 
-    void requestPreview(bool clearLastGoodFrame);
+    void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind);
     void submitPreview(PendingRequest request, PreparedPreviewFrameHandle retainedFrame);
     void publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
                           std::optional<runtime::TaskId> taskId,
@@ -105,6 +129,7 @@ class CompositionPreviewController final : public QObject {
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
+    void flushCadence();
     [[nodiscard]] bool isCurrent(const ActiveRequest& request) const;
     [[nodiscard]] bool
     liveSessionMatches(const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept;
@@ -117,6 +142,8 @@ class CompositionPreviewController final : public QObject {
     CompositionPreviewState state_;
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
+    QTimer interactiveCadenceTimer_;
+    bool interactiveTimeChangeArmed_ = false;
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
 };

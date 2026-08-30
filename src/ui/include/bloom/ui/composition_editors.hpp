@@ -10,13 +10,17 @@ class QTreeWidget;
 
 namespace bloom::ui {
 
+class CompositionPreviewController;
 class CompositionSession;
+class TimelineKeyframePanel;
+class TimelineRuler;
 
 class TimelineEditor final : public QWidget {
     Q_OBJECT
 
   public:
-    explicit TimelineEditor(CompositionSession& session, QWidget* parent = nullptr);
+    TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
+                   QWidget* parent = nullptr);
 
   private:
     void rebuild();
@@ -24,6 +28,8 @@ class TimelineEditor final : public QWidget {
     void updateHistoryActions();
 
     CompositionSession& session_;
+    TimelineRuler* ruler_ = nullptr;
+    TimelineKeyframePanel* keyframes_ = nullptr;
     QTreeWidget* layers_ = nullptr;
     QToolButton* addButton_ = nullptr;
     QToolButton* undoButton_ = nullptr;

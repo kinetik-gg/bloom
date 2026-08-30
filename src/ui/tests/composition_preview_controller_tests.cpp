@@ -338,6 +338,177 @@ void testNewestPendingRequestGate(Expectations& expectations) {
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+std::optional<bloom::runtime::TaskSnapshot>
+snapshotForGeneration(const bloom::runtime::TaskScheduler& scheduler,
+                      const std::uint64_t generation) {
+    for (const auto& snapshot : scheduler.snapshots()) {
+        if (snapshot.sourceVersion.requestGeneration == generation) {
+            return snapshot;
+        }
+    }
+    return std::nullopt;
+}
+
+// docs/architecture/animation-and-time.md, "Session Time And Scrubbing": a burst of Interactive
+// requests inside the injectable trailing cadence window coalesces to only the newest, submitted
+// once the window elapses; Visible requests bypass the cadence entirely.
+void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Interactive Cadence Test");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    std::atomic<int> invocationCount = 0;
+    ui::CompositionPreviewSettings settings;
+    settings.interactiveTrailingCadence = 40ms;
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&invocationCount, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            ++invocationCount;
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+        },
+        settings);
+
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "initial frame becomes ready before the cadence burst");
+    const auto callsBeforeBurst = invocationCount.load();
+
+    controller.beginInteractiveScrub();
+    std::vector<core::RationalTime> times;
+    for (std::int64_t numerator = 1; numerator <= 6; ++numerator) {
+        const auto time = core::RationalTime::create(numerator, 100);
+        expectations.expect(time.has_value(), "burst time fixture is valid");
+        times.push_back(time.value_or(core::RationalTime{}));
+    }
+    for (const auto& time : times) {
+        expectations.expect(session.setCurrentTime(time),
+                            "each distinct burst time is accepted by the session");
+    }
+    const auto newestGeneration = generation(controller.state());
+    expectations.expect(controller.state().desiredIdentity.has_value() &&
+                            controller.state().desiredIdentity->time == times.back(),
+                        "the desired identity advances immediately to the newest scrub time");
+    expectations.expect(invocationCount.load() == callsBeforeBurst,
+                        "no preparation call fires before the trailing cadence window elapses");
+
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the coalesced newest Interactive request completes");
+    expectations.expect(invocationCount.load() == callsBeforeBurst + 1,
+                        "the entire burst submits only once, for the newest request");
+    const auto interactiveSnapshot = snapshotForGeneration(scheduler, newestGeneration);
+    expectations.expect(interactiveSnapshot.has_value() &&
+                            interactiveSnapshot->priority == runtime::TaskPriority::Interactive,
+                        "the coalesced burst submits at Interactive priority");
+
+    // A Visible request (discrete typed time entry, key selection, or document refresh) bypasses
+    // the cadence entirely, even while a scrub gesture is still armed.
+    const auto callsBeforeVisible = invocationCount.load();
+    controller.requestRefresh();
+    const auto visibleGeneration = generation(controller.state());
+    expectations.expect(waitUntil([&] { return invocationCount.load() > callsBeforeVisible; }),
+                        "a Visible request submits without waiting for any cadence window");
+    const auto visibleSnapshot = snapshotForGeneration(scheduler, visibleGeneration);
+    expectations.expect(visibleSnapshot.has_value() &&
+                            visibleSnapshot->priority == runtime::TaskPriority::Visible,
+                        "the Visible request submits at Visible priority");
+
+    controller.notifyScrubEnded();
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
+// The one-active/one-newest gate is untouched beneath the cadence: while a task is active, an
+// Interactive burst never invokes preparation again; the superseded active request still runs to
+// terminal before the newest pending request submits, and notifyScrubEnded() bypasses the
+// remaining trailing delay once the gate opens (docs/architecture/animation-and-time.md).
+void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Interactive Gate Test");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    WorkerGate firstRequest;
+    std::atomic<int> invocationCount = 0;
+    ui::CompositionPreviewSettings settings;
+    // A long cadence window proves notifyScrubEnded() bypasses it rather than merely outlasting it.
+    settings.interactiveTrailingCadence = 2000ms;
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&firstRequest, &invocationCount, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit, runtime::TaskContext& context) mutable {
+            if (invocationCount.fetch_add(1) == 0) {
+                firstRequest.enterAndWait();
+            }
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, context);
+        },
+        settings);
+
+    expectations.expect(waitUntil([&] { return firstRequest.entered(); }),
+                        "the initial Visible request occupies the active-request gate");
+
+    controller.beginInteractiveScrub();
+    std::vector<core::RationalTime> times;
+    for (std::int64_t numerator = 1; numerator <= 4; ++numerator) {
+        const auto time = core::RationalTime::create(numerator, 100);
+        expectations.expect(time.has_value(), "gate burst time fixture is valid");
+        times.push_back(time.value_or(core::RationalTime{}));
+    }
+    for (const auto& time : times) {
+        expectations.expect(session.setCurrentTime(time), "each gated burst time is accepted");
+    }
+    const auto newestGeneration = generation(controller.state());
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(invocationCount.load() == 1,
+                        "an Interactive burst behind the active gate never invokes preparation");
+    expectations.expect(controller.state().activity == ui::PreviewActivity::Rendering &&
+                            !controller.state().taskId.has_value(),
+                        "the newest pending Interactive request is not yet submitted");
+
+    firstRequest.release();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the pending Interactive request submits once the active task terminates");
+    expectations.expect(invocationCount.load() == 2,
+                        "the superseded active request ran to terminal before the pending request "
+                        "submitted, and only the newest pending request was ever prepared");
+    const auto interactiveSnapshot = snapshotForGeneration(scheduler, newestGeneration);
+    expectations.expect(interactiveSnapshot.has_value() &&
+                            interactiveSnapshot->priority == runtime::TaskPriority::Interactive,
+                        "the gate-held request still submits at Interactive priority");
+
+    // Now that nothing is active, a fresh Interactive request genuinely starts the (long) trailing
+    // cadence timer; notifyScrubEnded() must bypass it rather than merely outlast it.
+    const auto callsBeforeSecondScrub = invocationCount.load();
+    const auto secondTime = core::RationalTime::create(37, 100);
+    expectations.expect(secondTime.has_value() && session.setCurrentTime(*secondTime),
+                        "a fresh post-gate scrub time is accepted");
+    expectations.expect(invocationCount.load() == callsBeforeSecondScrub,
+                        "the fresh Interactive request is held by the 2 second cadence, not yet "
+                        "submitted");
+    QElapsedTimer bypassTimer;
+    bypassTimer.start();
+    controller.notifyScrubEnded();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "notifyScrubEnded() flushes the pending Interactive request");
+    expectations.expect(bypassTimer.elapsed() < 1000,
+                        "the flush happens immediately, far under the 2 second cadence window");
+    expectations.expect(invocationCount.load() == callsBeforeSecondScrub + 1,
+                        "exactly one additional preparation call services the bypassed request");
+
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 void testSameRevisionGenerationAndSelection(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Generation Test");
@@ -604,6 +775,8 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testRevisionAndPanelSuppression(expectations);
     testNewestPendingRequestGate(expectations);
+    testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);
+    testActiveGateHoldsAndScrubEndBypassesRemainingCadence(expectations);
     testSameRevisionGenerationAndSelection(expectations);
     testLastGoodAndOutcomeMapping(expectations);
     testCompositionSwitchClearsPixels(expectations);

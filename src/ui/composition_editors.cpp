@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_editors.hpp>
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 
 #include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
@@ -183,7 +184,8 @@ QToolButton* makeToolButton(const QString& text, const QString& accessibleName, 
 
 } // namespace
 
-TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
+TimelineEditor::TimelineEditor(CompositionSession& session,
+                               CompositionPreviewController& previewController, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("timelineEditor");
     setAccessibleName(tr("Layers timeline"));
@@ -223,6 +225,9 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
     controlsLayout->addWidget(undoButton_);
     controlsLayout->addWidget(redoButton_);
 
+    ruler_ = new TimelineRuler(session_, previewController, this);
+    keyframes_ = new TimelineKeyframePanel(session_, this);
+
     layers_ = new QTreeWidget(this);
     layers_->setObjectName("layerStackView");
     layers_->setAccessibleName(tr("Composition layers"));
@@ -237,6 +242,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session, QWidget* parent)
     layers_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
 
     layout->addWidget(controls);
+    layout->addWidget(ruler_);
+    layout->addWidget(keyframes_);
     layout->addWidget(layers_, 1);
 
     connect(addSolidAction, &QAction::triggered, this, [this] {
