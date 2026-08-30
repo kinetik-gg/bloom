@@ -240,15 +240,7 @@ class TimelineKeyframeRow final : public QWidget {
         }
 
         const qreal clickX = event->position().x();
-        std::optional<document::KeyframeId> closest;
-        qreal closestDistance = std::numeric_limits<qreal>::max();
-        for (const auto& key : collectKeys()) {
-            const qreal distance = std::abs(axis->pixelForTime(key.time) - clickX);
-            if (distance <= kKeyHitToleranceLogicalPixels && distance < closestDistance) {
-                closest = key.id;
-                closestDistance = distance;
-            }
-        }
+        const auto closest = hitTestKey(*axis, clickX);
         if (!closest.has_value()) {
             return;
         }
@@ -262,6 +254,42 @@ class TimelineKeyframeRow final : public QWidget {
         pressPos_ = event->position();
         dragging_ = false;
         ghostTime_.reset();
+    }
+
+    // Insert gesture (issue #86, task E1; decision 4): double-clicking the row BACKGROUND (never an
+    // existing key -- same hit-test tolerance/idiom as press-select above) inserts a new key at the
+    // clicked frame-snapped time, using the SAME TimelineAxis pixel<->frame mapping the drag
+    // gesture already snaps to (frameIndexForPixel() + frameTimeForIndex()). CompositionSession::
+    // insertKeyframeAtTime() owns the command construction, value sampling, occupied-time refusal,
+    // and the one-truth selection swap on success; this handler is pure hit-testing/dispatch.
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            QWidget::mouseDoubleClickEvent(event);
+            return;
+        }
+        const auto* composition = session_.composition();
+        if (composition == nullptr) {
+            return;
+        }
+        const auto axis = TimelineAxis::create(*composition, width());
+        if (!axis.has_value()) {
+            return;
+        }
+        const qreal clickX = event->position().x();
+        if (hitTestKey(*axis, clickX).has_value()) {
+            // Landed on an existing key, not the lane background -- no insert gesture.
+            return;
+        }
+        const auto index = axis->frameIndexForPixel(static_cast<int>(clickX));
+        const auto snappedTime = frameTimeForIndex(axis->frameRate, axis->duration, index);
+        if (!snappedTime.has_value()) {
+            return;
+        }
+        if (session_.insertKeyframeAtTime(curveId_, *snappedTime)) {
+            if (auto* panel = parentWidget()) {
+                panel->setFocus(Qt::MouseFocusReason);
+            }
+        }
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
@@ -325,6 +353,23 @@ class TimelineKeyframeRow final : public QWidget {
         pressedKeyId_.reset();
         ghostTime_.reset();
         update();
+    }
+
+    // Shared hit-test (press-select and double-click-insert both use it, same tolerance): the
+    // closest key within kKeyHitToleranceLogicalPixels of `pixelX`, or nullopt if none is close
+    // enough -- the latter is what marks a click as landing on the lane BACKGROUND.
+    [[nodiscard]] std::optional<document::KeyframeId> hitTestKey(const TimelineAxis& axis,
+                                                                 const qreal pixelX) const {
+        std::optional<document::KeyframeId> closest;
+        qreal closestDistance = std::numeric_limits<qreal>::max();
+        for (const auto& key : collectKeys()) {
+            const qreal distance = std::abs(axis.pixelForTime(key.time) - pixelX);
+            if (distance <= kKeyHitToleranceLogicalPixels && distance < closestDistance) {
+                closest = key.id;
+                closestDistance = distance;
+            }
+        }
+        return closest;
     }
 
     [[nodiscard]] std::vector<KeyEntry> collectKeys() const {

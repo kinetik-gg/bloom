@@ -86,21 +86,25 @@ struct PositionInteractionMapping final {
 
 // Typed rejection for CompositionSession::beginPositionInteraction (docs/architecture/
 // animation-and-time.md, "Direct Manipulation And Preview Overrides").
+//
+// issue #86 (task E1) removed the former AnimatedWithoutExactKey rejection: the contract never
+// forbade beginning a gesture on an animated base without an exact key at the current time -- D1's
+// refusal was an implementation gap (CompositionSession had no synchronous access to runtime's
+// exact rational curve sampling). sampleParameterValue() now closes that gap by compiling the
+// parameter's curve (runtime::compileAnimationCurve()) and sampling it (runtime::
+// sampleAnimationCurve()) synchronously, so an animated position with no exact key at the current
+// time begins from the exact interpolated base instead of refusing. No other code referenced the
+// removed enumerator (verified: composition_session.cpp/.hpp and its own tests were the only
+// occurrences), so it was deleted rather than kept as a documented-unreachable value.
 enum class PositionInteractionRejection : std::uint8_t {
     // No layer is the session's primary selection.
     NoLayerSelected,
-    // The selected layer exposes no position parameter, or its constant value does not match the
-    // Vec2d schema.
+    // The selected layer exposes no position parameter, its constant value does not match the
+    // Vec2d schema, or its animated curve fails to resolve/sample at the current session time.
     NoResolvablePosition,
     // The position parameter is bound to a driver; a gesture never disconnects a driven parameter
     // silently, so it never begins on one.
     DrivenParameter,
-    // The position parameter is animated but has no exact-time key at the current session time.
-    // CompositionSession has no synchronous access to runtime's exact rational curve sampling
-    // (src/runtime owns sampling; src/ui does not get a private evaluator), so it cannot resolve
-    // an interpolated base value without guessing. Refusing to begin is the honest v1 behavior;
-    // dragging is supported for animated parameters exactly when the playhead sits on a key.
-    AnimatedWithoutExactKey,
     // The supplied mapping has an empty/degenerate display rectangle.
     EmptyMapping,
 };
@@ -163,6 +167,19 @@ class CompositionSession final : public QObject {
     // equal to the key's current exact time commits nothing and returns true (docs/architecture/
     // animation-and-time.md's zero-move precedent, mirrored from commitPositionInteraction()).
     [[nodiscard]] bool moveSelectedKeyframe(core::RationalTime newTime);
+    // Timeline insert gesture (issue #86, task E1): double-clicking a keyframe lane's row
+    // BACKGROUND (never an existing key -- that hit-testing is the widget's job, same tolerance as
+    // the click-select/drag gestures) inserts a new key at the exact frame-snapped `time`, valued
+    // at the curve's own exactly sampled value at that time (sampleParameterValue(), via decision
+    // 1's compileAnimationCurve() + the existing sampleAnimationCurve()). Uses
+    // InsertScalarKeyframe/ InsertVec2Keyframe -- their default outgoing interpolation is Linear,
+    // matching exactly what SetKeyframeAtTime already does for a newly inserted key
+    // (src/commands/animation_operations.cpp) rather than inventing new policy. An occupied exact
+    // time is the commands layer's existing refusal (InvalidOrder): no transaction, selection
+    // untouched. On success the new key becomes the selected keyframe (K1's one-truth
+    // selectKeyframe() swap), in exactly one transaction.
+    [[nodiscard]] bool insertKeyframeAtTime(document::AnimationCurveId curveId,
+                                            core::RationalTime time);
 
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). Session-only,
@@ -243,6 +260,17 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool executePositionCommand(document::ParameterId parameterId,
                                               core::RationalTime time, document::Vec2d value,
                                               const QString& commandLabel);
+    // The one session-level exact-sampling helper (issue #86, task E1; docs/architecture/
+    // animation-and-time.md): for an animation-sourced parameter, compiles its curve
+    // (runtime::compileAnimationCurve(), decision 1's extracted pure conversion) and samples it at
+    // `time` via the existing runtime::sampleAnimationCurve() -- the SAME exact rational sampler
+    // src/runtime uses everywhere else. Returns std::nullopt for a constant/driven source (those
+    // callers keep their existing paths -- constantValue()/constantVec2Value(), the driven refusal
+    // branches) or if the curve fails to resolve/sample. Both beginPositionInteraction() (the
+    // relaxed animated-base rule) and insertKeyframeAtTime() (the timeline insert gesture) call
+    // this one place rather than each re-deriving the curve/sample logic.
+    [[nodiscard]] std::optional<std::variant<double, document::Vec2d>>
+    sampleParameterValue(const document::ParameterRecord& parameter, core::RationalTime time) const;
     // Not noexcept (see keyframeSelectionExists()): the KeyframeSelection branch delegates to it.
     [[nodiscard]] bool selectionExists(const CompositionSelection& selection) const;
     // Not noexcept: std::visit over the AnimationCurveStore's curve-kind variant cannot be proven

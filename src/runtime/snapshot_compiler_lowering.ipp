@@ -85,12 +85,6 @@
         }
     }
 
-    const auto interpolation = [](const document::KeyframeInterpolation mode) {
-        return mode == document::KeyframeInterpolation::Hold
-                   ? runtime::CompiledKeyframeInterpolation::Hold
-                   : runtime::CompiledKeyframeInterpolation::Linear;
-    };
-
     CompiledCurveTables tables;
     for (const auto& record : composition_->animationCurves().records()) {
         if (cancelled()) {
@@ -100,41 +94,21 @@
         if (!reachableCurveIds.contains(curveId)) {
             continue;
         }
+        // The document -> compiled per-curve conversion itself is the shared, pure
+        // runtime::compileAnimationCurve() (issue #86, task E1; bloom/runtime/curve_compilation.hpp)
+        // -- this loop keeps only the per-curve index bookkeeping and cancellation checkpoints that
+        // are specific to compiling a REACHABLE SET of curves.
         std::visit(
             [&](const auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
                 if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    std::vector<runtime::CompiledScalarKeyframe> keyframes;
-                    keyframes.reserve(curve.keyframes.size());
-                    for (const auto& keyframe : curve.keyframes) {
-                        if (cancelled()) {
-                            return;
-                        }
-                        keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
-                                             interpolation(keyframe.outgoingInterpolation)});
-                    }
-                    if (cancelled()) {
-                        return;
-                    }
                     scalarCurveIndices_.emplace(
                         curve.id, runtime::ScalarCurveIndex::fromRaw(tables.scalar.size()));
-                    tables.scalar.push_back({curve.id, std::move(keyframes)});
+                    tables.scalar.push_back(runtime::compileAnimationCurve(curve));
                 } else {
-                    std::vector<runtime::CompiledVec2Keyframe> keyframes;
-                    keyframes.reserve(curve.keyframes.size());
-                    for (const auto& keyframe : curve.keyframes) {
-                        if (cancelled()) {
-                            return;
-                        }
-                        keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
-                                             interpolation(keyframe.outgoingInterpolation)});
-                    }
-                    if (cancelled()) {
-                        return;
-                    }
                     vec2CurveIndices_.emplace(curve.id,
                                               runtime::Vec2CurveIndex::fromRaw(tables.vec2.size()));
-                    tables.vec2.push_back({curve.id, std::move(keyframes)});
+                    tables.vec2.push_back(runtime::compileAnimationCurve(curve));
                 }
             },
             record);

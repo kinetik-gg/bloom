@@ -194,6 +194,13 @@ void sendClick(QWidget& widget, const qreal pixelX, const qreal pixelY = -1.0) {
     QCoreApplication::sendEvent(&widget, &release);
 }
 
+void sendDoubleClick(QWidget& widget, const qreal pixelX) {
+    const QPointF local(pixelX, widget.height() / 2.0);
+    QMouseEvent doubleClick(QEvent::MouseButtonDblClick, local, local, Qt::LeftButton,
+                            Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&widget, &doubleClick);
+}
+
 void sendPress(QWidget& widget, const qreal pixelX) {
     const QPointF local(pixelX, widget.height() / 2.0);
     QMouseEvent press(QEvent::MouseButtonPress, local, local, Qt::LeftButton, Qt::LeftButton,
@@ -665,6 +672,259 @@ void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations)
                         "a release after Escape creates no transaction");
 }
 
+// Insert gesture (issue #86, task E1, decision 4): double-clicking a keyframe lane's row
+// BACKGROUND -- never an existing key -- inserts a new key at the exact frame-snapped time, valued
+// at the curve's own exactly sampled value there (CompositionSession::insertKeyframeAtTime()).
+// Width/frame-rate are chosen (1s @ 24fps, 2301 logical pixels, span 2300 = 100 * 23) so the
+// REVERSE pixel->frame-index snap used for the click (100 * index, an exact zero-remainder
+// multiple, same proof idiom as the drag test) lands more than kKeyHitToleranceLogicalPixels away
+// from every existing key's own FORWARD pixelForTime() paint position -- including the just-
+// inserted key's -- so a repeat double-click at the SAME pixel is never absorbed by hit-testing and
+// genuinely reaches the command layer's occupied-time refusal.
+void testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(
+    Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Keyframe Insert Test", time(1));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    const auto ids = addSolidLayer(document, commands, compositionId);
+    // Seeds k0 at t=0, value 1.0 (AddSolidLayer's default opacity) -- not itself part of the
+    // interpolation this test exercises.
+    const auto curveId = animateParameter(document, commands, compositionId, ids.opacity, time(0));
+
+    // The final key is inserted FIRST, before the sentinel: the model normalizes whichever key is
+    // currently LAST to outgoing Linear on every mutation
+    // (docs/architecture/animation-and-time.md), so inserting the sentinel first would make IT the
+    // momentary final key and silently normalize away its requested Hold interpolation (the same
+    // ordering trap the drag-move gesture test's own fixture documents).
+    {
+        commands::Transaction insertFinal("Insert final opacity key",
+                                          document.snapshot().revision());
+        insertFinal.emplace<commands::InsertScalarKeyframe>(compositionId, curveId, time(2, 3),
+                                                            0.25);
+        expectations.expect(commands.execute(std::move(insertFinal)).changed(),
+                            "fixture inserts the final opacity key");
+    }
+
+    // A genuinely off-grid ("subframe") key: 24 * (1/10) = 2.4 is not an integer frame index. Hold
+    // interpolation makes its own segment's sampled value a pure passthrough (no interpolation
+    // arithmetic to reason about) and marks it distinctly from every other key's kind. It stays
+    // interior (never final) since the final key above is already in place.
+    document::KeyframeId sentinelKeyId;
+    {
+        commands::Transaction insertSentinel("Insert sentinel opacity key",
+                                             document.snapshot().revision());
+        insertSentinel.emplace<commands::InsertScalarKeyframe>(
+            compositionId, curveId, time(1, 10), 0.6, document::KeyframeInterpolation::Hold);
+        const auto inserted = commands.execute(std::move(insertSentinel));
+        const auto id = inserted.outputId<document::KeyframeId>(commands::kKeyframeOutput);
+        expectations.expect(inserted.changed() && id.has_value(),
+                            "fixture inserts the subframe sentinel key");
+        if (!id.has_value()) {
+            return;
+        }
+        sentinelKeyId = *id;
+    }
+
+    ui::CompositionSession session(document, commands, compositionId);
+    session.selectLayer(ids.layer);
+    ui::TimelineKeyframePanel panel(session);
+    panel.resize(2301, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    const auto rows = panel.findChildren<QWidget*>();
+    expectations.expect(rows.size() == 1, "exactly one row exists for the single animated opacity");
+    if (rows.size() != 1) {
+        return;
+    }
+    auto* row = rows.front();
+    expectations.expect(row->width() == 2301, "the row matches the panel's exact pixel width");
+
+    auto findKey = [&](const document::KeyframeId id) -> std::optional<document::ScalarKeyframe> {
+        const auto* curve = session.composition()->animationCurves().findScalar(curveId);
+        if (curve == nullptr) {
+            return std::nullopt;
+        }
+        const auto found = std::ranges::find(curve->keyframes, id, &document::ScalarKeyframe::id);
+        return found == curve->keyframes.end() ? std::nullopt
+                                               : std::optional<document::ScalarKeyframe>(*found);
+    };
+
+    // Target: frame index 4 (t = 4/24 = 1/6), interior to [sentinel(1/10), finalKey(2/3)] -- the
+    // sentinel's Hold segment governs, so the exactly sampled value at 1/6 is the sentinel's OWN
+    // value (0.6) verbatim.
+    constexpr qreal kTargetPixel = 400.0; // 100 * 4, exact zero-remainder reverse snap to frame 4.
+    const auto historyBeforeInsert = commands.size();
+    sendDoubleClick(*row, kTargetPixel);
+
+    const auto* curveAfterInsert = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(curveAfterInsert != nullptr && curveAfterInsert->keyframes.size() == 4,
+                        "double-click on the lane background inserts exactly one new key");
+    expectations.expect(commands.size() == historyBeforeInsert + 1,
+                        "the insert gesture is exactly one undoable transaction");
+    if (curveAfterInsert == nullptr || curveAfterInsert->keyframes.size() != 4) {
+        return;
+    }
+    const auto insertedKeyIterator =
+        std::ranges::find(curveAfterInsert->keyframes, time(1, 6), &document::ScalarKeyframe::time);
+    expectations.expect(insertedKeyIterator != curveAfterInsert->keyframes.end() &&
+                            insertedKeyIterator->value == 0.6,
+                        "the inserted key sits at the exact frame-snapped time with the curve's "
+                        "exactly sampled value (the sentinel's Hold-held value)");
+    if (insertedKeyIterator == curveAfterInsert->keyframes.end()) {
+        return;
+    }
+    const auto insertedKeyId = insertedKeyIterator->id;
+    const auto* selectedAfterInsert =
+        std::get_if<ui::KeyframeSelection>(&session.selection().primary);
+    expectations.expect(selectedAfterInsert != nullptr &&
+                            selectedAfterInsert->keyframeId == insertedKeyId,
+                        "the newly inserted key becomes the selected keyframe");
+
+    const auto sentinelAfterInsert = findKey(sentinelKeyId);
+    expectations.expect(
+        sentinelAfterInsert.has_value() && sentinelAfterInsert->time == time(1, 10) &&
+            sentinelAfterInsert->value == 0.6 &&
+            sentinelAfterInsert->outgoingInterpolation == document::KeyframeInterpolation::Hold,
+        "the subframe sentinel key survives the insert completely unchanged");
+
+    // Occupied-time refusal: a repeat double-click at the SAME pixel snaps to the SAME now-occupied
+    // exact time again -- the inserted key's own forward paint pixel (383.33) is far enough from
+    // the click pixel (400) that hit-testing does not intercept it, so the attempt genuinely
+    // reaches InsertScalarKeyframe's occupied-time refusal.
+    const auto historyBeforeRefusal = commands.size();
+    sendDoubleClick(*row, kTargetPixel);
+    const auto* curveAfterRefusal = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(curveAfterRefusal != nullptr && curveAfterRefusal->keyframes.size() == 4,
+                        "a double-click on an already-occupied exact time inserts no key");
+    expectations.expect(commands.size() == historyBeforeRefusal,
+                        "the occupied-time refusal creates no transaction");
+    const auto* selectionAfterRefusal =
+        std::get_if<ui::KeyframeSelection>(&session.selection().primary);
+    expectations.expect(selectionAfterRefusal != nullptr &&
+                            selectionAfterRefusal->keyframeId == insertedKeyId,
+                        "a refused insert leaves the prior selection intact");
+
+    // Undo/redo id-stability.
+    expectations.expect(session.undo(), "the insert gesture undoes cleanly");
+    const auto* curveAfterUndo = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(curveAfterUndo != nullptr && curveAfterUndo->keyframes.size() == 3,
+                        "undo removes exactly the inserted key");
+    const auto sentinelAfterUndo = findKey(sentinelKeyId);
+    expectations.expect(sentinelAfterUndo.has_value() && sentinelAfterUndo->value == 0.6 &&
+                            sentinelAfterUndo->outgoingInterpolation ==
+                                document::KeyframeInterpolation::Hold,
+                        "undo leaves the sentinel key untouched");
+
+    expectations.expect(session.redo(), "the insert gesture redoes cleanly");
+    const auto reinserted = findKey(insertedKeyId);
+    expectations.expect(reinserted.has_value() && reinserted->time == time(1, 6) &&
+                            reinserted->value == 0.6,
+                        "redo restores the inserted key with the SAME KeyframeId and exact value");
+}
+
+// Sampling helper boundary semantics (docs/architecture/animation-and-time.md: "At or before the
+// first key, return the first value" / "At or after the last key, return the last value"), pinned
+// through the insert gesture: double-clicking before the first key or after the last key inserts a
+// new key holding the CLAMPED endpoint value, not an extrapolated one.
+void testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(
+    Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Keyframe Insert Boundary Test", time(1));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    const auto ids = addSolidLayer(document, commands, compositionId);
+    // Seeds the first key away from t=0 (frame 8, t=1/3) so a click before it is genuinely "before
+    // the first key" rather than clamped by the composition's own [0, duration) range.
+    const auto curveId =
+        animateParameter(document, commands, compositionId, ids.opacity, time(1, 3));
+    document::KeyframeId lastKeyId;
+    {
+        commands::Transaction insertLast("Insert last opacity key", document.snapshot().revision());
+        insertLast.emplace<commands::InsertScalarKeyframe>(compositionId, curveId, time(2, 3), 0.9);
+        const auto inserted = commands.execute(std::move(insertLast));
+        const auto id = inserted.outputId<document::KeyframeId>(commands::kKeyframeOutput);
+        expectations.expect(inserted.changed() && id.has_value(),
+                            "fixture inserts the last opacity key");
+        if (!id.has_value()) {
+            return;
+        }
+        lastKeyId = *id;
+    }
+    const auto* fixtureCurve = document.snapshot()
+                                   .project()
+                                   .findComposition(compositionId)
+                                   ->animationCurves()
+                                   .findScalar(curveId);
+    expectations.expect(fixtureCurve != nullptr && fixtureCurve->keyframes.size() == 2,
+                        "the fixture curve holds exactly the seeded first and inserted last key");
+    if (fixtureCurve == nullptr || fixtureCurve->keyframes.size() != 2) {
+        return;
+    }
+    const auto firstKeyValue =
+        fixtureCurve->keyframes.front().value; // AddSolidLayer's default 1.0.
+
+    ui::CompositionSession session(document, commands, compositionId);
+    session.selectLayer(ids.layer);
+    ui::TimelineKeyframePanel panel(session);
+    panel.resize(2301, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    const auto rows = panel.findChildren<QWidget*>();
+    expectations.expect(rows.size() == 1, "exactly one row exists for the single animated opacity");
+    if (rows.size() != 1) {
+        return;
+    }
+    auto* row = rows.front();
+
+    // Both clicks land before undoing anything (commands::CommandStack::size() reflects total
+    // history entries and is unaffected by undo() -- it only truncates on the NEXT execute() -- so
+    // interleaving an undo between the two inserts would make a size()-delta check of the second
+    // insert ambiguous).
+
+    // Before the first key: frame index 2 (t = 2/24 = 1/12), well left of the first key at 1/3.
+    const auto historyBeforeFirst = commands.size();
+    sendDoubleClick(*row, 200.0); // 100 * 2, exact zero-remainder reverse snap to frame 2.
+    const auto* curveAfterBefore = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(curveAfterBefore != nullptr && curveAfterBefore->keyframes.size() == 3,
+                        "a double-click before the first key still inserts");
+    expectations.expect(commands.size() == historyBeforeFirst + 1,
+                        "the before-first-key insert is exactly one transaction");
+    if (curveAfterBefore != nullptr) {
+        const auto before = std::ranges::find(curveAfterBefore->keyframes, time(1, 12),
+                                              &document::ScalarKeyframe::time);
+        expectations.expect(before != curveAfterBefore->keyframes.end() &&
+                                before->value == firstKeyValue,
+                            "the inserted key clamps to the first key's value (sampler rule: at or "
+                            "before the first key, return the first value)");
+    }
+
+    // After the last key: frame index 20 (t = 20/24 = 5/6), well right of the last key at 2/3.
+    const auto historyBeforeLast = commands.size();
+    sendDoubleClick(*row, 2000.0); // 100 * 20, exact zero-remainder reverse snap to frame 20.
+    const auto* curveAfterAfter = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(curveAfterAfter != nullptr && curveAfterAfter->keyframes.size() == 4,
+                        "a double-click after the last key inserts");
+    expectations.expect(commands.size() == historyBeforeLast + 1,
+                        "the after-last-key insert is exactly one transaction");
+    if (curveAfterAfter != nullptr) {
+        const auto after = std::ranges::find(curveAfterAfter->keyframes, time(5, 6),
+                                             &document::ScalarKeyframe::time);
+        expectations.expect(after != curveAfterAfter->keyframes.end() && after->value == 0.9,
+                            "the inserted key clamps to the last key's value (sampler rule: at or "
+                            "after the last key, return the last value)");
+    }
+
+    expectations.expect(session.undo(), "the after-last-key insert undoes cleanly");
+    expectations.expect(session.undo(), "the before-first-key insert undoes cleanly");
+    const auto* curveAfterUndo = session.composition()->animationCurves().findScalar(curveId);
+    expectations.expect(
+        curveAfterUndo != nullptr && curveAfterUndo->keyframes.size() == 2 &&
+            std::ranges::any_of(curveAfterUndo->keyframes,
+                                [&](const auto& key) { return key.id == lastKeyId; }),
+        "undo leaves exactly the original two keys in place");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -676,5 +936,7 @@ int main(int argc, char** argv) {
     testKeyframeClickSelectsByIdAndOneTruthSelectionSwap(expectations);
     testDeleteGestureRemovesKeyAndRefusesTheLastOne(expectations);
     testDragMoveGestureSnapsCommitsUndoesAndRefuses(expectations);
+    testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(expectations);
+    testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
