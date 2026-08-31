@@ -9,20 +9,26 @@ digest, preset-specific bound-analysis products, the module-private Output Seman
 1 streaming serializer/preparer, portable golden vectors, the flat OpenEXR adapter with its
 semantic reopen verifier and verifier-product issuance, and headless end-to-end EXR export
 publication (analysis attempt graph, immutable export request, and the shared-coordinator
-publication job), and the interactive frame-export command with explicit digest approval are
-implemented. The PNG adapter remains pending.
+publication job), the interactive frame-export command with explicit digest approval, and the
+constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance are
+implemented. The export job's PNG color-preparation wiring and export-command preset choice
+remain pending.
 
 Updated: 2026-08-31
 
 ## Purpose
 
 Bloom's first delivery surface renders one immutable composition frame to a deterministic PNG or a
-flat OpenEXR. OpenImageIO (OIIO) and OpenEXR are private implementation libraries; Bloom owns the
+flat OpenEXR. The version 1 format adapters are Bloom-owned over qualified private implementation
+libraries: the flat OpenEXR preset writes through the qualified OpenEXR components, and the
+constrained PNG profile writes through a Bloom-owned codec over the qualified zlib — its closed
+chunk profile requires contract-level verification no library surface provides. OpenImageIO
+remains a future candidate for broad media ingest (media-io.md), not these presets. Bloom owns the
 request, preservation analysis, cancellation, diagnostics, verification, and filesystem
 publication contracts.
 
-Writing bytes is not proof that an export preserved its requested meaning. OIIO documents that an
-output plugin may coerce unsupported data types, channel names, or metadata, and some formats cannot
+Writing bytes is not proof that an export preserved its requested meaning. General-purpose image
+libraries may coerce unsupported data types, channel names, or metadata, and some formats cannot
 represent Bloom's process image. Every staged output is therefore reopened and verified before it
 can replace the destination.
 
