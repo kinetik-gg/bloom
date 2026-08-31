@@ -19,6 +19,9 @@ target_sources(
         output_semantic_identity.cpp
         output_semantic_identity_numeric.cpp
         output_semantic_identity_ownership.cpp
+        png_output_adapter.cpp
+        png_preset_contract.hpp
+        png_reopen_verifier.cpp
         process_frame_semantic_identity.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -35,6 +38,8 @@ target_sources(
             include/bloom/output/output_export_stage.hpp
             include/bloom/output/output_facet_descriptor.hpp
             include/bloom/output/output_limits.hpp
+            include/bloom/output/png_output_adapter.hpp
+            include/bloom/output/png_reopen_verifier.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
 )
 
@@ -62,6 +67,20 @@ bloom_enable_warnings(bloom_output)
 # chain with no changes needed here.
 bloom_find_dependency(OpenEXR)
 target_link_libraries(bloom_output PRIVATE OpenEXR::OpenEXR)
+
+# issue #107 (PNG codec + strict chunk-profile verification): the PNG format layer is Bloom-owned
+# over the qualified zlib (design decision 1) -- no OIIO, no libpng anywhere. bloom_find_dependency
+# now resolves ZLIB in Config mode directly (issue #93 fixed the static-only prefix's
+# ZLIBConfig.cmake so an unqualified find_package(ZLIB CONFIG) no longer hard-fails). That direct
+# Config-mode resolution's own native CMake export names its imported target `ZLIB::ZLIBSTATIC`,
+# not the conventional `ZLIB::ZLIB` src/project's tests link -- those get `ZLIB::ZLIB` only
+# because it is transitively created by libzip's own nested Module-mode find_dependency(ZLIB)
+# call (forced by this same function's ZLIB_ROOT/CMAKE_FIND_PACKAGE_PREFER_CONFIG handling while
+# resolving libzip itself), never by a direct bloom_find_dependency(ZLIB) call like this one. Only
+# png_output_adapter.cpp/png_reopen_verifier.cpp see the real zlib.h API, and never in a public
+# bloom/output header.
+bloom_find_dependency(ZLIB)
+target_link_libraries(bloom_output PRIVATE ZLIB::ZLIBSTATIC)
 
 if(BUILD_TESTING)
     include(BloomTesting)
@@ -253,6 +272,45 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.output.flat_exr_export_write
         COMMAND bloom_output_flat_exr_export_write_test
+        LABELS unit output identity render
+    )
+
+    # issue #107 (PNG codec + strict chunk-profile verification).
+    add_executable(
+        bloom_output_png_output_adapter_test
+        tests/png_output_adapter_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_png_output_adapter_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_png_output_adapter_test
+        PRIVATE bloom_output ZLIB::ZLIBSTATIC
+    )
+    bloom_enable_warnings(bloom_output_png_output_adapter_test)
+    bloom_add_test(
+        NAME bloom.output.png_output_adapter
+        COMMAND bloom_output_png_output_adapter_test
+        LABELS unit output render
+    )
+
+    add_executable(
+        bloom_output_png_reopen_verifier_test
+        tests/png_reopen_verifier_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_png_reopen_verifier_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_png_reopen_verifier_test
+        PRIVATE bloom_output ZLIB::ZLIBSTATIC
+    )
+    bloom_enable_warnings(bloom_output_png_reopen_verifier_test)
+    bloom_add_test(
+        NAME bloom.output.png_reopen_verifier
+        COMMAND bloom_output_png_reopen_verifier_test
         LABELS unit output identity render
     )
 endif()
