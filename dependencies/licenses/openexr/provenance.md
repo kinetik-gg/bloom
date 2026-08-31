@@ -26,11 +26,15 @@ Reviewed: 2026-08-31
   links" with no stated exception for unused archive members. The superbuild's current
   `ExternalProject_Add` download/extract step is plain CMake/tar, not yet Bloom's own bounded
   archive reader (per the intake doc's "Implementation status", that reader and full
-  archive-safety enforcement remain pending). **This is an open compliance question for the
-  supervisor**: production qualification of this exact archive will need either an
-  upstream-tracked patch removing/replacing this archive member before extraction, or an explicit,
-  reviewed acquisition-time exception scoped to unextracted/unused paths. It is not resolved in
-  this task.
+  archive-safety enforcement remain pending). **Resolved by contract amendment in this change**:
+  the acquisition rules now admit a symbolic-link entry only when the component's provenance
+  review record enumerates its exact entry path and link target, the target is relative and
+  resolves within the archive root, and the linked subtree is outside every locked build's
+  consumed sources; the reader validates such an entry against this record and skips it without
+  materializing anything. This paragraph is that record for the single link above. It satisfies
+  every condition: relative target, resolves to the in-archive `src/test/oss-fuzz` tree, and the
+  OSS-Fuzz harness is never built (`OPENEXR_BUILD_OSS_FUZZ:BOOL=OFF`, `BUILD_TESTING:BOOL=OFF`).
+  Any other link that appears in a future archive revision is a hard failure until reviewed here.
 - This is GitHub's tag-generated archive, for which upstream publishes no signature
   (`provenancePolicy: not-published`). The Academy Software Foundation does not publish a
   detached signature or Sigstore bundle for OpenEXR tag archives at this release; adopting a
@@ -50,5 +54,5 @@ Reviewed: 2026-08-31
 
 ## Status
 
-- NOT QUALIFIED. Acquisition provenance only; qualification follows the intake contract gates,
-  including resolution of the symbolic-link finding above.
+- NOT QUALIFIED. Acquisition provenance only; qualification follows the intake contract gates.
+  The symbolic-link finding above is resolved by the recorded acquisition-time skip.

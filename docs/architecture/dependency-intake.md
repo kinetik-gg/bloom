@@ -502,7 +502,8 @@ role disagreement makes the prefix unqualified. Artifact references inside prefi
 results are prefix-root-relative rather than repository-relative and directly match installed
 records.
 
-Source archives still reject every link. A qualified Linux or macOS prefix may contain a symbolic
+Source-archive extraction still materializes no links; its only tolerance is the
+provenance-recorded skip defined under acquisition. A qualified Linux or macOS prefix may contain a symbolic
 link only when its link text is relative, uses `/`, is already normalized, passes the portable path
 segment rules, and resolves from the containing directory within the prefix to another recorded
 path. All installed paths have unique portable collision keys, and directory/non-directory prefix
@@ -582,7 +583,13 @@ The pipeline has four explicit phases:
 1. `acquire` downloads locked archives and provenance into a content-addressed cache and verifies
    every digest and published signature. It extracts only after verification into an empty staging
    directory through Bloom's bounded archive reader and the exact portable path profile above.
-   Version 1 also rejects devices, FIFOs, hardlinks, and symbolic links. It permits at most 4 GiB
+   Version 1 also rejects devices, FIFOs, and hardlinks. A symbolic-link entry is rejected unless
+   the component's provenance review record enumerates that exact entry path and link target; a
+   recorded link must have a relative target that resolves within the archive root, and the reader
+   skips it — validating it against the record and materializing nothing — so an extracted staging
+   tree never contains links. Unrecorded, absolute, or root-escaping links remain hard failures,
+   and a recorded link's subtree must be outside every locked build's consumed sources. It permits
+   at most 4 GiB
    source bytes, 200,000 entries, 16 GiB
    aggregate expanded bytes, 4 GiB per file, 1,024 UTF-8 bytes per logical path, and a 1,000:1
    aggregate expansion ratio. Checked counters and final path-containment verification are
