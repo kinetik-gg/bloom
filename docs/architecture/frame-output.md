@@ -6,9 +6,11 @@ Implementation status: the allocation-free Process Pixel Stream and Process-Fram
 Identity version 1 codecs, cancellable owning semantic-identity preparer, closed facet-descriptor
 grammar and validator, preset-specific owning OutputAnalysis analyzer/report, streaming analysis
 digest, preset-specific bound-analysis products, the module-private Output Semantic Identity version
-1 streaming serializer/preparer, portable golden vectors, and the flat OpenEXR adapter with its
-semantic reopen verifier and verifier-product issuance are implemented. The PNG adapter and
-end-to-end publication remain pending.
+1 streaming serializer/preparer, portable golden vectors, the flat OpenEXR adapter with its
+semantic reopen verifier and verifier-product issuance, and headless end-to-end EXR export
+publication (analysis attempt graph, immutable export request, and the shared-coordinator
+publication job) are implemented. The PNG adapter and the interactive export surface remain
+pending.
 
 Updated: 2026-08-31
 
