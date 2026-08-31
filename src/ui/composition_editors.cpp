@@ -14,6 +14,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -217,16 +219,25 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     addTextAction->setObjectName("addTextLayerAction");
     addTextAction->setToolTip(tr("Add a text layer"));
     addButton_->setMenu(addMenu);
+    // Playback transport (issue #105, decision 4): a play/pause toggle beside the ruler, using the
+    // same makeToolButton() idiom as Add/Undo/Redo. Owned per-panel (see the header's comment on
+    // playback_) -- constructed here, directly beside the ruler it drives.
+    playPauseButton_ = makeToolButton(tr("Play"), tr("Toggle playback"), controls);
+    playPauseButton_->setObjectName("playPauseButton");
+    playPauseButton_->setCheckable(true);
     undoButton_ = makeToolButton(tr("Undo"), tr("Undo last edit"), controls);
     redoButton_ = makeToolButton(tr("Redo"), tr("Redo last edit"), controls);
     controlsLayout->addWidget(title);
     controlsLayout->addWidget(addButton_);
+    controlsLayout->addWidget(playPauseButton_);
     controlsLayout->addStretch(1);
     controlsLayout->addWidget(undoButton_);
     controlsLayout->addWidget(redoButton_);
 
     ruler_ = new TimelineRuler(session_, previewController, this);
     keyframes_ = new TimelineKeyframePanel(session_, this);
+    playback_ = new PlaybackController(session_, previewController, &std::chrono::steady_clock::now,
+                                       std::chrono::milliseconds{16}, this);
 
     layers_ = new QTreeWidget(this);
     layers_->setObjectName("layerStackView");
@@ -261,6 +272,26 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     });
     connect(undoButton_, &QToolButton::clicked, &session_, &CompositionSession::undo);
     connect(redoButton_, &QToolButton::clicked, &session_, &CompositionSession::redo);
+    connect(playPauseButton_, &QToolButton::clicked, playback_, &PlaybackController::toggle);
+    connect(playback_, &PlaybackController::stateChanged, this,
+            &TimelineEditor::updatePlaybackButton);
+    updatePlaybackButton(playback_->state());
+
+    // Spacebar application shortcut (decision 4), gated against stealing Space from text-entry
+    // focus using the SAME idiom main_window.cpp's own window-level shortcuts use (QAction +
+    // setShortcutContext(Qt::WindowShortcut), e.g. undoAction_/redoAction_ in createMenus()):
+    // Qt::WindowShortcut fires whenever this widget's top-level window is active, independent of
+    // which descendant currently holds focus, EXCEPT that a focused text-entry widget (QLineEdit/
+    // QTextEdit and friends) accepts the ShortcutOverride event for an ordinary printable key like
+    // Space itself first, so the widget's own text-input handling wins over this action's shortcut
+    // whenever a text field has focus -- the standard Qt mechanism for exactly this gating, not a
+    // bespoke focus check.
+    auto* playPauseAction = new QAction(tr("Play/Pause"), this);
+    playPauseAction->setObjectName("playPauseAction");
+    playPauseAction->setShortcut(QKeySequence(Qt::Key_Space));
+    playPauseAction->setShortcutContext(Qt::WindowShortcut);
+    addAction(playPauseAction);
+    connect(playPauseAction, &QAction::triggered, playback_, &PlaybackController::toggle);
     connect(layers_, &QTreeWidget::itemSelectionChanged, this, [this] {
         if (rebuilding_) {
             return;
@@ -351,6 +382,14 @@ void TimelineEditor::updateHistoryActions() {
                                                 : tr("Undo %1").arg(undoLabel));
     redoButton_->setToolTip(redoLabel.isEmpty() ? tr("Nothing to redo")
                                                 : tr("Redo %1").arg(redoLabel));
+}
+
+void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
+    const bool playing = state == PlaybackState::Playing;
+    playPauseButton_->setChecked(playing);
+    playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
+    playPauseButton_->setToolTip(playing ? tr("Pause playback (Space)")
+                                         : tr("Play from the current time (Space)"));
 }
 
 PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)

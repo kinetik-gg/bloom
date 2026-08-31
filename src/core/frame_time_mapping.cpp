@@ -184,4 +184,18 @@ std::uint64_t FrameTimeMapping::nearestFrameIndex(const RationalTime time) const
     return doubledAtLeast(result.remainder, denominator) ? result.quotient + 1 : result.quotient;
 }
 
+std::optional<std::uint64_t> FrameTimeMapping::frameOffsetForElapsedNanoseconds(
+    const std::uint64_t elapsedNanoseconds) const noexcept {
+    constexpr auto nanosecondsPerSecond = std::uint64_t{1'000'000'000};
+    const auto numerator =
+        multiplyToUInt128(elapsedNanoseconds, static_cast<std::uint64_t>(rateNumerator_));
+    const auto denominator =
+        multiplyToUInt128(nanosecondsPerSecond, static_cast<std::uint64_t>(rateDenominator_));
+    const auto result = divideToUInt64(numerator, denominator);
+    if (result.quotientOverflow) {
+        return std::nullopt;
+    }
+    return result.quotient;
+}
+
 } // namespace bloom::core
