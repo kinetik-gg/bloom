@@ -118,6 +118,18 @@ class ProjectHost final : public QObject {
     [[nodiscard]] ProjectHostActivity activity() const noexcept;
     [[nodiscard]] std::optional<std::filesystem::path> displayPath() const;
 
+    // Application-wide sharing seam (task F3, issue #103): docs/architecture/frame-output.md,
+    // "Capability Boundary" / "Atomic Publication" -- "Project saves and frame exports reuse one
+    // src/platform::StagedArtifactCoordinator" and "The application-wide PublicationCoordinator
+    // owns monotonic intent IDs, per-target ordering, and supersession across saves and exports."
+    // ProjectHost already owns the application's one instance of each (constructed once, above);
+    // frame export must bind to the SAME live instances rather than constructing its own, or
+    // same-target save/export ordering and supersession would silently split across two unrelated
+    // coordinators. Both are guaranteed populated for the lifetime of this object (the constructor
+    // throws if either fails to construct), so these never return a moved-from/empty optional.
+    [[nodiscard]] host::PublicationCoordinator& publicationCoordinator() noexcept;
+    [[nodiscard]] platform::StagedArtifactCoordinator& artifactCoordinator() noexcept;
+
     // Design decision 2's UI seam, forwarded from the live ProjectSession: raw, non-owning
     // pointers to the currently installed document/command-stack pair (null for non-decoded
     // content). The caller hands these to a projection's own rebind() (e.g.

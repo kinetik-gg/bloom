@@ -10,6 +10,7 @@ target_sources(
         composition_session.cpp
         editor_area.cpp
         editor_registry.cpp
+        frame_export_controller.cpp
         jobs_editor.cpp
         main_window.cpp
         node_editor.cpp
@@ -32,6 +33,7 @@ target_sources(
             include/bloom/ui/composition_session.hpp
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
+            include/bloom/ui/frame_export_controller.hpp
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/main_window.hpp
             include/bloom/ui/node_editor.hpp

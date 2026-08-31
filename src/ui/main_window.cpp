@@ -4,6 +4,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -36,8 +37,10 @@ constexpr auto windowGeometryKey = "window/main/geometry";
 namespace bloom::ui {
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
-                       ProjectHost& projectHost, QWidget* parent)
-    : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost) {
+                       ProjectHost& projectHost, FrameExportController& frameExportController,
+                       QWidget* parent)
+    : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
+      frameExportController_(frameExportController) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -91,9 +94,36 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                 }
                 QMessageBox::warning(this, tr("Save a Copy"), message);
             });
+
+    // "File -> Export Frame..." gating (task F3, issue #103): a composition exists and no export
+    // is currently in flight (FrameExportController::canExport()), and the read-only placeholder is
+    // not currently authoritative (a preserved-read-only install leaves CompositionSession bound to
+    // its stale prior document -- see updateContentSurface()'s own comment -- so this action must
+    // never be offered while that placeholder is showing). Every signal that can change either
+    // condition is wired here, mirroring updateFileActions()'s own precedent.
+    connect(&frameExportController_, &FrameExportController::busyChanged, this,
+            &MainWindow::updateExportAction);
+    connect(&compositionSession_, &CompositionSession::compositionChanged, this,
+            &MainWindow::updateExportAction);
+    connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateExportAction);
+    connect(&frameExportController_, &FrameExportController::exportFinished, this,
+            [this](const FrameExportOutcome outcome, const QString& message) {
+                if (outcome == FrameExportOutcome::Published ||
+                    outcome == FrameExportOutcome::PublishedWithWarning) {
+                    statusBar()->showMessage(message, 4000);
+                    return;
+                }
+                if (outcome == FrameExportOutcome::Cancelled) {
+                    statusBar()->clearMessage();
+                    return;
+                }
+                QMessageBox::warning(this, tr("Export Frame"), message);
+            });
+
     updateFileActions();
     updateWindowTitle();
     updateContentSurface();
+    updateExportAction();
 }
 
 WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
@@ -205,6 +235,15 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
             &ProjectHost::requestSaveCopy);
 
     fileMenu.addSeparator();
+
+    // "Export Frame…" (task F3, issue #103): no default shortcut, its own group below the
+    // project-file actions.
+    exportFrameAction_ = fileMenu.addAction("Export &Frame…");
+    exportFrameAction_->setObjectName("exportFrameAction");
+    connect(exportFrameAction_, &QAction::triggered, &frameExportController_,
+            &FrameExportController::requestExport);
+
+    fileMenu.addSeparator();
 }
 
 void MainWindow::updateFileActions() {
@@ -234,6 +273,11 @@ void MainWindow::updateFileActions() {
         }
         break;
     }
+}
+
+void MainWindow::updateExportAction() {
+    exportFrameAction_->setEnabled(frameExportController_.canExport() &&
+                                   !isShowingReadOnlyPlaceholder());
 }
 
 void MainWindow::updateWindowTitle() {

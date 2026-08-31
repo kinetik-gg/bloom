@@ -146,6 +146,16 @@ std::optional<std::filesystem::path> ProjectHost::displayPath() const {
     return snapshot.displayPath->value();
 }
 
+host::PublicationCoordinator& ProjectHost::publicationCoordinator() noexcept {
+    return *publicationCoordinator_; // NOLINT(bugprone-unchecked-optional-access) -- guaranteed
+                                     // populated by the constructor (which throws otherwise).
+}
+
+platform::StagedArtifactCoordinator& ProjectHost::artifactCoordinator() noexcept {
+    return *artifactCoordinator_; // NOLINT(bugprone-unchecked-optional-access) -- guaranteed
+                                  // populated by the constructor (which throws otherwise).
+}
+
 std::pair<document::Document*, commands::CommandStack*>
 ProjectHost::liveDocumentAndStack() noexcept {
     if (!session_.has_value()) {

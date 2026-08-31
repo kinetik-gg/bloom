@@ -2,12 +2,16 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -416,8 +420,9 @@ int testMaximizeAndPersistence(const EditorRegistry& registry) {
 
 int testMainWindow(const EditorRegistry& registry,
                    bloom::ui::CompositionSession& compositionSession,
-                   bloom::ui::ProjectHost& projectHost) {
-    bloom::ui::MainWindow window(registry, compositionSession, projectHost);
+                   bloom::ui::ProjectHost& projectHost,
+                   bloom::ui::FrameExportController& frameExportController) {
+    bloom::ui::MainWindow window(registry, compositionSession, projectHost, frameExportController);
     if (!require(window.workspaceHost() != nullptr, 40)) {
         return 40;
     }
@@ -563,5 +568,12 @@ int main(int argc, char* argv[]) {
 
     bloom::runtime::TaskScheduler taskScheduler;
     bloom::ui::ProjectHost projectHost(taskScheduler);
-    return testMainWindow(registry, compositionSession, projectHost);
+    bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
+    nodeDefinitions.freeze();
+    bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
+    bloom::ui::FrameExportController frameExportController(
+        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
+        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
+    return testMainWindow(registry, compositionSession, projectHost, frameExportController);
 }

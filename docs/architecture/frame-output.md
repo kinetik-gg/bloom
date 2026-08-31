@@ -9,8 +9,8 @@ digest, preset-specific bound-analysis products, the module-private Output Seman
 1 streaming serializer/preparer, portable golden vectors, the flat OpenEXR adapter with its
 semantic reopen verifier and verifier-product issuance, and headless end-to-end EXR export
 publication (analysis attempt graph, immutable export request, and the shared-coordinator
-publication job) are implemented. The PNG adapter and the interactive export surface remain
-pending.
+publication job), and the interactive frame-export command with explicit digest approval are
+implemented. The PNG adapter remains pending.
 
 Updated: 2026-08-31
 

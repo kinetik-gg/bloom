@@ -2,11 +2,14 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -127,7 +130,13 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
 
     ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::MainWindow window(registry, session, projectHost);
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    ui::FrameExportController frameExportController(session, scheduler, bridge, snapshotCompiler,
+                                                    projectHost.publicationCoordinator(),
+                                                    projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
     window.resize(913, 577);
     QTemporaryDir settingsDirectory;
     QSettings settings(settingsDirectory.filePath(QStringLiteral("shutdown-state.ini")),
