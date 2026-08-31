@@ -2,12 +2,14 @@
 
 Status: accepted
 
-Implementation status: standalone version 1 durable value validation and domain-separated
-built-in/archive and external-loose content revision primitives are implemented. Project ownership,
-the qualified Bloom Neutral asset/profile, resolution, OCIO integration, processing, and
-cross-platform qualification remain pending.
+Implementation status: version 1 durable value validation, the domain-separated content revision
+primitives, the canonical display-processor identity, the built-in registry with concrete
+built-in resolution, and in-process Bloom Neutral CPU display processing (config parse, processor
+construction, and the checked alpha/pixel flow) are implemented and qualified on Linux. The
+supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
+processor cache, and cross-platform qualification remain pending.
 
-Updated: 2026-08-25
+Updated: 2026-08-31
 
 ## Purpose
 
