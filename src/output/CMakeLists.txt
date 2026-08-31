@@ -4,13 +4,16 @@ target_sources(
     bloom_output
     PRIVATE
         bound_output_analysis.cpp
+        flat_exr_export_write.cpp
         flat_exr_output_adapter.cpp
         flat_exr_preset_contract.hpp
         flat_exr_reopen_verifier.cpp
         output_analysis.cpp
         output_analysis_analyzer.cpp
+        output_analysis_attempt.cpp
         output_analysis_contract.cpp
         output_analysis_digest.cpp
+        output_export_resource_ledger.cpp
         output_facet_descriptor.cpp
         output_analysis_numeric.cpp
         output_semantic_identity.cpp
@@ -21,11 +24,15 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/output/flat_exr_export_write.hpp
             include/bloom/output/flat_exr_output_adapter.hpp
             include/bloom/output/flat_exr_reopen_verifier.hpp
             include/bloom/output/output_analysis.hpp
             include/bloom/output/output_analysis_analyzer.hpp
+            include/bloom/output/output_analysis_attempt.hpp
             include/bloom/output/output_analysis_digest.hpp
+            include/bloom/output/output_export_resource_ledger.hpp
+            include/bloom/output/output_export_stage.hpp
             include/bloom/output/output_facet_descriptor.hpp
             include/bloom/output/output_limits.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
@@ -34,7 +41,14 @@ target_sources(
 target_compile_features(bloom_output PUBLIC cxx_std_20)
 target_link_libraries(
     bloom_output
-    PUBLIC bloom_color bloom_core bloom_render bloom_runtime_evaluator
+    # bloom_platform is PUBLIC: bloom/output/output_analysis_attempt.hpp's
+    # OutputAnalysisAttemptTargetV1 carries bloom::platform::ArtifactTargetObservation/
+    # ArtifactOverwritePolicy value types (the plain-data OUTCOME of a platform preflight call, not
+    # a live StagedArtifactCoordinator/Target/Lease handle -- design decision 1's module split; see
+    # output_analysis_attempt.hpp's own namespace comment). {"output", "platform"} was already
+    # present in tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies
+    # allowlist before this task (no allowlist edit was needed).
+    PUBLIC bloom_color bloom_core bloom_platform bloom_render bloom_runtime_evaluator
 )
 bloom_enable_warnings(bloom_output)
 
@@ -186,5 +200,59 @@ if(BUILD_TESTING)
         NAME bloom.output.semantic_identity
         COMMAND bloom_output_semantic_identity_test
         LABELS unit output identity serialization
+    )
+
+    # Task F2 (issue #101): the export-attempt/job orchestration library's own Qt-free pieces.
+    add_executable(
+        bloom_output_export_resource_ledger_test
+        tests/output_export_resource_ledger_tests.cpp
+    )
+    target_link_libraries(
+        bloom_output_export_resource_ledger_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_export_resource_ledger_test)
+    bloom_add_test(
+        NAME bloom.output.export_resource_ledger
+        COMMAND bloom_output_export_resource_ledger_test
+        LABELS unit output
+    )
+
+    add_executable(
+        bloom_output_analysis_attempt_test
+        tests/output_analysis_attempt_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_analysis_attempt_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_analysis_attempt_test
+        PRIVATE bloom_output
+    )
+    bloom_enable_warnings(bloom_output_analysis_attempt_test)
+    bloom_add_test(
+        NAME bloom.output.analysis_attempt
+        COMMAND bloom_output_analysis_attempt_test
+        LABELS unit output identity render
+    )
+
+    add_executable(
+        bloom_output_flat_exr_export_write_test
+        tests/flat_exr_export_write_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_flat_exr_export_write_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_flat_exr_export_write_test
+        PRIVATE bloom_output OpenEXR::OpenEXR
+    )
+    bloom_enable_warnings(bloom_output_flat_exr_export_write_test)
+    bloom_add_test(
+        NAME bloom.output.flat_exr_export_write
+        COMMAND bloom_output_flat_exr_export_write_test
+        LABELS unit output identity render
     )
 endif()
