@@ -124,10 +124,11 @@ struct SaveArchiveVersionAgreementFailure final {
 
 // A typed failure from the DocumentMigration stage (document_migration.hpp's MigrationResult,
 // flattened for this composition boundary exactly like every other stage's failure payload).
-// `detectedVersion`/`currentVersion` are the same pair migrateDocumentDom() was called with;
-// `failedStepSourceVersion`/`failedStepTargetVersion` and `stepsApplied` are only meaningful for
-// error == ChainGap/StepTransformFailed/StepEmittedInvalidJson (they read as {0,0}/0 for
-// UnknownSourceVersion, which fails before any step is even looked up beyond the first).
+// `detectedVersion`/`currentVersion` are the same pair migrateDocumentDom() was called with. For
+// StepTransformFailed/StepEmittedInvalidJson the failed-step versions name the step that ran; for
+// UnknownSourceVersion/ChainGap -- where no registered step exists to name -- they carry the
+// unreachable version reached and the chain's target version, and `stepsApplied` counts the steps
+// that ran before the failed lookup (0 for UnknownSourceVersion by definition).
 struct SaveArchiveDocumentMigrationFailure final {
     MigrationError error = MigrationError::None;
     document::SchemaVersion detectedVersion;
