@@ -5,6 +5,8 @@ target_sources(
     PRIVATE
         copy_async_io.cpp
         copy_publication.cpp
+        frame_export_publication.cpp
+        output_analysis_attempt_runner.cpp
         project_session.cpp
         publication_coordinator.cpp
         save_publication.cpp
@@ -18,6 +20,8 @@ target_sources(
             include/bloom/host/bloom_neutral_profile.hpp
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
+            include/bloom/host/frame_export_publication.hpp
+            include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp
@@ -49,8 +53,17 @@ target_compile_features(bloom_host PUBLIC cxx_std_20)
 # type crosses a bloom_host API boundary. bloom_color has no dependency on bloom_host (or on
 # anything that depends on bloom_host), so this introduces no cycle. The {"host", "color"} edge was
 # added to kAllowedModuleDependencies for this task.
+#
+# bloom_output is PUBLIC (task F2, issue #101): include/bloom/host/frame_export_publication.hpp
+# and include/bloom/host/output_analysis_attempt_runner.hpp declare FrameExportRequestV1/
+# executeExportPublication()/beginOutputAnalysisAttemptV1() carrying
+# bloom::output::OutputAnalysisAttemptV1/ExportResourceLedgerV1/flat-EXR-export-write types
+# directly in their own public signatures, exactly like the existing PUBLIC bloom_platform/
+# bloom_runtime dependencies above. {"host", "output"} was already present in
+# tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist
+# before this task (no allowlist edit was needed).
 target_link_libraries(bloom_host PUBLIC bloom_color bloom_commands bloom_core bloom_document
-                                        bloom_project bloom_platform bloom_runtime)
+                                        bloom_output bloom_project bloom_platform bloom_runtime)
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)
@@ -168,6 +181,33 @@ if(BUILD_TESTING)
             NAME bloom.host.copy-async-io
             COMMAND bloom_host_copy_async_io_test
             LABELS unit host persistence security
+        )
+
+        # Task F2 (issue #101): drives beginOutputAnalysisAttemptV1() against a real
+        # platform::StagedArtifactCoordinator over a real bloom::runtime::TaskScheduler with real
+        # BlockingIo/Cpu workers -- gated Linux-only exactly as bloom.host.session-async-io is
+        # gated.
+        add_executable(bloom_host_output_analysis_attempt_runner_test
+                       tests/output_analysis_attempt_runner_tests.cpp)
+        target_link_libraries(bloom_host_output_analysis_attempt_runner_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_output_analysis_attempt_runner_test)
+        bloom_add_test(
+            NAME bloom.host.output-analysis-attempt-runner
+            COMMAND bloom_host_output_analysis_attempt_runner_test
+            LABELS unit host output persistence
+        )
+
+        # Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against
+        # the same real platform::StagedArtifactCoordinator + PublicationCoordinator save/copy
+        # already prove.
+        add_executable(bloom_host_frame_export_publication_test
+                       tests/frame_export_publication_tests.cpp)
+        target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_frame_export_publication_test)
+        bloom_add_test(
+            NAME bloom.host.frame-export-publication
+            COMMAND bloom_host_frame_export_publication_test
+            LABELS unit host output persistence security
         )
     endif()
 endif()
