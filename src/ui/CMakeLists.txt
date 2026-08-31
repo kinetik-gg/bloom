@@ -14,6 +14,7 @@ target_sources(
         main_window.cpp
         node_editor.cpp
         project_host.cpp
+        qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
         timeline_frame_math.cpp
@@ -35,6 +36,7 @@ target_sources(
             include/bloom/ui/main_window.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/project_host.hpp
+            include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/timeline_frame_math.hpp

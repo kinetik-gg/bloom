@@ -60,6 +60,8 @@ target_sources(
         cpu_composition_evaluator_support.hpp
         evaluation.cpp
         prepared_preview_frame.cpp
+        qualified_display_preparation.cpp
+        qualified_display_processor_provider.cpp
         reference_display_preparation.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -69,11 +71,22 @@ target_sources(
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
+            include/bloom/runtime/qualified_display_preparation.hpp
+            include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp
 )
 
 target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)
-target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render)
+# bloom_color_ocio (issue #97, task C3): the qualified display-preparation stage applies the C2
+# qualified Bloom Neutral CPU display processor (bloom/color/ocio_cpu_display_frame.hpp,
+# ocio_cpu_display_processor.hpp) to a ProcessFrame. runtime->color is the correct dependency
+# direction (docs/architecture/color-management.md's staged-graph "CPU Display Processor Boundary"
+# has color own the adapter and runtime own the staged application); PUBLIC because
+# qualified_display_preparation.hpp and qualified_display_processor_provider.hpp expose
+# bloom::color value types (PreparedCpuDisplayProcessorHandle, PreparedDisplayFrame) directly in
+# their own public signatures, exactly like the existing PUBLIC bloom_render dependency below.
+target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render
+                                                     bloom_color_ocio)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 

@@ -451,7 +451,11 @@ void CompositionPreviewController::consumeReadyResult() {
                 next.message = tr("Preview rendering returned pixels for a different request");
                 break;
             }
-            if (!frame->displayBuffer().isValid()) {
+            // Alternative-agnostic (issue #97, task C3): frame may carry either the reference or
+            // the qualified display product (PreparedPreviewFrame's closed alternative), and
+            // displayBufferView() normalizes both to the same validity/shape check rather than
+            // assuming the reference-only displayBuffer() accessor.
+            if (!frame->displayBufferView().has_value()) {
                 next.message = tr("Preview rendering returned an invalid display buffer");
                 break;
             }

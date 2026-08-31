@@ -339,7 +339,7 @@ constexpr auto kAllowedModuleDependencies =
         {"runtime", "document"},   {"runtime", "render"},    {"media", "core"},
         {"media", "platform"},     {"media", "render"},      {"media", "runtime"},
         {"color", "core"},         {"color", "platform"},    {"color", "render"},
-        {"color", "runtime"},      {"output", "color"},      {"output", "core"},
+        {"runtime", "color"},      {"output", "color"},      {"output", "core"},
         {"output", "document"},    {"output", "platform"},   {"output", "render"},
         {"output", "runtime"},     {"host", "color"},        {"host", "commands"},
         {"host", "core"},          {"host", "document"},     {"host", "output"},

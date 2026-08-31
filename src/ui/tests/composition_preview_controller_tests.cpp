@@ -1,12 +1,16 @@
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -156,6 +160,11 @@ struct PipelineFixture final {
     bloom::runtime::SnapshotCompiler compiler;
     bloom::runtime::CpuCompositionEvaluator evaluator;
     bloom::runtime::CpuReferenceDisplayPreparer displayPreparer;
+    // Pending by default (issue #97, task C3): a test that specifically exercises qualified-display
+    // readiness/failure builds its own provider and publishes to it directly (see
+    // testQualifiedDisplayReadinessAndFailClosed below) rather than sharing this fixture's, which
+    // every other test in this file relies on staying on the unchanged reference path.
+    bloom::runtime::QualifiedDisplayProcessorProvider qualifiedProcessorProvider;
     bloom::ui::PreviewPreparationFunction pipeline;
 
     PipelineFixture() : compiler(definitions) {
@@ -163,7 +172,8 @@ struct PipelineFixture final {
             std::abort();
         }
         definitions.freeze();
-        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer);
+        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                             qualifiedProcessorProvider);
     }
 };
 
@@ -786,6 +796,175 @@ void testCompositionSwitchClearsPixels(Expectations& expectations) {
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// Issue #97 (task C3): before-readiness/after-readiness routing, stale rejection across the
+// qualified path, and the fail-closed contract, using the SAME PipelineFixture-shaped setup as the
+// rest of this file but with a caller-owned QualifiedDisplayProcessorProvider this test drives
+// directly (PipelineFixture's own provider is deliberately never published to for every other test
+// in this file -- see its comment).
+void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
+    using namespace bloom;
+
+    // --- Part 1: Pending -> reference-labeled, then Ready -> qualified-flagged with the correct
+    // identity, and stale rejection still holds while a qualified frame is the retained one.
+    {
+        auto newProject = makeTestProject("Qualified Readiness Test");
+        const auto compositionId = newProject.initialCompositionId;
+        document::Document document(std::move(newProject.project));
+        commands::CommandStack commands(document);
+        ui::CompositionSession session(document, commands, compositionId);
+        runtime::TaskScheduler scheduler(testSchedulerConfig());
+        ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+        runtime::NodeDefinitionRegistry definitions;
+        expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                            "readiness fixture registers built-in node definitions");
+        definitions.freeze();
+        runtime::SnapshotCompiler compiler(definitions);
+        const runtime::CpuCompositionEvaluator evaluator;
+        const runtime::CpuReferenceDisplayPreparer displayPreparer;
+        runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+        auto pipeline = ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                           qualifiedProvider);
+        ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+
+        expectations.expect(
+            waitUntil([&] { return isReady(controller); }),
+            "an initial frame becomes ready before the qualified processor is built");
+        expectations.expect(controller.state().frame != nullptr &&
+                                !controller.state().frame->isOcioQualified(),
+                            "a frame prepared before readiness is reference-labeled, not qualified "
+                            "-- the honest startup window, not a fallback from failure");
+        const auto referenceFrame = controller.state().frame;
+
+        auto resolution = color::resolveBloomNeutralV1BuiltIn(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+            color::kBloomNeutralV1ConfigDigest);
+        expectations.expect(resolution.ready(), "the embedded Bloom Neutral built-in resolves");
+        auto resolved = std::move(resolution).takeResolved();
+        expectations.expect(resolved.has_value(), "the resolution produces a usable product");
+        if (resolved.has_value()) {
+            auto built = color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+            expectations.expect(static_cast<bool>(built), "the qualified processor builds");
+            if (built) {
+                auto handleValue = std::move(built).takeHandle();
+                expectations.expect(handleValue.has_value(), "the built result carries a handle");
+                if (handleValue.has_value()) {
+                    auto shared = std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(
+                        std::move(*handleValue));
+                    qualifiedProvider.publish(
+                        runtime::QualifiedDisplayProcessorBuildResult::ready(shared));
+                }
+            }
+        }
+
+        controller.requestRefresh();
+        expectations.expect(waitUntil([&] {
+                                return controller.state().activity == ui::PreviewActivity::Ready &&
+                                       controller.state().frame != referenceFrame;
+                            }),
+                            "a request after readiness produces a new frame");
+        const auto qualifiedFrame = controller.state().frame;
+        expectations.expect(qualifiedFrame != nullptr && qualifiedFrame->isOcioQualified(),
+                            "the frame prepared after readiness is qualified-flagged");
+        expectations.expect(
+            qualifiedFrame != nullptr && qualifiedFrame->qualifiedDisplayFrame() != nullptr &&
+                qualifiedFrame->qualifiedDisplayFrame()->processFrame() != nullptr &&
+                qualifiedFrame->processIdentity() ==
+                    qualifiedFrame->qualifiedDisplayFrame()->processFrame()->identity(),
+            "the qualified frame carries the correct process identity");
+        expectations.expect(controller.state().freshness == ui::FrameFreshness::Current,
+                            "the qualified frame is published as the current frame");
+
+        // Stale rejection still holds across the qualified path: a new request immediately marks
+        // the retained qualified frame Stale rather than dropping it, exactly as it would for a
+        // reference frame -- CompositionPreviewController's own freshness contract is unchanged
+        // (design decision 5).
+        controller.requestRefresh();
+        expectations.expect(controller.state().freshness == ui::FrameFreshness::Stale &&
+                                controller.state().frame == qualifiedFrame,
+                            "a newly-submitted request immediately marks the retained qualified "
+                            "frame stale rather than discarding it");
+        expectations.expect(
+            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Ready; }),
+            "the superseding request itself reaches Ready");
+        expectations.expect(controller.state().frame->isOcioQualified() &&
+                                controller.state().freshness == ui::FrameFreshness::Current,
+                            "the request that supersedes a qualified frame is itself qualified");
+
+        reachQuiescence(controller, bridge, scheduler, expectations);
+    }
+
+    // --- Part 2: fail-closed. A forced resolution failure retains last-good, surfaces a
+    // diagnostic, and never substitutes the reference transform for a qualified request.
+    {
+        auto newProject = makeTestProject("Qualified Fail-Closed Test");
+        const auto compositionId = newProject.initialCompositionId;
+        document::Document document(std::move(newProject.project));
+        commands::CommandStack commands(document);
+        ui::CompositionSession session(document, commands, compositionId);
+        runtime::TaskScheduler scheduler(testSchedulerConfig());
+        ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+        runtime::NodeDefinitionRegistry definitions;
+        expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                            "fail-closed fixture registers built-in node definitions");
+        definitions.freeze();
+        runtime::SnapshotCompiler compiler(definitions);
+        const runtime::CpuCompositionEvaluator evaluator;
+        const runtime::CpuReferenceDisplayPreparer displayPreparer;
+        runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+        auto pipeline = ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                           qualifiedProvider);
+        ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+
+        expectations.expect(waitUntil([&] { return isReady(controller); }),
+                            "the honest startup window still produces a reference-labeled frame");
+        const auto lastGood = controller.state().frame;
+        expectations.expect(lastGood != nullptr && !lastGood->isOcioQualified(),
+                            "the retained last-good frame is reference-labeled");
+
+        // Design decision 4's forced-failure seam: an intentionally perturbed expected revision (an
+        // all-zero digest, guaranteed to differ from the real embedded payload's digest) through
+        // bloom::color::resolveBloomNeutralV1BuiltIn -- the registry API's own typed "Changed"
+        // outcome -- rather than fabricating a diagnostic with no real registry call behind it.
+        const auto perturbedResolution = color::resolveBloomNeutralV1BuiltIn(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+            core::Sha256Digest{});
+        expectations.expect(
+            perturbedResolution.outcome() == color::OcioBuiltInRegistryOutcome::Changed,
+            "a perturbed expected revision is rejected as Changed by the registry API");
+        qualifiedProvider.publish(runtime::QualifiedDisplayProcessorBuildResult::failed(
+            {.code = "bloom.test.qualified-display.forced-failure",
+             .severity = runtime::DiagnosticSeverity::Error,
+             .summary = "The Bloom Neutral display configuration content changed",
+             .detail = {},
+             .suggestedAction = {}}));
+
+        controller.requestRefresh();
+        expectations.expect(
+            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+            "a request after a forced qualification failure reaches Failed");
+        expectations.expect(controller.state().frame == lastGood &&
+                                controller.state().freshness == ui::FrameFreshness::Stale &&
+                                !controller.state().message.isEmpty(),
+                            "Failed retains the last-good frame, marks it stale, and surfaces a "
+                            "diagnostic message");
+        expectations.expect(!controller.state().frame->isOcioQualified(),
+                            "the retained frame is never silently relabeled as qualified");
+
+        // A further request never substitutes the reference transform for a qualified one either --
+        // it stays Failed with the exact same retained frame.
+        controller.requestRefresh();
+        expectations.expect(
+            waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
+            "a subsequent request after the forced failure also reaches Failed");
+        expectations.expect(controller.state().frame == lastGood,
+                            "no later request silently substitutes a fresh reference frame");
+
+        reachQuiescence(controller, bridge, scheduler, expectations);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -799,5 +978,6 @@ int main(int argc, char** argv) {
     testSameRevisionGenerationAndSelection(expectations);
     testLastGoodAndOutcomeMapping(expectations);
     testCompositionSwitchClearsPixels(expectations);
+    testQualifiedDisplayReadinessAndFailClosed(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
