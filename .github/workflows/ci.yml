@@ -48,11 +48,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes clang-22 clang-format-22 clang-tidy-22
 
+      # The key suffix is sha256(sorted "<component> <archiveSha256>\n" lines for every
+      # dependencies.lock.json component), so it changes deterministically whenever the locked
+      # archive set changes (a component added/removed/re-versioned) and is unaffected by lock
+      # member reordering. It started as the yyjson archive digest alone (the first locked
+      # component); imath, libdeflate, and openexr's intake extends it to the full component set
+      # per this convention rather than embedding every raw digest in the key.
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-b16246f617b2a136c78d73e5e2647c6f1de1313e46678062985bdcf1f40bb75d
+          key: bloom-dependency-archives-4bdea8085ae0bdef479ec5279e724223ac06ec3f0362d997f751162bbb2eb744
 
       - name: Build dependency superbuild prefix
         run: |
@@ -132,11 +138,17 @@ jobs:
           python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
             --outputdir "${{ runner.temp }}/qt"
 
+      # The key suffix is sha256(sorted "<component> <archiveSha256>\n" lines for every
+      # dependencies.lock.json component), so it changes deterministically whenever the locked
+      # archive set changes (a component added/removed/re-versioned) and is unaffected by lock
+      # member reordering. It started as the yyjson archive digest alone (the first locked
+      # component); imath, libdeflate, and openexr's intake extends it to the full component set
+      # per this convention rather than embedding every raw digest in the key.
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-b16246f617b2a136c78d73e5e2647c6f1de1313e46678062985bdcf1f40bb75d
+          key: bloom-dependency-archives-4bdea8085ae0bdef479ec5279e724223ac06ec3f0362d997f751162bbb2eb744
 
       - name: Build dependency superbuild prefix
         run: |
