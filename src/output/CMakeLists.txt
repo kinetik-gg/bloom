@@ -4,6 +4,9 @@ target_sources(
     bloom_output
     PRIVATE
         bound_output_analysis.cpp
+        flat_exr_output_adapter.cpp
+        flat_exr_preset_contract.hpp
+        flat_exr_reopen_verifier.cpp
         output_analysis.cpp
         output_analysis_analyzer.cpp
         output_analysis_contract.cpp
@@ -18,6 +21,8 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/output/flat_exr_output_adapter.hpp
+            include/bloom/output/flat_exr_reopen_verifier.hpp
             include/bloom/output/output_analysis.hpp
             include/bloom/output/output_analysis_analyzer.hpp
             include/bloom/output/output_analysis_digest.hpp
@@ -32,6 +37,17 @@ target_link_libraries(
     PUBLIC bloom_color bloom_core bloom_render bloom_runtime_evaluator
 )
 bloom_enable_warnings(bloom_output)
+
+# issue #99 (flat OpenEXR write adapter): the qualified prefix ships OpenEXR 3.4.15 directly (no
+# OIIO); only this target links it, and only privately -- no OpenEXR/Imath type appears in any
+# public bloom/output header (flat_exr_output_adapter.cpp/flat_exr_reopen_verifier.cpp are the
+# only translation units that see real OpenEXR/Imath types), the same boundary discipline as
+# bloom_color_ocio's OpenColorIO link. The bloom_find_dependency transitive sandbox the OCIO slice
+# built (function-scoped CMAKE_PREFIX_PATH/NO_DEFAULT_PATH covering a package config's own nested
+# find_dependency calls) carries OpenEXRConfig.cmake's find_dependency(Threads/Imath/libdeflate)
+# chain with no changes needed here.
+bloom_find_dependency(OpenEXR)
+target_link_libraries(bloom_output PRIVATE OpenEXR::OpenEXR)
 
 if(BUILD_TESTING)
     include(BloomTesting)
@@ -113,6 +129,44 @@ if(BUILD_TESTING)
         NAME bloom.output.analysis_digest
         COMMAND bloom_output_analysis_digest_test
         LABELS unit output identity serialization
+    )
+
+    add_executable(
+        bloom_output_flat_exr_output_adapter_test
+        tests/flat_exr_output_adapter_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_flat_exr_output_adapter_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_flat_exr_output_adapter_test
+        PRIVATE bloom_output OpenEXR::OpenEXR
+    )
+    bloom_enable_warnings(bloom_output_flat_exr_output_adapter_test)
+    bloom_add_test(
+        NAME bloom.output.flat_exr_output_adapter
+        COMMAND bloom_output_flat_exr_output_adapter_test
+        LABELS unit output render
+    )
+
+    add_executable(
+        bloom_output_flat_exr_reopen_verifier_test
+        tests/flat_exr_reopen_verifier_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_flat_exr_reopen_verifier_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_flat_exr_reopen_verifier_test
+        PRIVATE bloom_output OpenEXR::OpenEXR
+    )
+    bloom_enable_warnings(bloom_output_flat_exr_reopen_verifier_test)
+    bloom_add_test(
+        NAME bloom.output.flat_exr_reopen_verifier
+        COMMAND bloom_output_flat_exr_reopen_verifier_test
+        LABELS unit output identity render
     )
 
     add_executable(
