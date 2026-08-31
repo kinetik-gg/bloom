@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/core/sha256.hpp>
 
 namespace bloom::host {
@@ -9,8 +10,14 @@ namespace bloom::host {
 // bloom::document::kBloomNeutralConfigUriV1, exactly "bloom://ocio/neutral-v1/config.ocio" --
 // see color_settings.hpp, which already owns that URI constant; it is not duplicated here).
 //
-// This is the doc-normative digest from docs/architecture/color-management.md's "OCIO Content
-// Revision Version 1" for a built-in payload -- an envelope hash, not a plain payload hash:
+// Issue #95 decision 2 ("the digest lives in ONE place"): this is no longer an independently
+// checked-in literal. It re-points to bloom::color::kBloomNeutralV1ConfigDigest
+// (src/color/include/bloom/color/bloom_neutral_builtin.hpp), the same constant
+// bloom_color_ocio's built-in registry resolves the embedded payload against. bloom_host links
+// bloom_color directly for this (see src/host/CMakeLists.txt); bloom_color has no OCIO
+// dependency and no dependency on bloom_host, so this introduces no cycle. This is the doc-
+// normative digest from docs/architecture/color-management.md's "OCIO Content Revision Version
+// 1" for a built-in payload -- an envelope hash, not a plain payload hash:
 //
 //   SHA-256("BloomOcioRevision\0" || u16(1) || u8(1) || u64(632) || exactPayloadBytes)
 //
@@ -27,11 +34,7 @@ namespace bloom::host {
 // exact envelope from the checked-in payload through core::Sha256Hasher at test time -- verifying
 // the FORMULA, not just the payload bytes -- so the asset and this constant can never silently
 // drift apart.
-inline constexpr core::Sha256Digest kBloomNeutralV1ConfigDigest = core::Sha256Digest::fromBytes({{
-    0xa6, 0xfc, 0x07, 0xc9, 0x5c, 0xea, 0x14, 0x89, //
-    0x7b, 0x72, 0x59, 0x92, 0xa1, 0x79, 0xd3, 0x50, //
-    0x55, 0xcc, 0xcc, 0xe2, 0xff, 0xaf, 0x71, 0x9c, //
-    0xa7, 0x3b, 0x4a, 0x28, 0x9c, 0x89, 0xea, 0xcf, //
-}});
+inline constexpr core::Sha256Digest kBloomNeutralV1ConfigDigest =
+    color::kBloomNeutralV1ConfigDigest;
 
 } // namespace bloom::host

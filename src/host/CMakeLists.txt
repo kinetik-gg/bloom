@@ -39,8 +39,18 @@ target_compile_features(bloom_host PUBLIC cxx_std_20)
 # dependency this introduces is already present in
 # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist (no
 # allowlist edit was needed for this task).
-target_link_libraries(bloom_host PUBLIC bloom_commands bloom_core bloom_document bloom_project
-                                        bloom_platform bloom_runtime)
+#
+# bloom_color is PUBLIC: the installed public header include/bloom/host/bloom_neutral_profile.hpp
+# (issue #95 decision 2) itself #includes <bloom/color/bloom_neutral_builtin.hpp> to re-point its
+# digest constant to bloom::color::kBloomNeutralV1ConfigDigest (a plain core::Sha256Digest value
+# copied by value into bloom::host's own constant -- no bloom::color type appears in any bloom_host
+# public signature). Any consumer of that header still needs bloom_color's include path on its
+# compiler search path, so the dependency must be PUBLIC, not PRIVATE, even though no bloom::color
+# type crosses a bloom_host API boundary. bloom_color has no dependency on bloom_host (or on
+# anything that depends on bloom_host), so this introduces no cycle. The {"host", "color"} edge was
+# added to kAllowedModuleDependencies for this task.
+target_link_libraries(bloom_host PUBLIC bloom_color bloom_commands bloom_core bloom_document
+                                        bloom_project bloom_platform bloom_runtime)
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)

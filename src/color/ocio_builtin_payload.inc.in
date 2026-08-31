@@ -1,0 +1,16 @@
+// Generated at CMake configure time from assets/ocio/neutral-v1/config.ocio by
+// src/color/CMakeLists.txt. Do not edit; the source of truth is the checked-in asset. Included
+// privately by ocio_builtin_registry.cpp only -- never installed, never a public header, and
+// never read from the filesystem at runtime (the "configure-time embed into a C++ array; no
+// runtime filesystem read" requirement of issue #95 design decision 2).
+
+namespace bloom::color::detail {
+
+inline constexpr unsigned char kBloomNeutralV1ConfigPayloadBytes[] = {
+@BLOOM_NEUTRAL_V1_PAYLOAD_BYTES@
+};
+
+inline constexpr std::size_t kBloomNeutralV1ConfigPayloadGeneratedByteCount =
+    sizeof(kBloomNeutralV1ConfigPayloadBytes);
+
+} // namespace bloom::color::detail

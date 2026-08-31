@@ -26,3 +26,21 @@ ExternalProject_Add(bloom_dependency_zlib
     LIST_SEPARATOR |
     USES_TERMINAL_DOWNLOAD ON
     USES_TERMINAL_BUILD ON)
+
+# Issue #93 fix: zlib 1.3.2's generated lib/cmake/zlib/ZLIBConfig.cmake unconditionally
+# include()s both ZLIB-shared.cmake and ZLIB-static.cmake when an unqualified find_package(ZLIB)
+# requests no explicit COMPONENTS -- but ZLIB_BUILD_SHARED is OFF above, so this static-only
+# prefix never installs ZLIB-shared.cmake and Config-mode resolution hard-fails for any consumer
+# that does not force Module mode (see dependencies/licenses/minizip-ng/review.md "ZLIB
+# Resolution", which documents two recipes working around exactly this by forcing Module mode
+# locally). This step replaces the generated file with a byte-for-byte equivalent whose includes
+# are existence-guarded, recorded at
+# dependencies/superbuild/projects/zlib-static-only-ZLIBConfig.cmake -- a documented post-install
+# config adjustment, never an unrecorded hand-edit of installed output. It runs after zlib's own
+# install step so it is never skipped or raced by that step.
+ExternalProject_Add_Step(bloom_dependency_zlib bloom_fix_static_only_config
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_CURRENT_LIST_DIR}/zlib-static-only-ZLIBConfig.cmake"
+        "<INSTALL_DIR>/lib/cmake/zlib/ZLIBConfig.cmake"
+    DEPENDEES install
+    COMMENT "bloom: applying issue #93 static-only ZLIBConfig.cmake fix")

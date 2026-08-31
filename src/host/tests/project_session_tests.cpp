@@ -177,6 +177,12 @@ decodedSessionWithPath(Expectations& expectations, ProjectSessionIdentitySource&
     return *state.currentRevision;
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param) -- both parameters are std::move()'d into
+// the constructed Transaction below (a sink-parameter pattern this check is meant to exempt); the
+// local clang-tidy 22.1.8 build used for issue #95's build gate flags it as an apparent false
+// positive on a default-argument parameter unrelated to this task's src/color/src/host ownership
+// fence. Suppressed here rather than restructured, since the existing pass-by-value/move-from
+// shape is already the correct idiom and this file is out of that fence.
 [[nodiscard]] Transaction rename(std::string value, const ProjectSession& session,
                                  std::string label = "Rename") {
     Transaction transaction(std::move(label), currentRevision(session));
