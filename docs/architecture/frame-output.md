@@ -9,10 +9,11 @@ digest, preset-specific bound-analysis products, the module-private Output Seman
 1 streaming serializer/preparer, portable golden vectors, the flat OpenEXR adapter with its
 semantic reopen verifier and verifier-product issuance, and headless end-to-end EXR export
 publication (analysis attempt graph, immutable export request, and the shared-coordinator
-publication job), the interactive frame-export command with explicit digest approval, and the
-constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance are
-implemented. The export job's PNG color-preparation wiring and export-command preset choice
-remain pending.
+publication job), the interactive frame-export command with explicit digest approval, the
+constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance, and
+the PNG export path end to end (attempt color preparation, prepared-stream production, and the
+export command's preset choice) are implemented. The supervised external-config helper and the
+non-built-in locator kinds remain the pending color-side work.
 
 Updated: 2026-08-31
 

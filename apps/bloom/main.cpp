@@ -97,7 +97,8 @@ int main(int argc, char* argv[]) {
     // TaskUiBridge the preview pipeline above already uses.
     bloom::ui::FrameExportController frameExportController(
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
-        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
+        projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
+        &qualifiedDisplayProcessorProvider);
 
     bloom::ui::EditorRegistry editorRegistry;
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
