@@ -103,6 +103,15 @@ install) and affects every future consumer that resolves ZLIB via an unqualified
 explicitly reused, not re-intaken, in this task package), but is flagged here so it can be
 addressed at the source rather than re-worked-around by each future consumer.
 
+**Resolved (issue #93, a later task)**: `dependencies/superbuild/projects/zlib.cmake` now fixes
+finding 1 at the source -- see `dependencies/licenses/zlib/review.md`'s "Issue #93 Resolution"
+section for the mechanism and its clean-rebuild config-mode smoke evidence. This recipe's own
+Module-mode `find_package(ZLIB QUIET)` and `CMAKE_FIND_PACKAGE_PREFER_CONFIG:BOOL=OFF` workaround
+(finding 1) and its `CMAKE_DISABLE_FIND_PACKAGE_ZLIB-NG:BOOL=ON` workaround (finding 2) remain
+unchanged and still correct; finding 1's workaround here is now belt-and-suspenders rather than
+load-bearing, since an unqualified Config-mode `find_package(ZLIB)` against the prefix now
+succeeds on its own.
+
 ## MZ_LIBBSD Feature-Summary Note
 
 minizip-ng's build-end feature summary reports `MZ_LIBBSD, Builds with libbsd crypto random` as
