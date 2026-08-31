@@ -4,6 +4,7 @@
 
 #include <QWidget>
 
+class QAction;
 class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
@@ -31,6 +32,17 @@ class TimelineEditor final : public QWidget {
     // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
     // state (design decision 4: "button/icon state reflects transport state via a signal").
     void updatePlaybackButton(PlaybackState state);
+    // Frame stepping (issue #108, decisions 1/2): Left/Right step one frame back/forward from
+    // nearestFrameIndex(currentTime()), clamped to [0, maxFrameIndex]; delta is -1 or +1. Home/End
+    // (stepToStart()/stepToEnd()) jump to frame 0 / the last frame. Every landing goes through the
+    // exact mapped frame time via CompositionSession::setCurrentTime(), and pauses playback FIRST
+    // through PlaybackController's own public pause() -- never by racing its tick().
+    void stepFrame(int delta);
+    void stepToStart();
+    void stepToEnd();
+    // Updates timeReadout_'s text to the current frame index / exact time (design decision 3),
+    // wired to currentTimeChanged() and compositionChanged().
+    void updateTimeReadout();
 
     CompositionSession& session_;
     TimelineRuler* ruler_ = nullptr;
@@ -46,6 +58,15 @@ class TimelineEditor final : public QWidget {
     // CompositionPreviewController rather than a single cross-panel singleton.
     PlaybackController* playback_ = nullptr;
     QToolButton* playPauseButton_ = nullptr;
+    // Current frame index / exact time readout (design decision 3), living beside playPauseButton_
+    // in the same controls row.
+    QLabel* timeReadout_ = nullptr;
+    // Frame-stepping QActions (design decision 2), disabled while layers_ holds keyboard focus --
+    // see their construction site in the .cpp for the arrow-key conflict this reconciles.
+    QAction* stepBackwardAction_ = nullptr;
+    QAction* stepForwardAction_ = nullptr;
+    QAction* stepToStartAction_ = nullptr;
+    QAction* stepToEndAction_ = nullptr;
     bool rebuilding_ = false;
 };
 

@@ -1,15 +1,19 @@
 #include <bloom/ui/composition_editors.hpp>
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <bloom/core/color.hpp>
+#include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QApplication>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -184,6 +188,67 @@ QToolButton* makeToolButton(const QString& text, const QString& accessibleName, 
     return button;
 }
 
+// Frame stepping / readout (issue #108): the frame rate, duration, and checked maximum frame index
+// every stepFrame()/stepToStart()/stepToEnd()/updateTimeReadout() call needs, resolved the one
+// place so they cannot silently drift from each other's notion of the composition's valid frame
+// range -- mirroring mappingForComposition() in playback_controller.cpp, which this deliberately
+// does NOT reuse (it is private to that translation unit and this task's fence forbids touching the
+// playback controller beyond the smallest justified accessor -- see stepFrame()'s own comment on
+// why none was needed). std::nullopt covers no live composition or a rate/duration
+// bloom::core::FrameTimeMapping itself refuses, exactly like every other caller of
+// timeline_frame_math.hpp's adapters.
+struct TimelineFrameContext final {
+    document::FrameRate frameRate;
+    core::RationalTime duration;
+    std::uint64_t maxFrameIndexValue;
+};
+
+[[nodiscard]] std::optional<TimelineFrameContext>
+frameContextFor(const CompositionSession& session) {
+    const auto* composition = session.composition();
+    if (composition == nullptr) {
+        return std::nullopt;
+    }
+    const auto frameRate = composition->format().frameRate();
+    const auto duration = composition->duration();
+    const auto maxIndex = maxFrameIndex(frameRate, duration);
+    if (!maxIndex.has_value()) {
+        return std::nullopt;
+    }
+    return TimelineFrameContext{frameRate, duration, *maxIndex};
+}
+
+// Formats an exact RationalTime as seconds with EXACTLY 3 truncated decimal digits (millisecond
+// resolution), computed purely from the integer numerator/denominator -- never through
+// RationalTime::toSeconds()'s binary64 conversion -- so the digits shown are always the value's
+// true leading digits, never a rounded/binary64-approximated one (design decision 3: "no
+// floating-point accumulation... a subframe time must display honestly"). Three places is a
+// deliberately BOUNDED cut of what can be an infinite decimal expansion (e.g. 1 s / 3 has no exact
+// finite decimal form); truncating rather than rounding means the displayed digits never overstate
+// the exact value. The widening multiply uses a 128-bit intermediate purely so an extreme
+// duration's denominator cannot silently overflow a 64-bit product -- unreachable for any realistic
+// composition, kept checked rather than UB regardless; this is ordinary display arithmetic, not
+// part of the sampling contract's own "no compiler-specific extended integers" rule
+// (docs/architecture/animation-and-time.md, "Sampling Semantics Version 1"), which governs curve
+// evaluation only.
+[[nodiscard]] QString formatExactSeconds(const core::RationalTime time) {
+    constexpr int kDecimalPlaces = 3;
+    constexpr unsigned __int128 kScale = 1000;
+    const std::int64_t numerator = time.numerator();
+    const auto denominator = static_cast<unsigned __int128>(time.denominator());
+    const bool negative = numerator < 0;
+    const auto magnitude = negative
+                               ? static_cast<unsigned __int128>(-static_cast<__int128>(numerator))
+                               : static_cast<unsigned __int128>(numerator);
+    const auto wholeSeconds = static_cast<qulonglong>(magnitude / denominator);
+    const auto remainder = magnitude % denominator;
+    const auto scaledFraction = static_cast<qulonglong>((remainder * kScale) / denominator);
+    return QStringLiteral("%1%2.%3s")
+        .arg(negative ? QStringLiteral("-") : QString())
+        .arg(wholeSeconds)
+        .arg(scaledFraction, kDecimalPlaces, 10, QChar('0'));
+}
+
 } // namespace
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
@@ -225,11 +290,19 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playPauseButton_ = makeToolButton(tr("Play"), tr("Toggle playback"), controls);
     playPauseButton_->setObjectName("playPauseButton");
     playPauseButton_->setCheckable(true);
+    // Current time readout (issue #108, decision 3): a small label beside the transport, matching
+    // PropertiesEditor::selectionLabel_'s plain-QLabel idiom (setObjectName + selectable text, no
+    // bespoke styling). Text is set by updateTimeReadout() below, not here.
+    timeReadout_ = new QLabel(controls);
+    timeReadout_->setObjectName("timelineTimeReadout");
+    timeReadout_->setAccessibleName(tr("Current frame and time"));
+    timeReadout_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     undoButton_ = makeToolButton(tr("Undo"), tr("Undo last edit"), controls);
     redoButton_ = makeToolButton(tr("Redo"), tr("Redo last edit"), controls);
     controlsLayout->addWidget(title);
     controlsLayout->addWidget(addButton_);
     controlsLayout->addWidget(playPauseButton_);
+    controlsLayout->addWidget(timeReadout_);
     controlsLayout->addStretch(1);
     controlsLayout->addWidget(undoButton_);
     controlsLayout->addWidget(redoButton_);
@@ -292,6 +365,63 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playPauseAction->setShortcutContext(Qt::WindowShortcut);
     addAction(playPauseAction);
     connect(playPauseAction, &QAction::triggered, playback_, &PlaybackController::toggle);
+
+    // Frame-stepping shortcuts (issue #108, decisions 1/2), mirroring playPauseAction's own
+    // WindowShortcut idiom exactly (same setObjectName/setShortcut/setShortcutContext/addAction
+    // shape, same reliance on Qt's ShortcutOverride mechanism to let a focused text-entry widget --
+    // e.g. PropertiesEditor's QDoubleSpinBox editors, verified with a standalone Qt harness to
+    // accept ShortcutOverride for Left/Right/Home/End exactly like QLineEdit does -- win over these
+    // shortcuts without any bespoke check here).
+    stepBackwardAction_ = new QAction(tr("Step Back One Frame"), this);
+    stepBackwardAction_->setObjectName("stepBackwardAction");
+    stepBackwardAction_->setShortcut(QKeySequence(Qt::Key_Left));
+    stepBackwardAction_->setShortcutContext(Qt::WindowShortcut);
+    addAction(stepBackwardAction_);
+    connect(stepBackwardAction_, &QAction::triggered, this, [this] { stepFrame(-1); });
+
+    stepForwardAction_ = new QAction(tr("Step Forward One Frame"), this);
+    stepForwardAction_->setObjectName("stepForwardAction");
+    stepForwardAction_->setShortcut(QKeySequence(Qt::Key_Right));
+    stepForwardAction_->setShortcutContext(Qt::WindowShortcut);
+    addAction(stepForwardAction_);
+    connect(stepForwardAction_, &QAction::triggered, this, [this] { stepFrame(1); });
+
+    stepToStartAction_ = new QAction(tr("Go To Start"), this);
+    stepToStartAction_->setObjectName("stepToStartAction");
+    stepToStartAction_->setShortcut(QKeySequence(Qt::Key_Home));
+    stepToStartAction_->setShortcutContext(Qt::WindowShortcut);
+    addAction(stepToStartAction_);
+    connect(stepToStartAction_, &QAction::triggered, this, &TimelineEditor::stepToStart);
+
+    stepToEndAction_ = new QAction(tr("Go To End"), this);
+    stepToEndAction_->setObjectName("stepToEndAction");
+    stepToEndAction_->setShortcut(QKeySequence(Qt::Key_End));
+    stepToEndAction_->setShortcutContext(Qt::WindowShortcut);
+    addAction(stepToEndAction_);
+    connect(stepToEndAction_, &QAction::triggered, this, &TimelineEditor::stepToEnd);
+
+    // Arrow-key conflict finding (this task's own investigation, verified with a standalone Qt
+    // harness before writing this code): layers_ (QTreeWidget) already consumes Left/Right/Home/End
+    // itself -- Left/Right collapse/expand the current item, Home/End jump to the first/last item
+    // -- but, unlike QLineEdit/QDoubleSpinBox, QAbstractItemView does NOT accept the
+    // ShortcutOverride event for those keys. That means a WindowShortcut action bound to the same
+    // key silently wins over the tree's OWN keyPressEvent()-based navigation the instant it exists:
+    // the harness showed the tree's current item and expand state never change at all once a
+    // same-key action is installed, with no error -- a genuine behavior change this task must not
+    // ship silently. The reconciliation rule (frozen by this task): widget-focus wins; the step
+    // action fires otherwise. Implemented by disabling these four actions outright while layers_
+    // holds keyboard focus -- a disabled QAction never claims ShortcutOverride, so the key event
+    // reaches layers_ and its native navigation runs completely unchanged; every other focus
+    // location (including no focus, the ruler, the keyframe panel, or a QDoubleSpinBox that itself
+    // already wins via ShortcutOverride) leaves the actions enabled and the step fires.
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
+        const bool layersFocused = (now == layers_);
+        stepBackwardAction_->setEnabled(!layersFocused);
+        stepForwardAction_->setEnabled(!layersFocused);
+        stepToStartAction_->setEnabled(!layersFocused);
+        stepToEndAction_->setEnabled(!layersFocused);
+    });
+
     connect(layers_, &QTreeWidget::itemSelectionChanged, this, [this] {
         if (rebuilding_) {
             return;
@@ -310,9 +440,19 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             &TimelineEditor::updateSelection);
     connect(&session_, &CompositionSession::historyChanged, this,
             &TimelineEditor::updateHistoryActions);
+    // Readout updates on every session-time change and on a composition switch (which resets
+    // session time to exact zero -- docs/architecture/animation-and-time.md, "Session Time And
+    // Scrubbing": "Switching compositions resets the session time to exact zero in version 1"), so
+    // the label always reflects the SAME time compositionChanged's reset already produced rather
+    // than momentarily showing the previous composition's stale frame/time.
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &TimelineEditor::updateTimeReadout);
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            &TimelineEditor::updateTimeReadout);
 
     rebuild();
     updateHistoryActions();
+    updateTimeReadout();
 }
 
 void TimelineEditor::rebuild() {
@@ -390,6 +530,87 @@ void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
     playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
     playPauseButton_->setToolTip(playing ? tr("Pause playback (Space)")
                                          : tr("Play from the current time (Space)"));
+}
+
+void TimelineEditor::stepFrame(const int delta) {
+    const auto context = frameContextFor(session_);
+    if (!context.has_value()) {
+        return;
+    }
+    const auto nearest =
+        nearestFrameIndexForTime(context->frameRate, context->duration, session_.currentTime());
+    if (!nearest.has_value()) {
+        return;
+    }
+    // Stepping while playing pauses playback FIRST through PlaybackController's own public
+    // transport API (design decision 1) -- composing with pause() explicitly here rather than
+    // relying on handleCurrentTimeChanged()'s existing "any external setCurrentTime() while playing
+    // pauses" side effect (playback_controller.cpp), so this call site is honest about what it does
+    // and the transport state change is never a coincidental side effect of the time write below.
+    // Called unconditionally (idempotent no-op if already Stopped -- PlaybackController::pause()'s
+    // own documented guard), not only when the step actually moves the playhead, matching the
+    // decision's "stepping... pauses playback FIRST" without making pausing conditional on the
+    // clamp outcome.
+    playback_->pause();
+
+    // Left/Right move exactly one frame index from the nearest index to the CURRENT (possibly
+    // subframe) time, clamped to [0, maxFrameIndex] (design decision 1). nearestFrameIndex()'s own
+    // tie rule (bloom::core::FrameTimeMapping::nearestFrameIndex(), and docs/architecture/
+    // animation-and-time.md's "Session Time And Scrubbing": "selects the nearest index with an
+    // exact halfway tie going to the greater index") decides which frame a subframe time steps
+    // from, not this call site.
+    std::uint64_t target = *nearest;
+    if (delta < 0) {
+        target = target > 0 ? target - 1 : 0;
+    } else {
+        target = target < context->maxFrameIndexValue ? target + 1 : context->maxFrameIndexValue;
+    }
+    const auto targetTime = frameTimeForIndex(context->frameRate, context->duration, target);
+    if (targetTime.has_value()) {
+        // A clamped step that lands back on the CURRENT exact time (e.g. Left at frame 0) is a
+        // true no-op through CompositionSession::setCurrentTime()'s own early-return-on-equal-time
+        // guard (composition_session.cpp) -- no currentTimeChanged signal churn, verified by that
+        // mutator's own implementation rather than re-checked here.
+        (void)session_.setCurrentTime(*targetTime);
+    }
+}
+
+void TimelineEditor::stepToStart() {
+    const auto context = frameContextFor(session_);
+    if (!context.has_value()) {
+        return;
+    }
+    playback_->pause();
+    const auto targetTime = frameTimeForIndex(context->frameRate, context->duration, 0);
+    if (targetTime.has_value()) {
+        (void)session_.setCurrentTime(*targetTime);
+    }
+}
+
+void TimelineEditor::stepToEnd() {
+    const auto context = frameContextFor(session_);
+    if (!context.has_value()) {
+        return;
+    }
+    playback_->pause();
+    const auto targetTime =
+        frameTimeForIndex(context->frameRate, context->duration, context->maxFrameIndexValue);
+    if (targetTime.has_value()) {
+        (void)session_.setCurrentTime(*targetTime);
+    }
+}
+
+void TimelineEditor::updateTimeReadout() {
+    const auto time = session_.currentTime();
+    const auto context = frameContextFor(session_);
+    QString frameText = QStringLiteral("—");
+    if (context.has_value()) {
+        const auto nearest = nearestFrameIndexForTime(context->frameRate, context->duration, time);
+        if (nearest.has_value()) {
+            frameText = QString::number(*nearest);
+        }
+    }
+    timeReadout_->setText(tr("Frame %1 · %2").arg(frameText, formatExactSeconds(time)));
 }
 
 PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)

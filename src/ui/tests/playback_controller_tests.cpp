@@ -1,4 +1,5 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -18,13 +19,17 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QLabel>
 #include <QLineEdit>
 #include <QTest>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -612,6 +617,361 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// Frame stepping (issue #108, decision 1): Right from t=0 lands exactly on frame one's exact
+// mapped time (1/25 s at this fixture's 25 fps rate), through the SAME CompositionSession::
+// setCurrentTime() mutator the ruler/keyframe gestures already use. Exercised through the real
+// stepForwardAction QAction (TimelineEditor::stepFrame()'s public seam), not a reimplementation of
+// the frame math.
+void testStepForwardFromZeroLandsOnFrameOne(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Forward", time(4)));
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
+    expectations.expect(stepForward != nullptr, "the step-forward action is reachable by name");
+    if (stepForward == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    expectations.expect(fixture.session.currentTime() == time(0), "session starts at exact zero");
+    stepForward->trigger();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "stepping forward from t=0 lands exactly on frame one's mapped time");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// Left at frame 0 clamps to frame 0 -- landing on the SAME exact time CompositionSession::
+// setCurrentTime() already refuses to re-emit for (composition_session.cpp's early-return-on-
+// equal-time guard), so no signal churn reaches observers.
+void testStepBackwardAtZeroClampsWithNoSignalChurn(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Clamp", time(4)));
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* stepBackward = editor->findChild<QAction*>("stepBackwardAction");
+    expectations.expect(stepBackward != nullptr, "the step-backward action is reachable by name");
+    if (stepBackward == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    int changeCount = 0;
+    QObject::connect(&fixture.session, &ui::CompositionSession::currentTimeChanged,
+                     [&changeCount] { ++changeCount; });
+    stepBackward->trigger();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "stepping backward at frame 0 clamps to frame 0");
+    expectations.expect(changeCount == 0,
+                        "clamping to the SAME exact time emits no currentTimeChanged -- no signal "
+                        "churn");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// End jumps to the exact maximum frame time (4 s at 25 fps == 100 frames, indices 0..99).
+void testStepToEndLandsAtExactMaxFrame(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step End", time(4)));
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* stepToEnd = editor->findChild<QAction*>("stepToEndAction");
+    expectations.expect(stepToEnd != nullptr, "the go-to-end action is reachable by name");
+    if (stepToEnd == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    stepToEnd->trigger();
+    expectations.expect(
+        fixture.session.currentTime() == time(99, 25),
+        "End lands exactly on the last frame's mapped time (index 99 at 25 fps over "
+        "a 4 s duration)");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// Home jumps to exact zero from anywhere.
+void testStepToStartLandsAtExactZero(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Home", time(4)));
+    expectations.expect(fixture.session.setCurrentTime(time(50, 25)),
+                        "session time moves away from zero first");
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* stepToStart = editor->findChild<QAction*>("stepToStartAction");
+    expectations.expect(stepToStart != nullptr, "the go-to-start action is reachable by name");
+    if (stepToStart == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    stepToStart->trigger();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "Home lands exactly on frame zero");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// A step from a SUBFRAME time lands per FrameTimeMapping::nearestFrameIndex()'s own documented tie
+// rule (frame_time_mapping.hpp: "Clamps to the valid frame range and rounds to nearest; an exact
+// halfway result selects the greater frame index" -- restated by docs/architecture/
+// animation-and-time.md, "Session Time And Scrubbing": "selects the nearest index with an exact
+// halfway tie going to the greater index"). 1/50 s is EXACTLY halfway between frame 0 (0 s) and
+// frame 1 (1/25 s == 2/50 s) at this fixture's 25 fps rate, so nearestFrameIndex(1/50 s) == 1 (the
+// GREATER of the tied indices) -- both step directions below are computed from that index 1 base.
+void testStepFromSubframeTimeUsesNearestIndexTieRule(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Subframe Tie", time(4)));
+    expectations.expect(fixture.session.setCurrentTime(time(1, 50)),
+                        "session time moves to the exact halfway-tie subframe time");
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* stepBackward = editor->findChild<QAction*>("stepBackwardAction");
+    auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
+    expectations.expect(stepBackward != nullptr && stepForward != nullptr,
+                        "both step actions are reachable by name");
+    if (stepBackward == nullptr || stepForward == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    stepForward->trigger();
+    expectations.expect(
+        fixture.session.currentTime() == time(2, 25),
+        "stepping forward from the tied subframe time steps from index 1 (the tie's "
+        "greater index), landing on frame 2's exact time -- not frame 1");
+
+    expectations.expect(fixture.session.setCurrentTime(time(1, 50)),
+                        "session time returns to the same tied subframe time");
+    stepBackward->trigger();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "stepping backward from the SAME tied subframe time steps from the SAME "
+                        "index 1 base, landing on frame 0 -- confirming both directions read the "
+                        "tie identically rather than each independently floor/ceiling-ing the "
+                        "subframe time");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// Stepping while playing pauses playback FIRST through PlaybackController's own public pause()
+// (design decision 1), asserted via the SAME play/pause button state the Space test above already
+// uses as its transport-state proxy (TimelineEditor owns playback_ privately -- this button is the
+// one observable seam).
+void testStepDuringPlaybackPausesThenSteps(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Playback Pause", time(4)));
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* button = editor->findChild<QToolButton*>("playPauseButton");
+    auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
+    expectations.expect(button != nullptr && stepForward != nullptr,
+                        "the play/pause button and step-forward action are reachable by name");
+    if (button == nullptr || stepForward == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    button->click();
+    expectations.expect(button->isChecked(), "playback starts Playing");
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "play() itself has not moved session time (no tick has fired)");
+
+    stepForward->trigger();
+    expectations.expect(!button->isChecked(), "stepping while playing pauses the transport FIRST");
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "the step itself still lands exactly on frame one's mapped time");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
+// Shortcuts (design decision 2): QActions mirroring the Space idiom exactly -- Left/Right/Home/End
+// move session time when no text-entry widget has focus; a focused QLineEdit keeps the keys for
+// its own cursor movement via the SAME Qt ShortcutOverride mechanism the Space test above already
+// exercises for real.
+void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Shortcuts", time(4)));
+
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* probeLineEdit = new QLineEdit(&host);
+    probeLineEdit->setObjectName("frameStepTestProbeLineEdit");
+    layout->addWidget(editor);
+    layout->addWidget(probeLineEdit);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    editor->setFocus();
+    QCoreApplication::processEvents();
+    QTest::keyClick(editor, Qt::Key_Right);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "the Right application shortcut steps forward one frame when no text-entry "
+                        "widget has focus");
+
+    QTest::keyClick(editor, Qt::Key_Home);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "the Home application shortcut jumps to frame zero");
+
+    QTest::keyClick(editor, Qt::Key_End);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(99, 25),
+                        "the End application shortcut jumps to the last frame");
+
+    probeLineEdit->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(QApplication::focusWidget() == probeLineEdit,
+                        "the probe line edit genuinely holds keyboard focus");
+    probeLineEdit->setText(QStringLiteral("ab"));
+    probeLineEdit->setCursorPosition(2);
+    QTest::keyClick(probeLineEdit, Qt::Key_Left);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(99, 25),
+                        "Left is NOT stolen from a focused text-entry widget: session time is "
+                        "unchanged by this keystroke");
+    expectations.expect(probeLineEdit->cursorPosition() == 1,
+                        "the focused line edit consumed Left as ordinary cursor movement, "
+                        "confirming it -- not a dropped/ignored event -- is what won the key");
+
+    finishFixture(fixture, expectations);
+}
+
+// Arrow-key conflict finding (this task's own investigation, verified with a standalone Qt harness
+// before writing composition_editors.cpp): layers_ (the QTreeWidget layer stack) already consumes
+// Left/Right/Home/End for its OWN keyboard navigation (Home/End jump to the first/last row), but --
+// unlike a text-entry widget -- does not claim the ShortcutOverride event for those keys, so a
+// same-key WindowShortcut action would otherwise silently swallow the tree's navigation the instant
+// it existed. The reconciliation rule implemented in composition_editors.cpp: widget-focus wins --
+// stepping is suppressed while the tree has focus, and the tree's native navigation runs completely
+// unchanged; step fires again once focus leaves the tree.
+void testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Frame Step Tree Conflict", time(4)));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.0, 0.0, 0.0, 1.0}),
+        "first layer added");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.0, 0.0, 0.0, 1.0}),
+        "second layer added");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("C"), core::Color4d{0.0, 0.0, 0.0, 1.0}),
+        "third layer added");
+
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    layout->addWidget(editor);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
+    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 3,
+                        "the layer stack tree has all three rows");
+    if (tree == nullptr || tree->topLevelItemCount() != 3) {
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    editor->setFocus();
+    QCoreApplication::processEvents();
+    QTest::keyClick(editor, Qt::Key_Right);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "stepping works normally before the tree has focus");
+
+    tree->setFocus(Qt::OtherFocusReason);
+    tree->setCurrentItem(tree->topLevelItem(1));
+    QCoreApplication::processEvents();
+    expectations.expect(QApplication::focusWidget() == tree, "the tree genuinely holds focus");
+
+    QTest::keyClick(tree, Qt::Key_Home);
+    QCoreApplication::processEvents();
+    expectations.expect(tree->currentItem() == tree->topLevelItem(0),
+                        "the tree's OWN Home navigation (jump to the first row) still runs "
+                        "unchanged while it has focus");
+    expectations.expect(
+        fixture.session.currentTime() == time(1, 25),
+        "the step-to-start action is suppressed while the tree has focus -- session "
+        "time is untouched");
+
+    QTest::keyClick(tree, Qt::Key_End);
+    QCoreApplication::processEvents();
+    expectations.expect(tree->currentItem() == tree->topLevelItem(2),
+                        "the tree's OWN End navigation (jump to the last row) still runs unchanged "
+                        "while it has focus");
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "the step-to-end action is suppressed while the tree has focus -- session "
+                        "time is still untouched");
+
+    editor->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    QTest::keyClick(editor, Qt::Key_Home);
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == time(0),
+                        "stepping resumes once focus leaves the tree");
+
+    finishFixture(fixture, expectations);
+}
+
+// Readout (design decision 3): the label tracks frame index / exact time across an exact frame
+// time, a genuinely subframe exact time (honest, not hidden/rounded away), and a composition switch
+// (which resets session time to exact zero -- docs/architecture/animation-and-time.md, "Session
+// Time And Scrubbing": "Switching compositions resets the session time to exact zero in version
+// 1").
+void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Readout Format", time(4));
+    expectations.expect(newProject.project.addComposition(secondComposition(time(4), testFormat())),
+                        "a second composition is added to the project");
+    SessionFixture fixture(std::move(newProject));
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
+    expectations.expect(readout != nullptr, "the time readout label is reachable by name");
+    if (readout == nullptr) {
+        delete editor;
+        finishFixture(fixture, expectations);
+        return;
+    }
+
+    expectations.expect(readout->text() == QStringLiteral("Frame 0 · 0.000s"),
+                        "the readout starts at exact frame 0 / 0.000s");
+
+    expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
+                        "session time advances to exactly frame one's time");
+    expectations.expect(readout->text() == QStringLiteral("Frame 1 · 0.040s"),
+                        "the readout tracks currentTimeChanged() at an exact frame time");
+
+    expectations.expect(fixture.session.setCurrentTime(time(1, 3)),
+                        "session time moves to a genuinely subframe exact time (1/3 s)");
+    expectations.expect(readout->text() == QStringLiteral("Frame 8 · 0.333s"),
+                        "a subframe time displays its true nearest-index / truncated-exact-seconds "
+                        "reading rather than hiding that it is not frame-aligned (1/3 s truncates "
+                        "to 0.333s, never rounding up to overstate it, and 1/3 s is nearest to "
+                        "frame index 8 at this fixture's 25 fps rate)");
+
+    expectations.expect(fixture.session.setComposition(document::CompositionId::fromRaw(2)),
+                        "switching composition succeeds");
+    expectations.expect(readout->text() == QStringLiteral("Frame 0 · 0.000s"),
+                        "the readout resets to frame 0 / 0.000s across a composition switch, "
+                        "matching CompositionSession's own session-time reset");
+
+    delete editor;
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -626,5 +986,14 @@ int main(int argc, char** argv) {
     testOverflowingDurationCompositionPlaybackIsNoOp(expectations);
     testIntegrationPlaybackDrivesInteractivePriorityUnderGate(expectations);
     testPlaybackToggleButtonAndSpaceShortcut(expectations);
+    testStepForwardFromZeroLandsOnFrameOne(expectations);
+    testStepBackwardAtZeroClampsWithNoSignalChurn(expectations);
+    testStepToEndLandsAtExactMaxFrame(expectations);
+    testStepToStartLandsAtExactZero(expectations);
+    testStepFromSubframeTimeUsesNearestIndexTieRule(expectations);
+    testStepDuringPlaybackPausesThenSteps(expectations);
+    testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(expectations);
+    testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(expectations);
+    testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
