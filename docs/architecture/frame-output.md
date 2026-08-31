@@ -6,11 +6,11 @@ Implementation status: the allocation-free Process Pixel Stream and Process-Fram
 Identity version 1 codecs, cancellable owning semantic-identity preparer, closed facet-descriptor
 grammar and validator, preset-specific owning OutputAnalysis analyzer/report, streaming analysis
 digest, preset-specific bound-analysis products, the module-private Output Semantic Identity version
-1 streaming serializer/preparer, and portable golden vectors are implemented. Preset pixel
-conversion, production verifier-product issuance, PNG/OpenEXR adapters, staged-format verification,
-and end-to-end publication remain pending.
+1 streaming serializer/preparer, portable golden vectors, and the flat OpenEXR adapter with its
+semantic reopen verifier and verifier-product issuance are implemented. The PNG adapter and
+end-to-end publication remain pending.
 
-Updated: 2026-08-25
+Updated: 2026-08-31
 
 ## Purpose
 
@@ -615,6 +615,12 @@ ties-to-even, with gradual underflow and preserved signed zero. NaN, infinity, a
 result, or finite overflow fails before staging. The same conversion rule governs any declared
 binary64-to-binary32 output boundary; it must not inherit ambient rounding or flush subnormals.
 Process samples are already binary32 and are copied bit-for-bit rather than numerically converted.
+
+Version 1 additionally bounds every data- and display-window coordinate to a magnitude strictly
+below `1073741823` (`INT32_MAX/2`) — the validated coordinate ceiling the qualified OpenEXR
+encoder itself enforces. A window outside that checked ceiling fails typed before staging rather
+than surfacing a library error; the full signed-32 wording above is therefore bounded by this
+explicit version 1 ceiling.
 
 The report marks process pixels, alpha, channels, and windows `Exact`. The pixel-aspect facet is
 `Exact` only when the stored Float32 round-trips to the source rational; otherwise it is
