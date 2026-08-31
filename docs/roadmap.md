@@ -411,13 +411,14 @@ pruning integration, and concrete dependency profiles remain pending.
 
 ### 5D — Durable Color Identity And Built-In Asset
 
-Implementation status: the standalone `ColorSettings`/`OcioConfigReference` v1 value model,
-locator/context validation, and versioned built-in/archive and external-loose revision hashing are
-implemented. No placeholder digest is manufactured. The qualified Bloom Neutral asset and its
-exact revision digest are provisioned (built-in registry, single digest truth, build-time
-embedded payload), unblocking the remaining items: attaching the values to `Project`, creating
-new-project defaults, and snapshot preservation are now a schema-minor change routed through the
-landed migration framework rather than waiting on qualification.
+Implementation status: complete. `colorSettings` is a required member of document schema 1.0 end
+to end — the v1 value model, locator/context validation, versioned revision hashing, canonical
+write/decode/reconstruction, round-trip handling, and the new-project Bloom Neutral default with
+its qualified digest (built-in registry, single digest truth, build-time embedded payload) are
+all implemented. The durable value currently travels as an explicit caller-supplied side-car
+rather than a `Project`-owned member; consolidating that ownership is a pure in-memory refactor
+with byte-identical output (no schema change), deferred with resolution-from-persisted-reference
+until an explicit relink command exists.
 
 - add project-level `ColorSettings` and `OcioConfigReference` to durable document state, with new
   projects fixed to `lin_rec709_scene` and `bloom://ocio/neutral-v1/config.ocio`
