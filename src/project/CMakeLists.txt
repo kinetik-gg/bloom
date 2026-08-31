@@ -16,6 +16,7 @@ target_sources(
         document_decode.cpp
         document_decode_composition.cpp
         document_decode_internal.hpp
+        document_migration.cpp
         document_reconstruct.cpp
         manifest_decode.cpp
         manifest_requirements.cpp
@@ -47,6 +48,7 @@ target_sources(
             include/bloom/project/canonical_json_writer.hpp
             include/bloom/project/canonical_manifest.hpp
             include/bloom/project/document_decode.hpp
+            include/bloom/project/document_migration.hpp
             include/bloom/project/document_reconstruct.hpp
             include/bloom/project/manifest_decode.hpp
             include/bloom/project/manifest_requirements.hpp
@@ -121,6 +123,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.project.document_decode
         COMMAND bloom_project_document_decode_test
+        LABELS unit project persistence document
+    )
+
+    add_executable(bloom_project_document_migration_test tests/document_migration_tests.cpp)
+    target_link_libraries(bloom_project_document_migration_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_document_migration_test)
+    bloom_add_test(
+        NAME bloom.project.document_migration
+        COMMAND bloom_project_document_migration_test
         LABELS unit project persistence document
     )
 

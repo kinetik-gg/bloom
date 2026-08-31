@@ -5,6 +5,7 @@
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/document_decode.hpp>
+#include <bloom/project/document_migration.hpp>
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/manifest_decode.hpp>
 #include <bloom/project/project_io_memory.hpp>
@@ -43,6 +44,12 @@ enum class SaveArchiveStage : std::uint8_t {
     DocumentParse,
     ManifestDecode,
     VersionAgreement,
+    // Routes a same-major, at-or-below-current-minor document DOM through migrateDocumentDom()
+    // (document_migration.hpp) before trusted decode; see runReopenChain()'s own call-site comment
+    // for the exact routing condition and why an unknown major or a same-major newer minor never
+    // reach this stage at all (both keep their existing DocumentDecode-stage/PreservationRequired
+    // handling, unchanged by this stage's addition).
+    DocumentMigration,
     DocumentDecode,
     Reconstruction,
     RequirementsValidation,
@@ -115,6 +122,22 @@ struct SaveArchiveVersionAgreementFailure final {
     document::SchemaVersion capturedInputVersion;
 };
 
+// A typed failure from the DocumentMigration stage (document_migration.hpp's MigrationResult,
+// flattened for this composition boundary exactly like every other stage's failure payload).
+// `detectedVersion`/`currentVersion` are the same pair migrateDocumentDom() was called with;
+// `failedStepSourceVersion`/`failedStepTargetVersion` and `stepsApplied` are only meaningful for
+// error == ChainGap/StepTransformFailed/StepEmittedInvalidJson (they read as {0,0}/0 for
+// UnknownSourceVersion, which fails before any step is even looked up beyond the first).
+struct SaveArchiveDocumentMigrationFailure final {
+    MigrationError error = MigrationError::None;
+    document::SchemaVersion detectedVersion;
+    document::SchemaVersion currentVersion;
+    std::uint32_t stepsApplied = 0;
+    document::SchemaVersion failedStepSourceVersion;
+    document::SchemaVersion failedStepTargetVersion;
+    SaveArchiveErrorPath path;
+};
+
 struct SaveArchiveDocumentDecodeFailure final {
     DocumentDecodeOutcome outcome = DocumentDecodeOutcome::Failed;
     DocumentDecodeError error = DocumentDecodeError::None;
@@ -142,8 +165,9 @@ using SaveArchiveFailurePayload = std::variant<
     std::monostate, SaveArchiveManifestEncodingFailure, SaveArchiveDocumentEncodingFailure,
     SaveArchiveContainerWriteFailure, SaveArchiveContainerReadFailure, SaveArchiveJsonParseFailure,
     SaveArchiveManifestDecodeFailure, SaveArchiveVersionAgreementFailure,
-    SaveArchiveDocumentDecodeFailure, SaveArchiveRequirementsFailure, ReconstructionRejected,
-    SaveArchiveVerificationMismatch, SaveArchiveResourceExhausted, SaveArchiveUnexpectedFailure>;
+    SaveArchiveDocumentMigrationFailure, SaveArchiveDocumentDecodeFailure,
+    SaveArchiveRequirementsFailure, ReconstructionRejected, SaveArchiveVerificationMismatch,
+    SaveArchiveResourceExhausted, SaveArchiveUnexpectedFailure>;
 
 class SaveArchiveFailure final {
   public:
