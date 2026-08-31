@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/playback_controller.hpp>
+
 #include <QWidget>
 
 class QDoubleSpinBox;
@@ -26,6 +28,9 @@ class TimelineEditor final : public QWidget {
     void rebuild();
     void updateSelection();
     void updateHistoryActions();
+    // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
+    // state (design decision 4: "button/icon state reflects transport state via a signal").
+    void updatePlaybackButton(PlaybackState state);
 
     CompositionSession& session_;
     TimelineRuler* ruler_ = nullptr;
@@ -34,6 +39,13 @@ class TimelineEditor final : public QWidget {
     QToolButton* addButton_ = nullptr;
     QToolButton* undoButton_ = nullptr;
     QToolButton* redoButton_ = nullptr;
+    // Owned here rather than shared with any sibling TimelineEditor a workspace split could open
+    // (issue #105): each TimelineEditor instance gets its own transport, matching how every other
+    // per-panel affordance in this class (the layer tree selection sync, the undo/redo buttons'
+    // enabled state) is already independently driven off the shared CompositionSession/
+    // CompositionPreviewController rather than a single cross-panel singleton.
+    PlaybackController* playback_ = nullptr;
+    QToolButton* playPauseButton_ = nullptr;
     bool rebuilding_ = false;
 };
 

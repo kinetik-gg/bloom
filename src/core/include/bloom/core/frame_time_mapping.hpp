@@ -48,6 +48,22 @@ class FrameTimeMapping final {
     // greater frame index.
     [[nodiscard]] std::uint64_t nearestFrameIndex(RationalTime time) const noexcept;
 
+    // Playback transport support (issue #105): the exact non-negative frame OFFSET covered by
+    // `elapsedNanoseconds` nanoseconds of continuous playback measured from a fixed start, computed
+    // as floor(elapsedNanoseconds / 1e9 * rateNumerator / rateDenominator) using the same checked
+    // multiword arithmetic as timeForFrame()/nearestFrameIndex() -- never floating point. Unlike
+    // nearestFrameIndex()'s round-to-nearest tie-to-greater SCRUB semantics, this FLOORS: at
+    // elapsed E since a playback start, the frame showing is the one that began at-or-before E,
+    // matching ordinary real-time playback (frame N spans the half-open interval
+    // [N/rate, (N+1)/rate)). The result is a relative offset, not clamped to maximumFrameIndex() --
+    // a playback controller adds it to a start frame index and wraps (modulo the frame count) for
+    // looping; recomputing this from a fixed elapsed-since-start each tick (rather than
+    // accumulating a running time) is what keeps repeated calls exact and drift-free.
+    // std::nullopt only if the checked product cannot be represented in 64 bits -- unreachable for
+    // realistic elapsed durations and frame rates, but kept checked rather than UB.
+    [[nodiscard]] std::optional<std::uint64_t>
+    frameOffsetForElapsedNanoseconds(std::uint64_t elapsedNanoseconds) const noexcept;
+
   private:
     friend class FrameTimeMappingCreateResult;
 
