@@ -413,9 +413,11 @@ pruning integration, and concrete dependency profiles remain pending.
 
 Implementation status: the standalone `ColorSettings`/`OcioConfigReference` v1 value model,
 locator/context validation, and versioned built-in/archive and external-loose revision hashing are
-implemented. No placeholder digest is manufactured. Attaching the values to `Project`, creating
-new-project defaults, and snapshot preservation wait for the qualified Bloom Neutral asset/profile
-so those changes can land without a false identity.
+implemented. No placeholder digest is manufactured. The qualified Bloom Neutral asset and its
+exact revision digest are provisioned (built-in registry, single digest truth, build-time
+embedded payload), unblocking the remaining items: attaching the values to `Project`, creating
+new-project defaults, and snapshot preservation are now a schema-minor change routed through the
+landed migration framework rather than waiting on qualification.
 
 - add project-level `ColorSettings` and `OcioConfigReference` to durable document state, with new
   projects fixed to `lin_rec709_scene` and `bloom://ocio/neutral-v1/config.ocio`
@@ -501,18 +503,23 @@ Contract status: the v1 `lin_rec709_scene` process identity, immutable Bloom Neu
 default, project-qualified OCIO boundary, preservation analysis, and semantic-determinism
 PNG/flat-EXR publication contracts are accepted implementation contracts in
 [`architecture/color-management.md`](architecture/color-management.md) and
-[`architecture/frame-output.md`](architecture/frame-output.md). Dependency implementations and
-qualification remain pending. The portable Process Pixel Stream and Process-Frame Semantic Identity
-version 1 codecs, owning preparer, preset-specific preservation analyzer/report, analysis digest,
-preset-bound analysis products, the module-private Output Semantic Identity version 1 streaming
-serializer/preparer, and golden vectors are implemented; preset conversion, production
-verifier-product issuance, file adapters, and semantic verification remain pending.
+[`architecture/frame-output.md`](architecture/frame-output.md). The OpenColorIO and OpenEXR
+dependency stacks are qualified and locked; the in-process Bloom Neutral CPU display processor,
+the color-managed viewer path with honest qualified/unqualified labeling, the flat OpenEXR
+adapter with strict semantic reopen verification, headless end-to-end EXR export publication,
+the interactive export command with explicit digest approval, and real-time playback are
+implemented on Linux. The constrained PNG codec is in progress; the export job's PNG
+color-preparation wiring, the supervised external-config helper, and durable project-level
+color-settings attachment (a future schema-minor migration) remain pending.
 
 Implement:
 
 - resolve the already-durable, qualified OpenColorIO configuration identity; create CPU display
   processors and explicit missing-config diagnostics
-- standards-backed PNG and flat OpenEXR output through qualified OpenImageIO/OpenEXR components
+- standards-backed flat OpenEXR output through the qualified OpenEXR components, and the closed
+  version 1 PNG profile through a Bloom-owned constrained codec over the qualified zlib (the
+  closed chunk profile requires contract-level verification no library surface provides;
+  OpenImageIO remains a future candidate for broad media ingest, not these presets)
 - explicit alpha, color, data/display window, pixel aspect, channel, and metadata behavior
 - cancellable foreground render tasks using immutable snapshots and explicit quality/color intent
 - export capability/loss reporting even for the initially small supported subset
