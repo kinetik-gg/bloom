@@ -6,6 +6,8 @@
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/output/output_export_stage.hpp>
+#include <bloom/output/output_limits.hpp>
+#include <bloom/output/png_export_write.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -52,6 +54,11 @@ namespace bloom::host {
 struct FrameExportLimitsV1 final {
     std::chrono::steady_clock::duration totalDeadline = std::chrono::hours(24);
     std::chrono::steady_clock::duration noProgressInterval = std::chrono::seconds(120);
+    // The PNG preset's retained-prepared-bytes ceiling (frame-output.md's "Version 1 export
+    // limits": "retained prepared PNG bytes | 256 MiB"). Ignored by the EXR preset, which retains
+    // no prepared display/output buffer at all. A request may LOWER this ("a request may lower but
+    // not raise them"); a higher value is clamped back down to the closed limit.
+    std::uint64_t preparedPngByteLimit = output::kOutputExportPreparedPngBytesMaximumV1;
 };
 
 enum class FrameExportApprovalStatusV1 : std::uint8_t {
@@ -164,6 +171,9 @@ class FrameExportRequestAccessV1 final {
 enum class FrameExportPublicationStageV1 : std::uint8_t {
     Preflight,
     Staging,
+    // PNG only: the retained qualified processor applied to the retained process frame in bounded
+    // chunks. EXR skips it entirely (frame-output.md: "EXR skips ColorPreparing").
+    ColorPreparing,
     Writing,
     Verifying,
     ArtifactCopy,
@@ -174,13 +184,18 @@ enum class FrameExportPublicationStageV1 : std::uint8_t {
 struct FrameExportDeadlineExceededV1 final {};
 struct FrameExportNoProgressExceededV1 final {};
 struct FrameExportResourceExhaustedV1 final {};
+// The PNG prepared straight-RGBA8 stream this export would retain exceeds the effective
+// retained-prepared-PNG-bytes limit. Distinct from FrameExportResourceExhaustedV1 (which reports a
+// refused ledger reservation) because this one names a specific closed per-preset limit.
+struct FrameExportPreparedBytesExceededV1 final {};
 struct FrameExportUnexpectedFailureV1 final {};
 
 using FrameExportPublicationFailurePayloadV1 =
     std::variant<std::monostate, platform::StagedArtifactError,
-                 output::FlatExrExportWriteErrorCodeV1, PublicationGuardStatus,
-                 FrameExportDeadlineExceededV1, FrameExportNoProgressExceededV1,
-                 FrameExportResourceExhaustedV1, FrameExportUnexpectedFailureV1>;
+                 output::FlatExrExportWriteErrorCodeV1, output::PngExportWriteErrorCodeV1,
+                 PublicationGuardStatus, FrameExportDeadlineExceededV1,
+                 FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
+                 FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
 
 class FrameExportPublicationFailureV1 final {
   public:

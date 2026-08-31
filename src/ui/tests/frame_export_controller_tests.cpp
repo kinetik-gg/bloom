@@ -39,6 +39,7 @@
 #include <string_view>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 // Task F3 (issue #103): drives bloom::ui::FrameExportController's public surface -- "File -> Export
 // Frame..." -- end to end over a REAL bloom::runtime::TaskScheduler, mirroring
@@ -562,6 +563,165 @@ void testExternalModificationConflictSurfacedAsFailure(Expectations& expectation
                         "was");
 }
 
+// -------------------------------------------------------------------------------------------
+// Preset selection by destination extension (issue #111, design decision 3): the chosen extension
+// -- not the dialog's selected filter entry -- selects the preset, so a hand-typed path behaves
+// identically to a filtered one.
+// -------------------------------------------------------------------------------------------
+
+void testDestinationExtensionSelectsPreset(Expectations& expectations) {
+    const auto preset = [](const char* path) {
+        return FrameExportController::presetForDestination(std::filesystem::path(path));
+    };
+    expectations.expect(preset("/tmp/frame.png") == output::OutputPresetV1::PngRgba8SrgbV1,
+                        "extension routing: .png selects the PNG preset");
+    expectations.expect(preset("/tmp/frame.PNG") == output::OutputPresetV1::PngRgba8SrgbV1,
+                        "extension routing: extension matching is ASCII case-insensitive");
+    expectations.expect(preset("/tmp/frame.exr") ==
+                            output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+                        "extension routing: .exr keeps the flat OpenEXR preset");
+    expectations.expect(preset("/tmp/frame") ==
+                            output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+                        "extension routing: no extension keeps the flat OpenEXR preset");
+    expectations.expect(preset("/tmp/frame.tiff") ==
+                            output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+                        "extension routing: an unrecognized extension keeps the flat OpenEXR "
+                        "preset, never a silently different one");
+}
+
+// -------------------------------------------------------------------------------------------
+// Full PNG drive through the injected destination seam: a .png destination routes to the PNG
+// preset, the approval prompt reports PNG-appropriate facts, and the published file really is a
+// PNG.
+// -------------------------------------------------------------------------------------------
+
+void testPngDestinationRoutesToPngPresetAndPublishes(Expectations& expectations) {
+    Fixture fixture;
+    if (!fixture.setUp(expectations, "png drive: fixture is available")) {
+        return;
+    }
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.25, 0.5, 0.75, 1.0}),
+        "png drive: the solid layer is added");
+
+    const auto target = fixture.directory.path() / "published.png";
+    fixture.controller().setDestinationProvider(
+        [&target]() -> std::optional<std::filesystem::path> { return target; });
+
+    std::optional<FrameExportApprovalPrompt> capturedPrompt;
+    fixture.controller().setApprovalDecisionProvider(
+        [&capturedPrompt](const FrameExportApprovalPrompt& prompt) {
+            capturedPrompt = prompt;
+            return FrameExportApprovalDecision::Export;
+        });
+
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString&) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                     });
+
+    fixture.controller().requestExport();
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "png drive: the export reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Published,
+                        "png drive: the export publishes");
+    expectations.expect(std::filesystem::exists(target),
+                        "png drive: the target file really exists");
+
+    const auto* prompt =
+        require(capturedPrompt, expectations, "png drive: the approval prompt was presented");
+    if (prompt != nullptr) {
+        expectations.expect(prompt->preset == output::OutputPresetV1::PngRgba8SrgbV1,
+                            "png drive: the prompt reports the typed PNG preset the .png "
+                            "destination selected");
+        expectations.expect(prompt->presetName == QStringLiteral("PngRgba8SrgbV1"),
+                            "png drive: the prompt names the exact serialized PNG preset id");
+        expectations.expect(prompt->width == 4 && prompt->height == 4,
+                            "png drive: the prompt names the composition's own resolution");
+        // docs/architecture/frame-output.md's nominal PNG derivation: pixels, precision, color, and
+        // alpha association are Approximated and external dependencies is ExternalReference -- five
+        // non-exact facets; the remaining six are Exact.
+        expectations.expect(prompt->facets.exactFacetCount == 6 &&
+                                prompt->facets.nonExactFacetCount == 5,
+                            "png drive: a nominal PNG export reports six Exact and five non-Exact "
+                            "facets");
+        expectations.expect(
+            prompt->facets.nonExactFacetNames.contains(QStringLiteral("Color")) &&
+                prompt->facets.nonExactFacetNames.contains(QStringLiteral("External Dependencies")),
+            "png drive: the non-exact facet list names the PNG-specific color and "
+            "external-dependency conversions");
+        expectations.expect(prompt->digestShortForm.size() == 16,
+                            "png drive: the digest short form is 16 hex characters");
+    }
+
+    std::ifstream published(target, std::ios::binary);
+    std::array<char, 8> signature{};
+    published.read(signature.data(), 8);
+    static constexpr std::array<unsigned char, 8> kPngSignature{137, 80, 78, 71, 13, 10, 26, 10};
+    bool signatureMatches = published.gcount() == 8;
+    for (std::size_t index = 0; index < signature.size() && signatureMatches; ++index) {
+        signatureMatches =
+            static_cast<unsigned char>(signature.at(index)) == kPngSignature.at(index);
+    }
+    expectations.expect(signatureMatches,
+                        "png drive: the published file carries the exact PNG signature");
+}
+
+// -------------------------------------------------------------------------------------------
+// Both presets from one controller, back to back: the EXR path is unchanged and the PNG path
+// coexists with it under the same one-export-at-a-time bound.
+// -------------------------------------------------------------------------------------------
+
+void testBothPresetsExportBackToBack(Expectations& expectations) {
+    Fixture fixture;
+    if (!fixture.setUp(expectations, "both presets: fixture is available")) {
+        return;
+    }
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
+        "both presets: the solid layer is added");
+
+    QStringList presetNames;
+    fixture.controller().setApprovalDecisionProvider(
+        [&presetNames](const FrameExportApprovalPrompt& prompt) {
+            presetNames << prompt.presetName;
+            return FrameExportApprovalDecision::Export;
+        });
+
+    int finishedCount = 0;
+    std::vector<FrameExportOutcome> outcomes;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString&) {
+                         ++finishedCount;
+                         outcomes.push_back(resultOutcome);
+                     });
+
+    const auto exrTarget = fixture.directory.path() / "both.exr";
+    const auto pngTarget = fixture.directory.path() / "both.png";
+    fixture.controller().beginExport(exrTarget);
+    expectations.expect(!fixture.controller().canExport(),
+                        "both presets: the one-export-at-a-time bound holds while the first export "
+                        "is in flight");
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "both presets: the EXR export reaches a terminal outcome");
+    fixture.controller().beginExport(pngTarget);
+    expectations.expect(waitUntil([&] { return finishedCount == 2; }),
+                        "both presets: the PNG export reaches a terminal outcome");
+
+    expectations.expect(outcomes.size() == 2 && outcomes[0] == FrameExportOutcome::Published &&
+                            outcomes[1] == FrameExportOutcome::Published,
+                        "both presets: both exports publish");
+    expectations.expect(std::filesystem::exists(exrTarget) && std::filesystem::exists(pngTarget),
+                        "both presets: both target files exist");
+    expectations.expect(presetNames == QStringList{QStringLiteral("FlatExrRgba32fLinRec709SceneV1"),
+                                                   QStringLiteral("PngRgba8SrgbV1")},
+                        "both presets: each approval prompt named the preset its own destination "
+                        "extension selected");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -573,5 +733,8 @@ int main(int argc, char** argv) {
     testAttemptFailureViaOverLimitCompositionSurfacesDiagnostics(expectations);
     testCancelAtApprovalDiscardsCleanly(expectations);
     testExternalModificationConflictSurfacedAsFailure(expectations);
+    testDestinationExtensionSelectsPreset(expectations);
+    testPngDestinationRoutesToPngPresetAndPublishes(expectations);
+    testBothPresetsExportBackToBack(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

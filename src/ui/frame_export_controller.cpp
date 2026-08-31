@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QStandardPaths>
 
+#include <cctype>
 #include <system_error>
 #include <utility>
 
@@ -93,6 +94,8 @@ summarizeFacets(const output::OutputAnalysisReportV1View& view) {
     switch (stage) {
     case host::OutputAnalysisAttemptStageV1::Resolving:
         return FrameExportController::tr("resolving the destination");
+    case host::OutputAnalysisAttemptStageV1::ColorPreparing:
+        return FrameExportController::tr("preparing the color transform");
     case host::OutputAnalysisAttemptStageV1::Evaluating:
         return FrameExportController::tr("evaluating the composition");
     case host::OutputAnalysisAttemptStageV1::Identifying:
@@ -109,6 +112,8 @@ summarizeFacets(const output::OutputAnalysisReportV1View& view) {
         return FrameExportController::tr("preflight");
     case host::FrameExportPublicationStageV1::Staging:
         return FrameExportController::tr("staging");
+    case host::FrameExportPublicationStageV1::ColorPreparing:
+        return FrameExportController::tr("preparing the color transform");
     case host::FrameExportPublicationStageV1::Writing:
         return FrameExportController::tr("writing");
     case host::FrameExportPublicationStageV1::Verifying:
@@ -163,16 +168,42 @@ exportFailureOutcome(const host::FrameExportPublicationFailureV1* failure) {
     return FrameExportOutcome::Failed;
 }
 
+// The exact serialized preset ID from the typed-preset table, never a paraphrase. The fallback
+// spellings are unreachable (outputPresetIdentityV1() covers both closed presets) but keep this
+// display path total.
+[[nodiscard]] QString presetDisplayName(const output::OutputPresetV1 preset) {
+    const auto identity = output::outputPresetIdentityV1(preset);
+    if (identity.has_value()) {
+        return QString::fromUtf8(identity->serializedId.data(),
+                                 static_cast<int>(identity->serializedId.size()));
+    }
+    return preset == output::OutputPresetV1::PngRgba8SrgbV1
+               ? QStringLiteral("PngRgba8SrgbV1")
+               : QStringLiteral("FlatExrRgba32fLinRec709SceneV1");
+}
+
 } // namespace
+
+output::OutputPresetV1
+FrameExportController::presetForDestination(const std::filesystem::path& destination) {
+    auto extension = destination.extension().string();
+    for (auto& character : extension) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return extension == ".png" ? output::OutputPresetV1::PngRgba8SrgbV1
+                               : output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+}
 
 FrameExportController::FrameExportController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     const runtime::SnapshotCompiler& compiler, host::PublicationCoordinator& publicationCoordinator,
     platform::StagedArtifactCoordinator& artifactCoordinator,
-    std::filesystem::path scratchDirectory, QObject* parent)
+    std::filesystem::path scratchDirectory,
+    runtime::QualifiedDisplayProcessorProvider* const displayProcessorProvider, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
       compiler_(compiler), publicationCoordinator_(publicationCoordinator),
       artifactCoordinator_(artifactCoordinator),
+      displayProcessorProvider_(displayProcessorProvider),
       scratchDirectory_(scratchDirectory.empty() ? defaultExportScratchDirectory()
                                                  : std::move(scratchDirectory)) {
     std::error_code error;
@@ -180,9 +211,13 @@ FrameExportController::FrameExportController(
 
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this, &FrameExportController::pollOnce);
 
+    // Both closed version 1 presets are offered; the chosen extension -- not the selected filter
+    // entry -- is what actually selects the preset (presetForDestination() above), so a path typed
+    // by hand behaves identically to one picked through a filter. OpenEXR stays first so the
+    // dialog's default selection, and therefore every existing artist habit, is unchanged.
     destinationProvider_ = []() -> std::optional<std::filesystem::path> {
-        const auto chosen =
-            QFileDialog::getSaveFileName(nullptr, tr("Export Frame"), {}, tr("OpenEXR (*.exr)"));
+        const auto chosen = QFileDialog::getSaveFileName(nullptr, tr("Export Frame"), {},
+                                                         tr("OpenEXR (*.exr);;PNG (*.png)"));
         if (chosen.isEmpty()) {
             return std::nullopt;
         }
@@ -295,6 +330,7 @@ void FrameExportController::beginExport(std::filesystem::path destination) {
     }
 
     pendingDestination_ = std::move(destination);
+    pendingPreset_ = presetForDestination(pendingDestination_);
 
     runtime::TaskRequest request(
         "Compile composition for frame export",
@@ -414,7 +450,9 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
                        .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit},
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
-        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)}};
+        .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
+        .preset = pendingPreset_,
+        .displayProcessorProvider = displayProcessorProvider_};
 
     auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, ledger_,
                                                     std::move(request));
@@ -490,13 +528,11 @@ void FrameExportController::presentApproval(
             prompt.height = descriptor->displayWindow().extent().height();
         }
     }
-    const auto presetIdentity =
-        output::outputPresetIdentityV1(output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1);
-    prompt.presetName =
-        presetIdentity.has_value()
-            ? QString::fromUtf8(presetIdentity->serializedId.data(),
-                                static_cast<int>(presetIdentity->serializedId.size()))
-            : QStringLiteral("FlatExrRgba32fLinRec709SceneV1");
+    // Read off the completed attempt, which took its preset from the chosen destination extension
+    // -- never re-derived from the path here, so the prompt can never name a different preset from
+    // the one that was actually analyzed.
+    prompt.preset = attempt->preset();
+    prompt.presetName = presetDisplayName(prompt.preset);
     prompt.facets = summarizeFacets(attempt->report()->view());
     const auto digestHex = digest->toLowercaseHex();
     prompt.digestShortForm = QString::fromLatin1(digestHex.data(), 16);
@@ -715,6 +751,10 @@ QString FrameExportController::describeExportFailure(
         return tr("The export ran out of its resource budget during %1; the previous target, if "
                   "any, is unchanged.")
             .arg(jobStageName(failure->stage()));
+    }
+    if (failure->payloadAs<host::FrameExportPreparedBytesExceededV1>() != nullptr) {
+        return tr("This frame's prepared PNG pixels exceed the export size limit; nothing was "
+                  "written and the previous target, if any, is unchanged.");
     }
     return tr("The export failed during %1; the previous target, if any, is unchanged.")
         .arg(jobStageName(failure->stage()));

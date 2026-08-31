@@ -62,8 +62,19 @@ target_compile_features(bloom_host PUBLIC cxx_std_20)
 # bloom_runtime dependencies above. {"host", "output"} was already present in
 # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist
 # before this task (no allowlist edit was needed).
-target_link_libraries(bloom_host PUBLIC bloom_color bloom_commands bloom_core bloom_document
-                                        bloom_output bloom_project bloom_platform bloom_runtime)
+# bloom_color_ocio is PUBLIC (issue #111): output_analysis_attempt_runner.cpp performs the PNG
+# attempt graph's step-4 color work directly against the C2 in-process registry
+# (bloom/color/ocio_builtin_registry.hpp) and processor builder
+# (bloom/color/ocio_cpu_display_processor.hpp) so it can map every closed registry outcome onto the
+# analyzer's own closed PNG color-resolution input states one to one -- something
+# bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor()'s free-text TaskDiagnostic result
+# cannot express. PUBLIC because bloom/host/output_analysis_attempt_runner.hpp's request already
+# exposes bloom::runtime::QualifiedDisplayProcessorProvider, whose own public surface carries
+# bloom::color::PreparedCpuDisplayProcessorHandle. {"host", "color"} was already present in
+# tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist.
+target_link_libraries(bloom_host PUBLIC bloom_color bloom_color_ocio bloom_commands bloom_core
+                                        bloom_document bloom_output bloom_project bloom_platform
+                                        bloom_runtime)
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)
@@ -200,9 +211,16 @@ if(BUILD_TESTING)
         # Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against
         # the same real platform::StagedArtifactCoordinator + PublicationCoordinator save/copy
         # already prove.
+        #
+        # Links ZLIB::ZLIB directly (issue #111) for its own from-scratch PNG reader -- a raw chunk
+        # parse plus a zlib inflate that never calls into bloom::output's PNG writer/verifier, so
+        # the PNG round-trip test proves the published artifact against a second, independent
+        # reading. Same rationale and same target as bloom_host_session_open_test's own direct
+        # ZLIB::ZLIB link above.
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)
-        target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host)
+        target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host
+                                                                               ZLIB::ZLIB)
         bloom_enable_warnings(bloom_host_frame_export_publication_test)
         bloom_add_test(
             NAME bloom.host.frame-export-publication
