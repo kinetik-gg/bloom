@@ -182,6 +182,47 @@ void testStructuredFailures() {
             "a valid index reports when its exact time exceeds RationalTime representation");
 }
 
+// issue #105 (playback transport): frameOffsetForElapsedNanoseconds() floors rather than rounds
+// to nearest -- unlike nearestFrameIndex()'s scrub tie-to-greater semantics, ordinary real-time
+// playback at elapsed E shows the frame that began at-or-before E.
+void testFrameOffsetForElapsedNanosecondsFloorsExactly() {
+    // 1000 fps: 1 frame == 1,000,000 ns exactly, so boundaries land on integer nanoseconds and the
+    // floor/no-floor distinction is directly testable without an inexact rate.
+    const auto oneKilohertz = mapping(time(1), 1000, 1);
+    require(oneKilohertz.frameOffsetForElapsedNanoseconds(0) == 0,
+            "zero elapsed time is frame offset zero");
+    require(oneKilohertz.frameOffsetForElapsedNanoseconds(999'999) == 0,
+            "one nanosecond below a frame boundary still floors to the earlier frame");
+    require(oneKilohertz.frameOffsetForElapsedNanoseconds(1'000'000) == 1,
+            "exactly one frame duration floors to the next frame, matching timeForFrame(1)");
+    require(oneKilohertz.frameOffsetForElapsedNanoseconds(1'000'001) == 1,
+            "one nanosecond past a frame boundary stays on that frame");
+    require(oneKilohertz.frameOffsetForElapsedNanoseconds(2'500'000) == 2,
+            "a non-multiple elapsed duration floors, never rounds to nearest");
+
+    // A fractional rate (24000/1001, i.e. ~23.976 fps) exercises the same checked multiword
+    // arithmetic timeForFrame()/nearestFrameIndex() use, not just an integer-friendly rate. Frame
+    // ten's exact time is 10 * 1001 / 24000 seconds == 417,083,333.333... ns (not an integer
+    // nanosecond count), so the whole-nanosecond boundary straddles it: one nanosecond below still
+    // floors to frame nine, one nanosecond above already floors to frame ten.
+    const auto fractional = mapping(time(10), 24000, 1001);
+    const auto frameTenTime = fractional.timeForFrame(10);
+    require(frameTenTime.hasValue(), "frame ten is within the ten-second duration");
+    require(fractional.frameOffsetForElapsedNanoseconds(417'083'333) == 9,
+            "elapsed time strictly before a fractional-rate frame boundary floors to the prior "
+            "frame");
+    require(fractional.frameOffsetForElapsedNanoseconds(417'083'334) == 10,
+            "elapsed time at/past a fractional-rate frame boundary floors to that frame");
+
+    // Overflow is checked, not UB: an elapsed duration paired with the maximal representable rate
+    // numerator overflows the 64-bit quotient and must report std::nullopt rather than wrap.
+    constexpr auto maximumRate = std::numeric_limits<std::uint32_t>::max();
+    const auto huge = mapping(time(1), maximumRate, 1);
+    require(!huge.frameOffsetForElapsedNanoseconds(std::numeric_limits<std::uint64_t>::max())
+                 .has_value(),
+            "an unrepresentable frame offset is refused rather than silently wrapped");
+}
+
 } // namespace
 
 int main() {
@@ -192,5 +233,6 @@ int main() {
     testMaximumIndexDomainBoundary();
     testExactTimeRepresentationBoundary();
     testStructuredFailures();
+    testFrameOffsetForElapsedNanosecondsFloorsExactly();
     return 0;
 }
