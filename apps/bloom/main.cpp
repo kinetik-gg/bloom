@@ -9,6 +9,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -89,6 +90,15 @@ int main(int argc, char* argv[]) {
     application.installEventFilter(&shutdownCoordinator);
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);
 
+    // "File -> Export Frame..." (task F3, issue #103): binds to the SAME application-wide
+    // PublicationCoordinator/StagedArtifactCoordinator ProjectHost already owns (docs/architecture/
+    // frame-output.md, "Capability Boundary": saves and exports share one coordinator pair for
+    // correct same-target ordering/supersession), and to the SAME SnapshotCompiler/TaskScheduler/
+    // TaskUiBridge the preview pipeline above already uses.
+    bloom::ui::FrameExportController frameExportController(
+        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
+        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
+
     bloom::ui::EditorRegistry editorRegistry;
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
                                        editorRegistry, compositionSession, previewController) &&
@@ -107,7 +117,8 @@ int main(int argc, char* argv[]) {
 
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
-    bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost);
+    bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
+                                 frameExportController);
     (void)window.restoreApplicationState(settings);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,

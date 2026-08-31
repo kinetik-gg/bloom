@@ -10,10 +10,14 @@
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <zlib.h>
@@ -430,7 +434,18 @@ void testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(Expectations& expecta
     bloom::ui::CompositionSession compositionSession(*initialDocument, *initialCommandStack,
                                                      projectHost.lowestCompositionId());
 
-    MainWindow window(registry, compositionSession, projectHost);
+    // MainWindow's own "Export Frame..." menu action needs a real FrameExportController (task F3,
+    // issue #103) -- this test drives the read-only-placeholder switch, not export itself, so a
+    // minimal fixture (an empty, frozen NodeDefinitionRegistry) is enough.
+    bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
+    nodeDefinitions.freeze();
+    bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    bloom::ui::TaskUiBridge taskUiBridge(scheduler);
+    bloom::ui::FrameExportController frameExportController(
+        compositionSession, scheduler, taskUiBridge, snapshotCompiler,
+        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
+
+    MainWindow window(registry, compositionSession, projectHost, frameExportController);
     window.show();
     QApplication::processEvents();
 
@@ -546,7 +561,15 @@ void testSaveCopyFromReadOnlyPlaceholder(Expectations& expectations) {
     bloom::ui::CompositionSession compositionSession(*initialDocument, *initialCommandStack,
                                                      projectHost.lowestCompositionId());
 
-    MainWindow window(registry, compositionSession, projectHost);
+    bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
+    nodeDefinitions.freeze();
+    bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    bloom::ui::TaskUiBridge taskUiBridge(scheduler);
+    bloom::ui::FrameExportController frameExportController(
+        compositionSession, scheduler, taskUiBridge, snapshotCompiler,
+        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
+
+    MainWindow window(registry, compositionSession, projectHost, frameExportController);
     window.show();
     QApplication::processEvents();
 
