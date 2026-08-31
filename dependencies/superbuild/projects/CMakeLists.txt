@@ -3,3 +3,6 @@
 include(yyjson.cmake)
 include(zlib.cmake)
 include(libzip.cmake)
+include(imath.cmake)
+include(libdeflate.cmake)
+include(openexr.cmake)
