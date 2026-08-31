@@ -333,19 +333,19 @@ constexpr auto kKnownModules = std::to_array<std::string_view>(
      "output", "host", "scripting"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
-        {"platform", "core"},     {"document", "core"},      {"commands", "core"},
-        {"commands", "document"}, {"project", "core"},       {"project", "document"},
-        {"project", "platform"},  {"render", "core"},        {"runtime", "core"},
-        {"runtime", "document"},  {"runtime", "render"},     {"media", "core"},
-        {"media", "platform"},    {"media", "render"},       {"media", "runtime"},
-        {"color", "core"},        {"color", "platform"},     {"color", "render"},
-        {"color", "runtime"},     {"output", "color"},       {"output", "core"},
-        {"output", "document"},   {"output", "platform"},    {"output", "render"},
-        {"output", "runtime"},    {"host", "commands"},      {"host", "core"},
-        {"host", "document"},     {"host", "output"},        {"host", "platform"},
-        {"host", "project"},      {"host", "runtime"},       {"scripting", "commands"},
-        {"scripting", "core"},    {"scripting", "document"}, {"scripting", "host"},
-        {"scripting", "runtime"},
+        {"platform", "core"},      {"document", "core"},     {"commands", "core"},
+        {"commands", "document"},  {"project", "core"},      {"project", "document"},
+        {"project", "platform"},   {"render", "core"},       {"runtime", "core"},
+        {"runtime", "document"},   {"runtime", "render"},    {"media", "core"},
+        {"media", "platform"},     {"media", "render"},      {"media", "runtime"},
+        {"color", "core"},         {"color", "platform"},    {"color", "render"},
+        {"color", "runtime"},      {"output", "color"},      {"output", "core"},
+        {"output", "document"},    {"output", "platform"},   {"output", "render"},
+        {"output", "runtime"},     {"host", "color"},        {"host", "commands"},
+        {"host", "core"},          {"host", "document"},     {"host", "output"},
+        {"host", "platform"},      {"host", "project"},      {"host", "runtime"},
+        {"scripting", "commands"}, {"scripting", "core"},    {"scripting", "document"},
+        {"scripting", "host"},     {"scripting", "runtime"},
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,

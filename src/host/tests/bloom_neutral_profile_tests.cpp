@@ -148,6 +148,20 @@ void testBloomNeutralAssetDigestMatchesFrozenConstant(Expectations& expectations
                         "colorspace name (srgb_rec709_display)");
 }
 
+// Issue #95 decision 2 ("the digest lives in ONE place"): bloom::host::kBloomNeutralV1ConfigDigest
+// now re-points to bloom::color::kBloomNeutralV1ConfigDigest, and this header re-declares the
+// locator URI as bloom::color::kBloomNeutralV1ConfigUri rather than including
+// bloom/document/color_settings.hpp from bloom_color (which would introduce a color -> document
+// module edge). This test, which already links both bloom_document and (transitively, via
+// bloom_neutral_profile.hpp) bloom_color, is where the two independently spelled URI constants are
+// cross-checked for exact byte equality so they can never silently drift apart.
+void testBloomNeutralUriConstantsAgree(Expectations& expectations) {
+    expectations.expect(
+        bloom::color::kBloomNeutralV1ConfigUri == bloom::document::kBloomNeutralConfigUriV1,
+        "bloom::color::kBloomNeutralV1ConfigUri and bloom::document::kBloomNeutralConfigUriV1 "
+        "are byte-identical");
+}
+
 } // namespace
 
 int main(int argumentCount, char** arguments) {
@@ -161,5 +175,6 @@ int main(int argumentCount, char** arguments) {
 
     Expectations expectations;
     testBloomNeutralAssetDigestMatchesFrozenConstant(expectations, repositoryRoot);
+    testBloomNeutralUriConstantsAgree(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

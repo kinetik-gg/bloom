@@ -124,6 +124,28 @@ function(bloom_find_dependency package)
         set(ZLIB_ROOT "${BLOOM_DEPENDENCY_PREFIX}")
         set(CMAKE_FIND_PACKAGE_PREFER_CONFIG OFF)
 
+        # issue #95 (OpenColorIO intake): OpenColorIOConfig.cmake's own find_dependency(expat/
+        # Imath/pystring/yaml-cpp/ZLIB/minizip-ng) calls are, like the ZLIB case above, not
+        # restricted by this function's own NO_DEFAULT_PATH/PATHS (find_dependency does not
+        # inherit them). Unlike ZLIB, most of those five have no per-package _ROOT hint here, so
+        # left alone they either fail outright (observed: Imath not found at all) or -- worse --
+        # silently resolve a host copy (observed on this development machine: expat resolved
+        # `/usr/include`'s system package, a real accidental-host-library reference, the exact
+        # defect class docs/architecture/dependency-intake.md's Qualification Matrix forbids).
+        # CMAKE_PREFIX_PATH is the general mechanism (rather than adding a `<Pkg>_ROOT` hint per
+        # transitive as each failure surfaces): setting it to exactly this prefix, then disabling
+        # every OTHER search-path group find_package consults (environment variables, the
+        # CMAKE_INSTALL_PREFIX search root, and CMake's own system paths such as /usr), makes
+        # every nested find_package/find_dependency call reachable from this function's scope
+        # resolve only from the qualified prefix or fail closed -- never silently substitute a
+        # host package. All of this is function-scoped set() (no PARENT_SCOPE) so it never leaks
+        # to the caller, exactly like the ZLIB_ROOT hint above.
+        set(CMAKE_PREFIX_PATH "${BLOOM_DEPENDENCY_PREFIX}")
+        set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH OFF)
+        set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH OFF)
+        set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH OFF)
+        set(CMAKE_FIND_USE_INSTALL_PREFIX OFF)
+
         find_package(${package} REQUIRED CONFIG
             PATHS "${BLOOM_DEPENDENCY_PREFIX}"
             NO_DEFAULT_PATH)
