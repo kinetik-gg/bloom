@@ -419,14 +419,55 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                            capturedInputVersion.value_or(manifestValue.documentSchemaVersion)}));
         }
 
+        // A same-major document at or below the current minor is the "supported older version"
+        // migrateDocumentDom() exists for (see docs/architecture/project-format.md, "Versions,
+        // Migrations, And Preservation"); an unknown major or a same-major *newer* minor must NOT
+        // reach this stage -- both keep their existing, unmodified handling: an unknown major
+        // fails at DocumentDecode below with DomainViolation exactly as before, and a newer minor
+        // still takes decode's own RT1 PreservationRequired route below, also exactly as before.
+        // decodedDocumentVersion.minor <= current.minor (with major already pinned equal) is the
+        // exact complement of "newer minor" that keeps both those paths untouched. Today current
+        // is exactly {1,0}, so the only value satisfying this guard is {1,0} itself: production
+        // wiring is real (this stage always runs for an otherwise-decodable document) but only
+        // ever exercises MigrationOutcome::Identity -- see document_migration_tests.cpp for the
+        // synthetic coverage of every other outcome this stage can produce once a real older
+        // version ever exists.
+        stage = SaveArchiveStage::DocumentMigration;
+        const JsonValue* trustedDocumentRoot = &documentDom.document()->root();
+        auto effectiveDocumentVersion = decodedDocumentVersion;
+        auto effectiveDocumentValueCount = documentValueCount;
+        std::optional<MigrationResult> documentMigration;
+        if (decodedDocumentVersion.has_value() &&
+            decodedDocumentVersion->major == kCanonicalDocumentSchemaVersionV1.major &&
+            decodedDocumentVersion->minor <= kCanonicalDocumentSchemaVersionV1.minor) {
+            documentMigration.emplace(migrateDocumentDom(
+                *trustedDocumentRoot, *decodedDocumentVersion, kCanonicalDocumentSchemaVersionV1,
+                kProductionDocumentMigrationSteps, documentJsonLimits(limits, remainingValues),
+                operation));
+            if (!*documentMigration) {
+                return ReopenChainResult::failure(SaveArchiveFailure(
+                    stage, SaveArchiveDocumentMigrationFailure{
+                               documentMigration->error(), *decodedDocumentVersion,
+                               kCanonicalDocumentSchemaVersionV1, documentMigration->stepsApplied(),
+                               documentMigration->failedStepSourceVersion(),
+                               documentMigration->failedStepTargetVersion(),
+                               SaveArchiveErrorPath::from(documentMigration->path())}));
+            }
+            if (documentMigration->outcome() == MigrationOutcome::Migrated) {
+                trustedDocumentRoot = documentMigration->migratedRoot();
+                effectiveDocumentVersion = kCanonicalDocumentSchemaVersionV1;
+                effectiveDocumentValueCount = countJsonValues(*trustedDocumentRoot);
+            }
+        }
+
         stage = SaveArchiveStage::DocumentDecode;
-        auto decodeReservation =
-            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
+        auto decodeReservation = reserveRepresentation(operation, entries->documentBytes().size(),
+                                                       effectiveDocumentValueCount);
         if (!decodeReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
-        auto decodedDocument = decodeDocumentEnvelope(documentDom.document()->root());
+        auto decodedDocument = decodeDocumentEnvelope(*trustedDocumentRoot);
         if (decodedDocument.outcome() == DocumentDecodeOutcome::PreservedReadOnlyRequired) {
             return ReopenChainResult::documentPreservedReadOnlyRequired(
                 decodedDocument.preservationReason(),
@@ -441,8 +482,8 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         }
 
         stage = SaveArchiveStage::Reconstruction;
-        auto reconstructionReservation =
-            reserveRepresentation(operation, entries->documentBytes().size(), documentValueCount);
+        auto reconstructionReservation = reserveRepresentation(
+            operation, entries->documentBytes().size(), effectiveDocumentValueCount);
         if (!reconstructionReservation.has_value()) {
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
@@ -488,7 +529,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
             .zipRead = std::move(reopened),
             .document = std::move(*reconstructed.value()),
             .manifest = *decodedManifest.value(),
-            .documentRootVersion = decodedDocumentVersion,
+            .documentRootVersion = effectiveDocumentVersion,
             .roundTrip = std::move(roundTrip),
             .manifestReservation = std::move(*manifestReservation),
             .decodeReservation = std::move(*decodeReservation),

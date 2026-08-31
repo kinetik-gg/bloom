@@ -21,10 +21,15 @@
 // cross-file implementation seam within one CMake target.
 //
 // runReopenChain() runs exactly the prefix the two callers share: container read, strict parse of
-// both entries under one shared JSON value budget, manifest decode, version agreement, document
-// decode, reconstruction, and manifest-requirements validation against the reconstructed project
-// (see save_archive.hpp's SaveArchiveStage enum, whose ContainerRead..RequirementsValidation
-// members name this exact prefix). Save's own re-encode and byte-comparison stages
+// both entries under one shared JSON value budget, manifest decode, version agreement, a routed
+// document migration pass, document decode, reconstruction, and manifest-requirements validation
+// against the reconstructed project (see save_archive.hpp's SaveArchiveStage enum, whose
+// ContainerRead..RequirementsValidation members -- now including DocumentMigration -- name this
+// exact prefix). The migration pass itself (document_migration.hpp's migrateDocumentDom()) only
+// ever does real work for a same-major, at-or-below-current-minor document; today that is only the
+// identity case, since schema {1,0} is the only version Bloom has ever shipped -- see this file's
+// implementation in save_archive.cpp for the exact routing condition. Save's own re-encode and
+// byte-comparison stages
 // (ManifestReencode..DocumentByteComparison) are not part of this routine; they run only in
 // verifySaveArchive() against the state this routine hands back. Every allocation is charged
 // through `operation`, identically to the pre-split verifySaveArchive() this was extracted from.
