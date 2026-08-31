@@ -48,7 +48,9 @@ buildAttempt(output::ExportResourceLedgerV1& ledger, support::Fixture fixture) {
          .target = {.targetKey = bloom::core::ArtifactTargetKey::fromRaw(1),
                     .observation = platform::ArtifactTargetObservation::absent(),
                     .targetPath = "/tmp/ignored.exr",
-                    .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace}},
+                    .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace},
+         // EXR has no display product at all (frame-output.md: "EXR has no display product").
+         .display = {}},
         ledger);
     if (!result) {
         std::abort();

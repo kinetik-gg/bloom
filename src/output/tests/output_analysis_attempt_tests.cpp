@@ -43,7 +43,8 @@ void testBuildSucceedsAndRetainsProducts(Expectations& expectations) {
     auto result = output::buildOutputAnalysisAttemptV1({.frame = source.frame,
                                                         .processIdentity = source.processIdentity,
                                                         .report = source.report,
-                                                        .target = fixtureTarget()},
+                                                        .target = fixtureTarget(),
+                                                        .display = {}},
                                                        ledger);
     expectations.expect(static_cast<bool>(result),
                         "a valid ready EXR source builds a completed attempt");
@@ -71,12 +72,14 @@ void testDigestIsStableAcrossTwoBuilds(Expectations& expectations) {
     auto resultA = output::buildOutputAnalysisAttemptV1({.frame = sourceA.frame,
                                                          .processIdentity = sourceA.processIdentity,
                                                          .report = sourceA.report,
-                                                         .target = fixtureTarget()},
+                                                         .target = fixtureTarget(),
+                                                         .display = {}},
                                                         ledger);
     auto resultB = output::buildOutputAnalysisAttemptV1({.frame = sourceB.frame,
                                                          .processIdentity = sourceB.processIdentity,
                                                          .report = sourceB.report,
-                                                         .target = fixtureTarget()},
+                                                         .target = fixtureTarget(),
+                                                         .display = {}},
                                                         ledger);
     expectations.expect(static_cast<bool>(resultA) && static_cast<bool>(resultB),
                         "both identical-fixture builds succeed");
@@ -96,11 +99,37 @@ void testInvalidTargetIsRejected(Expectations& expectations) {
         {.frame = source.frame,
          .processIdentity = source.processIdentity,
          .report = source.report,
-         .target = {}}, // default-constructed target has an invalid ArtifactTargetKey
+         .target = {}, // default-constructed target has an invalid ArtifactTargetKey
+         .display = {}},
         ledger);
     expectations.expect(!result && result.error() ==
                                        output::OutputAnalysisAttemptErrorCodeV1::InvalidTarget,
                         "an invalid (never-preflighted) target is a typed InvalidTarget failure");
+}
+
+// frame-output.md: "EXR has no display product" and "The EXR preset rejects a nonempty OCIO
+// revision or display identity." A partially-populated display triple is equally structurally
+// invalid for EXR -- it is neither present nor absent -- so it is rejected before any digest is
+// computed rather than silently ignored.
+void testExrRejectsRetainedDisplayProducts(Expectations& expectations) {
+    auto source = support::prepareSource(support::roundTripFixture());
+    output::ExportResourceLedgerV1 ledger;
+    auto result = output::buildOutputAnalysisAttemptV1(
+        {.frame = source.frame,
+         .processIdentity = source.processIdentity,
+         .report = source.report,
+         .target = fixtureTarget(),
+         .display = {.processor = nullptr,
+                     .identity = nullptr,
+                     .expectedOcioRevision = bloom::core::Sha256Digest{}}},
+        ledger);
+    expectations.expect(
+        !result &&
+            result.error() == output::OutputAnalysisAttemptErrorCodeV1::InvalidDisplayProducts,
+        "an EXR attempt carrying any PNG display product is a typed InvalidDisplayProducts "
+        "failure");
+    expectations.expect(ledger.chargedBytes() == 0,
+                        "a refused display-product build charges nothing against the ledger");
 }
 
 void testResourceExhaustionIsTypedWithZeroLeak(Expectations& expectations) {
@@ -109,7 +138,8 @@ void testResourceExhaustionIsTypedWithZeroLeak(Expectations& expectations) {
     auto result = output::buildOutputAnalysisAttemptV1({.frame = source.frame,
                                                         .processIdentity = source.processIdentity,
                                                         .report = source.report,
-                                                        .target = fixtureTarget()},
+                                                        .target = fixtureTarget(),
+                                                        .display = {}},
                                                        ledger);
     expectations.expect(
         !result &&
@@ -126,6 +156,7 @@ int main() {
     testBuildSucceedsAndRetainsProducts(expectations);
     testDigestIsStableAcrossTwoBuilds(expectations);
     testInvalidTargetIsRejected(expectations);
+    testExrRejectsRetainedDisplayProducts(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -306,13 +306,17 @@ FrameExportPublicationResultV1 executeExportPublication(
         return cancelledResult(FrameExportPublicationStageV1::Staging);
     }
 
-    // --- Writing + Verifying (design decision 4 node 3's first half): F1's writer/verifier
-    // against a caller-owned scratch path bridging their path-based OpenEXR API to the lease's
-    // byte-oriented staging (see bloom/output/flat_exr_export_write.hpp's own namespace comment
-    // for the full rationale). The bridging progress callback also resets the no-progress clock;
-    // a mid-call deadline/no-progress violation can only be detected once F1's own (synchronous,
-    // uninterruptible from here) call returns -- runtime::CancellationToken exposes no
-    // caller-side "request my own cancellation" seam, and changing task_scheduler.hpp is out of
+    // --- (PNG only: ColorPreparing + PreparingOutput, node 2) then Writing + Verifying (design
+    // decision 4 node 3's first half), through the preset's own bridge: F1's flat OpenEXR
+    // writer/verifier, or G1's PNG writer/verifier behind the retained qualified display
+    // processor. Both target a caller-owned scratch path bridging their path-based APIs to the
+    // lease's byte-oriented staging (see bloom/output/flat_exr_export_write.hpp and
+    // bloom/output/png_export_write.hpp's own namespace comments for the full rationale); the
+    // publication half below is one shared code path for both. The bridging progress callback --
+    // the same sink for both presets -- also resets the no-progress clock;
+    // a mid-call deadline/no-progress violation can only be detected once the bridge's own
+    // (synchronous, uninterruptible from here) call returns -- runtime::CancellationToken exposes
+    // no caller-side "request my own cancellation" seam, and changing task_scheduler.hpp is out of
     // this task's scope. See the implementor's report for the full limitation.
     const ScratchFileGuard scratch(
         uniqueScratchFilePath(scratchDirectory, isPng ? ".png" : ".exr"));
