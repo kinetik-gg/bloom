@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/color/display_processor_identity.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/core/artifact_target_key.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
@@ -32,8 +34,6 @@
 // StagedArtifactCoordinator").
 namespace bloom::output {
 
-// Version 1 ships EXR only (design decision 3's task package scope); PNG's additional retained
-// display-processor identity is future preset breadth, not represented here.
 struct OutputAnalysisAttemptTargetV1 final {
     core::ArtifactTargetKey targetKey;
     platform::ArtifactTargetObservation observation = platform::ArtifactTargetObservation::absent();
@@ -44,12 +44,44 @@ struct OutputAnalysisAttemptTargetV1 final {
     [[nodiscard]] bool isValid() const noexcept { return targetKey.isValid(); }
 };
 
+// The PNG-only products the attempt graph's step 4 produces ("for PNG, bounded color/config
+// resolution plus preparation or exact reuse of the qualified display processor and its canonical
+// DisplayProcessorIdentity; EXR has no display product") and that the "Immutable Export Request"
+// bullet list requires a completed attempt to retain ("the qualified PNG display-processor handle
+// and identity when applicable"). Every field is empty for EXR, and for a PNG attempt whose color
+// resolution or adapter was not Ready -- such an attempt still completes with a truthful
+// non-approvable report (frame-output.md: "A failed or unavailable stage may still produce the
+// truthful nonapprovable report ... but it never produces a placeholder identity or approval
+// digest").
+//
+// `identity` is expected to alias `processor`'s own DisplayProcessorIdentityV1 (the aliasing
+// std::shared_ptr constructor), never an independently-adopted copy: the doc forbids pairing a
+// frame or processor with a substitute identity at approval or export, and aliasing makes that
+// pairing structural rather than checked.
+struct OutputAnalysisAttemptDisplayProductsV1 final {
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
+    std::shared_ptr<const color::DisplayProcessorIdentityV1> identity;
+    std::optional<core::Sha256Digest> expectedOcioRevision;
+
+    [[nodiscard]] bool isPresent() const noexcept {
+        return processor != nullptr && identity != nullptr && expectedOcioRevision.has_value();
+    }
+    [[nodiscard]] bool isAbsent() const noexcept {
+        return processor == nullptr && identity == nullptr && !expectedOcioRevision.has_value();
+    }
+};
+
 enum class OutputAnalysisAttemptErrorCodeV1 : std::uint8_t {
     None,
     InvalidTarget,
     InvalidFrame,
     InvalidIdentity,
     InvalidReport,
+    // The retained display products do not match the report's own preset: EXR carries any of them
+    // at all, a PNG report carries a partially-populated set, or an APPROVABLE PNG report carries
+    // none (an approvable PNG report exists only when color resolution and the adapter were both
+    // Ready, which is exactly when the processor/identity/revision triple exists).
+    InvalidDisplayProducts,
     DigestFailed,
     ResourceReservationFailed,
     InternalInvariant,
@@ -62,6 +94,7 @@ struct OutputAnalysisAttemptBuildInputsV1 final {
     std::shared_ptr<const ProcessFrameSemanticIdentityV1> processIdentity;
     std::shared_ptr<const OutputAnalysisReportV1> report;
     OutputAnalysisAttemptTargetV1 target;
+    OutputAnalysisAttemptDisplayProductsV1 display;
 };
 
 class [[nodiscard]] OutputAnalysisAttemptBuildResultV1 final {
@@ -90,7 +123,9 @@ class [[nodiscard]] OutputAnalysisAttemptBuildResultV1 final {
 // OutputAnalysisReportV1, the approval OutputAnalysisDigest (present only when the report is
 // approvable -- frame-output.md: "OutputAnalysisDigest becomes available only when a validated
 // frame-bound process identity exists ... Approval requires both that digest and all eleven
-// derived permission bits"), the canonical target preflight, and its own resource reservation
+// derived permission bits"), the typed preset, the qualified PNG display-processor handle and its
+// canonical identity when applicable, the canonical target preflight, and its own resource
+// reservation
 // (released when the last shared_ptr to this attempt, or to a FrameExportRequestV1 that still
 // retains it, is dropped -- "Dismissal or supersession cancels unfinished work and releases the
 // completed attempt and its reservations when no admitted export retains them").
@@ -118,6 +153,13 @@ class OutputAnalysisAttemptV1 final {
     [[nodiscard]] const std::shared_ptr<const OutputAnalysisReportV1>& report() const&& = delete;
     [[nodiscard]] bool approvable() const noexcept { return digest_.has_value(); }
     [[nodiscard]] std::optional<core::Sha256Digest> digest() const noexcept { return digest_; }
+    // The typed preset this attempt was analyzed for -- read straight off the retained report, so
+    // it can never disagree with the report's own facet vocabulary or descriptor schema.
+    [[nodiscard]] OutputPresetV1 preset() const noexcept { return preset_; }
+    [[nodiscard]] const OutputAnalysisAttemptDisplayProductsV1& display() const& noexcept {
+        return display_;
+    }
+    [[nodiscard]] const OutputAnalysisAttemptDisplayProductsV1& display() const&& = delete;
     [[nodiscard]] const OutputAnalysisAttemptTargetV1& target() const noexcept { return target_; }
     [[nodiscard]] const std::shared_ptr<ExportResourceReservationV1>& resources() const& noexcept {
         return reservation_;
@@ -132,15 +174,18 @@ class OutputAnalysisAttemptV1 final {
     OutputAnalysisAttemptV1(std::shared_ptr<const runtime::ProcessFrame> frame,
                             std::shared_ptr<const ProcessFrameSemanticIdentityV1> processIdentity,
                             std::shared_ptr<const OutputAnalysisReportV1> report,
-                            std::optional<core::Sha256Digest> digest,
+                            std::optional<core::Sha256Digest> digest, OutputPresetV1 preset,
                             OutputAnalysisAttemptTargetV1 target,
+                            OutputAnalysisAttemptDisplayProductsV1 display,
                             std::shared_ptr<ExportResourceReservationV1> reservation) noexcept;
 
     std::shared_ptr<const runtime::ProcessFrame> frame_;
     std::shared_ptr<const ProcessFrameSemanticIdentityV1> processIdentity_;
     std::shared_ptr<const OutputAnalysisReportV1> report_;
     std::optional<core::Sha256Digest> digest_;
+    OutputPresetV1 preset_ = OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
     OutputAnalysisAttemptTargetV1 target_;
+    OutputAnalysisAttemptDisplayProductsV1 display_;
     std::shared_ptr<ExportResourceReservationV1> reservation_;
 };
 

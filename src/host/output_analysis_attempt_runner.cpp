@@ -1,7 +1,11 @@
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -9,12 +13,146 @@ namespace bloom::host {
 
 namespace {
 
+// The PNG-only color half of the blocking stage, in the exact closed input vocabulary
+// analyzePngRgba8SrgbV1 accepts. `display` is populated only when both fields below are the
+// nominal Ready/Qualified pair.
+struct ColorResolutionOutcomeV1 final {
+    output::PngRgba8SrgbColorResolutionStateV1 colorResolution =
+        output::PngRgba8SrgbColorResolutionStateV1::Ready;
+    output::OutputAnalysisAdapterStateV1 adapter = output::OutputAnalysisAdapterStateV1::Qualified;
+    output::OutputAnalysisAttemptDisplayProductsV1 display;
+};
+
+// Everything the blocking stage hands the Cpu stage, behind ONE shared_ptr: runtime::
+// TaskResultValue caps a task result at four pointers (task_scheduler.hpp), and the retained
+// target plus the PNG display products exceed that on their own. Bundling them keeps the task
+// result a single small handle while still transferring both products by value semantics.
+struct ResolvedAttemptInputsV1 final {
+    output::OutputAnalysisAttemptTargetV1 target;
+    ColorResolutionOutcomeV1 color;
+};
+
 struct ResolvingOutcomeV1 final {
     bool succeeded = false;
+    // Distinguishes an allocation/internal failure of the PNG color stage (which fails the attempt
+    // AT ColorPreparing) from a target-preflight failure (which fails it at Resolving). A merely
+    // non-Ready color resolution is neither: it travels in `resolved->color` to the analyzer.
+    bool colorStageFailed = false;
     platform::StagedArtifactError error = platform::StagedArtifactError::None;
-    std::shared_ptr<const output::OutputAnalysisAttemptTargetV1> target = nullptr;
+    std::shared_ptr<const ResolvedAttemptInputsV1> resolved = nullptr;
 };
 static_assert(runtime::TaskResultValue<ResolvingOutcomeV1>);
+
+// Maps the C2 in-process registry's own closed outcome set onto the analyzer's closed PNG
+// color-resolution input states, one to one, per frame-output.md's "The five ocio.* codes map
+// one-to-one from the corresponding typed color-resolution failures". `Ready` is handled by the
+// caller (it is the only outcome that carries a resolved product to build a processor from).
+//
+// `LocatorKindRequiresHelper` names a real, planned locator kind that this in-process registry
+// never resolves; it is unreachable for the built-in URI this code always passes, and it maps to
+// `MissingResource` (`ocio.resource-missing`) -- the honest "the configuration resource this build
+// can reach does not cover that locator" state -- rather than being collapsed into `Missing`.
+// `UnsupportedVersion` (`ocio.version-unsupported`) has no producer at all in version 1: the
+// built-in payload's version is frozen with the binary, so nothing can present a newer one.
+[[nodiscard]] output::PngRgba8SrgbColorResolutionStateV1
+mapRegistryOutcome(const color::OcioBuiltInRegistryOutcome outcome) noexcept {
+    switch (outcome) {
+    case color::OcioBuiltInRegistryOutcome::Ready:
+        break; // unreachable here; the caller only maps a non-Ready outcome.
+    case color::OcioBuiltInRegistryOutcome::Missing:
+        return output::PngRgba8SrgbColorResolutionStateV1::Missing;
+    case color::OcioBuiltInRegistryOutcome::Changed:
+        return output::PngRgba8SrgbColorResolutionStateV1::Changed;
+    case color::OcioBuiltInRegistryOutcome::Invalid:
+        return output::PngRgba8SrgbColorResolutionStateV1::Invalid;
+    case color::OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper:
+        return output::PngRgba8SrgbColorResolutionStateV1::MissingResource;
+    }
+    return output::PngRgba8SrgbColorResolutionStateV1::Missing;
+}
+
+// Binds a built or reused processor handle to the retained display-product triple. The identity is
+// an ALIASING shared_ptr into the handle's own DisplayProcessorIdentityV1 member -- never an
+// independently adopted copy -- so the exported identity can never be paired with a different
+// processor (frame-output.md: "Recomputing pixel hashes or substituting an equivalent-looking
+// frame or processor at approval or export is forbidden").
+[[nodiscard]] std::optional<output::OutputAnalysisAttemptDisplayProductsV1>
+retainDisplayProducts(std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> handle) {
+    core::Sha256Digest expectedRevision;
+    if (const auto view = handle->identity().borrowedView(); view.has_value()) {
+        expectedRevision = view->expectedOcioRevision();
+    } else {
+        return std::nullopt;
+    }
+    std::shared_ptr<const color::DisplayProcessorIdentityV1> identity(handle, &handle->identity());
+    return output::OutputAnalysisAttemptDisplayProductsV1{.processor = std::move(handle),
+                                                          .identity = std::move(identity),
+                                                          .expectedOcioRevision = expectedRevision};
+}
+
+// The attempt graph's step 4. Never throws; a genuine allocation/internal failure is signalled by
+// returning nullopt so the caller can fail the attempt AT the ColorPreparing stage, while every
+// modelled configuration/adapter state returns a populated outcome that the analyzer turns into a
+// truthful, non-approvable report.
+[[nodiscard]] std::optional<ColorResolutionOutcomeV1>
+resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const provider) noexcept {
+    try {
+        if (provider != nullptr) {
+            const auto snapshot = provider->snapshot();
+            if (snapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Ready &&
+                snapshot.handle != nullptr) {
+                auto products = retainDisplayProducts(snapshot.handle);
+                if (!products.has_value()) {
+                    return std::nullopt;
+                }
+                return ColorResolutionOutcomeV1{
+                    .colorResolution = output::PngRgba8SrgbColorResolutionStateV1::Ready,
+                    .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
+                    .display = std::move(*products)};
+            }
+        }
+
+        auto resolution = color::resolveBloomNeutralV1BuiltIn(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+            color::kBloomNeutralV1ConfigDigest);
+        if (!resolution.ready()) {
+            return ColorResolutionOutcomeV1{
+                .colorResolution = mapRegistryOutcome(resolution.outcome()),
+                .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
+                .display = {}};
+        }
+        auto resolved = std::move(resolution).takeResolved();
+        if (!resolved.has_value()) {
+            return std::nullopt;
+        }
+
+        // frame-output.md: "A resolved PNG configuration whose helper, processor, or execution
+        // provider cannot run is an adapter-execution failure: Color keeps its Ready nominal tuple
+        // while External Dependencies uses adapter.unavailable."
+        auto built = color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+        auto handleValue = std::move(built).takeHandle();
+        if (!handleValue.has_value()) {
+            return ColorResolutionOutcomeV1{
+                .colorResolution = output::PngRgba8SrgbColorResolutionStateV1::Ready,
+                .adapter = output::OutputAnalysisAdapterStateV1::Unavailable,
+                .display = {}};
+        }
+        auto handle = std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(
+            std::move(*handleValue));
+        auto products = retainDisplayProducts(std::move(handle));
+        if (!products.has_value()) {
+            return std::nullopt;
+        }
+        return ColorResolutionOutcomeV1{.colorResolution =
+                                            output::PngRgba8SrgbColorResolutionStateV1::Ready,
+                                        .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
+                                        .display = std::move(*products)};
+    } catch (const std::bad_alloc&) {
+        return std::nullopt;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 enum class BuildFailureKindV1 : std::uint8_t {
     None,
@@ -145,6 +283,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
             !taken->value()->succeeded) {
             state_->completed = true;
+            if (taken->value().has_value() && taken->value()->colorStageFailed) {
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::ColorPreparing, false, std::monostate{}});
+            }
             const auto error = taken->value().has_value() ? taken->value()->error
                                                           : platform::StagedArtifactError::None;
             return OutputAnalysisAttemptOutcomeV1::failure(
@@ -152,8 +294,15 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         }
 
         // Resolving succeeded: submit the Cpu stage, consuming its typed result (the retained
-        // target) directly into the next task's closure -- never a wait/get/join.
-        auto resolvedTarget = taken->value()->target;
+        // target, and for PNG the retained display products) directly into the next task's closure
+        // -- never a wait/get/join.
+        auto resolved = taken->value()->resolved;
+        if (resolved == nullptr) {
+            state_->completed = true;
+            return OutputAnalysisAttemptOutcomeV1::failure(
+                {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
+        }
+        const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
@@ -163,7 +312,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
-            [plan = std::move(plan), evaluation, resolvedTarget,
+            [plan = std::move(plan), evaluation, resolved, preset,
              ledger](runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -215,10 +364,25 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
 
                 context.reportProgress(
                     {.phase = "Analyzing", .subphase = "", .completed = 0, .total = std::nullopt});
-                auto analyzed = output::analyzeFlatExrRgba32fLinRec709SceneV1(
-                    {.process = {.state = output::OutputAnalysisProcessSourceStateV1::Ready,
-                                 .readyIdentity = identityResult.identity(),
-                                 .missingDescriptor = std::nullopt}});
+                const output::OutputAnalysisProcessSourceV1 processSource{
+                    .state = output::OutputAnalysisProcessSourceStateV1::Ready,
+                    .readyIdentity = identityResult.identity(),
+                    .missingDescriptor = std::nullopt};
+                // The preset-specific analyzer entry points -- never a preset enum plus a union of
+                // optional fields (frame-output.md: "There is no public entry point that accepts a
+                // preset enum plus a union of optional fields"). The PNG input's expected OCIO
+                // revision is the persisted Bloom Neutral v1 expectedRevision, required whether or
+                // not resolution succeeded; when resolution DID succeed it byte-equals the revision
+                // embedded in the retained canonical DisplayProcessorIdentity, which the digest
+                // stage independently re-checks.
+                auto analyzed =
+                    preset == output::OutputPresetV1::PngRgba8SrgbV1
+                        ? output::analyzePngRgba8SrgbV1(
+                              {.process = processSource,
+                               .expectedOcioRevision = color::kBloomNeutralV1ConfigDigest,
+                               .colorResolution = resolved->color.colorResolution,
+                               .adapter = resolved->color.adapter})
+                        : output::analyzeFlatExrRgba32fLinRec709SceneV1({.process = processSource});
                 if (!analyzed.hasReport()) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(
                         {.succeeded = false,
@@ -233,7 +397,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     {.frame = evalResult.frame(),
                      .processIdentity = identityResult.identity(),
                      .report = analyzed.report(),
-                     .target = *resolvedTarget},
+                     .target = resolved->target,
+                     .display = resolved->color.display},
                     *ledger);
                 if (!buildResult) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(
@@ -311,16 +476,21 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             .completed = false,
         });
 
+    const auto preset = state->request.preset;
+    auto* const displayProvider = state->request.displayProcessorProvider;
+
     runtime::TaskRequest resolvingRequest(
         "Resolve an export target", attemptOwner(state->request.owner),
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
-        [&artifacts, targetPath, overwritePolicy](
+        [&artifacts, targetPath, overwritePolicy, preset, displayProvider](
             runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
             }
+            context.reportProgress(
+                {.phase = "Resolving", .subphase = "", .completed = 0, .total = std::nullopt});
             auto preflightResult = artifacts.preflight({.targetPath = targetPath,
                                                         .overwritePolicy = overwritePolicy,
                                                         .expectedTarget = std::nullopt});
@@ -334,20 +504,39 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             // `target` goes out of scope here: the live platform active-target admission it holds
             // is released immediately rather than kept open for the duration of a pending artist
             // decision (see this file's own header-level rationale comment).
-            std::shared_ptr<const output::OutputAnalysisAttemptTargetV1> retained;
+            ResolvedAttemptInputsV1 inputs{.target = {.targetKey = targetKey,
+                                                      .observation = observation,
+                                                      .targetPath = targetPath,
+                                                      .overwritePolicy = overwritePolicy},
+                                           .color = {}};
+
+            // EXR has no display product and therefore never enters ColorPreparing at all.
+            if (preset == output::OutputPresetV1::PngRgba8SrgbV1) {
+                if (context.isCancellationRequested()) {
+                    return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
+                }
+                context.reportProgress({.phase = "ColorPreparing",
+                                        .subphase = "",
+                                        .completed = 0,
+                                        .total = std::nullopt});
+                auto color = resolvePngDisplayProducts(displayProvider);
+                if (!color.has_value()) {
+                    return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
+                        {.succeeded = false, .colorStageFailed = true});
+                }
+                inputs.color = std::move(*color);
+            }
+
+            std::shared_ptr<const ResolvedAttemptInputsV1> retained;
             try {
-                retained = std::make_shared<const output::OutputAnalysisAttemptTargetV1>(
-                    output::OutputAnalysisAttemptTargetV1{.targetKey = targetKey,
-                                                          .observation = observation,
-                                                          .targetPath = targetPath,
-                                                          .overwritePolicy = overwritePolicy});
+                retained = std::make_shared<const ResolvedAttemptInputsV1>(std::move(inputs));
             } catch (const std::bad_alloc&) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
                     {.succeeded = false,
                      .error = platform::StagedArtifactError::ResourceUnavailable});
             }
             return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
-                {.succeeded = true, .target = std::move(retained)});
+                {.succeeded = true, .resolved = std::move(retained)});
         });
 
     if (!submission.accepted()) {

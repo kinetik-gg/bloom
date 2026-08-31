@@ -3,11 +3,14 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/output/output_limits.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <fstream>
 #include <limits>
 #include <new>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -104,12 +107,74 @@ FrameExportPublicationResultV1 FrameExportPublicationResultV1::failure(
 namespace {
 
 [[nodiscard]] std::filesystem::path
-uniqueScratchFilePath(const std::filesystem::path& directory) noexcept {
+uniqueScratchFilePath(const std::filesystem::path& directory,
+                      const std::string_view extension) noexcept {
     static std::atomic<std::uint64_t> counter{0};
     const auto suffix = counter.fetch_add(1, std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-    return directory /
-           (".bloom-export-scratch-" + std::to_string(now) + "-" + std::to_string(suffix) + ".exr");
+    return directory / (".bloom-export-scratch-" + std::to_string(now) + "-" +
+                        std::to_string(suffix) + std::string(extension));
+}
+
+// The doc's ordered stage vocabulary, mapped onto the existing TaskContext::reportProgress()
+// phase strings (frame-output.md, "Non-Blocking Execution"). EXR only ever produces Writing,
+// Verifying, and Publishing here -- exactly the three the previous inline ternary produced.
+[[nodiscard]] std::string exportStagePhase(const output::OutputExportStageV1 stage) {
+    switch (stage) {
+    case output::OutputExportStageV1::Resolving:
+        return "Resolving";
+    case output::OutputExportStageV1::Evaluating:
+        return "Evaluating";
+    case output::OutputExportStageV1::Identifying:
+        return "Identifying";
+    case output::OutputExportStageV1::ColorPreparing:
+        return "ColorPreparing";
+    case output::OutputExportStageV1::Analyzing:
+        return "Analyzing";
+    case output::OutputExportStageV1::PreparingOutput:
+        return "PreparingOutput";
+    case output::OutputExportStageV1::Writing:
+        return "Writing";
+    case output::OutputExportStageV1::Verifying:
+        return "Verifying";
+    case output::OutputExportStageV1::Publishing:
+        break;
+    }
+    return "Publishing";
+}
+
+// The preset-independent shape of "the staged bytes exist at the scratch path and carry these two
+// digests", so the publication half below stays one code path for both presets.
+struct WriteVerifyOutcomeV1 final {
+    bool written = false;
+    bool cancelled = false;
+    FrameExportPublicationStageV1 stage = FrameExportPublicationStageV1::Writing;
+    FrameExportPublicationFailurePayloadV1 payload{};
+    core::Sha256Digest semanticDigest;
+    core::Sha256Digest artifactDigest;
+    std::uint64_t artifactByteCount = 0;
+};
+
+// Maps the PNG bridge's typed error onto the publication stage it happened at. ColorPreparing and
+// PreparingOutput both belong to the doc's node 2 ("dependent output preparation"); the remaining
+// codes belong to node 3's writer/verifier halves.
+[[nodiscard]] FrameExportPublicationStageV1
+pngFailureStage(const output::PngExportWriteErrorCodeV1 error) noexcept {
+    switch (error) {
+    case output::PngExportWriteErrorCodeV1::MissingDisplayProducts:
+    case output::PngExportWriteErrorCodeV1::PreparedBytesLimitExceeded:
+    case output::PngExportWriteErrorCodeV1::ColorPrepareFailed:
+        return FrameExportPublicationStageV1::ColorPreparing;
+    case output::PngExportWriteErrorCodeV1::VerifyFailed:
+        return FrameExportPublicationStageV1::Verifying;
+    case output::PngExportWriteErrorCodeV1::None:
+    case output::PngExportWriteErrorCodeV1::InvalidAttempt:
+    case output::PngExportWriteErrorCodeV1::WriteFailed:
+    case output::PngExportWriteErrorCodeV1::ArtifactHashFailed:
+    case output::PngExportWriteErrorCodeV1::InternalInvariant:
+        break;
+    }
+    return FrameExportPublicationStageV1::Writing;
 }
 
 class ScratchFileGuard final {
@@ -183,18 +248,43 @@ FrameExportPublicationResultV1 executeExportPublication(
             FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
     }
 
+    // PNG's prepared straight-RGBA8 stream is the one buffer the approved job adds on top of the
+    // attempt's already-charged retained products, so it is both checked against its own closed
+    // limit and folded into the expanded reservation below -- BEFORE anything is allocated or any
+    // file is created (frame-output.md: "An insufficient or overflowing reservation rejects the
+    // stage before allocation or file creation"). EXR exposes the retained rows directly and adds
+    // nothing here, which is why its peak arithmetic below is unchanged.
+    const bool isPng = attempt.preset() == output::OutputPresetV1::PngRgba8SrgbV1;
+    std::uint64_t preparedBytes = 0;
+    if (isPng) {
+        const auto counted = output::checkedPngPreparedByteCountV1(attempt);
+        if (!counted.has_value()) {
+            return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+                FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
+        }
+        const auto preparedLimit =
+            std::min(limits.preparedPngByteLimit, output::kOutputExportPreparedPngBytesMaximumV1);
+        if (preparedLimit == 0 || *counted > preparedLimit) {
+            return FrameExportPublicationResultV1::failure(
+                FrameExportPublicationFailureV1(FrameExportPublicationStageV1::ColorPreparing,
+                                                FrameExportPreparedBytesExceededV1{}));
+        }
+        preparedBytes = *counted;
+    }
+
     // Approved-job admission transactionally expands the SAME reservation the attempt already
     // holds (design decision 5: "Approved-job admission transactionally expands that reservation
     // to the checked peak ... it neither double-charges shared retained storage") -- the checked
-    // peak here is the retained bytes already charged plus one streaming chunk of encoder/
-    // verifier/copy scratch (EXR exposes retained rows directly; there is no separate prepared
-    // display/output buffer to add).
+    // peak here is the retained bytes already charged, plus PNG's prepared display/output pixels
+    // (zero for EXR), plus one streaming chunk of encoder/verifier/copy scratch. The attempt's own
+    // retained storage is never re-added, so nothing is double-charged.
     const auto currentCharge = attempt.resources()->chargedBytes();
     constexpr auto chunkBound =
         static_cast<std::uint64_t>(output::kOutputAdapterMaximumStreamingChunkBytesV1);
-    const auto peak = currentCharge > std::numeric_limits<std::uint64_t>::max() - chunkBound
-                          ? std::numeric_limits<std::uint64_t>::max()
-                          : currentCharge + chunkBound;
+    constexpr auto maximumBytes = std::numeric_limits<std::uint64_t>::max();
+    auto peak =
+        currentCharge > maximumBytes - preparedBytes ? maximumBytes : currentCharge + preparedBytes;
+    peak = peak > maximumBytes - chunkBound ? maximumBytes : peak + chunkBound;
     if (attempt.resources()->expand(peak) != output::ExportResourceAdmissionStatusV1::Reserved) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
             FrameExportPublicationStageV1::Preflight, FrameExportResourceExhaustedV1{}));
@@ -224,25 +314,52 @@ FrameExportPublicationResultV1 executeExportPublication(
     // uninterruptible from here) call returns -- runtime::CancellationToken exposes no
     // caller-side "request my own cancellation" seam, and changing task_scheduler.hpp is out of
     // this task's scope. See the implementor's report for the full limitation.
-    const ScratchFileGuard scratch(uniqueScratchFilePath(scratchDirectory));
-    const output::FlatExrExportWriterV1 writer;
-    const auto writeVerifyResult = writer.run(
-        attempt, scratch.path(), context.cancellation(),
-        [&](const output::OutputExportProgressV1& stageProgress) {
-            lastProgress = clock();
-            context.reportProgress(
-                {.phase = stageProgress.stage == output::OutputExportStageV1::Writing
-                              ? "Writing"
-                              : (stageProgress.stage == output::OutputExportStageV1::Verifying
-                                     ? "Verifying"
-                                     : "Publishing"),
-                 .subphase = "",
-                 .completed = stageProgress.completed,
-                 .total = stageProgress.total});
-            if (progress) {
-                progress(stageProgress);
-            }
-        });
+    const ScratchFileGuard scratch(
+        uniqueScratchFilePath(scratchDirectory, isPng ? ".png" : ".exr"));
+    const auto stageProgressSink = [&](const output::OutputExportProgressV1& stageProgress) {
+        lastProgress = clock();
+        context.reportProgress({.phase = exportStagePhase(stageProgress.stage),
+                                .subphase = "",
+                                .completed = stageProgress.completed,
+                                .total = stageProgress.total});
+        if (progress) {
+            progress(stageProgress);
+        }
+    };
+
+    WriteVerifyOutcomeV1 writeVerify;
+    if (isPng) {
+        const output::PngExportWriterV1 pngWriter;
+        const auto pngResult = pngWriter.run(attempt, scratch.path(), context.cancellation(),
+                                             stageProgressSink, limits.preparedPngByteLimit);
+        writeVerify.cancelled = pngResult.status() == output::PngExportWriteStatusV1::Cancelled;
+        writeVerify.written = pngResult.status() == output::PngExportWriteStatusV1::Written;
+        if (writeVerify.written) {
+            writeVerify.semanticDigest = pngResult.semanticDigest();
+            writeVerify.artifactDigest = pngResult.artifactDigest();
+            writeVerify.artifactByteCount = pngResult.artifactByteCount();
+        } else if (!writeVerify.cancelled) {
+            writeVerify.stage = pngFailureStage(pngResult.error());
+            writeVerify.payload = pngResult.error();
+        }
+    } else {
+        const output::FlatExrExportWriterV1 writer;
+        const auto exrResult =
+            writer.run(attempt, scratch.path(), context.cancellation(), stageProgressSink);
+        writeVerify.cancelled = exrResult.status() == output::FlatExrExportWriteStatusV1::Cancelled;
+        writeVerify.written = exrResult.status() == output::FlatExrExportWriteStatusV1::Written;
+        if (writeVerify.written) {
+            writeVerify.semanticDigest = exrResult.semanticDigest();
+            writeVerify.artifactDigest = exrResult.artifactDigest();
+            writeVerify.artifactByteCount = exrResult.artifactByteCount();
+        } else if (!writeVerify.cancelled) {
+            writeVerify.stage =
+                exrResult.error() == output::FlatExrExportWriteErrorCodeV1::WriteFailed
+                    ? FrameExportPublicationStageV1::Writing
+                    : FrameExportPublicationStageV1::Verifying;
+            writeVerify.payload = exrResult.error();
+        }
+    }
 
     const auto afterWriteVerify = clock();
     if (deadlineExceeded(afterWriteVerify)) {
@@ -253,16 +370,12 @@ FrameExportPublicationResultV1 executeExportPublication(
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
             FrameExportPublicationStageV1::Writing, FrameExportNoProgressExceededV1{}));
     }
-    if (writeVerifyResult.status() == output::FlatExrExportWriteStatusV1::Cancelled) {
+    if (writeVerify.cancelled) {
         return cancelledResult(FrameExportPublicationStageV1::Writing);
     }
-    if (writeVerifyResult.status() != output::FlatExrExportWriteStatusV1::Written) {
-        const auto stage =
-            writeVerifyResult.error() == output::FlatExrExportWriteErrorCodeV1::WriteFailed
-                ? FrameExportPublicationStageV1::Writing
-                : FrameExportPublicationStageV1::Verifying;
+    if (!writeVerify.written) {
         return FrameExportPublicationResultV1::failure(
-            FrameExportPublicationFailureV1(stage, writeVerifyResult.error()));
+            FrameExportPublicationFailureV1(writeVerify.stage, writeVerify.payload));
     }
 
     // --- Artifact copy (design decision 4 node 3's "artifact SHA-256 + flush"): stream the
@@ -356,7 +469,7 @@ FrameExportPublicationResultV1 executeExportPublication(
                 break;
             }
         }
-        if (rehasher.finalize() != writeVerifyResult.artifactDigest()) {
+        if (rehasher.finalize() != writeVerify.artifactDigest) {
             static_cast<void>(lease.rejectVerification());
             return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
                 FrameExportPublicationStageV1::ArtifactCopy, FrameExportUnexpectedFailureV1{}));
@@ -384,8 +497,8 @@ FrameExportPublicationResultV1 executeExportPublication(
         auto guard = std::move(guardResult).takeGuard();
         auto publication = lease.publish(platform::PublicationDisposition::Proceed);
         return FrameExportPublicationResultV1::published(
-            publication, intentId, writeVerifyResult.semanticDigest(),
-            writeVerifyResult.artifactDigest(), writeVerifyResult.artifactByteCount());
+            publication, intentId, writeVerify.semanticDigest, writeVerify.artifactDigest,
+            writeVerify.artifactByteCount);
     }
     case PublicationGuardStatus::Superseded:
         return FrameExportPublicationResultV1::published(

@@ -16,9 +16,11 @@ target_sources(
         output_export_resource_ledger.cpp
         output_facet_descriptor.cpp
         output_analysis_numeric.cpp
+        output_export_artifact_hash.hpp
         output_semantic_identity.cpp
         output_semantic_identity_numeric.cpp
         output_semantic_identity_ownership.cpp
+        png_export_write.cpp
         png_output_adapter.cpp
         png_preset_contract.hpp
         png_reopen_verifier.cpp
@@ -38,6 +40,7 @@ target_sources(
             include/bloom/output/output_export_stage.hpp
             include/bloom/output/output_facet_descriptor.hpp
             include/bloom/output/output_limits.hpp
+            include/bloom/output/png_export_write.hpp
             include/bloom/output/png_output_adapter.hpp
             include/bloom/output/png_reopen_verifier.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
@@ -53,7 +56,18 @@ target_link_libraries(
     # output_analysis_attempt.hpp's own namespace comment). {"output", "platform"} was already
     # present in tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies
     # allowlist before this task (no allowlist edit was needed).
-    PUBLIC bloom_color bloom_core bloom_platform bloom_render bloom_runtime_evaluator
+    # bloom_color_ocio is PUBLIC (issue #111): bloom/output/output_analysis_attempt.hpp's
+    # OutputAnalysisAttemptDisplayProductsV1 retains a
+    # bloom::color::PreparedCpuDisplayProcessorHandle in its own public surface (the doc's
+    # "Immutable Export Request" bullet: "the qualified PNG display-processor handle and identity
+    # when applicable"), and png_export_write.cpp applies that handle through
+    # bloom::runtime::CpuQualifiedDisplayPreparer. It was already reachable transitively through
+    # bloom_runtime_evaluator's own PUBLIC bloom_color_ocio link; naming it here makes the direct
+    # use explicit. No OpenColorIO type crosses either boundary (bloom_color_ocio links
+    # OpenColorIO::OpenColorIO PRIVATE), and {"output", "color"} was already present in
+    # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist.
+    PUBLIC bloom_color bloom_color_ocio bloom_core bloom_platform bloom_render
+           bloom_runtime_evaluator
 )
 bloom_enable_warnings(bloom_output)
 
@@ -312,5 +326,27 @@ if(BUILD_TESTING)
         NAME bloom.output.png_reopen_verifier
         COMMAND bloom_output_png_reopen_verifier_test
         LABELS unit output identity render
+    )
+
+    # issue #111 (PNG export through color preparation): the approved job's PNG
+    # ColorPreparing/PreparingOutput/Writing/Verifying bridge over a real qualified Bloom Neutral
+    # CPU display processor.
+    add_executable(
+        bloom_output_png_export_write_test
+        tests/png_export_write_tests.cpp
+    )
+    target_include_directories(
+        bloom_output_png_export_write_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+        bloom_output_png_export_write_test
+        PRIVATE bloom_output ZLIB::ZLIBSTATIC
+    )
+    bloom_enable_warnings(bloom_output_png_export_write_test)
+    bloom_add_test(
+        NAME bloom.output.png_export_write
+        COMMAND bloom_output_png_export_write_test
+        LABELS unit output color identity render
     )
 endif()

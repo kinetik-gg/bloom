@@ -9,6 +9,7 @@
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -46,8 +47,11 @@ struct FrameExportApprovalPrompt final {
     std::filesystem::path destination;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    // The typed preset the chosen destination extension selected, read straight off the completed
+    // attempt (never re-derived from the path at prompt time).
+    output::OutputPresetV1 preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
     // The exact serialized preset ID (docs/architecture/frame-output.md's typed-preset table) --
-    // "FlatExrRgba32fLinRec709SceneV1" in version 1, never a paraphrase.
+    // "PngRgba8SrgbV1" or "FlatExrRgba32fLinRec709SceneV1", never a paraphrase.
     QString presetName;
     FrameExportFacetSummary facets;
     // The first 16 lowercase hex characters of attempt->digest()->toLowercaseHex() -- "the digest's
@@ -111,11 +115,21 @@ class FrameExportController final : public QObject {
     // owns ... supersession across saves and exports"). `scratchDirectory`, when non-empty,
     // overrides the default app-private temp location (tests use this to stay inside their own temp
     // fixture); either way the resolved directory is created if missing.
-    FrameExportController(CompositionSession& session, runtime::TaskScheduler& scheduler,
-                          TaskUiBridge& taskUiBridge, const runtime::SnapshotCompiler& compiler,
-                          host::PublicationCoordinator& publicationCoordinator,
-                          platform::StagedArtifactCoordinator& artifactCoordinator,
-                          std::filesystem::path scratchDirectory = {}, QObject* parent = nullptr);
+    // `displayProcessorProvider`, when non-null, must be the SAME application-wide
+    // bloom::runtime::QualifiedDisplayProcessorProvider the viewer's preview pipeline reads, and
+    // must outlive this object. A PNG export then REUSES that already-built qualified processor
+    // instead of resolving and building a second one on its own blocking stage. When it is null
+    // (or still Pending), the PNG attempt builds its own -- a real cost, never a silent fallback
+    // to an unqualified transform. It is a trailing defaulted parameter so the composition root
+    // can adopt it without every existing caller changing.
+    FrameExportController(
+        CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
+        const runtime::SnapshotCompiler& compiler,
+        host::PublicationCoordinator& publicationCoordinator,
+        platform::StagedArtifactCoordinator& artifactCoordinator,
+        std::filesystem::path scratchDirectory = {},
+        runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr,
+        QObject* parent = nullptr);
     ~FrameExportController() override;
 
     // A composition exists and no export is currently in flight (menu-enabled rule; MainWindow
@@ -131,10 +145,19 @@ class FrameExportController final : public QObject {
     [[nodiscard]] std::uint64_t chargedResourceBytes() const noexcept;
 
     // Seam setters (ProjectHost's decision-4 precedent). Defaults are installed at construction (a
-    // real QFileDialog::getSaveFileName ".exr" filter; a real QMessageBox Export/Cancel prompt), so
+    // real QFileDialog::getSaveFileName offering both closed presets' ".exr"/".png" filters; a real
+    // QMessageBox Export/Cancel prompt naming the selected preset), so
     // offscreen tests can drive the whole flow without a real dialog appearing.
     void setDestinationProvider(FrameExportDestinationProvider provider);
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
+
+    // The typed preset a destination path selects: the closed extension->preset mapping the export
+    // command uses (design decision 3: "the chosen extension selects the preset"). Exactly ".png"
+    // (ASCII case-insensitive) selects PngRgba8SrgbV1; every other extension -- including ".exr",
+    // no extension at all, and an unrecognized one -- keeps the flat OpenEXR preset this command
+    // has always used, so no pre-existing destination changes meaning.
+    [[nodiscard]] static output::OutputPresetV1
+    presetForDestination(const std::filesystem::path& destination);
 
   public slots:
     // "File -> Export Frame..." entry point: refuses while busy or without a composition, else
@@ -180,6 +203,7 @@ class FrameExportController final : public QObject {
     const runtime::SnapshotCompiler& compiler_;
     host::PublicationCoordinator& publicationCoordinator_;
     platform::StagedArtifactCoordinator& artifactCoordinator_;
+    runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider_ = nullptr;
     output::ExportResourceLedgerV1 ledger_;
     std::filesystem::path scratchDirectory_;
 
@@ -188,6 +212,7 @@ class FrameExportController final : public QObject {
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;
+    output::OutputPresetV1 pendingPreset_ = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
 
     std::variant<std::monostate, CompileHandle, host::OutputAnalysisAttemptRunnerV1,
                  ExportJobHandle>

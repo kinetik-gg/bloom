@@ -6,6 +6,7 @@
 #include <bloom/output/process_frame_semantic_identity.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <cstdint>
@@ -32,7 +33,13 @@
 //     rather than held open for the lifetime of a pending artist decision -- the job graph
 //     revalidates via a second, real StagedArtifactCoordinator::preflight() call at publish time
 //     (bloom/host/frame_export_publication.hpp), reusing the identical platform call rather than
-//     inventing a way to keep the first live handle alive indefinitely.
+//     inventing a way to keep the first live handle alive indefinitely. For the PNG preset this
+//     same BlockingIo task additionally performs the attempt graph's step-4 color work
+//     (ColorPreparing): resolving Bloom Neutral through the C2 in-process registry and reusing (or,
+//     when the application published none, building) the qualified CPU display processor. It runs
+//     here, not on the Cpu task, because processor preparation is the established one-time BLOCKING
+//     stage (issue #97's decision 3, bloom/runtime/qualified_display_processor_provider.hpp), and
+//     because it is a pure input to the analyzer, which is the very next stage.
 //   - Evaluating, Identifying, and Analyzing are pure CPU work sharing one TaskExecutor::Cpu task
 //     (runtime::CpuCompositionEvaluator, output::ProcessFrameSemanticIdentityV1Preparer,
 //     output::analyzeFlatExrRgba32fLinRec709SceneV1, output::buildOutputAnalysisAttemptV1 in
@@ -58,10 +65,30 @@ struct OutputAnalysisAttemptRequestV1 final {
     platform::ArtifactOverwritePolicy overwritePolicy =
         platform::ArtifactOverwritePolicy::CreateOrReplace;
     runtime::TaskOwner owner{.kind = runtime::TaskOwnerKind::Export, .id = {}};
+    // Which closed preset contract this attempt analyzes for (issue #111). The typed preset selects
+    // the analyzer entry point -- analyzePngRgba8SrgbV1 vs analyzeFlatExrRgba32fLinRec709SceneV1 --
+    // and therefore whether the blocking stage additionally resolves Bloom Neutral and prepares the
+    // qualified display processor at all ("EXR has no display product"). The default keeps every
+    // pre-existing caller on the exact flat OpenEXR path it had before.
+    output::OutputPresetV1 preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+    // Optional, non-owning: the application's already-published qualified display processor
+    // (bloom/runtime/qualified_display_processor_provider.hpp -- the same one-shot startup handoff
+    // the viewer's preview pipeline reads). When it is non-null AND Ready, the PNG blocking stage
+    // REUSES that exact handle instead of resolving and building a second one -- the doc's
+    // "preparation or EXACT REUSE of the qualified display processor". When it is null, Pending, or
+    // Failed, the blocking stage resolves and builds its own; that is a real cost, never a silent
+    // fallback to an unqualified transform. Must outlive the whole asynchronous operation.
+    runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {
     Resolving,
+    // PNG only: bounded Bloom Neutral resolution plus preparation or exact reuse of the qualified
+    // display processor (frame-output.md's attempt-graph step 4 and its ordered stage vocabulary).
+    // A non-Ready color resolution or an unusable adapter is NOT reported here -- it is a truthful
+    // analyzer input state that still produces a completed, non-approvable attempt. Only an
+    // allocation or internal-invariant failure of this stage itself fails the attempt at it.
+    ColorPreparing,
     Evaluating,
     Identifying,
     Analyzing,
