@@ -1,5 +1,6 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -11,6 +12,7 @@
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -70,11 +72,19 @@ int main(int argc, char* argv[]) {
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
     bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    // Issue #97 (task C3): resolved and built once, on the shared TaskScheduler's blocking-I/O
+    // lane, at this same session/pipeline-construction point (design decision 3). Declared before
+    // taskUiBridge/qualifiedDisplayProcessorBootstrap/previewController so it outlives every
+    // reference into it those objects hold (locals destruct in reverse declaration order).
+    bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
+    bloom::ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        taskScheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge,
         bloom::ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator,
-                                                  referenceDisplayPreparer));
+                                                  referenceDisplayPreparer,
+                                                  qualifiedDisplayProcessorProvider));
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     application.installEventFilter(&shutdownCoordinator);
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);

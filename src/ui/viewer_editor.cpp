@@ -6,6 +6,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/render/display_buffer.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <QImage>
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <variant>
 
 namespace bloom::ui {
@@ -214,40 +216,40 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle displayedFrame = preview.frame;
     bool drewPixels = false;
+    bool drewQualifiedPixels = false;
     if (displayedFrame != nullptr) {
-        const auto viewResult = displayedFrame->displayBuffer().view();
-        if (viewResult) {
-            const auto view = *viewResult.value();
-            const auto descriptorResult = view.descriptor();
-            if (descriptorResult.has_value()) {
-                const auto descriptor = *descriptorResult;
-                const auto extent = descriptor.displayWindow().extent();
-                const auto& layout = descriptor.layout();
-                if (extent.width() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-                    extent.height() <=
-                        static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
-                    layout.rowStrideBytes <=
-                        static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
-                    const auto pixels = view.pixels();
-                    // displayedFrame owns the immutable bytes for this entire paint. The const-data
-                    // QImage constructor borrows them, so presentation does not copy or convert a
-                    // full frame on the UI thread.
-                    const QImage image(
-                        reinterpret_cast<const uchar*>(pixels.data()),
-                        static_cast<int>(extent.width()), static_cast<int>(extent.height()),
-                        static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
-                    if (!image.isNull()) {
-                        const QRectF displayRect =
-                            fitDisplayRect(frame, extent, descriptor.pixelAspect());
-                        drawCheckerboard(painter, displayRect);
-                        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-                        painter.drawImage(displayRect, image, QRectF(image.rect()));
-                        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                        painter.setPen(QPen(QColor(104, 107, 114), 1.0));
-                        painter.setBrush(Qt::NoBrush);
-                        painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
-                        drewPixels = true;
-                    }
+        // displayBufferView() normalizes both display-product alternatives (reference and
+        // qualified) to the same packed-RGBA8 shape (design decision 2) -- the viewer draws
+        // pixels identically either way; isOcioQualified is the only distinguishing bit, used
+        // below only for the corner provenance label, never to change how pixels are drawn.
+        const auto bufferView = displayedFrame->displayBufferView();
+        if (bufferView.has_value()) {
+            const auto extent = bufferView->displayWindow.extent();
+            const auto& layout = bufferView->layout;
+            if (extent.width() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+                extent.height() <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+                layout.rowStrideBytes <=
+                    static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
+                const auto pixels = bufferView->pixels;
+                // displayedFrame owns the immutable bytes for this entire paint. The const-data
+                // QImage constructor borrows them, so presentation does not copy or convert a
+                // full frame on the UI thread.
+                const QImage image(
+                    reinterpret_cast<const uchar*>(pixels.data()), static_cast<int>(extent.width()),
+                    static_cast<int>(extent.height()),
+                    static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
+                if (!image.isNull()) {
+                    const QRectF displayRect =
+                        fitDisplayRect(frame, extent, bufferView->pixelAspect);
+                    drawCheckerboard(painter, displayRect);
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                    painter.drawImage(displayRect, image, QRectF(image.rect()));
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                    painter.setPen(QPen(QColor(104, 107, 114), 1.0));
+                    painter.setBrush(Qt::NoBrush);
+                    painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
+                    drewPixels = true;
+                    drewQualifiedPixels = bufferView->isOcioQualified;
                 }
             }
         }
@@ -260,8 +262,16 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                      composition == nullptr ? tr("No composition")
                                             : QString::fromStdString(composition->name()));
     painter.setPen(QColor(169, 165, 219));
+    // Never a silent relabel: this reads the envelope's own isOcioQualified flag every paint,
+    // rather than assuming qualified once readiness is reached (design decision 2 / the "reference
+    // path is never silently relabeled as qualified" contract). A frame drawn before the qualified
+    // processor is ready -- or the last-good frame retained through a later qualification failure
+    // -- keeps reading as "Reference display (unqualified)" here for exactly as long as it is.
     painter.drawText(QRectF(frame.left(), 2.0, frame.width(), 22.0),
-                     Qt::AlignRight | Qt::AlignVCenter, tr("Reference display"));
+                     Qt::AlignRight | Qt::AlignVCenter,
+                     drewPixels ? (drewQualifiedPixels ? tr("Qualified display")
+                                                       : tr("Reference display (unqualified)"))
+                                : tr("Reference display"));
 
     if (!drewPixels) {
         painter.setPen(QColor(178, 182, 190));
@@ -306,8 +316,15 @@ void ViewerEditor::updatePreviewAccessibility() {
         frameDescription = tr("Previous composition pixels are displayed and marked out of date");
         break;
     }
+    const auto bufferView =
+        preview.frame != nullptr ? preview.frame->displayBufferView() : std::nullopt;
+    const QString colorStateDescription =
+        bufferView.has_value()
+            ? (bufferView->isOcioQualified ? tr("Qualified display.")
+                                           : tr("Reference display (unqualified)."))
+            : tr("Reference display.");
     setAccessibleDescription(
-        tr("%1. %2. Reference display.").arg(preview.message, frameDescription));
+        tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
 }
 
 std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
@@ -327,16 +344,24 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     if (composition == nullptr) {
         return std::nullopt;
     }
-    const auto viewResult = frameHandle->displayBuffer().view();
-    if (!viewResult) {
+    // The gesture-mapping geometry is alternative-agnostic (design decision 2): a qualified frame's
+    // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does. The frozen
+    // PositionInteractionMapping::displayDescriptor stays a
+    // render::ReferenceDisplayBufferDescriptor purely as a geometry/change-detection value here
+    // (extent, pixel aspect, packed layout) -- never as a claim that the underlying pixels are the
+    // unqualified reference product; a qualified frame's isOcioQualified() bit lives on
+    // PreviewDisplayBufferView above, not on this reused geometry type, and nothing reads this
+    // descriptor's own (always-false) isOcioQualified() to decide provenance.
+    const auto bufferView = frameHandle->displayBufferView();
+    if (!bufferView.has_value()) {
         return std::nullopt;
     }
-    const auto view = *viewResult.value();
-    const auto descriptorResult = view.descriptor();
-    if (!descriptorResult.has_value()) {
+    const auto descriptorResult = render::ReferenceDisplayBufferDescriptor::create(
+        bufferView->displayWindow, bufferView->pixelAspect);
+    if (!descriptorResult) {
         return std::nullopt;
     }
-    const auto descriptor = *descriptorResult;
+    const auto descriptor = *descriptorResult.value();
     const QRectF displayRect = fitDisplayRect(
         viewerFrame(*this), descriptor.displayWindow().extent(), descriptor.pixelAspect());
     if (displayRect.isEmpty()) {

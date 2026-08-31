@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
@@ -104,6 +105,21 @@ taskDiagnostics(const bloom::runtime::ReferenceDisplayPreparationResult& result)
     return diagnostics;
 }
 
+std::vector<bloom::runtime::TaskDiagnostic>
+taskDiagnostics(const bloom::runtime::QualifiedDisplayPreparationResult& result) {
+    std::vector<bloom::runtime::TaskDiagnostic> diagnostics;
+    diagnostics.reserve(result.diagnostics().size());
+    for (const auto& diagnostic : result.diagnostics()) {
+        diagnostics.push_back(
+            {.code = std::string(bloom::runtime::qualifiedDisplayDiagnosticCodeId(diagnostic.code)),
+             .severity = diagnostic.severity,
+             .summary = diagnostic.summary,
+             .detail = diagnostic.detail,
+             .suggestedAction = "Review the preview display intent and memory settings."});
+    }
+    return diagnostics;
+}
+
 bloom::runtime::TaskDiagnostic missingResultDiagnostic(std::string summary) {
     return {.code = "bloom.preview.pipeline.invalid-result",
             .severity = bloom::runtime::DiagnosticSeverity::Error,
@@ -143,15 +159,27 @@ void reportDisplayProgress(bloom::runtime::TaskContext& context,
                             .total = progress.total});
 }
 
+void reportQualifiedDisplayProgress(bloom::runtime::TaskContext& context,
+                                    const bloom::runtime::QualifiedDisplayProgress& progress) {
+    const std::string subphase =
+        progress.stage == bloom::runtime::QualifiedDisplayProgressStage::Preflight
+            ? "Validating the bounded qualified display handoff"
+            : "Applying the qualified Bloom Neutral display transform";
+    context.reportProgress({.phase = "Preparing composition preview display",
+                            .subphase = subphase,
+                            .completed = progress.completed,
+                            .total = progress.total});
+}
+
 } // namespace
 
 namespace bloom::ui {
 
-PreviewPreparationFunction
-makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
-                               const runtime::CpuCompositionEvaluator& evaluator,
-                               const runtime::CpuReferenceDisplayPreparer& displayPreparer) {
-    return [&compiler, &evaluator, &displayPreparer](
+PreviewPreparationFunction makeCompositionPreviewPipeline(
+    const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
+    const runtime::CpuReferenceDisplayPreparer& displayPreparer,
+    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider) {
+    return [&compiler, &evaluator, &displayPreparer, &qualifiedProcessorProvider](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -161,6 +189,22 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
 
         if (context.isCancellationRequested()) {
             return TaskResult::cancelled();
+        }
+        // One single locked read of the provider up front (see QualifiedDisplayProcessorSnapshot's
+        // documentation): readiness/handle/failureDiagnostic are used together below, and reading
+        // them as separate calls could straddle the provider's one-shot publish() and observe an
+        // inconsistent pair (Pending readiness alongside a Failed diagnostic, for example) --
+        // reading once and reusing the same snapshot for both the early fail-closed check and the
+        // later reference-vs-qualified branch makes this decision race-free.
+        const auto qualifiedSnapshot = qualifiedProcessorProvider.snapshot();
+        // Design decision 4 (fail-closed): once qualification is known to have failed, no preview
+        // request is prepared at all -- CompositionPreviewController's existing Failed handling
+        // retains its last-good frame and surfaces this diagnostic, and Bloom never auto-
+        // substitutes the reference transform for a qualified request. This is checked before any
+        // compilation/evaluation work so a permanently failed qualification does not keep spending
+        // worker time on frames nothing will ever qualify to display.
+        if (qualifiedSnapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Failed) {
+            return TaskResult::failed(qualifiedSnapshot.failureDiagnostic);
         }
         if (desiredIdentity.projectId != snapshot.project().id() ||
             snapshot.project().findComposition(desiredIdentity.compositionId) == nullptr ||
@@ -244,38 +288,80 @@ makeCompositionPreviewPipeline(const runtime::SnapshotCompiler& compiler,
             return TaskResult::failed(std::move(diagnostics));
         }
 
-        const runtime::ReferenceDisplayPreparationRequest displayRequest{
-            .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
-            .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
-        };
-        auto displayResult = displayPreparer.prepare(
-            evaluationResult.frame(), displayRequest, context.cancellation(),
-            [&context](const runtime::ReferenceDisplayProgress& progress) {
-                reportDisplayProgress(context, progress);
-            });
-        auto displayDiagnostics = taskDiagnostics(displayResult);
-        diagnostics.insert(diagnostics.end(), std::make_move_iterator(displayDiagnostics.begin()),
-                           std::make_move_iterator(displayDiagnostics.end()));
+        // Design decision 5 (default flow after readiness): every request routes through the
+        // qualified preparer once qualifiedProcessorProvider reports Ready; the honest startup
+        // window (design decision 3) routes through the unchanged reference path otherwise -- the
+        // permanently-Failed case already returned above, before evaluation even ran.
+        std::optional<runtime::PreparedPreviewFrame> prepared;
+        if (qualifiedSnapshot.handle != nullptr) {
+            const runtime::CpuQualifiedDisplayPreparer qualifiedPreparer(*qualifiedSnapshot.handle);
+            const runtime::QualifiedDisplayPreparationRequest qualifiedRequest{
+                .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
+            };
+            auto qualifiedResult = qualifiedPreparer.prepare(
+                evaluationResult.frame(), qualifiedRequest, context.cancellation(),
+                [&context](const runtime::QualifiedDisplayProgress& progress) {
+                    reportQualifiedDisplayProgress(context, progress);
+                });
+            auto qualifiedDiagnostics = taskDiagnostics(qualifiedResult);
+            diagnostics.insert(diagnostics.end(),
+                               std::make_move_iterator(qualifiedDiagnostics.begin()),
+                               std::make_move_iterator(qualifiedDiagnostics.end()));
 
-        switch (displayResult.status()) {
-        case runtime::ReferenceDisplayPreparationStatus::Cancelled:
-            return TaskResult::cancelled(std::move(diagnostics));
-        case runtime::ReferenceDisplayPreparationStatus::Failed:
-            if (diagnostics.empty()) {
-                diagnostics.push_back(
-                    missingResultDiagnostic("Reference display preparation failed"));
+            switch (qualifiedResult.status()) {
+            case runtime::QualifiedDisplayPreparationStatus::Cancelled:
+                return TaskResult::cancelled(std::move(diagnostics));
+            case runtime::QualifiedDisplayPreparationStatus::Failed:
+                if (diagnostics.empty()) {
+                    diagnostics.push_back(
+                        missingResultDiagnostic("Qualified display preparation failed"));
+                }
+                return TaskResult::failed(std::move(diagnostics));
+            case runtime::QualifiedDisplayPreparationStatus::Prepared:
+                break;
             }
-            return TaskResult::failed(std::move(diagnostics));
-        case runtime::ReferenceDisplayPreparationStatus::Prepared:
-            break;
+            if (qualifiedResult.frame() == nullptr) {
+                diagnostics.push_back(
+                    missingResultDiagnostic("Display preparation returned no immutable frame"));
+                return TaskResult::failed(std::move(diagnostics));
+            }
+            prepared = runtime::PreparedPreviewFrame::createQualified(
+                desiredIdentity.requestGeneration, qualifiedResult.frame());
+        } else {
+            const runtime::ReferenceDisplayPreparationRequest displayRequest{
+                .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
+                .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
+            };
+            auto displayResult = displayPreparer.prepare(
+                evaluationResult.frame(), displayRequest, context.cancellation(),
+                [&context](const runtime::ReferenceDisplayProgress& progress) {
+                    reportDisplayProgress(context, progress);
+                });
+            auto displayDiagnostics = taskDiagnostics(displayResult);
+            diagnostics.insert(diagnostics.end(),
+                               std::make_move_iterator(displayDiagnostics.begin()),
+                               std::make_move_iterator(displayDiagnostics.end()));
+
+            switch (displayResult.status()) {
+            case runtime::ReferenceDisplayPreparationStatus::Cancelled:
+                return TaskResult::cancelled(std::move(diagnostics));
+            case runtime::ReferenceDisplayPreparationStatus::Failed:
+                if (diagnostics.empty()) {
+                    diagnostics.push_back(
+                        missingResultDiagnostic("Reference display preparation failed"));
+                }
+                return TaskResult::failed(std::move(diagnostics));
+            case runtime::ReferenceDisplayPreparationStatus::Prepared:
+                break;
+            }
+            if (displayResult.frame() == nullptr) {
+                diagnostics.push_back(
+                    missingResultDiagnostic("Display preparation returned no immutable frame"));
+                return TaskResult::failed(std::move(diagnostics));
+            }
+            prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
+                                                             displayResult.frame());
         }
-        if (displayResult.frame() == nullptr) {
-            diagnostics.push_back(
-                missingResultDiagnostic("Display preparation returned no immutable frame"));
-            return TaskResult::failed(std::move(diagnostics));
-        }
-        auto prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
-                                                              displayResult.frame());
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(
                 missingResultDiagnostic("The prepared frame identity did not match its request"));

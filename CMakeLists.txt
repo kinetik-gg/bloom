@@ -36,9 +36,13 @@ add_subdirectory(tools/quality/dependency_artifact_checks)
 add_subdirectory(src/platform)
 add_subdirectory(src/document)
 add_subdirectory(src/project)
+# src/color must precede src/runtime: bloom_runtime_evaluator's qualified display-preparation
+# stage (issue #97, task C3) links bloom_color_ocio, and target_link_libraries() requires that
+# target to already exist. src/color itself only depends on src/core/src/render (both already
+# added above), never on src/runtime, so this reordering introduces no cycle.
 add_subdirectory(src/render)
-add_subdirectory(src/runtime)
 add_subdirectory(src/color)
+add_subdirectory(src/runtime)
 add_subdirectory(src/output)
 add_subdirectory(src/commands)
 add_subdirectory(src/host)

@@ -142,6 +142,10 @@ struct PipelineFixture final {
     bloom::runtime::SnapshotCompiler compiler;
     bloom::runtime::CpuCompositionEvaluator evaluator;
     bloom::runtime::CpuReferenceDisplayPreparer displayPreparer;
+    // Never published to Ready in this fixture (issue #97, task C3): direct manipulation only
+    // needs the geometry mapping, which is alternative-agnostic; keeping this pipeline on the
+    // reference path is unrelated to what this test exercises.
+    bloom::runtime::QualifiedDisplayProcessorProvider qualifiedProcessorProvider;
     bloom::ui::PreviewPreparationFunction pipeline;
 
     PipelineFixture() : compiler(definitions) {
@@ -149,7 +153,8 @@ struct PipelineFixture final {
             std::abort();
         }
         definitions.freeze();
-        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer);
+        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                             qualifiedProcessorProvider);
     }
 };
 

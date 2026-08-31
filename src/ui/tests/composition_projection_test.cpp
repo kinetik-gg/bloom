@@ -157,12 +157,16 @@ parameterForRole(const bloom::document::Composition& composition,
     runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     runtime::CpuCompositionEvaluator cpuEvaluator;
     runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    // Never published to Ready in this test (issue #97, task C3): composition projection is
+    // unrelated to qualified-display readiness/failure, so this pipeline stays on the unchanged
+    // reference path throughout.
+    runtime::QualifiedDisplayProcessorProvider qualifiedProcessorProvider;
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
     ui::CompositionPreviewController previewController(
         session, scheduler, taskUiBridge,
-        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator,
-                                           referenceDisplayPreparer));
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedProcessorProvider));
     ui::EditorRegistry registry;
     if (!require(ui::registerFoundationEditors(registry, session, previewController),
                  "foundation editor registration succeeds") ||

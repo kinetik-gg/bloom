@@ -111,6 +111,10 @@ struct PipelineFixture final {
     bloom::runtime::SnapshotCompiler compiler;
     bloom::runtime::CpuCompositionEvaluator evaluator;
     bloom::runtime::CpuReferenceDisplayPreparer displayPreparer;
+    // Never published to Ready in this fixture (issue #97, task C3): every request this pipeline
+    // prepares stays on the unchanged reference path, exactly like before this task, since nothing
+    // here exercises qualified-display readiness/failure specifically.
+    bloom::runtime::QualifiedDisplayProcessorProvider qualifiedProcessorProvider;
     bloom::ui::PreviewPreparationFunction pipeline;
 
     PipelineFixture() : compiler(definitions) {
@@ -118,7 +122,8 @@ struct PipelineFixture final {
             std::abort();
         }
         definitions.freeze();
-        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer);
+        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                             qualifiedProcessorProvider);
     }
 };
 
