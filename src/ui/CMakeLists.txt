@@ -17,6 +17,8 @@ target_sources(
     bloom_ui_kit
     PRIVATE
         kit/button.cpp
+        kit/dropdown.cpp
+        kit/dropdown_popup.cpp
         kit/fonts.cpp
         kit/icons.cpp
         kit/painting.cpp
@@ -27,6 +29,8 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/ui/kit/button.hpp
+            include/bloom/ui/kit/dropdown.hpp
+            include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
             include/bloom/ui/kit/painting.hpp
