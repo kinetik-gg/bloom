@@ -1,3 +1,6 @@
+add_executable(bloom_kit_tokens_test
+    kit_tokens_tests.cpp
+)
 add_executable(bloom_composition_projection_test
     composition_projection_test.cpp
 )
@@ -58,6 +61,7 @@ add_executable(bloom_main_window_readonly_placeholder_test
     main_window_readonly_placeholder_tests.cpp
 )
 
+target_link_libraries(bloom_kit_tokens_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
@@ -73,6 +77,7 @@ target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_kit_tokens_test)
 bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
@@ -90,6 +95,14 @@ bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
 bloom_enable_warnings(bloom_playback_controller_test)
 
 include(BloomTesting)
+
+bloom_add_test(
+    NAME bloom.ui.kit_tokens
+    COMMAND bloom_kit_tokens_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 
 bloom_add_test(
     NAME bloom.ui.composition_projection

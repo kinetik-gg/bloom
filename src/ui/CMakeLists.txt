@@ -1,3 +1,33 @@
+# bloom_ui_kit (task U1, issue #117): the Kinetik design system -- tokens, icons, fonts, the
+# application theme installer, and the reusable widget kit. A target of its own rather than more
+# files inside bloom_ui, mirroring src/color's bloom_color/bloom_color_ocio precedent: the kit owns
+# the vendored third-party icon and font assets and the Qt6::Svg dependency, and nothing about a
+# panel, a session, or a document may leak into it. bloom_ui links it PUBLIC, so every existing UI
+# source keeps consuming it without its own link line.
+#
+# Both repository_checks.cpp rules are satisfied without a checker edit: the kit lives entirely
+# below src/ui, which is exempt from the "Qt types are restricted to src/ui and apps" scan
+# (isNonUiSource()) and from the "non-UI source module links directly to Qt" CMake scan
+# (appendCmakeArchitectureFindings() skips parts[1] == "ui"); and its public headers sit at
+# src/ui/include/bloom/ui/kit/*.hpp, which satisfies appendPublicHeaderPathFinding()'s
+# src/<module>/include/bloom/<module> rule because parts[3]/parts[4] are still bloom/ui.
+add_library(bloom_ui_kit STATIC)
+
+target_sources(
+    bloom_ui_kit
+    PRIVATE
+        kit/tokens.cpp
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS include
+        FILES
+            include/bloom/ui/kit/tokens.hpp
+)
+
+target_compile_features(bloom_ui_kit PUBLIC cxx_std_20)
+target_link_libraries(bloom_ui_kit PUBLIC Qt6::Widgets)
+bloom_enable_warnings(bloom_ui_kit)
+
 add_library(bloom_ui STATIC)
 
 target_sources(
@@ -68,6 +98,7 @@ target_link_libraries(
         bloom_render
         bloom_runtime
         bloom_runtime_evaluator
+        bloom_ui_kit
         Qt6::Widgets
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler)
