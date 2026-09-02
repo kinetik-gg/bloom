@@ -87,16 +87,16 @@ void testTheStateMachineResolvesOneStateAtATime(Expectations& expectations) {
     layout->addWidget(&button);
     host.show();
     host.activateWindow();
-    QCoreApplication::processEvents();
     // Qt/platform combinations disagree about what a freshly shown window receives: one offscreen
-    // build synthesizes an enter or hands the first focusable widget focus, another does neither.
-    // Rest is this test's baseline, so DRIVE the button there instead of assuming the environment
-    // provides it: drop focus and deliver a leave, then assert the resolution rule from a known
-    // starting point.
+    // build synthesizes an enter, another queues activation focus for the first focusable widget
+    // (observed landing only on the SECOND event-loop pass). Rest is this test's baseline, so
+    // settle the queue completely, then DRIVE the button to rest synchronously — and pump no
+    // further events between the drive and the assertion.
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
     button.clearFocus();
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(&button, &leave);
-    QCoreApplication::processEvents();
     expectations.expect(button.visualState() == kit::State::Normal, "a fresh button is at rest");
 
     button.setDown(true);
