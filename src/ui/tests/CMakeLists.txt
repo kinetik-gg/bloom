@@ -16,6 +16,9 @@ add_executable(bloom_kit_fonts_test
 add_executable(bloom_kit_icons_test
     kit_icons_tests.cpp
 )
+add_executable(bloom_kit_range_test
+    kit_range_tests.cpp
+)
 add_executable(bloom_kit_theme_test
     kit_theme_tests.cpp
 )
@@ -88,6 +91,7 @@ target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_range_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_theme_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_tokens_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
@@ -111,6 +115,7 @@ bloom_enable_warnings(bloom_kit_choice_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_icons_test)
+bloom_enable_warnings(bloom_kit_range_test)
 bloom_enable_warnings(bloom_kit_theme_test)
 bloom_enable_warnings(bloom_kit_tokens_test)
 bloom_enable_warnings(bloom_composition_projection_test)
@@ -176,6 +181,14 @@ bloom_add_test(
     COMMAND bloom_kit_icons_test
     LABELS ui unit kit
     TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_range
+    COMMAND bloom_kit_range_test
+    LABELS ui unit kit
+    TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
