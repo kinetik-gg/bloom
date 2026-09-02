@@ -22,6 +22,8 @@ target_sources(
         kit/fonts.cpp
         kit/icons.cpp
         kit/painting.cpp
+        kit/radio_group.cpp
+        kit/switch_control.cpp
         kit/theme.cpp
         kit/tokens.cpp
     PUBLIC
@@ -34,6 +36,8 @@ target_sources(
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
             include/bloom/ui/kit/painting.hpp
+            include/bloom/ui/kit/radio_group.hpp
+            include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/tokens.hpp
 )

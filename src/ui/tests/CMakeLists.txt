@@ -4,6 +4,9 @@ add_executable(bloom_editor_area_chrome_test
 add_executable(bloom_kit_button_test
     kit_button_tests.cpp
 )
+add_executable(bloom_kit_choice_test
+    kit_choice_tests.cpp
+)
 add_executable(bloom_kit_dropdown_test
     kit_dropdown_tests.cpp
 )
@@ -81,6 +84,7 @@ add_executable(bloom_main_window_readonly_placeholder_test
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
@@ -103,6 +107,7 @@ target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kit_button_test)
+bloom_enable_warnings(bloom_kit_choice_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_icons_test)
@@ -137,6 +142,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_button
     COMMAND bloom_kit_button_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_choice
+    COMMAND bloom_kit_choice_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
