@@ -203,6 +203,31 @@ void testTheStateMachineAndDisabledField(Expectations& expectations) {
 
 } // namespace
 
+void testAFocusedFieldClaimsEditingKeyOverrides(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& field = *new kit::KValueField(&host);
+    layout->addWidget(&field);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    field.setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    QKeyEvent leftOverride(QEvent::ShortcutOverride, Qt::Key_Left, Qt::NoModifier);
+    QCoreApplication::sendEvent(&field, &leftOverride);
+    expectations.expect(leftOverride.isAccepted(),
+                        "a focused field claims Left so window shortcuts stay inert");
+
+    field.clearFocus();
+    QKeyEvent unfocusedOverride(QEvent::ShortcutOverride, Qt::Key_Left, Qt::NoModifier);
+    unfocusedOverride.ignore();
+    QCoreApplication::sendEvent(&field, &unfocusedOverride);
+    expectations.expect(!unfocusedOverride.isAccepted(),
+                        "an unfocused field leaves window shortcuts alone");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -214,5 +239,6 @@ int main(int argc, char** argv) {
     testSteppersAndKeysStepTheValue(expectations);
     testTheWheelIsIgnoredUntilTheFieldIsFocused(expectations);
     testTheStateMachineAndDisabledField(expectations);
+    testAFocusedFieldClaimsEditingKeyOverrides(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
