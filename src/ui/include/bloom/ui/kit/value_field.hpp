@@ -65,6 +65,7 @@ class KValueField final : public QWidget {
     void mousePressEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    bool event(QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void changeEvent(QEvent* event) override;

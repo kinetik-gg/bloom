@@ -174,6 +174,31 @@ void KValueField::wheelEvent(QWheelEvent* event) {
     event->accept();
 }
 
+bool KValueField::event(QEvent* event) {
+    // A focused value field owns its editing keys the way a spin box does: claim the
+    // ShortcutOverride so window-level shortcuts (frame stepping, transport jumps) stay inert
+    // while the artist is adjusting a value. Left/Right/Home/End are claimed for parity with the
+    // spin-box widgets this field replaces even though only Up/Down/Page currently step.
+    if (event->type() == QEvent::ShortcutOverride && hasFocus()) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        switch (key->key()) {
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_PageUp:
+        case Qt::Key_PageDown:
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Home:
+        case Qt::Key_End:
+            event->accept();
+            return true;
+        default:
+            break;
+        }
+    }
+    return QWidget::event(event);
+}
+
 void KValueField::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
     case Qt::Key_Up:
