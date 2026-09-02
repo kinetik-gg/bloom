@@ -106,6 +106,13 @@ add_executable(bloom_main_window_readonly_placeholder_test
     main_window_readonly_placeholder_tests.cpp
 )
 
+# Task U7 (issue #122): TimelineEditor track-row/transport Kinetik restyle tests, appended rather
+# than folded into timeline_ruler_tests.cpp (which owns the ruler/keyframe-panel interaction
+# contract this task must keep byte-equivalent).
+add_executable(bloom_timeline_editor_style_test
+    timeline_editor_style_tests.cpp
+)
+
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
@@ -137,6 +144,7 @@ target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kinetik_baseline_test)
 bloom_enable_warnings(bloom_kit_button_test)
@@ -168,6 +176,7 @@ bloom_enable_warnings(bloom_direct_manipulation_test)
 bloom_enable_warnings(bloom_frame_export_controller_test)
 bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
 bloom_enable_warnings(bloom_playback_controller_test)
+bloom_enable_warnings(bloom_timeline_editor_style_test)
 
 include(BloomTesting)
 
@@ -415,6 +424,14 @@ bloom_add_test(
     NAME bloom.ui.playback_controller
     COMMAND bloom_playback_controller_test
     LABELS ui integration animation
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.timeline_editor_style
+    COMMAND bloom_timeline_editor_style_test
+    LABELS ui integration kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
