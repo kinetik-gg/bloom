@@ -2,6 +2,7 @@
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/graph.hpp>
@@ -67,31 +68,31 @@ QString previewStatusText(const CompositionPreviewState& state) {
 QColor previewStatusColor(const PreviewActivity activity) {
     switch (activity) {
     case PreviewActivity::Rendering:
-        return QColor(49, 137, 202);
+        return kit::color(kit::Color::Accent);
     case PreviewActivity::Ready:
-        return QColor(67, 154, 92);
+        return kit::color(kit::Color::Ok);
     case PreviewActivity::Unsupported:
-        return QColor(194, 142, 51);
+        return kit::color(kit::Color::Warn);
     case PreviewActivity::Cancelled:
-        return QColor(128, 132, 142);
+        return kit::color(kit::Color::Muted);
     case PreviewActivity::Failed:
-        return QColor(194, 68, 73);
+        return kit::color(kit::Color::Error);
     }
-    return QColor(128, 132, 142);
+    return kit::color(kit::Color::Muted);
 }
 
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
     constexpr qreal tileSize = 12.0;
     painter.save();
     painter.setClipRect(bounds);
-    painter.fillRect(bounds, QColor(49, 51, 56));
+    painter.fillRect(bounds, kit::color(kit::Color::Surface));
     const int columns = static_cast<int>(bounds.width() / tileSize) + 2;
     const int rows = static_cast<int>(bounds.height() / tileSize) + 2;
     for (int row = 0; row < rows; ++row) {
         for (int column = row % 2; column < columns; column += 2) {
             painter.fillRect(QRectF(bounds.left() + column * tileSize,
                                     bounds.top() + row * tileSize, tileSize, tileSize),
-                             QColor(61, 63, 68));
+                             kit::color(kit::Color::SurfaceRaised));
         }
     }
     painter.restore();
@@ -111,9 +112,9 @@ void drawStatusChip(QPainter& painter, const QRectF& available, QString text, co
                            : available.left() + 12.0;
     const QRectF chip(left, available.top() + 10.0, width, chipHeight);
     painter.setPen(QPen(color.lighter(125), 1.0));
-    painter.setBrush(QColor(color.red(), color.green(), color.blue(), 218));
+    painter.setBrush(kit::withOpacity(color, 0.855));
     painter.drawRoundedRect(chip, 4.0, 4.0);
-    painter.setPen(QColor(245, 246, 248));
+    painter.setPen(kit::color(kit::Color::Foreground));
     painter.drawText(chip.adjusted(horizontalPadding, 0.0, -horizontalPadding, 0.0),
                      Qt::AlignVCenter | Qt::AlignLeft, text);
 }
@@ -124,10 +125,10 @@ void drawDiagnosticBanner(QPainter& painter, const QRectF& available, const QStr
     }
     const QRectF banner =
         available.adjusted(24.0, available.height() * 0.38, -24.0, -available.height() * 0.38);
-    painter.setPen(QPen(QColor(121, 124, 132), 1.0));
-    painter.setBrush(QColor(22, 23, 26, 224));
+    painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
+    painter.setBrush(kit::withOpacity(kit::color(kit::Color::Surface), 0.88));
     painter.drawRoundedRect(banner, 5.0, 5.0);
-    painter.setPen(QColor(226, 228, 233));
+    painter.setPen(kit::color(kit::Color::Foreground));
     const QString visible = painter.fontMetrics().elidedText(
         message, Qt::ElideRight, static_cast<int>(std::max<qreal>(0.0, banner.width() - 20.0)));
     painter.drawText(banner.adjusted(10.0, 0.0, -10.0, 0.0), Qt::AlignCenter, visible);
@@ -195,15 +196,15 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 void ViewerEditor::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(15, 16, 18));
+    painter.fillRect(rect(), kit::color(kit::Color::Background));
 
     const QRectF frame = viewerFrame(*this);
-    painter.fillRect(frame, QColor(39, 41, 45));
-    painter.setPen(QPen(QColor(77, 80, 87), 1.0));
+    painter.fillRect(frame, kit::color(kit::Color::Surface));
+    painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
     painter.drawRect(frame.adjusted(0.0, 0.0, -1.0, -1.0));
 
     constexpr int gridStep = 32;
-    painter.setPen(QPen(QColor(46, 48, 53), 1.0));
+    painter.setPen(QPen(kit::color(kit::Color::Border), 1.0));
     for (int offset = gridStep; static_cast<qreal>(offset) < frame.width(); offset += gridStep) {
         const qreal x = frame.left() + static_cast<qreal>(offset);
         painter.drawLine(QPointF(x, frame.top()), QPointF(x, frame.bottom()));
@@ -245,7 +246,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, image, QRectF(image.rect()));
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                    painter.setPen(QPen(QColor(104, 107, 114), 1.0));
+                    painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
                     drewPixels = true;
@@ -256,12 +257,12 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     }
 
     const auto* composition = session_.composition();
-    painter.setPen(QColor(201, 204, 210));
+    painter.setPen(kit::color(kit::Color::Foreground));
     painter.drawText(QRectF(frame.left(), 2.0, frame.width(), 22.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      composition == nullptr ? tr("No composition")
                                             : QString::fromStdString(composition->name()));
-    painter.setPen(QColor(169, 165, 219));
+    painter.setPen(kit::color(kit::Color::Muted));
     // Never a silent relabel: this reads the envelope's own isOcioQualified flag every paint,
     // rather than assuming qualified once readiness is reached (design decision 2 / the "reference
     // path is never silently relabeled as qualified" contract). A frame drawn before the qualified
@@ -274,7 +275,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                 : tr("Reference display"));
 
     if (!drewPixels) {
-        painter.setPen(QColor(178, 182, 190));
+        painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame.adjusted(24.0, 44.0, -24.0, -44.0), Qt::AlignCenter,
                          previewStatusText(preview));
     }
@@ -290,10 +291,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         const QString name = layerName(*composition, *session_.selection().contextualLayer);
         const QRectF selectionStatus(frame.left() + 12.0, frame.bottom() - 38.0,
                                      frame.width() - 24.0, 26.0);
-        painter.setPen(QPen(QColor(44, 158, 232), 1.0));
-        painter.setBrush(QColor(27, 46, 61));
+        painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
+        painter.setBrush(kit::color(kit::Color::SurfaceRaised));
         painter.drawRoundedRect(selectionStatus, 4.0, 4.0);
-        painter.setPen(QColor(208, 231, 247));
+        painter.setPen(kit::color(kit::Color::Foreground));
         const QString status = tr("Selected: %1 · evaluated bounds unavailable").arg(name);
         painter.drawText(
             selectionStatus.adjusted(8.0, 0.0, -8.0, 0.0), Qt::AlignVCenter | Qt::AlignLeft,
