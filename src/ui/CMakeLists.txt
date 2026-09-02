@@ -17,6 +17,11 @@ target_sources(
     bloom_ui_kit
     PRIVATE
         kit/button.cpp
+        kit/color.cpp
+        kit/color_chip.cpp
+        kit/color_picker.cpp
+        kit/color_sampler.cpp
+        kit/color_swatches.cpp
         kit/dropdown.cpp
         kit/dropdown_popup.cpp
         kit/fonts.cpp
@@ -36,6 +41,11 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/ui/kit/button.hpp
+            include/bloom/ui/kit/color.hpp
+            include/bloom/ui/kit/color_chip.hpp
+            include/bloom/ui/kit/color_picker.hpp
+            include/bloom/ui/kit/color_sampler.hpp
+            include/bloom/ui/kit/color_swatches.hpp
             include/bloom/ui/kit/dropdown.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
