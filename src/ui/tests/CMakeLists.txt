@@ -10,6 +10,21 @@ add_executable(bloom_kit_button_test
 add_executable(bloom_kit_choice_test
     kit_choice_tests.cpp
 )
+add_executable(bloom_kit_color_test
+    kit_color_tests.cpp
+)
+add_executable(bloom_kit_color_chip_test
+    kit_color_chip_tests.cpp
+)
+add_executable(bloom_kit_color_picker_test
+    kit_color_picker_tests.cpp
+)
+add_executable(bloom_kit_color_sampler_test
+    kit_color_sampler_tests.cpp
+)
+add_executable(bloom_kit_color_swatches_test
+    kit_color_swatches_tests.cpp
+)
 add_executable(bloom_kit_dropdown_test
     kit_dropdown_tests.cpp
 )
@@ -110,6 +125,11 @@ target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_color_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_color_chip_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_color_picker_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_color_sampler_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_color_swatches_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
@@ -141,6 +161,11 @@ bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kinetik_baseline_test)
 bloom_enable_warnings(bloom_kit_button_test)
 bloom_enable_warnings(bloom_kit_choice_test)
+bloom_enable_warnings(bloom_kit_color_test)
+bloom_enable_warnings(bloom_kit_color_chip_test)
+bloom_enable_warnings(bloom_kit_color_picker_test)
+bloom_enable_warnings(bloom_kit_color_sampler_test)
+bloom_enable_warnings(bloom_kit_color_swatches_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_icons_test)
@@ -198,6 +223,46 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_choice
     COMMAND bloom_kit_choice_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_color
+    COMMAND bloom_kit_color_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_color_chip
+    COMMAND bloom_kit_color_chip_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_color_picker
+    COMMAND bloom_kit_color_picker_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_color_sampler
+    COMMAND bloom_kit_color_sampler_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_color_swatches
+    COMMAND bloom_kit_color_swatches_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
