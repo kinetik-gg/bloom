@@ -82,6 +82,11 @@ void testTheStateMachineResolvesOneStateAtATime(Expectations& expectations) {
     // Focus needs a shown, active window: an unshown widget can never be the focus widget, so
     // asserting the focus branch without a host would only prove Qt refused the request.
     QWidget host;
+    // The offscreen platform's ambient cursor rests at (0, 0); a window shown at the origin puts
+    // the button under it and Qt honestly delivers an Enter, so the "fresh" state would read as
+    // Hover in CI while reading Normal on a desktop whose pointer is elsewhere. Move the host
+    // away from the cursor so rest-state means rest everywhere.
+    host.move(600, 600);
     auto* layout = new QVBoxLayout(&host);
     auto& button = *new kit::KButton(QStringLiteral("Render"), &host);
     layout->addWidget(&button);
