@@ -167,7 +167,9 @@ class NodeGraphicsView final : public QGraphicsView {
   private:
     void updatePanCursor();
     [[nodiscard]] QRectF graphBounds() const;
-    void applyCenteredScale(double scale);
+    // False when there is nothing to frame -- an empty graph, or a viewport with no area --
+    // in which case the caller must not latch any "the artist moved the view" state.
+    [[nodiscard]] bool applyCenteredScale(double scale);
 
     bool spaceHeld_ = false;
     bool panActive_ = false;

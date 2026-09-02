@@ -33,6 +33,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -1059,17 +1060,18 @@ QRectF NodeGraphicsView::graphBounds() const {
     return scene() == nullptr ? QRectF() : scene()->itemsBoundingRect();
 }
 
-void NodeGraphicsView::applyCenteredScale(const double scale) {
+bool NodeGraphicsView::applyCenteredScale(const double scale) {
     const QRectF bounds = graphBounds();
     const QRectF view = QRectF(viewport()->rect());
     if (bounds.isEmpty() || view.isEmpty()) {
-        return;
+        return false;
     }
     const double clamped = std::clamp(scale, ViewTransform::kMinZoom, ViewTransform::kMaxZoom);
     QTransform framed = QTransform::fromTranslate(-bounds.center().x(), -bounds.center().y());
     framed *= QTransform::fromScale(clamped, clamped);
     framed *= QTransform::fromTranslate(view.center().x(), view.center().y());
     setTransform(framed);
+    return true;
 }
 
 void NodeGraphicsView::frameGraph() {
@@ -1078,7 +1080,10 @@ void NodeGraphicsView::frameGraph() {
     if (bounds.isEmpty() || view.isEmpty()) {
         return;
     }
-    applyCenteredScale(std::min(view.width() / bounds.width(), view.height() / bounds.height()));
+    if (!applyCenteredScale(
+            std::min(view.width() / bounds.width(), view.height() / bounds.height()))) {
+        return;
+    }
     // Fit means "keep framing everything": a later projection rebuild re-frames until the artist
     // moves the view themselves.
     viewAdjusted_ = false;
@@ -1086,7 +1091,13 @@ void NodeGraphicsView::frameGraph() {
 }
 
 void NodeGraphicsView::zoomToActualSize() {
-    applyCenteredScale(1.0);
+    // A gesture that could not move the view does not count as the artist having taken the view
+    // over. Latching the flag on an empty canvas -- no composition, or a collapsed panel -- would
+    // permanently stop the auto-framing that a rebuild and a resize depend on, and the canvas would
+    // never frame the content that arrived afterwards.
+    if (!applyCenteredScale(1.0)) {
+        return;
+    }
     viewAdjusted_ = true;
     framedOnce_ = true;
 }
@@ -1119,6 +1130,12 @@ void NodeGraphicsView::wheelEvent(QWheelEvent* event) {
         event->ignore();
         return;
     }
+    // The wheel ALWAYS zooms the canvas, including over an in-node field. The canvas's
+    // zoom-about-cursor rule is decision 1's contract and an artist reaching for the wheel over a
+    // dense graph means "zoom" every time; a field that silently ate the gesture because it
+    // happened to hold focus would make the canvas feel broken in exactly the places it is densest.
+    // The field loses nothing it needs: its own steppers, and Up/Down/PageUp/PageDown while
+    // focused (kit/value_field.cpp), still step it.
     const int notches = event->angleDelta().y() / kWheelDetent;
     if (notches == 0) {
         QGraphicsView::wheelEvent(event);
@@ -1356,9 +1373,15 @@ void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     if (auto* node = nodeItemAncestor(view_->itemAt(viewportPosition))) {
         session_.selectNode(node->id());
     }
-    auto* menu = buildContextMenu(view_);
+    // QPointer, because exec() runs a nested event loop: anything that closed this panel from
+    // inside the menu would take the menu (its child) with it, and the cleanup below would then be
+    // touching freed memory. Nothing the menu currently offers can do that; the guard is what keeps
+    // that true when something later can.
+    const QPointer<QMenu> menu = buildContextMenu(view_);
     menu->exec(view_->viewport()->mapToGlobal(viewportPosition));
-    menu->deleteLater();
+    if (!menu.isNull()) {
+        menu->deleteLater();
+    }
 }
 
 } // namespace bloom::ui

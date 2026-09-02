@@ -276,6 +276,32 @@ void testSpaceHoldAndMiddleDragBothPan(Expectations& expectations) {
               Qt::NoButton);
 }
 
+// A zoom gesture that cannot move the view must not count as the artist taking the view over.
+// Latching that state on an empty canvas would permanently stop the auto-framing that a projection
+// rebuild and a resize both depend on, and the canvas would never frame content that arrived later.
+void testEmptyCanvasZoomDoesNotLatchTheViewAway(Expectations& expectations) {
+    // A project with no composition at all -- the only way session.composition() is legitimately
+    // null (CompositionSession's constructor falls back to the lowest id whenever one exists).
+    document::Project emptyProject(document::ProjectId::fromRaw(1), "Empty Node Project");
+    document::Document document(std::move(emptyProject));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, document::CompositionId::fromRaw(1));
+    ui::NodeGraphEditor editor(session);
+    editor.resize(800, 600);
+    editor.show();
+    QCoreApplication::processEvents();
+
+    expectations.expect(session.composition() == nullptr,
+                        "the fixture genuinely has no composition -- this is the empty canvas");
+    expectations.expect(editor.graphScene()->items().isEmpty(), "so the canvas projects nothing");
+
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_Z);
+    expectations.expect(!editor.graphView()->viewAdjusted(),
+                        "100% on an empty canvas changes nothing, so it does not claim the view");
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_F);
+    expectations.expect(!editor.graphView()->viewAdjusted(), "and neither does Fit");
+}
+
 // --- Decision 2: selection stays the session's one truth ---------------------------------------
 
 void testSelectionFollowsTheSessionInBothDirections(Expectations& expectations) {
@@ -607,6 +633,7 @@ int runAll() {
     testZoomClampsToTheViewersOwnBounds(expectations);
     testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(expectations);
     testSpaceHoldAndMiddleDragBothPan(expectations);
+    testEmptyCanvasZoomDoesNotLatchTheViewAway(expectations);
     testSelectionFollowsTheSessionInBothDirections(expectations);
     testConnectorTypingIsPinnedPerSocketKind(expectations);
     testEveryProjectedEdgeIsAPathItemBetweenTwoCards(expectations);
