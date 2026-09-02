@@ -373,8 +373,11 @@ void testContextMenuOffersOnlyRealCommands(Expectations& expectations) {
                         "Add offers exactly the two layer kinds the command layer has: Solid and "
                         "Text -- the same pair the timeline's Add menu offers");
     expectations.expect(named(QStringLiteral("nodeFitAction")) != nullptr &&
-                            named(QStringLiteral("nodeActualSizeAction")) != nullptr,
-                        "and the canvas view items Fit and 100%");
+                            named(QStringLiteral("nodeActualSizeAction")) != nullptr &&
+                            named(QStringLiteral("nodeZoomInAction")) != nullptr &&
+                            named(QStringLiteral("nodeZoomOutAction")) != nullptr,
+                        "and the same canvas view items the Viewer's own menu offers: Fit, 100%, "
+                        "Zoom In, Zoom Out");
 
     // The honesty rule, pinned: no delete-layer, remove-node or duplicate command exists anywhere
     // in src/commands, so no such item may appear -- not even a disabled one.
@@ -472,9 +475,15 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
     }
     const document::Vec2d editedPosition{24.0, originalPosition.value().y};
 
-    // One gesture on the card: one command, one undo step, on the SAME ParameterId the Properties
-    // panel writes.
+    // One gesture on the card: one command, one undo step, one snapshot signal, on the SAME
+    // ParameterId the Properties panel writes.
+    int snapshotSignals = 0;
+    QObject::connect(&fixture.session, &ui::CompositionSession::snapshotChanged, &fixture.session,
+                     [&snapshotSignals] { ++snapshotSignals; });
     positionX->setValue(24.0);
+    expectations.expect(snapshotSignals == 1,
+                        "one field gesture produces exactly one committed snapshot -- the session "
+                        "signal flow is intact and the edit is not split across commands");
     expectations.expect(fixture.session.constantVec2Value(positionId) == editedPosition,
                         "an in-node X edit writes the canonical position parameter");
     expectations.expect(fixture.session.undoLabel() == QStringLiteral("Set Position"),

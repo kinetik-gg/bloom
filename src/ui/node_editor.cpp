@@ -312,11 +312,13 @@ class NodeItem final : public QGraphicsObject {
   protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
 
-    void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
+    // The elevation is raised on the first MOVE, not on the press: a click that only selects a card
+    // is not a drag, and lifting the card for it would read as a flash rather than as depth.
+    void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override {
         if (dragShadow_ != nullptr) {
             dragShadow_->setEnabled(true);
         }
-        QGraphicsObject::mousePressEvent(event);
+        QGraphicsObject::mouseMoveEvent(event);
     }
 
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
@@ -1263,6 +1265,18 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent) {
     auto* actualSizeAction = menu->addAction(tr("100%"));
     actualSizeAction->setObjectName(QStringLiteral("nodeActualSizeAction"));
     connect(actualSizeAction, &QAction::triggered, view_, &NodeGraphicsView::zoomToActualSize);
+
+    // The same Fit / 100% / Zoom In / Zoom Out set, in the same order and with the same separator,
+    // that ViewerEditor::contextMenuEvent() offers -- one application, one canvas menu.
+    menu->addSeparator();
+
+    auto* zoomInAction = menu->addAction(tr("Zoom In"));
+    zoomInAction->setObjectName(QStringLiteral("nodeZoomInAction"));
+    connect(zoomInAction, &QAction::triggered, view_, [this] { view_->zoomStep(1); });
+
+    auto* zoomOutAction = menu->addAction(tr("Zoom Out"));
+    zoomOutAction->setObjectName(QStringLiteral("nodeZoomOutAction"));
+    connect(zoomOutAction, &QAction::triggered, view_, [this] { view_->zoomStep(-1); });
 
     return menu;
 }
