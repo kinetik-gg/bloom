@@ -26,6 +26,7 @@ target_sources(
         kit/range_selector.cpp
         kit/slider.cpp
         kit/switch_control.cpp
+        kit/value_field.cpp
         kit/theme.cpp
         kit/tokens.cpp
     PUBLIC
@@ -42,6 +43,7 @@ target_sources(
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/switch_control.hpp
+            include/bloom/ui/kit/value_field.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/tokens.hpp
 )
