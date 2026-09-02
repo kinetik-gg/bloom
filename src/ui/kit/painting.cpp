@@ -178,4 +178,39 @@ void applyElevation(QWidget& widget, const Elevation elevation) {
     widget.setGraphicsEffect(effect);
 }
 
+void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, const int cellPx,
+                           const Radius radius) {
+    if (bounds.isEmpty() || cellPx <= 0) {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const auto extent = static_cast<int>(std::lround(std::min(bounds.width(), bounds.height())));
+    const auto corner = static_cast<qreal>(radiusPx(radius, extent));
+    QPainterPath clip;
+    clip.addRoundedRect(bounds, corner, corner);
+    painter.setClipPath(clip, Qt::IntersectClip);
+
+    const QColor light = color(Color::Surface);
+    const QColor dark = color(surfaceStep(Color::Surface, 1));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(light);
+    painter.drawRect(bounds);
+
+    painter.setBrush(dark);
+    const auto cell = static_cast<qreal>(cellPx);
+    const auto rows = static_cast<int>(std::ceil(bounds.height() / cell));
+    const auto columns = static_cast<int>(std::ceil(bounds.width() / cell));
+    for (int row = 0; row < rows; ++row) {
+        const qreal y = bounds.top() + static_cast<qreal>(row) * cell;
+        const qreal h = std::min(cell, bounds.bottom() - y);
+        for (int column = row % 2; column < columns; column += 2) {
+            const qreal x = bounds.left() + static_cast<qreal>(column) * cell;
+            const qreal w = std::min(cell, bounds.right() - x);
+            painter.drawRect(QRectF(x, y, w, h));
+        }
+    }
+    painter.restore();
+}
+
 } // namespace bloom::ui::kit
