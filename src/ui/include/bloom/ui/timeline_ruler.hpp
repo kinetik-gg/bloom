@@ -2,6 +2,7 @@
 
 #include <bloom/document/ids.hpp>
 
+#include <QRectF>
 #include <QWidget>
 
 #include <vector>
@@ -20,6 +21,13 @@ class CompositionSession;
 // priority through the controller's trailing cadence (CompositionPreviewController::
 // beginInteractiveScrub()/notifyScrubEnded()). Projection and scrub only: no direct Viewer
 // manipulation, no playback transport, no key-editing gestures.
+//
+// Kinetik restyle (task U7, issue #122, decision 3): labeled MAJOR ticks are density-adaptive --
+// the step between them is chosen from the ruler's own width and the widest label this axis could
+// ever paint (its own FONT metrics, not a guessed pixel budget) so adjacent major labels can never
+// collide; unlabeled MINOR ticks fill in at a denser, purely visual grid. The pixel<->frame axis
+// math itself (TimelineAxis, private to the .cpp) is completely unchanged -- this only changes
+// which ticks get a text label and how far apart they are.
 class TimelineRuler final : public QWidget {
     Q_OBJECT
 
@@ -36,9 +44,36 @@ class TimelineRuler final : public QWidget {
   private:
     void scrubToPixel(int pixelX);
 
+  public:
+    // Exposed purely for tests (mirrors ViewerEditor::zoomDropdownForTest()'s precedent): the
+    // exact major-tick label rects paintEvent would draw at the ruler's CURRENT width/composition,
+    // so a collision test can assert disjointness without re-deriving the density math or
+    // rasterizing a QImage to find text.
+    [[nodiscard]] std::vector<QRectF> majorTickLabelRectsForTest() const;
+
+  private:
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool scrubbing_ = false;
+};
+
+// The honest "work area" strip (task U7, issue #122, decision 3): a thin Accent-dim band spanning
+// the FULL [0, duration) composition range, painted directly above TimelineRuler in
+// TimelineEditor's layout. Bloom has no range-editing feature yet -- there is no separate in/out
+// point to visualize
+// -- so this band always spans the entire width by construction; it is deliberately
+// non-interactive (no mouse handling at all) rather than pretend a click could narrow it.
+class TimelineWorkAreaStrip final : public QWidget {
+    Q_OBJECT
+
+  public:
+    explicit TimelineWorkAreaStrip(CompositionSession& session, QWidget* parent = nullptr);
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+
+  private:
+    CompositionSession& session_;
 };
 
 // One row per animated parameter of the current selection's layer (position/opacity only in

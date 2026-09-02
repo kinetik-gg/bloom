@@ -15,18 +15,22 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPointF>
+#include <QRectF>
 #include <QString>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -930,6 +934,119 @@ void testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(
         "undo leaves exactly the original two keys in place");
 }
 
+[[nodiscard]] bool near(const QColor& left, const QColor& right, const int tolerance) {
+    return std::abs(left.red() - right.red()) <= tolerance &&
+           std::abs(left.green() - right.green()) <= tolerance &&
+           std::abs(left.blue() - right.blue()) <= tolerance;
+}
+
+[[nodiscard]] bool disjoint(const QRectF& left, const QRectF& right) {
+    return !left.intersects(right);
+}
+
+// Task U7 (issue #122), decision 3: "majors every N frames chosen from zoom/width so labels never
+// collide." Two widths -- one where a single-density ruler would have crammed a label every few
+// frames, one where it would have been far sparser -- both need every major label's own rect
+// disjoint from every other. A long composition (999 frames, so the widest label is 3 digits) makes
+// the collision risk concrete rather than trivially avoided by a short duration.
+void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Ruler Density Test", time(999, 24)));
+    expectations.expect(
+        waitUntil(
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview leaves the Rendering activity before measuring labels");
+
+    ui::TimelineRuler ruler(fixture.session, fixture.controller);
+    for (const int width : {180, 1600}) {
+        ruler.resize(width, 26);
+        const auto rects = ruler.majorTickLabelRectsForTest();
+        expectations.expect(!rects.empty(), "at least one major label is chosen at every width");
+        for (std::size_t i = 0; i < rects.size(); ++i) {
+            for (std::size_t j = i + 1; j < rects.size(); ++j) {
+                expectations.expect(disjoint(rects[i], rects[j]),
+                                    "two major label rects never overlap, at width " +
+                                        std::to_string(width));
+            }
+        }
+    }
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the density fixture reaches asynchronous scheduler quiescence");
+}
+
+// Decision 4: "Accent 2px line with a head marker... spanning ruler + lanes." Playhead PIXEL MATH
+// itself is unchanged (pinned by testRulerScrubLandsOnExactFrameTimesIncludingATie above via
+// scrubbing); this pins the RESTYLED presentation -- the line at the playhead's exact pixel is
+// Accent-colored across the ruler's full height.
+void testRulerPlayheadPaintsAnAccentLine(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Ruler Playhead Color Test", time(1)));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity !=
+                                   ui::PreviewActivity::Rendering;
+                        }),
+                        "the initial preview leaves the Rendering activity before sampling");
+
+    ui::TimelineRuler ruler(fixture.session, fixture.controller);
+    ruler.resize(200, 26);
+    sendClick(ruler, 100.0);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    const QImage image = ruler.grab().toImage();
+    const int playheadX = image.width() / 2;
+    const QColor accent = ui::kit::color(ui::kit::Color::Accent);
+    bool sawAccent = false;
+    for (int y = ruler.height() / 3; y < ruler.height(); ++y) {
+        if (near(image.pixelColor(playheadX, y), accent, 24)) {
+            sawAccent = true;
+            break;
+        }
+    }
+    expectations.expect(sawAccent, "the playhead paints an Accent-colored line at its exact pixel");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the playhead color fixture reaches asynchronous scheduler quiescence");
+}
+
+// Decision 3: the honest work-area strip spans the WHOLE [0, duration) width by construction (no
+// range-editing feature exists to make it partial) and is a dim Accent band, sampled at both edges
+// to prove it is not a fake partial trim.
+void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Work Area Strip Test", time(4));
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, newProject.initialCompositionId);
+
+    ui::TimelineWorkAreaStrip strip(session);
+    strip.resize(300, strip.sizeHint().height() > 0 ? strip.sizeHint().height() : 4);
+
+    const QImage image = strip.grab().toImage();
+    const QColor surface = ui::kit::color(ui::kit::Color::Surface);
+    const QColor accent = ui::kit::color(ui::kit::Color::Accent);
+    const QColor expected(
+        static_cast<int>(std::lround(accent.red() * ui::kit::kDisabledOpacity +
+                                     surface.red() * (1.0 - ui::kit::kDisabledOpacity))),
+        static_cast<int>(std::lround(accent.green() * ui::kit::kDisabledOpacity +
+                                     surface.green() * (1.0 - ui::kit::kDisabledOpacity))),
+        static_cast<int>(std::lround(accent.blue() * ui::kit::kDisabledOpacity +
+                                     surface.blue() * (1.0 - ui::kit::kDisabledOpacity))));
+
+    const int y = image.height() / 2;
+    expectations.expect(near(image.pixelColor(4, y), expected, 20),
+                        "the dim Accent band reaches the LEFT edge (time 0)");
+    expectations.expect(near(image.pixelColor(image.width() - 4, y), expected, 20),
+                        "the dim Accent band reaches the RIGHT edge (just before duration) -- the "
+                        "whole [0, duration) span, never a partial/trimmed band");
+    expectations.expect(!near(image.pixelColor(4, y), accent, 6),
+                        "the band is DIM, not a solid opaque Accent fill");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -943,5 +1060,8 @@ int main(int argc, char** argv) {
     testDragMoveGestureSnapsCommitsUndoesAndRefuses(expectations);
     testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(expectations);
     testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(expectations);
+    testRulerMajorTickLabelsNeverCollideAtTwoWidths(expectations);
+    testRulerPlayheadPaintsAnAccentLine(expectations);
+    testWorkAreaStripSpansFullWidthWithDimAccentBand(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
