@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QMetaType>
 #include <QString>
 #include <QStringView>
 
@@ -28,7 +29,7 @@ struct KColor final {
     float alpha = 1.0F;
 
     [[nodiscard]] static constexpr KColor fromRgba(const float r, const float g, const float b,
-                                                    const float a = 1.0F) noexcept {
+                                                   const float a = 1.0F) noexcept {
         return KColor{r, g, b, a};
     }
 
@@ -112,3 +113,7 @@ enum class PickerForm : std::uint8_t {
 [[nodiscard]] std::array<PickerForm, 5> pickerForms();
 
 } // namespace bloom::ui::kit
+
+// Registered so KColor can travel through a QVariant -- the path a Qt::QueuedConnection or a
+// QSignalSpy capturing colorActivated()/colorChanged()/colorPicked() argument values both need.
+Q_DECLARE_METATYPE(bloom::ui::kit::KColor)

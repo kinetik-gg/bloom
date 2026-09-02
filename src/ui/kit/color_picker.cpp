@@ -27,7 +27,10 @@ namespace {
 [[nodiscard]] int alphaBarHeightPx() { return px(Size::ControlCompact); }
 [[nodiscard]] int barGapPx() { return px(Spacing::S); }
 [[nodiscard]] int contentWidthPx() { return squareSidePx() + barGapPx() + hueBarWidthPx(); }
-[[nodiscard]] int checkerCellPx() { return px(Spacing::XXS); }
+// A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
+// a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
+// it in a test would be sampling blend artifacts rather than the pattern itself.
+[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
 [[nodiscard]] qreal markerRadiusPx() { return static_cast<qreal>(px(Spacing::S)) / 2.0; }
 
 [[nodiscard]] QString hexFieldStyleSheet() {
@@ -113,7 +116,7 @@ void KColorPicker::buildChrome() {
         field->setSingleStep(1.0);
         field->setDecimals(0);
         connect(field, &KValueField::valueChanged, this,
-               [this](double) { onChannelFieldEdited(); });
+                [this](double) { onChannelFieldEdited(); });
     }
 
     hexField_ = new QLineEdit(this);
@@ -196,28 +199,37 @@ void KColorPicker::rebuildChannelFields() {
     switch (model_) {
     case ColorModel::Hsva:
         specs = {FieldSpec{QStringLiteral("H"), QStringLiteral("°"), 0.0, 360.0},
-                FieldSpec{QStringLiteral("S"), QStringLiteral("%"), 0.0, 100.0},
-                FieldSpec{QStringLiteral("V"), QStringLiteral("%"), 0.0, 100.0},
-                FieldSpec{QStringLiteral("A"), QStringLiteral("%"), 0.0, 100.0}};
+                 FieldSpec{QStringLiteral("S"), QStringLiteral("%"), 0.0, 100.0},
+                 FieldSpec{QStringLiteral("V"), QStringLiteral("%"), 0.0, 100.0},
+                 FieldSpec{QStringLiteral("A"), QStringLiteral("%"), 0.0, 100.0}};
         break;
     case ColorModel::Hsla:
         specs = {FieldSpec{QStringLiteral("H"), QStringLiteral("°"), 0.0, 360.0},
-                FieldSpec{QStringLiteral("S"), QStringLiteral("%"), 0.0, 100.0},
-                FieldSpec{QStringLiteral("L"), QStringLiteral("%"), 0.0, 100.0},
-                FieldSpec{QStringLiteral("A"), QStringLiteral("%"), 0.0, 100.0}};
+                 FieldSpec{QStringLiteral("S"), QStringLiteral("%"), 0.0, 100.0},
+                 FieldSpec{QStringLiteral("L"), QStringLiteral("%"), 0.0, 100.0},
+                 FieldSpec{QStringLiteral("A"), QStringLiteral("%"), 0.0, 100.0}};
         break;
     case ColorModel::Rgba:
         specs = {FieldSpec{QStringLiteral("R"), QString(), 0.0, 255.0},
-                FieldSpec{QStringLiteral("G"), QString(), 0.0, 255.0},
-                FieldSpec{QStringLiteral("B"), QString(), 0.0, 255.0},
-                FieldSpec{QStringLiteral("A"), QString(), 0.0, 255.0}};
+                 FieldSpec{QStringLiteral("G"), QString(), 0.0, 255.0},
+                 FieldSpec{QStringLiteral("B"), QString(), 0.0, 255.0},
+                 FieldSpec{QStringLiteral("A"), QString(), 0.0, 255.0}};
         break;
     }
+    // Guarded for the same reason refreshChannelFields() guards its own setValue() calls:
+    // KValueField::setRange() clamps its current value into the new range and emits valueChanged
+    // when that clamp actually moves it (e.g. an RGBA field sitting at 200 dropping to HSLA's
+    // 0..100 span). Left unguarded, that clamp signal would reach onChannelFieldEdited() mid-loop,
+    // while only some of the four fields have their new label/unit/range yet -- reading a mix of
+    // stale and just-clamped values and silently corrupting hue_/saturation_/value_/alpha_ from a
+    // plain model switch.
+    updatingChrome_ = true;
     for (std::size_t index = 0; index < channelFields_.size(); ++index) {
         channelFields_[index]->setLabel(specs[index].label);
         channelFields_[index]->setUnit(specs[index].unit);
         channelFields_[index]->setRange(specs[index].minimum, specs[index].maximum);
     }
+    updatingChrome_ = false;
     refreshChannelFields();
 }
 
@@ -253,9 +265,7 @@ void KColorPicker::refreshChannelFields() {
     updatingChrome_ = false;
 }
 
-void KColorPicker::refreshHexField() {
-    hexField_->setText(currentColor().toHex(alpha_ < 1.0F));
-}
+void KColorPicker::refreshHexField() { hexField_->setText(currentColor().toHex(alpha_ < 1.0F)); }
 
 void KColorPicker::refreshSwatchPreview() { swatchRow_->setCurrentColor(currentColor()); }
 
@@ -343,7 +353,7 @@ QRectF KColorPicker::alphaBarRect() const noexcept { return alphaBarRect_; }
 
 QPointF KColorPicker::svMarkerPosition() const noexcept {
     return {svSquareRect_.left() + static_cast<qreal>(saturation_) * svSquareRect_.width(),
-           svSquareRect_.top() + static_cast<qreal>(1.0F - value_) * svSquareRect_.height()};
+            svSquareRect_.top() + static_cast<qreal>(1.0F - value_) * svSquareRect_.height()};
 }
 
 qreal KColorPicker::huePosition() const noexcept { return static_cast<qreal>(hue_) / 360.0; }

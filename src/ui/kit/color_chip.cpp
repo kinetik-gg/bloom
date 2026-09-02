@@ -14,7 +14,10 @@
 namespace bloom::ui::kit {
 namespace {
 
-[[nodiscard]] int checkerCellPx() { return px(Spacing::XXS); }
+// A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
+// a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
+// it in a test would be sampling blend artifacts rather than the pattern itself.
+[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
 
 // KColorChip and KColorABPair both declare their own color()/colorA()/colorB() accessors, which
 // hides the free bloom::ui::kit::color(Color) token lookup inside their member functions (plain
@@ -210,7 +213,8 @@ void KColorChip::paintEvent(QPaintEvent* event) {
         const qreal inset = painter.pen().widthF() / 2.0;
         painter.drawEllipse(bounds.adjusted(inset, inset, -inset, -inset));
     } else {
-        fillRoundedSurface(painter, bounds, swatch, tokenColor(borderForState(state)), Radius::Small);
+        fillRoundedSurface(painter, bounds, swatch, tokenColor(borderForState(state)),
+                           Radius::Small);
     }
 
     if (hasFocus() && state != State::Disabled) {
@@ -250,7 +254,7 @@ QRectF KColorABPair::swapButtonRect() const {
     const auto overlap = chipExtent * 0.5;
     const auto swapExtent = static_cast<qreal>(px(Size::IconSmall)) + px(Spacing::XS);
     return {overlap - swapExtent / 2.0, chipExtent - overlap - swapExtent / 2.0, swapExtent,
-           swapExtent};
+            swapExtent};
 }
 
 void KColorABPair::layoutChips() {
@@ -266,9 +270,7 @@ void KColorABPair::layoutChips() {
 QSize KColorABPair::sizeHint() const { return size(); }
 QSize KColorABPair::minimumSizeHint() const { return size(); }
 
-void KColorABPair::resizeEvent(QResizeEvent* event) {
-    QWidget::resizeEvent(event);
-}
+void KColorABPair::resizeEvent(QResizeEvent* event) { QWidget::resizeEvent(event); }
 
 void KColorABPair::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton && swapButtonRect().contains(event->position())) {

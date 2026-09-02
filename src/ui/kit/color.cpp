@@ -146,12 +146,12 @@ std::optional<KColor> KColor::fromHex(const QStringView text, const float fallba
         alpha = dequantizeChannel8(*alphaByte);
     }
     return KColor{dequantizeChannel8(*red), dequantizeChannel8(*green), dequantizeChannel8(*blue),
-                 alpha};
+                  alpha};
 }
 
 KColor KColor::fromQColor(const QColor& value) noexcept {
     return KColor{dequantizeChannel8(value.red()), dequantizeChannel8(value.green()),
-                 dequantizeChannel8(value.blue()), dequantizeChannel8(value.alpha())};
+                  dequantizeChannel8(value.blue()), dequantizeChannel8(value.alpha())};
 }
 
 std::array<float, 4> KColor::toHsva() const noexcept {
@@ -176,9 +176,9 @@ std::array<float, 4> KColor::toHsla() const noexcept {
 
 QString KColor::toHex(const bool includeAlpha) const {
     QString rgb = QStringLiteral("#%1%2%3")
-                            .arg(quantizeChannel8(red), 2, 16, QLatin1Char('0'))
-                            .arg(quantizeChannel8(green), 2, 16, QLatin1Char('0'))
-                            .arg(quantizeChannel8(blue), 2, 16, QLatin1Char('0'));
+                      .arg(quantizeChannel8(red), 2, 16, QLatin1Char('0'))
+                      .arg(quantizeChannel8(green), 2, 16, QLatin1Char('0'))
+                      .arg(quantizeChannel8(blue), 2, 16, QLatin1Char('0'));
     if (!includeAlpha) {
         return rgb;
     }
@@ -187,7 +187,7 @@ QString KColor::toHex(const bool includeAlpha) const {
 
 QColor KColor::toQColor() const noexcept {
     return QColor(quantizeChannel8(red), quantizeChannel8(green), quantizeChannel8(blue),
-                 quantizeChannel8(alpha));
+                  quantizeChannel8(alpha));
 }
 
 QString colorModelLabel(const ColorModel model) {
@@ -220,7 +220,7 @@ QString pickerFormLabel(const PickerForm form) {
 
 std::array<PickerForm, 5> pickerForms() {
     return {PickerForm::Square, PickerForm::Wheel, PickerForm::Triangle, PickerForm::Spectrum,
-           PickerForm::SliderStack};
+            PickerForm::SliderStack};
 }
 
 } // namespace bloom::ui::kit

@@ -28,8 +28,9 @@ std::optional<KColor> sampleWidgetPixel(QWidget& widget, const QPoint& localPoin
         return std::nullopt;
     }
     const qreal dpr = grabbed.devicePixelRatio();
-    const QPoint devicePoint(static_cast<int>(std::lround(static_cast<qreal>(localPoint.x()) * dpr)),
-                             static_cast<int>(std::lround(static_cast<qreal>(localPoint.y()) * dpr)));
+    const QPoint devicePoint(
+        static_cast<int>(std::lround(static_cast<qreal>(localPoint.x()) * dpr)),
+        static_cast<int>(std::lround(static_cast<qreal>(localPoint.y()) * dpr)));
     return sampleImagePixel(grabbed.toImage(), devicePoint);
 }
 

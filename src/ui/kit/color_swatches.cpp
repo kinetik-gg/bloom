@@ -22,12 +22,14 @@ constexpr int kLongPressMs = static_cast<int>(std::chrono::milliseconds(500).cou
 
 [[nodiscard]] int cellExtent() { return px(Size::IconLarge); }
 [[nodiscard]] int cellGap() { return px(Spacing::XXS); }
-[[nodiscard]] int checkerCellPx() { return px(Spacing::XXS); }
+// A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
+// a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
+// it in a test would be sampling blend artifacts rather than the pattern itself.
+[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
 
 } // namespace
 
-KRecentColorStore::KRecentColorStore(const int capacity)
-    : capacity_(std::max(1, capacity)) {
+KRecentColorStore::KRecentColorStore(const int capacity) : capacity_(std::max(1, capacity)) {
     colors_.reserve(static_cast<std::size_t>(capacity_));
 }
 
@@ -268,11 +270,10 @@ void KColorSwatchRow::paintEvent(QPaintEvent* event) {
             painter.setPen(pen);
             painter.setBrush(Qt::NoBrush);
             const qreal inset = kFocusRingWidth;
-            painter.drawRoundedRect(rect.adjusted(inset, inset, -inset, -inset),
-                                    static_cast<qreal>(radiusPx(Radius::Small,
-                                                                static_cast<int>(rect.width()))),
-                                    static_cast<qreal>(radiusPx(Radius::Small,
-                                                                static_cast<int>(rect.width()))));
+            painter.drawRoundedRect(
+                rect.adjusted(inset, inset, -inset, -inset),
+                static_cast<qreal>(radiusPx(Radius::Small, static_cast<int>(rect.width()))),
+                static_cast<qreal>(radiusPx(Radius::Small, static_cast<int>(rect.width()))));
             painter.restore();
         }
     }
