@@ -23,7 +23,7 @@ The archive SHA-256 above was computed over the exact bytes downloaded from that
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 44 of them in two weights (88 files). `regular` is the default interface weight
+embeds 48 of them in two weights (96 files). `regular` is the default interface weight
 and `fill` is the selected/toggled weight; the other four upstream weights (`thin`, `light`,
 `bold`, `duotone`) are deliberately not vendored, because no implemented Bloom control uses them.
 
@@ -51,6 +51,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/caret-up-down.svg` | `d2e93459514746d53d152c8624fbf89356ee4e0932ab3efd094e8dce9bb0d793` |
 | `regular/caret-up.svg` | `bccc26004e73e5de783ac6dde607e3671e776261d81972ccdbd296b4aca21ca9` |
 | `regular/check.svg` | `cbb89a8c42f283d4f846eb935e05d88c1be04462f16480e068c0f82b9ce40b12` |
+| `regular/clock.svg` | `b8c6c2899d2b9af48a55ba02ba6d7faf89b757915772dd24f5397f7b0d02aa5c` |
 | `regular/corners-in.svg` | `31e9060aafdd6e24f4b8aef7742a89e7e616e6e2da07160691d020cb5ab07dee` |
 | `regular/corners-out.svg` | `fd79277404b3662b50b737127fb6bf6f63ae93c9b60d9f2aca9122a950ec08c8` |
 | `regular/cube.svg` | `7c0f13cb492d0dd212e48ab259dabec4627df32d71aa00ce31b3228c0f35112b` |
@@ -63,6 +64,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/film-strip.svg` | `6d079e87432258b9fe9eff9d10ababcfbca7a400537277a215360a436581987f` |
 | `regular/folder.svg` | `4a882bcd4a91ae0a01887024f08d358932f183b6b171e87a3e48c5910364d507` |
 | `regular/gear.svg` | `5c0cb3ba307c72babf78d952d9140c682ff30307fedc7fbb87c9a293c1e2fd64` |
+| `regular/graph.svg` | `0a863bd9d39960eb220400400332ee1b3ada0e6ce309b89b202bb0784e4e28aa` |
 | `regular/hand-grabbing.svg` | `5c07fc19f6101a86c10cfa3cb4685c388cd0b89a69aa46caa92e44b5ba599977` |
 | `regular/hand.svg` | `b845c51acbe69c5ac2ec208c5648806f33c0a86b06d2dfa53ebe599ccb0f9c65` |
 | `regular/image.svg` | `642a0575f7b5a7ea2f5fefa6f27a5dc57683911845b85213a7e33652c2a3179d` |
@@ -80,10 +82,12 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/repeat.svg` | `12cef5f8ba7074921f909838088154a6847b936b11342c28daa475c62b71df86` |
 | `regular/skip-back.svg` | `20f318558e166d5dea09fb854a1bbc199e9891b17febed640e912a6ee4712d37` |
 | `regular/skip-forward.svg` | `52f1ed5a89f1a38bf8537b38bd2da0501e396fc4cb03a2cdde38d248ceb03fbe` |
+| `regular/sliders-horizontal.svg` | `1d937baa3bc51ec4052364edf30cf8991d550920534f5d413eb9f60535cc1916` |
 | `regular/speaker-simple-high.svg` | `3c0160ae73577763cf4304afc7766e8ed71f72bba3f6c1214a48931c0cba281b` |
 | `regular/speaker-simple-slash.svg` | `cb7e3bd3c0255d0a22e4cc7eec9bd50c7898b8e87a44074aadd48accd815a916` |
 | `regular/square-split-horizontal.svg` | `d37901731a53cc0edb101f8587af0a8122ad31d4c5b78c45453f1d6c1d26df70` |
 | `regular/square-split-vertical.svg` | `5e720feffbac898b3ae728639b6ab663899aefb6d3e7efba4447afe22840b16c` |
+| `regular/stack.svg` | `ee9eaaeb345e8a28c9662cf8a59147cb86080bd922e41f143444189e0116ea7e` |
 | `regular/text-t.svg` | `00f5cc0ddab2aacaf377ffe956e2ee5375ec3395043d468cbb5937251df7fc69` |
 | `regular/trash.svg` | `e6a830c0409f9e101e3695c981eef98427d39fd01f502b9cbd6900930b01f19c` |
 | `regular/warning-circle.svg` | `e48a90760a68659fd3f06dd9187e471aead4877c72e915339071b2c7f7bd714c` |
@@ -100,6 +104,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/caret-up-down-fill.svg` | `8f99e01d03202cc8ba423dc2448731a23e7d9c64aecf39ddab00cdd01dfdbbb8` |
 | `fill/caret-up-fill.svg` | `a4703a6e23011c86e9d7d18234b30bba36ba04f43f37ca08bb3d04beb9e3770b` |
 | `fill/check-fill.svg` | `d114007dc371976dc3e8f4ebc59c5aef429fae59ae58d56acdf231a52b4700be` |
+| `fill/clock-fill.svg` | `4abe98cfc61350de60baf70ce93e85b3a9acbb80e34f9cf19688661aaddbc140` |
 | `fill/corners-in-fill.svg` | `ade092d133654ec69ee3484ed10b79523ffe23eb9b8f9c96e5e1fe72b7af31be` |
 | `fill/corners-out-fill.svg` | `206cdf1c6c7a3d2da17edebae2a122b5bcf8186f276170cac730a041c3077a1d` |
 | `fill/cube-fill.svg` | `9c681bfc8547fbb142d5df4d69ad923af5c422fea1013e6d69c32cef9ced3de3` |
@@ -112,6 +117,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
 | `fill/folder-fill.svg` | `2217bd2f730884d7a8aec3e3358eb7500448b0e3d86f33a63142f40f0622bfe9` |
 | `fill/gear-fill.svg` | `564f53f72b0bd4371dc14a3d39a3fcf4c5a1a74d285eb56fff465a954f993ec8` |
+| `fill/graph-fill.svg` | `73eea2682fd6c43d58d448107bd01c65cd662c3890bea8d28b39964031bdd110` |
 | `fill/hand-fill.svg` | `9a1598a0dce127935ad97ede769c77629f422de7a1eabe54b4ec1b2d0c19369b` |
 | `fill/hand-grabbing-fill.svg` | `df9ace3ad62fe54f8f876b140c2824a7cf1ae55a087cd31649f3c562e465a39b` |
 | `fill/image-fill.svg` | `8cbeb0cac6e7f683e08d8a71a5db21c10435c39d0487c3277b75b146a86abf42` |
@@ -129,10 +135,12 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/repeat-fill.svg` | `0ccdc4397cd7c1e528c571d6ba3fb6764043d791b3de0ac86c6eaf5edb3a8ce6` |
 | `fill/skip-back-fill.svg` | `65a2d664196ad28fff7288ed7a1870f508fdb922334ad1a49c54586dae7592d7` |
 | `fill/skip-forward-fill.svg` | `2f13f5cbeab47627d30782e7942001e7f80f7da993df053d3be2b8c6cb737ae2` |
+| `fill/sliders-horizontal-fill.svg` | `59fdf39771e7939dd315912702f3c8241a9dfeb1f5b6512a074525884765a76c` |
 | `fill/speaker-simple-high-fill.svg` | `3414782909ef8fa9c30c54c9fa3325654282ce818336ec1f27393aca9074b365` |
 | `fill/speaker-simple-slash-fill.svg` | `80439f069b5313a88af31cc8b07881cbd519f46ac3d5a38673bd6cb8c60c0cfd` |
 | `fill/square-split-horizontal-fill.svg` | `cb047582904dc8ae92fe8f4ff9d0bb31df3c74a64bd5b0bc68eb6b2df3445f25` |
 | `fill/square-split-vertical-fill.svg` | `0ace6381e25145a677d0e2841813c292436bd451d3c3c96def9061a82f4cb83b` |
+| `fill/stack-fill.svg` | `549d53f6eaf6a1da0d66be403180199f1578f0651506bfc137ae036b1fc2a60b` |
 | `fill/text-t-fill.svg` | `5ddee68d99ab4598641cf99fb7025cb18e2add9302ae4df31653418066ca0c6d` |
 | `fill/trash-fill.svg` | `f78767cc15e1a7d6eea49c4efb515cf6fceaf07fbc421e8ce18373d07c14b673` |
 | `fill/warning-circle-fill.svg` | `29199dd3ff20a7fc36380dc366c9004fafa98d979649dc2311c5b1f8fd968dac` |
@@ -145,7 +153,7 @@ A single value covering the whole vendored subset, so a drift in any one asset i
 away rather than 86:
 
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = e48d6a543caa269bc39d1aaacb306a5dd46a820d94581e61025161d4577f8982
+SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = 00bf12ff493f93fbcdab0c55f8159041130b54e1cba50951b7ad0580bf64a9e1
 ```
 
 Reproduce with:

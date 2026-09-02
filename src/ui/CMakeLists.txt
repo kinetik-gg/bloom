@@ -87,6 +87,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/caret-up-down.svg
         kit/third_party/phosphor-icons/regular/caret-up.svg
         kit/third_party/phosphor-icons/regular/check.svg
+        kit/third_party/phosphor-icons/regular/clock.svg
         kit/third_party/phosphor-icons/regular/corners-in.svg
         kit/third_party/phosphor-icons/regular/corners-out.svg
         kit/third_party/phosphor-icons/regular/cube.svg
@@ -99,6 +100,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/film-strip.svg
         kit/third_party/phosphor-icons/regular/folder.svg
         kit/third_party/phosphor-icons/regular/gear.svg
+        kit/third_party/phosphor-icons/regular/graph.svg
         kit/third_party/phosphor-icons/regular/hand-grabbing.svg
         kit/third_party/phosphor-icons/regular/hand.svg
         kit/third_party/phosphor-icons/regular/image.svg
@@ -116,10 +118,12 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/repeat.svg
         kit/third_party/phosphor-icons/regular/skip-back.svg
         kit/third_party/phosphor-icons/regular/skip-forward.svg
+        kit/third_party/phosphor-icons/regular/sliders-horizontal.svg
         kit/third_party/phosphor-icons/regular/speaker-simple-high.svg
         kit/third_party/phosphor-icons/regular/speaker-simple-slash.svg
         kit/third_party/phosphor-icons/regular/square-split-horizontal.svg
         kit/third_party/phosphor-icons/regular/square-split-vertical.svg
+        kit/third_party/phosphor-icons/regular/stack.svg
         kit/third_party/phosphor-icons/regular/text-t.svg
         kit/third_party/phosphor-icons/regular/trash.svg
         kit/third_party/phosphor-icons/regular/warning-circle.svg
@@ -131,6 +135,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/caret-up-down-fill.svg
         kit/third_party/phosphor-icons/fill/caret-up-fill.svg
         kit/third_party/phosphor-icons/fill/check-fill.svg
+        kit/third_party/phosphor-icons/fill/clock-fill.svg
         kit/third_party/phosphor-icons/fill/corners-in-fill.svg
         kit/third_party/phosphor-icons/fill/corners-out-fill.svg
         kit/third_party/phosphor-icons/fill/cube-fill.svg
@@ -143,6 +148,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/film-strip-fill.svg
         kit/third_party/phosphor-icons/fill/folder-fill.svg
         kit/third_party/phosphor-icons/fill/gear-fill.svg
+        kit/third_party/phosphor-icons/fill/graph-fill.svg
         kit/third_party/phosphor-icons/fill/hand-fill.svg
         kit/third_party/phosphor-icons/fill/hand-grabbing-fill.svg
         kit/third_party/phosphor-icons/fill/image-fill.svg
@@ -160,10 +166,12 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/repeat-fill.svg
         kit/third_party/phosphor-icons/fill/skip-back-fill.svg
         kit/third_party/phosphor-icons/fill/skip-forward-fill.svg
+        kit/third_party/phosphor-icons/fill/sliders-horizontal-fill.svg
         kit/third_party/phosphor-icons/fill/speaker-simple-high-fill.svg
         kit/third_party/phosphor-icons/fill/speaker-simple-slash-fill.svg
         kit/third_party/phosphor-icons/fill/square-split-horizontal-fill.svg
         kit/third_party/phosphor-icons/fill/square-split-vertical-fill.svg
+        kit/third_party/phosphor-icons/fill/stack-fill.svg
         kit/third_party/phosphor-icons/fill/text-t-fill.svg
         kit/third_party/phosphor-icons/fill/trash-fill.svg
         kit/third_party/phosphor-icons/fill/warning-circle-fill.svg

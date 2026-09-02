@@ -25,6 +25,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace bloom::ui {
@@ -33,11 +34,36 @@ namespace {
 // The panel header is a dense chrome row, so its icon-only controls take the smallest icon box.
 constexpr auto kHeaderIconSize = kit::Size::IconSmall;
 
+// task U8, issue #131, formal amendment 1, A5: the panel-switcher glyph per editor kind. Media
+// reuses Folder (already vendored for the data-kind vocabulary) rather than a duplicate asset. An
+// editor id outside this table (an unavailable-editor placeholder, or a test's own probe id) gets
+// no icon at all -- exactly QComboBox's own no-icon default.
+[[nodiscard]] std::optional<kit::IconId> iconForEditorId(const std::string& editorId) {
+    if (editorId == "bloom.media") {
+        return kit::IconId::Folder;
+    }
+    if (editorId == "bloom.viewer") {
+        return kit::IconId::Stack;
+    }
+    if (editorId == "bloom.timeline") {
+        return kit::IconId::Clock;
+    }
+    if (editorId == "bloom.properties") {
+        return kit::IconId::SlidersHorizontal;
+    }
+    if (editorId == "bloom.nodes") {
+        return kit::IconId::Graph;
+    }
+    return std::nullopt;
+}
+
 // task U8, issue #131, fix 7: "the header QToolButtons must also be square: fixed size
-// Size::Control minus header padding, uniform." The header row reserves 4 design pixels of
-// vertical padding above and below its controls (headerLayout's own setContentsMargins(6, 4, 4,
-// 4) below), so a header button's square extent is the Control token less that one padding unit.
-constexpr int kHeaderVerticalPadding = 4;
+// Size::Control minus header padding, uniform." The header row reserves Spacing::PanelHeader
+// design pixels of vertical padding above and below its controls (headerLayout's own
+// setContentsMargins() below); task U8 formal amendment 1, A4 gave that padding its own named
+// token (10, deliberately off the base-4 scale) in place of the ad hoc 4 fix 7 originally used,
+// so a header button's square extent is the Control token less that one padding unit.
+constexpr int kHeaderVerticalPadding = kit::px(kit::Spacing::PanelHeader);
 constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control) - kHeaderVerticalPadding;
 
 } // namespace
@@ -76,7 +102,15 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     editorPicker_->setFont(kit::font(kit::TypeRole::UiSmall));
 
     for (const auto& editor : registry.editors()) {
-        editorPicker_->addItem(editor.displayName, QString::fromStdString(editor.id));
+        // task U8, issue #131, formal amendment 1, A5: setItemIcon() (via this addItem() overload)
+        // renders natively in both the closed field's current-item icon and every popup row --
+        // this is plain QComboBox item-icon rendering, not the down-arrow QSS limitation fix 3 hit.
+        if (const auto iconId = iconForEditorId(editor.id); iconId.has_value()) {
+            editorPicker_->addItem(kit::icon(*iconId, kit::Size::IconSmall), editor.displayName,
+                                   QString::fromStdString(editor.id));
+        } else {
+            editorPicker_->addItem(editor.displayName, QString::fromStdString(editor.id));
+        }
     }
 
     auto* content = new QWidget(this);
@@ -316,14 +350,15 @@ void EditorArea::resizeEvent(QResizeEvent* event) {
 }
 
 void EditorArea::updateRoundedMask() {
-    // Radius::Small rounded corners over the Background gutter (task U2, issue #118, decision 4;
-    // shrunk to the smallest panel radius by task U8, issue #131, fix 2): a real clip rather than
-    // only the stylesheet's own border-radius, so the header's Surface background and whatever the
-    // active editor draws never overhang the panel's rounded corners -- the QFrame's own CSS
-    // border-radius (kinetikStyleSheet()'s QFrame#editorArea rule) only ever paints the frame's
-    // OWN background/border, never its children.
+    // Rounded corners over the Background gutter (task U2, issue #118, decision 4; shrunk to
+    // Radius::Small by task U8, issue #131, fix 2; moved to its own Radius::Panel = 4 by formal
+    // amendment 1, A3): a real clip rather than only the stylesheet's own border-radius, so the
+    // header's Surface background and whatever the active editor draws never overhang the
+    // panel's rounded corners -- the QFrame's own CSS border-radius (kinetikStyleSheet()'s
+    // QFrame#editorArea rule) only ever paints the frame's OWN background/border, never its
+    // children.
     QPainterPath path;
-    const int radius = kit::radiusPx(kit::Radius::Small, 0);
+    const int radius = kit::radiusPx(kit::Radius::Panel, 0);
     path.addRoundedRect(rect(), radius, radius);
     setMask(QRegion(path.toFillPolygon().toPolygon()));
 }

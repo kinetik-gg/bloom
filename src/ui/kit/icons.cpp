@@ -70,6 +70,10 @@ const auto& iconAssets() {
         {IconId::Audio, QLatin1StringView("music-notes")},
         {IconId::Composition, QLatin1StringView("cube")},
         {IconId::Text, QLatin1StringView("text-t")},
+        {IconId::Stack, QLatin1StringView("stack")},
+        {IconId::Clock, QLatin1StringView("clock")},
+        {IconId::SlidersHorizontal, QLatin1StringView("sliders-horizontal")},
+        {IconId::Graph, QLatin1StringView("graph")},
     });
     return entries;
 }

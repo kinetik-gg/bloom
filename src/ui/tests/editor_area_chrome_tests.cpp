@@ -5,12 +5,14 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QIcon>
 #include <QMenu>
 #include <QPoint>
 #include <QSignalSpy>
+#include <QSize>
 #include <QString>
 #include <QToolButton>
 #include <QWidget>
@@ -45,6 +47,23 @@ EditorRegistry makeRegistry() {
     EditorRegistry registry;
     (void)registry.registerEditor(
         {"bloom.probe", "Probe", [](QWidget* parent) -> QWidget* { return new QWidget(parent); }});
+    return registry;
+}
+
+// task U8, issue #131, formal amendment 1, A5: the real editor ids the panel-identity icon
+// mapping keys on, with trivial factories -- not registerFoundationEditors(), which needs a real
+// CompositionSession/CompositionPreviewController this test has no reason to construct.
+EditorRegistry makeRealIdRegistry() {
+    EditorRegistry registry;
+    const auto addTrivial = [&registry](const char* id, const char* displayName) {
+        (void)registry.registerEditor(
+            {id, displayName, [](QWidget* parent) -> QWidget* { return new QWidget(parent); }});
+    };
+    addTrivial("bloom.viewer", "Viewer");
+    addTrivial("bloom.nodes", "Nodes");
+    addTrivial("bloom.timeline", "Timeline");
+    addTrivial("bloom.media", "Media");
+    addTrivial("bloom.properties", "Properties");
     return registry;
 }
 
@@ -109,8 +128,10 @@ void testTheHeaderQToolButtonsAreSquare(Expectations& expectations) {
     }
     expectations.expect(button->width() == button->height(),
                         "the header's one remaining icon-only QToolButton is square");
+    // task U8, formal amendment 1, A4 gave the header's own vertical padding a named token
+    // (Spacing::PanelHeader = 10), replacing fix 7's original ad hoc 4.
     expectations.expect(
-        button->width() == kit::px(kit::Size::Control) - 4,
+        button->width() == kit::px(kit::Size::Control) - kit::px(kit::Spacing::PanelHeader),
         "square at Size::Control minus the header's own vertical padding, per fix 7");
 }
 
@@ -223,6 +244,42 @@ void testSplitAndCloseEnablementIsUnchanged(Expectations& expectations) {
                         "re-enabling reaches the close action too");
 }
 
+// task U8, issue #131, formal amendment 1, A5: pins the panel-switcher icon mapping. setItemIcon
+// (via the addItem(icon, text, data) overload) renders natively in both the closed field's
+// current-item icon and the popup row, so one assertion per id covers both.
+void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
+    const EditorRegistry registry = makeRealIdRegistry();
+    EditorArea area(registry, "bloom.viewer", QString{});
+    auto* picker = area.findChild<QComboBox*>(QStringLiteral("editorTypePicker"));
+    expectations.expect(picker != nullptr, "the panel switcher exists");
+    if (picker == nullptr) {
+        return;
+    }
+
+    struct Mapping {
+        const char* id;
+        kit::IconId icon;
+    };
+    const auto sampleSize = QSize(kit::px(kit::Size::IconSmall), kit::px(kit::Size::IconSmall));
+    for (const auto& [id, iconId] :
+         {Mapping{"bloom.media", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
+          Mapping{"bloom.timeline", kit::IconId::Clock},
+          Mapping{"bloom.properties", kit::IconId::SlidersHorizontal},
+          Mapping{"bloom.nodes", kit::IconId::Graph}}) {
+        const int index = picker->findData(QString::fromLatin1(id));
+        expectations.expect(index >= 0, std::string{id} + " is a panel-switcher entry");
+        if (index < 0) {
+            continue;
+        }
+        const QIcon actual = picker->itemIcon(index);
+        expectations.expect(!actual.isNull(), std::string{id} + " carries an icon");
+        const QIcon expected = kit::icon(iconId, kit::Size::IconSmall);
+        expectations.expect(actual.pixmap(sampleSize).toImage() ==
+                                expected.pixmap(sampleSize).toImage(),
+                            std::string{id} + " maps to its documented glyph");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -236,5 +293,6 @@ int main(int argc, char** argv) {
     testARightClickOnTheHeaderOpensTheMenuAtTheCursor(expectations);
     testHeaderControlsAndMenuActionsStillDriveTheirSignals(expectations);
     testSplitAndCloseEnablementIsUnchanged(expectations);
+    testThePanelSwitcherPinsTheIconMapping(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
