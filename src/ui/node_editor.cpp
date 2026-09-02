@@ -426,9 +426,20 @@ class NodeItem final : public QGraphicsObject {
         if (fieldsBuilt_ && roles == builtRoles_) {
             return;
         }
+        // Detached from the card, taken out of the scene (an item whose parent is cleared stays in
+        // the scene as a top-level item and would keep painting), then deferred-deleted: this can
+        // in principle run while one of these very widgets is emitting, so nothing is destroyed
+        // under a live stack frame.
         for (auto* child : childItems()) {
             child->setParentItem(nullptr);
-            delete child;
+            if (scene() != nullptr) {
+                scene()->removeItem(child);
+            }
+            if (auto* object = child->toGraphicsObject()) {
+                object->deleteLater();
+            } else {
+                delete child;
+            }
         }
         valueRows_.clear();
         readOnlyRows_.clear();
