@@ -35,6 +35,10 @@ enum class Color : std::uint8_t {
     Faint,
     Border,
     BorderHover,
+    // The active-panel indicator (task U8, issue #131, fix 1): a subtle neutral border a focused
+    // EditorArea takes instead of Accent. Panel chrome never reads as accent-colored; this is the
+    // one role that marks "this is the active panel."
+    BorderActive,
     Accent,
     AccentHover,
     AccentPressed,

@@ -47,6 +47,7 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | `Faint` | `#666666` | Placeholder text, tertiary labels, ruler ticks and separators |
 | `Border` | `#222222` | Resting hairlines |
 | `BorderHover` | `#454545` | Hovered hairlines, scrollbar thumbs |
+| `BorderActive` | `#333333` | The active-panel border only -- a subtle neutral, never `Accent` |
 | `Accent` | `#0C8CE9` | Selection, focus, active state, the primary action |
 | `AccentHover` | `#3AA5F0` | An accent surface under the pointer |
 | `AccentPressed` | `#0A73C2` | An accent surface being pressed |

@@ -49,6 +49,8 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::Faint, "#666666");
     expectHex(kit::Color::Border, "#222222");
     expectHex(kit::Color::BorderHover, "#454545");
+    // task U8, issue #131, fix 1: the active-panel indicator is a neutral border, never Accent.
+    expectHex(kit::Color::BorderActive, "#333333");
     expectHex(kit::Color::Accent, "#0c8ce9");
     expectHex(kit::Color::AccentHover, "#3aa5f0");
     expectHex(kit::Color::AccentPressed, "#0a73c2");

@@ -133,6 +133,36 @@ void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations)
                         "the active-area border rule survives, property selector and all");
 }
 
+// task U8, issue #131, fix 1 and fix 2: the active-panel border is the new neutral BorderActive
+// token, never Accent, and panel bodies take the smallest corner radius.
+void testTheActivePanelBorderIsNeutralNotAccent(Expectations& expectations) {
+    const QString sheet = kit::kinetikStyleSheet();
+    const qsizetype activeRule =
+        sheet.indexOf(QStringLiteral("QFrame#editorArea[active=\"true\"]"));
+    expectations.expect(activeRule >= 0, "the active-area rule exists");
+    if (activeRule < 0) {
+        return;
+    }
+    const QString block = sheet.mid(activeRule, 80);
+    expectations.expect(block.contains(kit::hex(kit::Color::BorderActive)),
+                        "the active border paints BorderActive (#333333), not Accent");
+    expectations.expect(!block.contains(kit::hex(kit::Color::Accent)),
+                        "no accent color leaks into panel chrome");
+
+    const qsizetype restRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
+    expectations.expect(restRule >= 0, "the resting-area rule exists");
+    if (restRule < 0) {
+        return;
+    }
+    const QString restBlock = sheet.mid(restRule, 160);
+    expectations.expect(
+        restBlock.contains(
+            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Small, 0))),
+        "panel bodies take Radius::Small, the smallest panel radius");
+    expectations.expect(restBlock.contains(kit::hex(kit::Color::Border)),
+                        "the resting border is the plain Border token");
+}
+
 void testTokenExpansionResolvesNumbersAndColors(Expectations& expectations) {
     const QString expanded = kit::expandTokens(
         QStringLiteral("a{color.Accent}b{space.M}c{radius.Medium}d{size.Control}"));
@@ -163,6 +193,7 @@ int main(int argc, char** argv) {
     testTheInstallerIsReRunnable(application, expectations);
     testTheStyleSheetIsGeneratedEntirelyFromTokens(expectations);
     testTheStyleSheetPreservesEveryStyledObjectName(expectations);
+    testTheActivePanelBorderIsNeutralNotAccent(expectations);
     testTokenExpansionResolvesNumbersAndColors(expectations);
     testThemedWidgetsResolveTheirTokenColors(application, expectations);
     return expectations.failures() == 0 ? 0 : 1;
