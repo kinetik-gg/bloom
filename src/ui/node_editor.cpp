@@ -33,6 +33,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QResizeEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyleOptionGraphicsItem>
@@ -1082,6 +1083,17 @@ void NodeGraphicsView::zoomToActualSize() {
 void NodeGraphicsView::showEvent(QShowEvent* event) {
     QGraphicsView::showEvent(event);
     if (!framedOnce_ && !viewAdjusted_) {
+        frameGraph();
+    }
+}
+
+void NodeGraphicsView::resizeEvent(QResizeEvent* event) {
+    QGraphicsView::resizeEvent(event);
+    // The Viewer's Fit recomputes its rectangle from the available area on every paint, so a
+    // resized Viewer stays fitted. This canvas keeps that behavior for the same state: while the
+    // artist has not moved the view, a resize re-frames the graph. Once they have, the view is
+    // theirs and a resize leaves it exactly where they put it.
+    if (!viewAdjusted_) {
         frameGraph();
     }
 }

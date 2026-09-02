@@ -18,6 +18,7 @@ class QKeyEvent;
 class QMenu;
 class QMouseEvent;
 class QPainter;
+class QResizeEvent;
 class QShowEvent;
 class QWheelEvent;
 
@@ -161,6 +162,7 @@ class NodeGraphicsView final : public QGraphicsView {
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     void updatePanCursor();

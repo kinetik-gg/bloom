@@ -218,6 +218,21 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_F);
     expectations.expect(!fixture.view()->viewAdjusted() && !near(fixture.view()->zoomFactor(), 1.0),
                         "F re-frames the graph");
+
+    // While the artist has not moved the view, a resize re-frames -- the same way the Viewer's Fit
+    // recomputes its rectangle from the available area. Once they HAVE moved it, a resize leaves
+    // the view exactly where they put it.
+    const double fittedZoom = fixture.view()->zoomFactor();
+    fixture.editor.resize(400, 300);
+    QCoreApplication::processEvents();
+    expectations.expect(!near(fixture.view()->zoomFactor(), fittedZoom),
+                        "a resize re-frames the graph while the view is still following it");
+
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Z);
+    fixture.editor.resize(800, 600);
+    QCoreApplication::processEvents();
+    expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
+                        "but a resize never moves a view the artist has taken over");
 }
 
 void testSpaceHoldAndMiddleDragBothPan(Expectations& expectations) {
