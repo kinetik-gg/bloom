@@ -242,9 +242,10 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const auto ringMargin = kFocusRingWidth;
     const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
 
-    // A closed field rests on Field, the top rung of the surface ladder, so its hover step is the
-    // border alone -- exactly what the ladder's clamp says it should be.
-    fillRoundedSurface(painter, bounds, color(surfaceForState(Color::Field, state)),
+    // A closed field rests on ControlSurface (task U8, issue 131, formal amendment 1, A2 --
+    // previously Field). ControlSurface is not a surfaceStep() rung, so its hover step is the
+    // border alone, exactly like Field's own behavior at the top of the ladder before it.
+    fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
                        color(borderForState(state)), Radius::Small);
     if (hasFocus() && state != State::Disabled) {
         drawFocusRing(painter, bounds, Radius::Small);

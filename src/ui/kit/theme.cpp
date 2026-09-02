@@ -26,6 +26,7 @@ const auto& colorPlaceholders() {
         {QLatin1StringView("Surface"), Color::Surface},
         {QLatin1StringView("SurfaceRaised"), Color::SurfaceRaised},
         {QLatin1StringView("Field"), Color::Field},
+        {QLatin1StringView("ControlSurface"), Color::ControlSurface},
         {QLatin1StringView("Foreground"), Color::Foreground},
         {QLatin1StringView("Muted"), Color::Muted},
         {QLatin1StringView("Faint"), Color::Faint},
@@ -58,10 +59,12 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("space.XL"), px(Spacing::XL)},
         {QLatin1StringView("space.XXL"), px(Spacing::XXL)},
         {QLatin1StringView("space.Gutter"), px(Spacing::Gutter)},
+        {QLatin1StringView("space.PanelHeader"), px(Spacing::PanelHeader)},
         {QLatin1StringView("radius.Small"), radiusPx(Radius::Small, 0)},
         {QLatin1StringView("radius.Medium"), radiusPx(Radius::Medium, 0)},
         {QLatin1StringView("radius.Large"), radiusPx(Radius::Large, 0)},
         {QLatin1StringView("radius.XLarge"), radiusPx(Radius::XLarge, 0)},
+        {QLatin1StringView("radius.Panel"), radiusPx(Radius::Panel, 0)},
         {QLatin1StringView("size.ControlCompact"), px(Size::ControlCompact)},
         {QLatin1StringView("size.Control"), px(Size::Control)},
         {QLatin1StringView("size.ControlRoomy"), px(Size::ControlRoomy)},
@@ -222,7 +225,7 @@ QMenu::separator {
 QFrame#editorArea {
     background: {color.Background};
     border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
+    border-radius: {radius.Panel}px;
 }
 QFrame#editorArea[active="true"] {
     border-color: {color.BorderActive};
@@ -236,6 +239,7 @@ QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};
 }
 QToolButton#maximizeAreaButton {
+    background: {color.ControlSurface};
     border: {border.Hairline}px solid {color.Border};
     border-radius: {radius.Small}px;
 }
@@ -258,7 +262,7 @@ QLabel#readOnlyPlaceholderBody {
     color: {color.Muted};
 }
 QComboBox {
-    background: {color.Field};
+    background: {color.ControlSurface};
     color: {color.Foreground};
     border: {border.Hairline}px solid {color.Border};
     border-radius: {radius.Small}px;
@@ -293,8 +297,9 @@ QComboBox::drop-down {
    QComboBox keeps the Fusion style's own down-arrow indicator, which already paints in the
    installed QPalette's Foreground/Button ink, so it stays legible even though it is Fusion's
    single arrow rather than the vendored double chevron. Everything else in the design sheet
-   (bordered Field-surface field, BorderHover on hover, Radius::Small, bordered SurfaceRaised
-   popup at Radius::Small) is reproduced exactly, including on the panel-switcher QComboBox. */
+   (bordered ControlSurface field per formal amendment 1's A2, BorderHover on hover,
+   Radius::Small, bordered SurfaceRaised popup at Radius::Small) is reproduced exactly,
+   including on the panel-switcher QComboBox. */
 QComboBox QAbstractItemView {
     background: {color.SurfaceRaised};
     color: {color.Foreground};

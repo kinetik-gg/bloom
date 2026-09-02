@@ -145,7 +145,8 @@ void testTheActivePanelBorderIsNeutralNotAccent(Expectations& expectations) {
     }
     const QString block = sheet.mid(activeRule, 80);
     expectations.expect(block.contains(kit::hex(kit::Color::BorderActive)),
-                        "the active border paints BorderActive (#333333), not Accent");
+                        "the active border paints BorderActive (#444444, formal amendment 1's "
+                        "final value), not Accent");
     expectations.expect(!block.contains(kit::hex(kit::Color::Accent)),
                         "no accent color leaks into panel chrome");
 
@@ -155,12 +156,51 @@ void testTheActivePanelBorderIsNeutralNotAccent(Expectations& expectations) {
         return;
     }
     const QString restBlock = sheet.mid(restRule, 160);
+    // task U8, formal amendment 1, A3: panel bodies moved from Radius::Small to their own
+    // Radius::Panel (4) -- still the smallest step reserved for the panel body specifically.
     expectations.expect(
         restBlock.contains(
-            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Small, 0))),
-        "panel bodies take Radius::Small, the smallest panel radius");
+            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Panel, 0))),
+        "panel bodies take Radius::Panel");
     expectations.expect(restBlock.contains(kit::hex(kit::Color::Border)),
                         "the resting border is the plain Border token");
+}
+
+// task U8, issue #131, formal amendment 1, A2: ControlSurface backs header-variant icon buttons
+// and every dropdown closed field (here, the app-wide QComboBox QSS); Border (#222222) still
+// borders panels, the header button, and the dropdown closed field, verified as asked.
+void testControlSurfaceBacksHeaderButtonsAndDropdownFieldsBorderStaysConsistent(
+    Expectations& expectations) {
+    const QString sheet = kit::kinetikStyleSheet();
+
+    const qsizetype maximizeRule =
+        sheet.indexOf(QStringLiteral("QToolButton#maximizeAreaButton {"));
+    expectations.expect(maximizeRule >= 0, "the header maximize button rule exists");
+    if (maximizeRule >= 0) {
+        const QString block = sheet.mid(maximizeRule, 160);
+        expectations.expect(block.contains(kit::hex(kit::Color::ControlSurface)),
+                            "the header button's background is ControlSurface");
+        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
+                            "the header button borders with Border (#222222)");
+    }
+
+    const qsizetype comboRule = sheet.indexOf(QStringLiteral("QComboBox {"));
+    expectations.expect(comboRule >= 0, "the app-wide QComboBox rule exists");
+    if (comboRule >= 0) {
+        const QString block = sheet.mid(comboRule, 220);
+        expectations.expect(block.contains(kit::hex(kit::Color::ControlSurface)),
+                            "the dropdown closed field's background is ControlSurface");
+        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
+                            "the dropdown closed field borders with Border (#222222)");
+    }
+
+    const qsizetype panelRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
+    expectations.expect(panelRule >= 0, "the panel rule exists");
+    if (panelRule >= 0) {
+        const QString block = sheet.mid(panelRule, 160);
+        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
+                            "the panel borders with Border (#222222)");
+    }
 }
 
 void testTokenExpansionResolvesNumbersAndColors(Expectations& expectations) {
@@ -194,6 +234,7 @@ int main(int argc, char** argv) {
     testTheStyleSheetIsGeneratedEntirelyFromTokens(expectations);
     testTheStyleSheetPreservesEveryStyledObjectName(expectations);
     testTheActivePanelBorderIsNeutralNotAccent(expectations);
+    testControlSurfaceBacksHeaderButtonsAndDropdownFieldsBorderStaysConsistent(expectations);
     testTokenExpansionResolvesNumbersAndColors(expectations);
     testThemedWidgetsResolveTheirTokenColors(application, expectations);
     return expectations.failures() == 0 ? 0 : 1;

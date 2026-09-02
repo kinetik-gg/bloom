@@ -24,15 +24,20 @@ struct ColorEntry {
 // color()/hex() so a rule and a painter can never drift apart.
 constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::Background, 0x111111U},
-    {Color::Surface, 0x161616U},
+    // task U8 (issue 131), formal amendment 1, A2: panel body darkened from 0x161616.
+    {Color::Surface, 0x141414U},
     {Color::SurfaceRaised, 0x1B1B1BU},
     {Color::Field, 0x202020U},
+    // task U8 (issue 131), formal amendment 1, A2: the recessed fill for header-variant icon
+    // buttons and every dropdown closed field -- darker than Background itself, by design.
+    {Color::ControlSurface, 0x0E0E0EU},
     {Color::Foreground, 0xFFFFFFU},
     {Color::Muted, 0x999999U},
     {Color::Faint, 0x666666U},
     {Color::Border, 0x222222U},
     {Color::BorderHover, 0x454545U},
-    {Color::BorderActive, 0x333333U},
+    // task U8 (issue 131), formal amendment 1, A1: final value, supersedes 0x333333.
+    {Color::BorderActive, 0x444444U},
     {Color::Accent, 0x0C8CE9U},
     {Color::AccentHover, 0x3AA5F0U},
     {Color::AccentPressed, 0x0A73C2U},
