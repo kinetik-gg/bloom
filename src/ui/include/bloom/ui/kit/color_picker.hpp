@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/kit/color_sampler.hpp>
 #include <bloom/ui/kit/color_swatches.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -16,6 +17,7 @@ class QLineEdit;
 
 namespace bloom::ui::kit {
 
+class KButton;
 class KDropdown;
 class KValueField;
 
@@ -77,6 +79,12 @@ class KColorPicker final : public QWidget {
     [[nodiscard]] QLineEdit* hexField() const noexcept;
     [[nodiscard]] KColorSwatchRow* swatchRow() const noexcept;
 
+    // Decision 5: the eyedropper affordance. Toggling this on begins an app-scoped sample (see
+    // color_sampler.hpp -- Bloom's own windows only, disclosed via kSamplerScopeTooltip); a pick
+    // commits straight into this picker's color the same way a swatch activation does.
+    [[nodiscard]] KButton* eyedropperButton() const noexcept;
+    [[nodiscard]] KColorSampler* sampler() const noexcept;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
@@ -109,6 +117,8 @@ class KColorPicker final : public QWidget {
     void onHexFieldEdited();
     void onModelChanged(int index);
     void onSwatchActivated(const KColor& color);
+    void onEyedropperToggled(bool active);
+    void onColorSampled(const KColor& color);
     void updateDragFromPoint(const QPointF& point);
     // Pushes the current color into the bound recent-color store and refreshes the swatch row's
     // "what would 'set' write here" preview. Called only at discrete commit points (a drag
@@ -130,6 +140,8 @@ class KColorPicker final : public QWidget {
     QRectF alphaBarRect_;
 
     KDropdown* formSelector_ = nullptr;
+    KButton* eyedropperButton_ = nullptr;
+    KColorSampler* sampler_ = nullptr;
     KDropdown* modelSelector_ = nullptr;
     std::array<KValueField*, 4> channelFields_{};
     QLineEdit* hexField_ = nullptr;

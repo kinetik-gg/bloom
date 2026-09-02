@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/color_picker.hpp>
 
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -22,6 +23,8 @@ namespace {
 // that grows with the widget: every drag test can then assert against a known rect, and the
 // picker's overall size is simply whatever that fixed canvas plus its token-spaced chrome rows
 // need. Every number below reads off an existing Size/Spacing token, never a bare pixel count.
+// The SV square's side is 5x ControlRoomy (160px at the current token value): big enough for a
+// precise drag target, small enough that the whole popup fits comfortably inside a normal window.
 [[nodiscard]] int squareSidePx() { return px(Size::ControlRoomy) * 5; }
 [[nodiscard]] int hueBarWidthPx() { return px(Size::ControlCompact); }
 [[nodiscard]] int alphaBarHeightPx() { return px(Size::ControlCompact); }
@@ -104,6 +107,21 @@ void KColorPicker::buildChrome() {
         }
     });
 
+    // Decision 5: the eyedropper affordance. Ghost + checkable, so "active" reads as pressed the
+    // same way an open KDropdown's own field does -- no bespoke "sampling" visual state needed.
+    eyedropperButton_ = new KButton(tr("Sample"), this);
+    eyedropperButton_->setObjectName(QStringLiteral("kColorPickerEyedropper"));
+    eyedropperButton_->setVariant(KButton::Variant::Ghost);
+    eyedropperButton_->setControlSize(KButton::ControlSize::Compact);
+    eyedropperButton_->setCheckable(true);
+    eyedropperButton_->setToolTip(QString::fromUtf8(kSamplerScopeTooltip));
+    eyedropperButton_->setAccessibleName(tr("Sample a color from Bloom"));
+    sampler_ = new KColorSampler(this);
+    connect(eyedropperButton_, &KButton::toggled, this, &KColorPicker::onEyedropperToggled);
+    connect(sampler_, &KColorSampler::colorPicked, this, &KColorPicker::onColorSampled);
+    connect(sampler_, &KColorSampler::sampleCancelled, this,
+            [this]() { eyedropperButton_->setChecked(false); });
+
     modelSelector_ = new KDropdown(this);
     modelSelector_->setControlSize(KDropdown::ControlSize::Compact);
     modelSelector_->addItem(colorModelLabel(ColorModel::Hsva), static_cast<int>(ColorModel::Hsva));
@@ -157,7 +175,9 @@ void KColorPicker::layoutRegions() {
 
     formSelector_->move(margin, y);
     formSelector_->resize(formSelector_->sizeHint());
-    y += formSelector_->height() + rowGap;
+    eyedropperButton_->resize(eyedropperButton_->sizeHint());
+    eyedropperButton_->move(margin + contentWidthPx() - eyedropperButton_->width(), y);
+    y += std::max(formSelector_->height(), eyedropperButton_->height()) + rowGap;
 
     svSquareRect_ = QRectF(margin, y, squareSidePx(), squareSidePx());
     hueBarRect_ = QRectF(svSquareRect_.right() + barGapPx(), y, hueBarWidthPx(), squareSidePx());
@@ -372,6 +392,8 @@ KValueField* KColorPicker::channelField(const int index) const {
 
 QLineEdit* KColorPicker::hexField() const noexcept { return hexField_; }
 KColorSwatchRow* KColorPicker::swatchRow() const noexcept { return swatchRow_; }
+KButton* KColorPicker::eyedropperButton() const noexcept { return eyedropperButton_; }
+KColorSampler* KColorPicker::sampler() const noexcept { return sampler_; }
 
 QSize KColorPicker::sizeHint() const { return size(); }
 QSize KColorPicker::minimumSizeHint() const { return size(); }
@@ -437,6 +459,20 @@ void KColorPicker::onHexFieldEdited() {
 void KColorPicker::onSwatchActivated(const KColor& swatchColor) {
     setColor(swatchColor);
     commitToRecents();
+}
+
+void KColorPicker::onEyedropperToggled(const bool active) {
+    if (active) {
+        sampler_->begin();
+    } else {
+        sampler_->cancel();
+    }
+}
+
+void KColorPicker::onColorSampled(const KColor& sampledColor) {
+    setColor(sampledColor);
+    commitToRecents();
+    eyedropperButton_->setChecked(false);
 }
 
 void KColorPicker::commitToRecents() {

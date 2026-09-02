@@ -1,4 +1,6 @@
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_picker.hpp>
+#include <bloom/ui/kit/color_sampler.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -194,6 +196,34 @@ void testFormSelectorListsOnlyTheAvailableForm(Expectations& expectations) {
                         "the picker itself reports the Square form");
 }
 
+void testEyedropperTogglesTheSamplerAndAppliesAPick(Expectations& expectations) {
+    Fixture fixture;
+    auto& picker = *fixture.picker;
+    expectations.expect(picker.eyedropperButton() != nullptr,
+                        "decision 5's UI affordance is present on the picker");
+    expectations.expect(picker.eyedropperButton()->toolTip() ==
+                            QString::fromUtf8(kit::kSamplerScopeTooltip),
+                        "the eyedropper discloses its app-only scope in its own tooltip");
+    expectations.expect(!picker.sampler()->isActive(), "the sampler starts inactive");
+
+    picker.eyedropperButton()->setChecked(true);
+    expectations.expect(picker.sampler()->isActive(), "checking the eyedropper begins sampling");
+
+    // Emitted directly rather than driven through a simulated global mouse click: colorPicked is a
+    // public Qt signal (Q_SIGNALS expands to `public`), and this proves the picker's own wiring --
+    // KColorSampler's real click-to-globalPos path is covered in kit_color_sampler_tests.cpp.
+    const kit::KColor sampled = kit::KColor::fromRgba(0.1F, 0.9F, 0.3F);
+    Q_EMIT picker.sampler()->colorPicked(sampled);
+
+    const kit::KColor pickedColor = picker.color();
+    const bool closeEnough = std::abs(pickedColor.red - sampled.red) < 0.01F &&
+                             std::abs(pickedColor.green - sampled.green) < 0.01F &&
+                             std::abs(pickedColor.blue - sampled.blue) < 0.01F;
+    expectations.expect(closeEnough, "a completed sample commits into the picker's color");
+    expectations.expect(!picker.eyedropperButton()->isChecked(),
+                        "a completed sample releases the eyedropper toggle");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -208,5 +238,6 @@ int main(int argc, char** argv) {
     testHexEntryRoundTrips(expectations);
     testChannelFieldEditUpdatesTheColorAndSwatch(expectations);
     testFormSelectorListsOnlyTheAvailableForm(expectations);
+    testEyedropperTogglesTheSamplerAndAppliesAPick(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
