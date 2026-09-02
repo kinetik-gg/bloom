@@ -84,8 +84,7 @@ void TitleBar::setMaximized(const bool maximized) {
     }
     maximized_ = maximized;
     maximizeButton_->setIconId(maximized_ ? IconId::Restore : IconId::Maximize);
-    const QString toolTip =
-        maximized_ ? QStringLiteral("Restore") : QStringLiteral("Maximize");
+    const QString toolTip = maximized_ ? QStringLiteral("Restore") : QStringLiteral("Maximize");
     maximizeButton_->setToolTip(toolTip);
     maximizeButton_->setAccessibleName(toolTip);
 }

@@ -55,9 +55,9 @@ ChromeMode chromeModeFromSettings(const QSettings& settings) {
 }
 
 void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
-    settings.setValue(QLatin1StringView(chromeModeKey),
-                      mode == ChromeMode::Native ? QStringLiteral("native")
-                                                 : QStringLiteral("custom"));
+    settings.setValue(QLatin1StringView(chromeModeKey), mode == ChromeMode::Native
+                                                            ? QStringLiteral("native")
+                                                            : QStringLiteral("custom"));
 }
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
@@ -326,8 +326,7 @@ void MainWindow::createViewMenu(QMenu& viewMenu) {
     useNativeFrameAction_->setObjectName("useNativeFrameAction");
     useNativeFrameAction_->setCheckable(true);
     useNativeFrameAction_->setChecked(chromeMode_ == ChromeMode::Native);
-    useNativeFrameAction_->setStatusTip(
-        tr("Restart Bloom to apply the window frame change."));
+    useNativeFrameAction_->setStatusTip(tr("Restart Bloom to apply the window frame change."));
     connect(useNativeFrameAction_, &QAction::triggered, this, [this](const bool checked) {
         QSettings settings;
         setChromeModeInSettings(settings, checked ? ChromeMode::Native : ChromeMode::Custom);

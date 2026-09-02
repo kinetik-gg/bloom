@@ -245,7 +245,7 @@ void testViewMenuItemsExistAndFire(Expectations& expectations) {
     // Window menu's own action would.
     auto* windowMaximizeAction = window.findChild<QAction*>(QStringLiteral("maximizeAreaAction"));
     expectations.expect(windowMaximizeAction != nullptr, "view menu: the Window menu's own "
-                                                          "Maximize Active Area action exists too");
+                                                         "Maximize Active Area action exists too");
     expectations.expect(maximizePanelAction->isEnabled(),
                         "view menu: Maximize Panel is enabled with the default multi-area layout");
     maximizePanelAction->trigger();

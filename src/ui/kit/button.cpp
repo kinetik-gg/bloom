@@ -170,13 +170,12 @@ QColor KButton::inkForVisualState(const State state) const {
         case State::Selected:
             return color(Color::Foreground);
         case State::Disabled:
-            return variant_ == Variant::Danger
-                       ? withOpacity(color(Color::Error), kDisabledOpacity)
-                       : inkForState(restingInk(variant_), state);
+            return variant_ == Variant::Danger ? withOpacity(color(Color::Error), kDisabledOpacity)
+                                               : inkForState(restingInk(variant_), state);
         case State::Normal:
         case State::Focused:
             return variant_ == Variant::Danger ? color(Color::Error)
-                                                : inkForState(restingInk(variant_), state);
+                                               : inkForState(restingInk(variant_), state);
         }
     }
     return inkForState(restingInk(variant_), state);

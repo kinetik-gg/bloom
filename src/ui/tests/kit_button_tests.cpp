@@ -256,7 +256,8 @@ void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
 
     expectations.expect(!button.fillForState(kit::State::Normal).isValid(),
                         "still no surface of its own at rest, exactly like plain Ghost");
-    expectations.expect(button.inkForVisualState(kit::State::Normal) == kit::color(kit::Color::Muted),
+    expectations.expect(button.inkForVisualState(kit::State::Normal) ==
+                            kit::color(kit::Color::Muted),
                         "resting ink is still the ordinary ghost muted ink, not Error");
 
     expectations.expect(button.fillForState(kit::State::Hover) ==
@@ -271,8 +272,8 @@ void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
 
     // Every other variant ignores the flag entirely: it is a Ghost-only opt-in.
     button.setVariant(kit::KButton::Variant::Secondary);
-    expectations.expect(button.fillForState(kit::State::Hover) != kit::hoverFillFor(kit::color(
-                                                                       kit::Color::Error)),
+    expectations.expect(button.fillForState(kit::State::Hover) !=
+                            kit::hoverFillFor(kit::color(kit::Color::Error)),
                         "dangerOnHover has no effect outside Variant::Ghost");
 }
 

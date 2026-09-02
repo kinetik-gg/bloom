@@ -37,7 +37,8 @@ using namespace bloom::ui;
 
 // The set of component directory names that carry a LICENSE file under one root -- exactly the
 // discovery rule generate_third_party_license_catalog.cmake itself applies.
-[[nodiscard]] std::set<std::string> licensedComponentDirectories(const std::filesystem::path& root) {
+[[nodiscard]] std::set<std::string>
+licensedComponentDirectories(const std::filesystem::path& root) {
     std::set<std::string> names;
     if (!std::filesystem::exists(root)) {
         return names;
@@ -55,7 +56,7 @@ using namespace bloom::ui;
 // because the catalog also carries the synthesized Qt/ADR-0014 notice, which has no LICENSE file
 // of its own to enumerate here.
 void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations,
-                                                       const std::filesystem::path& repositoryRoot) {
+                                                      const std::filesystem::path& repositoryRoot) {
     const auto dependencyComponents =
         licensedComponentDirectories(repositoryRoot / "dependencies" / "licenses");
     const auto kitComponents =
@@ -69,9 +70,9 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
     std::set<std::string> catalogComponents;
     for (const auto& entry : thirdPartyLicenseCatalog()) {
         catalogComponents.emplace(entry.component);
-        expectations.expect(!entry.licenseText.empty(),
-                            std::string{"the catalog entry for "} + std::string{entry.component} +
-                                " has non-empty license text");
+        expectations.expect(!entry.licenseText.empty(), std::string{"the catalog entry for "} +
+                                                            std::string{entry.component} +
+                                                            " has non-empty license text");
     }
 
     for (const auto& name : dependencyComponents) {

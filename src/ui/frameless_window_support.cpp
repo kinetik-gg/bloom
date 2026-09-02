@@ -8,8 +8,7 @@
 
 namespace bloom::ui {
 
-FramelessEdgeResizer::FramelessEdgeResizer(QMainWindow& window, const int marginPx,
-                                           QObject* parent)
+FramelessEdgeResizer::FramelessEdgeResizer(QMainWindow& window, const int marginPx, QObject* parent)
     : QObject(parent), window_(window), marginPx_(marginPx) {}
 
 bool FramelessEdgeResizer::eventFilter(QObject* watched, QEvent* event) {
@@ -34,7 +33,8 @@ bool FramelessEdgeResizer::eventFilter(QObject* watched, QEvent* event) {
 
     const QPoint local = window_.mapFromGlobal(mouseEvent->globalPosition().toPoint());
     const QRect bounds = window_.rect();
-    if (!bounds.marginsAdded(QMargins(marginPx_, marginPx_, marginPx_, marginPx_)).contains(local)) {
+    if (!bounds.marginsAdded(QMargins(marginPx_, marginPx_, marginPx_, marginPx_))
+             .contains(local)) {
         return false;
     }
 

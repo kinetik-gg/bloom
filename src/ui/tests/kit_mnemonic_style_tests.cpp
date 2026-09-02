@@ -62,7 +62,8 @@ void testInstalledProxyRoutesThroughToTheRealStyleHintQuery(Expectations& expect
     // spot-check one hint that has nothing to do with mnemonics.
     const int tabFocus = style.styleHint(QStyle::SH_Widget_ShareActivation);
     const auto* fusion = QStyleFactory::create(QStringLiteral("Fusion"));
-    expectations.expect(fusion != nullptr, "a reference Fusion style is available to compare against");
+    expectations.expect(fusion != nullptr,
+                        "a reference Fusion style is available to compare against");
     if (fusion != nullptr) {
         expectations.expect(tabFocus == fusion->styleHint(QStyle::SH_Widget_ShareActivation),
                             "hints other than SH_UnderlineShortcut fall through to the base style "

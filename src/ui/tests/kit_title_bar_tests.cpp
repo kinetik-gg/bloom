@@ -128,7 +128,8 @@ void testMaximizeIconSwapsWithAppearance(Expectations& expectations) {
                         "and shows the Maximize glyph at rest");
 
     titleBar.setMaximized(true);
-    expectations.expect(titleBar.maximizedAppearance(), "setMaximized(true) records the appearance");
+    expectations.expect(titleBar.maximizedAppearance(),
+                        "setMaximized(true) records the appearance");
     expectations.expect(maximize->iconId() == kit::IconId::Restore,
                         "maximizing swaps the glyph to Restore");
     expectations.expect(maximize->toolTip() == QStringLiteral("Restore"),

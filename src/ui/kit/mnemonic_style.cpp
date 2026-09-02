@@ -15,8 +15,7 @@ AltUnderlineProxyStyle::AltUnderlineProxyStyle()
 AltUnderlineProxyStyle::AltUnderlineProxyStyle(QStyle* baseStyle) : QProxyStyle(baseStyle) {}
 
 int AltUnderlineProxyStyle::styleHint(const StyleHint hint, const QStyleOption* option,
-                                      const QWidget* widget,
-                                      QStyleHintReturn* returnData) const {
+                                      const QWidget* widget, QStyleHintReturn* returnData) const {
     if (hint == QStyle::SH_UnderlineShortcut) {
         return showMnemonicUnderline(QGuiApplication::keyboardModifiers()) ? 1 : 0;
     }

@@ -65,13 +65,11 @@ void testHeaderControlsAreIconsWithTheirNamesIntact(Expectations& expectations) 
         const char* objectName;
         const char* toolTip;
     };
-    for (const auto& [objectName, toolTip] :
-         {Contract{"panelContextMenuButton", "Panel options"},
-          Contract{"maximizeAreaButton", "Maximize area"},
-          Contract{"closeAreaButton", "Close area"}}) {
+    for (const auto& [objectName, toolTip] : {Contract{"panelContextMenuButton", "Panel options"},
+                                              Contract{"maximizeAreaButton", "Maximize area"},
+                                              Contract{"closeAreaButton", "Close area"}}) {
         auto* button = area.findChild<QToolButton*>(QString::fromLatin1(objectName));
-        expectations.expect(button != nullptr,
-                            std::string{"the header exposes "} + objectName);
+        expectations.expect(button != nullptr, std::string{"the header exposes "} + objectName);
         if (button == nullptr) {
             continue;
         }
@@ -87,14 +85,12 @@ void testHeaderControlsAreIconsWithTheirNamesIntact(Expectations& expectations) 
         expectations.expect(button->iconSize().width() == kit::px(kit::Size::IconSmall),
                             std::string{objectName} + " uses the dense-chrome icon box");
     }
-
 }
 
 void testTheContextMenuOffersAllFourOperations(Expectations& expectations) {
     const EditorRegistry registry = makeRegistry();
     EditorArea area(registry, "bloom.probe", QString{});
-    auto* contextButton =
-        area.findChild<QToolButton*>(QStringLiteral("panelContextMenuButton"));
+    auto* contextButton = area.findChild<QToolButton*>(QStringLiteral("panelContextMenuButton"));
     expectations.expect(contextButton != nullptr, "the context-menu button exists");
     if (contextButton == nullptr) {
         return;
@@ -105,9 +101,8 @@ void testTheContextMenuOffersAllFourOperations(Expectations& expectations) {
     if (menu == nullptr) {
         return;
     }
-    for (const char* objectName :
-         {"panelSplitHorizontalAction", "panelSplitVerticalAction", "panelMaximizeAction",
-          "panelCloseAction"}) {
+    for (const char* objectName : {"panelSplitHorizontalAction", "panelSplitVerticalAction",
+                                   "panelMaximizeAction", "panelCloseAction"}) {
         expectations.expect(menu->findChild<QAction*>(QString::fromLatin1(objectName)) != nullptr,
                             std::string{"the menu offers "} + objectName);
     }
