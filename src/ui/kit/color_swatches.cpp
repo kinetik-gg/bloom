@@ -15,9 +15,13 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// The press-and-hold duration that turns a click into a "set this slot" gesture, matching the
-// motion vocabulary's Pop entrance duration order of magnitude rather than a random guess -- long
-// enough that an ordinary click never fires it, short enough that the artist does not have to wait.
+// The press-and-hold duration that turns a click into a "set this slot" gesture. Deliberately not
+// drawn from kit::Motion: that vocabulary times animated transitions and always pairs a duration
+// with an easing curve (tokens.hpp's Fast/Pop/None), where this is a plain gesture-recognition
+// threshold with no curve of its own -- a different kind of "duration" than the token exists for.
+// 500ms is the conventional press-and-hold length (matching the platform long-press interval most
+// touch and pointer UIs converge on): long enough that an ordinary click never fires it, short
+// enough that the artist does not have to wait.
 constexpr int kLongPressMs = static_cast<int>(std::chrono::milliseconds(500).count());
 
 [[nodiscard]] int cellExtent() { return px(Size::IconLarge); }
