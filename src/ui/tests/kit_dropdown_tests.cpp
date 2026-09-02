@@ -1,10 +1,12 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QFile>
 #include <QListView>
 #include <QMouseEvent>
 #include <QSignalSpy>
@@ -210,6 +212,40 @@ void testTheStateMachineAndDisabledDropdown(Expectations& expectations) {
     dropdown.setEnabled(true);
 }
 
+// task U8, issue #131, fix 3: the design sheet's dropdown chrome -- bordered closed field with the
+// vendored double up/down chevron, bordered popup at Radius::Small.
+void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    QCoreApplication::processEvents();
+
+    expectations.expect(
+        QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Regular)) &&
+            QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Fill)),
+        "the vendored double-chevron asset backs IconId::CaretUpDown in both weights");
+
+    const QPixmap rendered = dropdown.grab();
+    expectations.expect(!rendered.isNull(), "the bordered closed field renders offscreen");
+}
+
+void testThePopupFrameIsBorderedAtRadiusSmall(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    const QString sheet = dropdown.popup()->styleSheet();
+    expectations.expect(sheet.contains(QStringLiteral("border: %1px solid %2;")
+                                           .arg(static_cast<int>(kit::kHairlineWidth))
+                                           .arg(kit::hex(kit::Color::Border))),
+                        "the popup frame carries the Border hairline");
+    expectations.expect(
+        sheet.contains(
+            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Small, 0))),
+        "the popup frame corners are Radius::Small, matching the closed field");
+    expectations.expect(sheet.contains(kit::hex(kit::Color::SurfaceRaised)),
+                        "the popup rests on SurfaceRaised");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -223,5 +259,7 @@ int main(int argc, char** argv) {
     testADisabledItemIsVisibleButNotSelectable(expectations);
     testAnOversizedValueElidesInTheClosedField(expectations);
     testTheStateMachineAndDisabledDropdown(expectations);
+    testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(expectations);
+    testThePopupFrameIsBorderedAtRadiusSmall(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

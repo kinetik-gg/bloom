@@ -255,16 +255,14 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const QRectF caretColumn(bounds.right() - px(Spacing::M) - caretWidth, bounds.top(), caretWidth,
                              bounds.height());
 
-    // The caret pair: an up and a down chevron stacked, which reads as "this opens" rather than
-    // "this scrolls one way".
+    // The caret pair (task U8, issue #131, fix 3): Phosphor's own caret-up-down glyph, a single
+    // vendored double chevron, rather than two separately stacked CaretUp/CaretDown icons -- it
+    // reads as "this opens" rather than "this scrolls one way".
     const auto caretBox = static_cast<qreal>(px(Size::IconSmall));
-    const qreal caretGap = px(Spacing::XXS);
-    const qreal caretTop = caretColumn.center().y() - caretBox + caretGap / 2.0;
-    painter.drawPixmap(QRectF(caretColumn.left(), caretTop, caretBox, caretBox).toRect(),
-                       iconPixmap(IconId::CaretUp, Size::IconSmall, ink, devicePixelRatioF()));
-    painter.drawPixmap(
-        QRectF(caretColumn.left(), caretTop + caretBox - caretGap, caretBox, caretBox).toRect(),
-        iconPixmap(IconId::CaretDown, Size::IconSmall, ink, devicePixelRatioF()));
+    const QRectF caretRect(caretColumn.left(), caretColumn.center().y() - caretBox / 2.0, caretBox,
+                           caretBox);
+    painter.drawPixmap(caretRect.toRect(),
+                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF()));
 
     painter.setPen(ink);
     painter.setFont(font());

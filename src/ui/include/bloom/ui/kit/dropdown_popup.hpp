@@ -12,7 +12,7 @@ namespace bloom::ui::kit {
 
 // The raised surface a KDropdown opens. A top-level Qt::Popup with a translucent background and a
 // margin the elevation's blur fits into, holding an inner frame that carries the drop shadow, the
-// SurfaceRaised fill, the Radius::Medium corners, and the item list.
+// SurfaceRaised fill, the Radius::Small corners (task U8, issue #131, fix 3), and the item list.
 //
 // The translucent-outer / opaque-inner split is what lets a real drop shadow exist at all: a
 // graphics effect cannot paint outside its widget, so the shadow needs margin to live in.

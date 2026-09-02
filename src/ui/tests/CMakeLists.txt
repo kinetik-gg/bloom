@@ -137,7 +137,7 @@ add_executable(bloom_node_editor_test
 )
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
-target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui)
+target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_color_test PRIVATE bloom_ui_kit)
