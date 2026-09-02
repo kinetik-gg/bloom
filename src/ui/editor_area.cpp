@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QChildEvent>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -32,6 +33,13 @@ namespace {
 // The panel header is a dense chrome row, so its icon-only controls take the smallest icon box.
 constexpr auto kHeaderIconSize = kit::Size::IconSmall;
 
+// task U8, issue #131, fix 7: "the header QToolButtons must also be square: fixed size
+// Size::Control minus header padding, uniform." The header row reserves 4 design pixels of
+// vertical padding above and below its controls (headerLayout's own setContentsMargins(6, 4, 4,
+// 4) below), so a header button's square extent is the Control token less that one padding unit.
+constexpr int kHeaderVerticalPadding = 4;
+constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control) - kHeaderVerticalPadding;
+
 } // namespace
 
 EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialEditorId,
@@ -48,13 +56,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    auto* header = new QWidget(this);
-    header->setObjectName("editorHeader");
-    auto* headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(6, 4, 4, 4);
+    header_ = new QWidget(this);
+    header_->setObjectName("editorHeader");
+    auto* headerLayout = new QHBoxLayout(header_);
+    headerLayout->setContentsMargins(6, kHeaderVerticalPadding, 4, kHeaderVerticalPadding);
     headerLayout->setSpacing(4);
 
-    editorPicker_ = new QComboBox(header);
+    editorPicker_ = new QComboBox(header_);
     editorPicker_->setObjectName("editorTypePicker");
     editorPicker_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     // The panel header's title styling (task U2, issue #118, decision 4): UiSmall already IS
@@ -82,30 +90,28 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // glyphs moved from typed characters ("H", "V", the box, the multiplication sign) to Kinetik
     // icons here, and nowhere else. Tooltips, accessible names, objectNames, and behavior are
     // unchanged -- an icon never replaces an accessible name (ADR 0010), so every one of these
-    // icon-only controls still carries both.
-    auto makeHeaderButton = [header](const kit::IconId iconId, const QString& toolTip,
-                                     const QString& objectName) {
-        auto* button = new QToolButton(header);
+    // icon-only controls still carries both. task U8, issue #131, fix 7: every header button this
+    // builds is fixed at kHeaderButtonExtent square, uniformly.
+    auto makeHeaderButton = [this](const kit::IconId iconId, const QString& toolTip,
+                                   const QString& objectName) {
+        auto* button = new QToolButton(header_);
         button->setIcon(kit::icon(iconId, kHeaderIconSize));
         button->setIconSize(QSize(kit::px(kHeaderIconSize), kit::px(kHeaderIconSize)));
         button->setToolTip(toolTip);
         button->setAccessibleName(button->toolTip());
         button->setObjectName(objectName);
         button->setAutoRaise(true);
+        button->setFixedSize(kHeaderButtonExtent, kHeaderButtonExtent);
         return button;
     };
 
-    // The header context-menu button (task U2, issue #118, decision 4 -- the ONE sanctioned
-    // test-contract change): replaces the separate H/V split QToolButtons with a single
-    // ContextMenu-icon button whose kit-styled QMenu offers all four panel operations under the
-    // SAME signals the old buttons emitted. Maximize and Close stay as their own dedicated
-    // buttons below (unchanged since task U1) -- only the two less-frequent split actions move
-    // into the menu; both are ALSO offered there for a consistent, discoverable, keyboard-
-    // reachable equivalent.
-    contextMenuButton_ =
-        makeHeaderButton(kit::IconId::ContextMenu, "Panel options", "panelContextMenuButton");
-
-    contextMenu_ = new QMenu(contextMenuButton_);
+    // The panel options menu (task U2, issue #118, decision 4; reworked task U8, issue #131,
+    // fix 4): the SAME kit-styled QMenu offering all four panel operations under the SAME signals
+    // as before, but no longer owned by a dedicated header button -- fix 4 removes
+    // panelContextMenuButton entirely, and a right-click anywhere on the header (caught by
+    // EditorArea's own eventFilter below, since header_ is one of the widgets watchForActivation()
+    // installs it on) opens this exact menu at the cursor instead.
+    contextMenu_ = new QMenu(this);
     contextMenu_->setObjectName("panelOptionsMenu");
     auto* splitHorizontalAction = contextMenu_->addAction("Split Horizontally");
     splitHorizontalAction->setObjectName("panelSplitHorizontalAction");
@@ -116,32 +122,30 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     connect(splitVerticalAction, &QAction::triggered, this,
             [this] { emit splitRequested(this, Qt::Vertical); });
     contextMenu_->addSeparator();
-    auto* menuMaximizeAction = contextMenu_->addAction("Maximize");
+    // "Maximize" reads as "Fullscreen"/"Exit Fullscreen" (fix 6's wording), kept in lockstep with
+    // the header button's own tooltip by setMaximizedAppearance() below.
+    auto* menuMaximizeAction = contextMenu_->addAction("Fullscreen");
     menuMaximizeAction->setObjectName("panelMaximizeAction");
     connect(menuMaximizeAction, &QAction::triggered, this,
             [this] { emit maximizeRequested(this); });
     auto* menuCloseAction = contextMenu_->addAction("Close");
     menuCloseAction->setObjectName("panelCloseAction");
     connect(menuCloseAction, &QAction::triggered, this, [this] { emit closeRequested(this); });
-    contextMenuButton_->setMenu(contextMenu_);
-    contextMenuButton_->setPopupMode(QToolButton::InstantPopup);
 
-    maximizeButton_ =
-        makeHeaderButton(kit::IconId::Maximize, "Maximize area", "maximizeAreaButton");
-    closeButton_ = makeHeaderButton(kit::IconId::Close, "Close area", "closeAreaButton");
+    // task U8, issue #131, fix 5/6: the maximize button is the ONLY remaining header button --
+    // closeAreaButton is gone (closing lives only in the menu now), and this one button both
+    // toggles and restores fullscreen (icon/tooltip swap in setMaximizedAppearance()).
+    maximizeButton_ = makeHeaderButton(kit::IconId::Maximize, "Fullscreen", "maximizeAreaButton");
 
     headerLayout->addWidget(editorPicker_);
     headerLayout->addStretch(1);
-    headerLayout->addWidget(contextMenuButton_);
     headerLayout->addWidget(maximizeButton_);
-    headerLayout->addWidget(closeButton_);
 
-    layout->addWidget(header);
+    layout->addWidget(header_);
     layout->addWidget(content, 1);
 
     connect(editorPicker_, &QComboBox::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
-    connect(closeButton_, &QToolButton::clicked, this, [this] { emit closeRequested(this); });
     connect(maximizeButton_, &QToolButton::clicked, this, [this] { emit maximizeRequested(this); });
 
     if (initialEditorId.empty()) {
@@ -210,17 +214,26 @@ void EditorArea::setSplitEnabled(bool enabled) {
 }
 
 void EditorArea::setCloseEnabled(bool enabled) {
-    closeButton_->setEnabled(enabled);
+    // task U8, issue #131, fix 5: closing lives only in the menu now -- closeAreaButton is gone,
+    // but the semantics this setter promises (an artist cannot close the last remaining area)
+    // stay exactly as before, just on the one remaining path.
     if (auto* action = contextMenu_->findChild<QAction*>("panelCloseAction")) {
         action->setEnabled(enabled);
     }
 }
 
 void EditorArea::setMaximizedAppearance(bool maximized) {
+    // task U8, issue #131, fix 6: the maximize header button is the only remaining header
+    // button, toggling AND restoring fullscreen; wording is Fullscreen/Exit Fullscreen rather than
+    // Maximize/Restore, and the context menu's own action stays in lockstep with it.
     maximizeButton_->setIcon(
         kit::icon(maximized ? kit::IconId::Restore : kit::IconId::Maximize, kHeaderIconSize));
-    maximizeButton_->setToolTip(maximized ? "Restore area" : "Maximize area");
-    maximizeButton_->setAccessibleName(maximizeButton_->toolTip());
+    const QString toolTip = maximized ? "Exit Fullscreen" : "Fullscreen";
+    maximizeButton_->setToolTip(toolTip);
+    maximizeButton_->setAccessibleName(toolTip);
+    if (auto* action = contextMenu_->findChild<QAction*>("panelMaximizeAction")) {
+        action->setText(toolTip);
+    }
 }
 
 void EditorArea::rebuildEditor(int editorIndex) {
@@ -271,6 +284,18 @@ bool EditorArea::eventFilter(QObject* watched, QEvent* event) {
             watchForActivation(static_cast<QWidget*>(child));
         }
     }
+    // task U8, issue #131, fix 4: a right-click anywhere on the header opens panelOptionsMenu_ at
+    // the cursor -- there is no longer a dedicated button that owns it. header_ is one of the
+    // widgets watchForActivation() installs this filter on, so an ignored ContextMenu event that
+    // bubbles up from a header child (Qt's own propagation for an unhandled QContextMenuEvent)
+    // lands here exactly like one delivered to the header directly; a right-click inside the
+    // switcher's OWN open popup never reaches this filter at all, since that popup is a separate
+    // top-level widget the header does not parent.
+    if (watched == header_ && event->type() == QEvent::ContextMenu) {
+        const auto* menuEvent = static_cast<QContextMenuEvent*>(event);
+        contextMenu_->popup(menuEvent->globalPos());
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::FocusIn) {
         emit activationRequested(this);
     }
@@ -291,13 +316,14 @@ void EditorArea::resizeEvent(QResizeEvent* event) {
 }
 
 void EditorArea::updateRoundedMask() {
-    // Radius::Large rounded corners over the Background gutter (task U2, issue #118, decision 4):
-    // a real clip rather than only the stylesheet's own border-radius, so the header's Surface
-    // background and whatever the active editor draws never overhang the panel's rounded corners
-    // -- the QFrame's own CSS border-radius (kinetikStyleSheet()'s QFrame#editorArea rule) only
-    // ever paints the frame's OWN background/border, never its children.
+    // Radius::Small rounded corners over the Background gutter (task U2, issue #118, decision 4;
+    // shrunk to the smallest panel radius by task U8, issue #131, fix 2): a real clip rather than
+    // only the stylesheet's own border-radius, so the header's Surface background and whatever the
+    // active editor draws never overhang the panel's rounded corners -- the QFrame's own CSS
+    // border-radius (kinetikStyleSheet()'s QFrame#editorArea rule) only ever paints the frame's
+    // OWN background/border, never its children.
     QPainterPath path;
-    const int radius = kit::radiusPx(kit::Radius::Large, 0);
+    const int radius = kit::radiusPx(kit::Radius::Small, 0);
     path.addRoundedRect(rect(), radius, radius);
     setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
