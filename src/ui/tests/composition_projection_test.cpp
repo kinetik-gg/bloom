@@ -15,13 +15,13 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QAction>
 #include <QApplication>
-#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGraphicsItem>
@@ -279,9 +279,9 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     session.selectLayer(layerId);
 
-    auto* positionX = properties.findChild<QDoubleSpinBox*>("positionXEditor");
-    auto* positionY = properties.findChild<QDoubleSpinBox*>("positionYEditor");
-    auto* opacity = properties.findChild<QDoubleSpinBox*>("opacityEditor");
+    auto* positionX = properties.findChild<ui::kit::KValueField*>("positionXEditor");
+    auto* positionY = properties.findChild<ui::kit::KValueField*>("positionYEditor");
+    auto* opacity = properties.findChild<ui::kit::KValueField*>("opacityEditor");
     if (!require(positionX != nullptr && positionY != nullptr && opacity != nullptr,
                  "properties exposes transform editors") ||
         !require(positionX->isEnabled() && positionY->isEnabled() && opacity->isEnabled(),
