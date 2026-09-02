@@ -84,6 +84,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/caret-down.svg
         kit/third_party/phosphor-icons/regular/caret-left.svg
         kit/third_party/phosphor-icons/regular/caret-right.svg
+        kit/third_party/phosphor-icons/regular/caret-up-down.svg
         kit/third_party/phosphor-icons/regular/caret-up.svg
         kit/third_party/phosphor-icons/regular/check.svg
         kit/third_party/phosphor-icons/regular/corners-in.svg
@@ -127,6 +128,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/caret-down-fill.svg
         kit/third_party/phosphor-icons/fill/caret-left-fill.svg
         kit/third_party/phosphor-icons/fill/caret-right-fill.svg
+        kit/third_party/phosphor-icons/fill/caret-up-down-fill.svg
         kit/third_party/phosphor-icons/fill/caret-up-fill.svg
         kit/third_party/phosphor-icons/fill/check-fill.svg
         kit/third_party/phosphor-icons/fill/corners-in-fill.svg

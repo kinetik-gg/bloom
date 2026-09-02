@@ -23,7 +23,7 @@ The archive SHA-256 above was computed over the exact bytes downloaded from that
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 43 of them in two weights (86 files, 360 KiB). `regular` is the default interface weight
+embeds 44 of them in two weights (88 files). `regular` is the default interface weight
 and `fill` is the selected/toggled weight; the other four upstream weights (`thin`, `light`,
 `bold`, `duotone`) are deliberately not vendored, because no implemented Bloom control uses them.
 
@@ -48,6 +48,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/caret-down.svg` | `53f0cf2d0b144ac3cb07e353e0cd0853ffb3ed432d741460ce288edfcb0924b1` |
 | `regular/caret-left.svg` | `623bf248fe21a8170344e168aaac2e174119cea5d7c5d0fb0dc84f581009475f` |
 | `regular/caret-right.svg` | `e6dec01e074807965b7f3146b976a9b5e82c31d9c2c88aeb52e77cc2ab16c1d7` |
+| `regular/caret-up-down.svg` | `d2e93459514746d53d152c8624fbf89356ee4e0932ab3efd094e8dce9bb0d793` |
 | `regular/caret-up.svg` | `bccc26004e73e5de783ac6dde607e3671e776261d81972ccdbd296b4aca21ca9` |
 | `regular/check.svg` | `cbb89a8c42f283d4f846eb935e05d88c1be04462f16480e068c0f82b9ce40b12` |
 | `regular/corners-in.svg` | `31e9060aafdd6e24f4b8aef7742a89e7e616e6e2da07160691d020cb5ab07dee` |
@@ -96,6 +97,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/caret-down-fill.svg` | `33550432966b277d6cf891f4db186357f4a83b1f8a5c7770c6ad6f5dee9b0b34` |
 | `fill/caret-left-fill.svg` | `a6300d93ee3016043fe02af787421093bedd301a0da992337d07b16404e65fa5` |
 | `fill/caret-right-fill.svg` | `c62278a701f1e4c08f424ce4b5cac69c8adb23b496dae489d5545ea7e6c019ef` |
+| `fill/caret-up-down-fill.svg` | `8f99e01d03202cc8ba423dc2448731a23e7d9c64aecf39ddab00cdd01dfdbbb8` |
 | `fill/caret-up-fill.svg` | `a4703a6e23011c86e9d7d18234b30bba36ba04f43f37ca08bb3d04beb9e3770b` |
 | `fill/check-fill.svg` | `d114007dc371976dc3e8f4ebc59c5aef429fae59ae58d56acdf231a52b4700be` |
 | `fill/corners-in-fill.svg` | `ade092d133654ec69ee3484ed10b79523ffe23eb9b8f9c96e5e1fe72b7af31be` |
@@ -143,7 +145,7 @@ A single value covering the whole vendored subset, so a drift in any one asset i
 away rather than 86:
 
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = bf9a19c1a9f75236be13614c011668433909f284ecec518114bc17c48bc307e4
+SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = e48d6a543caa269bc39d1aaacb306a5dd46a820d94581e61025161d4577f8982
 ```
 
 Reproduce with:

@@ -35,6 +35,7 @@ enum class IconId : std::uint8_t {
     CaretUp,
     CaretRight,
     CaretLeft,
+    CaretUpDown,
     // Transport.
     Play,
     Pause,

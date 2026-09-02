@@ -37,6 +37,7 @@ const auto& iconAssets() {
         {IconId::CaretUp, QLatin1StringView("caret-up")},
         {IconId::CaretRight, QLatin1StringView("caret-right")},
         {IconId::CaretLeft, QLatin1StringView("caret-left")},
+        {IconId::CaretUpDown, QLatin1StringView("caret-up-down")},
         {IconId::Play, QLatin1StringView("play")},
         {IconId::Pause, QLatin1StringView("pause")},
         {IconId::StepBack, QLatin1StringView("skip-back")},
