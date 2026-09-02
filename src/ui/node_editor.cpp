@@ -326,7 +326,16 @@ class NodeItem final : public QGraphicsObject {
         return nullptr;
     }
 
-    [[nodiscard]] QRectF boundingRect() const override { return {0.0, 0.0, width_, height_}; }
+    // The card's own rectangle. The port dots are centered ON its left and right edges, so half of
+    // each dot lies outside it -- boundingRect() below adds that overhang, because a QGraphicsItem
+    // that paints outside its bounding rectangle leaves trails behind it and gets clipped out of
+    // itemsBoundingRect() (which is what Fit frames against).
+    [[nodiscard]] QRectF cardRect() const { return {0.0, 0.0, width_, height_}; }
+
+    [[nodiscard]] QRectF boundingRect() const override {
+        const qreal overhang = kSocketDiameter / 2.0 + kit::kHairlineWidth;
+        return cardRect().adjusted(-overhang, 0.0, overhang, 0.0);
+    }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override;
 
@@ -584,10 +593,12 @@ class NodeItem final : public QGraphicsObject {
         const qreal width =
             std::max({kCardMinimumWidth, 2.0 * kCardPadding + contentWidth,
                       2.0 * kCardPadding + headerMetrics.horizontalAdvance(title_)});
+        // A card with no parameter rows is exactly its header: no empty body lip below it, which
+        // would read as a clipped row rather than as a node that simply has nothing to edit.
         const qreal height =
             kCardHeaderHeight +
             (rowCount > 0.0 ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
-                            : kCardPadding);
+                            : 0.0);
 
         if (!qFuzzyCompare(width, width_) || !qFuzzyCompare(height, height_)) {
             prepareGeometryChange();
@@ -704,7 +715,7 @@ class NodeEdgeItem final : public QGraphicsPathItem {
 };
 
 void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) {
-    const QRectF bounds = boundingRect();
+    const QRectF bounds = cardRect();
     const bool selected = option->state.testFlag(QStyle::State_Selected);
     painter->setRenderHint(QPainter::Antialiasing, true);
 
@@ -723,6 +734,11 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     // The header strip: one step down the surface ladder from the card so it reads as chrome, with
     // its own hairline foot rather than a second rounded rectangle.
     QPainterPath header;
+    // Winding, not QPainterPath's default odd-even rule: the header is a rounded rectangle UNION a
+    // square strip that squares off its bottom corners, and the two subpaths overlap. Under
+    // odd-even the overlap cancels and the strip is left unpainted -- a dark band across the bottom
+    // of every header, which is exactly what the pre-U4 projection drew.
+    header.setFillRule(Qt::WindingFill);
     const auto headerRadius = static_cast<qreal>(
         kit::radiusPx(kCardRadius, static_cast<int>(std::min(bounds.width(), kCardHeaderHeight))));
     header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), kCardHeaderHeight), headerRadius,
