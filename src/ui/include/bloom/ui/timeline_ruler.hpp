@@ -58,8 +58,9 @@ class TimelineRuler final : public QWidget {
 };
 
 // The honest "work area" strip (task U7, issue #122, decision 3): a thin Accent-dim band spanning
-// the FULL [0, duration) composition range, painted directly above TimelineRuler in TimelineEditor's
-// layout. Bloom has no range-editing feature yet -- there is no separate in/out point to visualize
+// the FULL [0, duration) composition range, painted directly above TimelineRuler in
+// TimelineEditor's layout. Bloom has no range-editing feature yet -- there is no separate in/out
+// point to visualize
 // -- so this band always spans the entire width by construction; it is deliberately
 // non-interactive (no mouse handling at all) rather than pretend a click could narrow it.
 class TimelineWorkAreaStrip final : public QWidget {

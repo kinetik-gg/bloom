@@ -952,11 +952,10 @@ void testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(
 void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Density Test", time(999, 24)));
-    expectations.expect(waitUntil([&] {
-                            return fixture.controller.state().activity !=
-                                   ui::PreviewActivity::Rendering;
-                        }),
-                        "the initial preview leaves the Rendering activity before measuring labels");
+    expectations.expect(
+        waitUntil(
+            [&] { return fixture.controller.state().activity != ui::PreviewActivity::Rendering; }),
+        "the initial preview leaves the Rendering activity before measuring labels");
 
     ui::TimelineRuler ruler(fixture.session, fixture.controller);
     for (const int width : {180, 1600}) {

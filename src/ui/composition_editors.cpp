@@ -37,8 +37,8 @@
 #include <QSignalBlocker>
 #include <QSize>
 #include <QStyle>
-#include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -135,14 +135,14 @@ QString layerKind(const CompositionSession& session, const document::LayerId lay
 // audio -- that this project has no import pipeline for yet (verified: no media-backed layer type
 // exists anywhere in src/document). Mapping a Solid or Text layer to one of those roles (e.g.
 // "Solid = DataClip green", the literal example this task's own decision explicitly rejects) would
-// misrepresent a generated, composition-local layer as referenced media it is not. `DataComposition`
-// is the one palette entry that is NOT about referenced media: its own stated meaning is
-// "Compositions" -- content that is authored/evaluated INSIDE a project rather than referenced from
-// an external asset, exactly the property every layer kind Bloom has today (Solid, Text) shares.
-// This is therefore ONE mapping applied uniformly to every layer kind that exists right now, not a
-// per-kind table -- there is nothing to honestly differentiate yet. A future media-backed layer
-// (image/clip/sequence/audio import) would take its own, more specific Data* token when that
-// feature ships; this function is the one place that day's change would land.
+// misrepresent a generated, composition-local layer as referenced media it is not.
+// `DataComposition` is the one palette entry that is NOT about referenced media: its own stated
+// meaning is "Compositions" -- content that is authored/evaluated INSIDE a project rather than
+// referenced from an external asset, exactly the property every layer kind Bloom has today (Solid,
+// Text) shares. This is therefore ONE mapping applied uniformly to every layer kind that exists
+// right now, not a per-kind table -- there is nothing to honestly differentiate yet. A future
+// media-backed layer (image/clip/sequence/audio import) would take its own, more specific Data*
+// token when that feature ships; this function is the one place that day's change would land.
 [[nodiscard]] kit::Color layerLaneColorToken() { return kit::Color::DataComposition; }
 
 qulonglong nextLayerNumber(const CompositionSession& session, const std::string_view typeId,
@@ -315,7 +315,7 @@ class TimelineTrackRowDelegate final : public QStyledItemDelegate {
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
-              const QModelIndex& index) const override {
+               const QModelIndex& index) const override {
         painter->save();
         const bool selected = (option.state & QStyle::State_Selected) != 0;
         // "Row striping via surface ladder": odd rows step one rung up from Background, the same
@@ -625,8 +625,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // Decision 5: "Add menu restyled" -- the Add glyph itself; menu entries stay plain text (no
     // Data* token honestly names a generic structured layer the way Add names the action).
     addButton_->setIcon(kit::icon(kit::IconId::Add, kit::Size::IconMedium));
-    addButton_->setIconSize(
-        QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
+    addButton_->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
     addButton_->setPopupMode(QToolButton::InstantPopup);
     addButton_->setToolTip(tr("Add a structured layer"));
     auto* addMenu = new QMenu(tr("Add Layer"), addButton_);
@@ -653,10 +652,9 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playPauseButton_ = makeToolButton(tr("Play"), tr("Toggle playback"), controls);
     playPauseButton_->setObjectName("playPauseButton");
     playPauseButton_->setCheckable(true);
-    stepForwardButton_ =
-        makeIconToolButton(kit::IconId::StepForward, tr("Step forward one frame (Right)"),
-                          tr("Step forward one frame"),
-                          QStringLiteral("timelineStepForwardButton"), controls);
+    stepForwardButton_ = makeIconToolButton(
+        kit::IconId::StepForward, tr("Step forward one frame (Right)"),
+        tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), controls);
     // Loop indicator (decision 5): non-interactive status glyph, not a button -- playback always
     // loops (PlaybackController::tick()'s exact modulo wrap) and there is no command to disable it,
     // so a clickable control here would dishonestly imply a toggle that does not exist.
@@ -704,8 +702,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // Header text stays attached to its LOGICAL column below regardless of the visual reorder
     // (moveSection() a few lines down): text(kNameColumn)/text(kKindColumn) remain the pinned test
     // contract's exact logical columns 0/1.
-    layers_->setHeaderLabels({tr("Name"), tr("Kind"), tr("Visible"), tr("Blending"), tr("Parent"),
-                             tr("Lane")});
+    layers_->setHeaderLabels(
+        {tr("Name"), tr("Kind"), tr("Visible"), tr("Blending"), tr("Parent"), tr("Lane")});
     layers_->setRootIsDecorated(false);
     // Striping now comes from TimelineTrackRowDelegate's own surface-ladder recipe (decision 1),
     // not Qt's native AlternateBase.
@@ -914,9 +912,9 @@ void TimelineEditor::rebuild() {
             // icon with a tooltip that says exactly why, never a toggle that would silently do
             // nothing. Reported in this task's raw report.
             row->setIcon(kVisibilityColumn,
-                        QIcon(kit::iconPixmap(
-                            kit::IconId::Visible, kit::Size::IconSmall,
-                            kit::withOpacity(kit::color(kit::Color::Muted), kit::kDisabledOpacity))));
+                         QIcon(kit::iconPixmap(kit::IconId::Visible, kit::Size::IconSmall,
+                                               kit::withOpacity(kit::color(kit::Color::Muted),
+                                                                kit::kDisabledOpacity))));
             row->setToolTip(kVisibilityColumn,
                             tr("Layer visibility has no command yet -- every layer renders"));
 
@@ -925,20 +923,19 @@ void TimelineEditor::rebuild() {
             // (no audio-layer kind, no solo concept, no lock field anywhere in src/document), so
             // three permanently-inert icons crammed into this already-dense 34px row would read as
             // broken chrome rather than an honest "reserved" placeholder. Justification recorded in
-            // this task's raw report per decision 1's own "omitted entirely... YOUR call, justified"
-            // allowance.
+            // this task's raw report per decision 1's own "omitted entirely... YOUR call,
+            // justified" allowance.
 
             // Blending / Parent (decision 1): one always-disabled dropdown per row, each carrying
             // its single honest value.
-            layers_->setItemWidget(
-                row, kBlendingColumn,
-                makeDisabledPlaceholderDropdown(
-                    tr("Normal"), tr("Blend modes are not implemented yet"),
-                    QStringLiteral("layerBlendingDropdown"), layers_));
-            layers_->setItemWidget(
-                row, kParentColumn,
-                makeDisabledPlaceholderDropdown(tr("None"), tr("Layer parenting does not exist yet"),
-                                                QStringLiteral("layerParentDropdown"), layers_));
+            layers_->setItemWidget(row, kBlendingColumn,
+                                   makeDisabledPlaceholderDropdown(
+                                       tr("Normal"), tr("Blend modes are not implemented yet"),
+                                       QStringLiteral("layerBlendingDropdown"), layers_));
+            layers_->setItemWidget(row, kParentColumn,
+                                   makeDisabledPlaceholderDropdown(
+                                       tr("None"), tr("Layer parenting does not exist yet"),
+                                       QStringLiteral("layerParentDropdown"), layers_));
 
             // Lane bar (decision 2): one type-color-coded bar per row, spanning this column's full
             // width (see TimelineLaneBar's own honesty disclosure comment above).

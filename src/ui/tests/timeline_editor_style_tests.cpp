@@ -170,8 +170,7 @@ void testVisibilityColumnRendersDisabledWithHonestTooltip(Expectations& expectat
 
     ui::TimelineEditor editor(fixture.session, fixture.controller);
     auto* tree = editor.findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1,
-                        "the layer row exists");
+    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1, "the layer row exists");
     if (tree == nullptr || tree->topLevelItemCount() != 1) {
         finishFixture(fixture);
         return;
@@ -194,8 +193,8 @@ void testVisibilityColumnRendersDisabledWithHonestTooltip(Expectations& expectat
         "the visibility icon is the SAME permanently dimmed rendering, not the bright/active one");
 
     const auto toolTip = row->toolTip(ui::TimelineEditor::kVisibilityColumn);
-    expectations.expect(!toolTip.isEmpty() && toolTip.contains(QStringLiteral("no command"),
-                                                                Qt::CaseInsensitive),
+    expectations.expect(!toolTip.isEmpty() &&
+                            toolTip.contains(QStringLiteral("no command"), Qt::CaseInsensitive),
                         "the tooltip honestly explains there is no visibility command yet");
 
     finishFixture(fixture);
@@ -215,16 +214,15 @@ void testBlendingAndParentColumnsAreDisabledPlaceholders(Expectations& expectati
     layoutTree(host);
 
     auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1,
-                        "the layer row exists");
+    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1, "the layer row exists");
     if (tree == nullptr || tree->topLevelItemCount() != 1) {
         finishFixture(fixture);
         return;
     }
     auto* row = tree->topLevelItem(0);
 
-    auto* blending =
-        qobject_cast<ui::kit::KDropdown*>(tree->itemWidget(row, ui::TimelineEditor::kBlendingColumn));
+    auto* blending = qobject_cast<ui::kit::KDropdown*>(
+        tree->itemWidget(row, ui::TimelineEditor::kBlendingColumn));
     auto* parent =
         qobject_cast<ui::kit::KDropdown*>(tree->itemWidget(row, ui::TimelineEditor::kParentColumn));
     expectations.expect(blending != nullptr && parent != nullptr,
@@ -234,7 +232,8 @@ void testBlendingAndParentColumnsAreDisabledPlaceholders(Expectations& expectati
         return;
     }
 
-    expectations.expect(!blending->isEnabled() && blending->currentText() == QStringLiteral("Normal"),
+    expectations.expect(!blending->isEnabled() &&
+                            blending->currentText() == QStringLiteral("Normal"),
                         "Blending shows the one honest value \"Normal\", disabled");
     expectations.expect(!blending->toolTip().isEmpty(), "Blending's disabled state is explained");
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
@@ -260,8 +259,7 @@ void testLaneBarUsesTheDocumentedDataTypeColor(Expectations& expectations) {
     layoutTree(host);
 
     auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 2,
-                        "both layer rows exist");
+    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 2, "both layer rows exist");
     if (tree == nullptr || tree->topLevelItemCount() != 2) {
         finishFixture(fixture);
         return;
@@ -334,8 +332,9 @@ void testSelectedRowPaintsAccentInsetEdgeNotAFill(Expectations& expectations) {
     // this is what "inset edge, not a fill" means concretely.
     const QColor selectedInterior =
         viewport.pixelColor(sampleX, selectedRect.top() + selectedRect.height() / 2);
-    expectations.expect(!near(selectedInterior, accent, 24),
-                        "the selected row's INTERIOR is not accent-filled -- only the inset edge is");
+    expectations.expect(
+        !near(selectedInterior, accent, 24),
+        "the selected row's INTERIOR is not accent-filled -- only the inset edge is");
 
     finishFixture(fixture);
 }
@@ -358,23 +357,20 @@ void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {
 
     const auto playIcon = ui::kit::icon(ui::kit::IconId::Play, ui::kit::Size::IconMedium);
     const auto pauseIcon = ui::kit::icon(ui::kit::IconId::Pause, ui::kit::Size::IconMedium);
-    const auto size = QSize(ui::kit::px(ui::kit::Size::IconMedium),
-                            ui::kit::px(ui::kit::Size::IconMedium));
-    expectations.expect(
-        button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
-        "the button starts showing the Play glyph");
+    const auto size =
+        QSize(ui::kit::px(ui::kit::Size::IconMedium), ui::kit::px(ui::kit::Size::IconMedium));
+    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
+                        "the button starts showing the Play glyph");
 
     button->click();
     expectations.expect(button->isChecked() && button->text() == QStringLiteral("Pause"),
                         "the existing text()/isChecked() contract still flips on click");
-    expectations.expect(
-        button->icon().pixmap(size).toImage() == pauseIcon.pixmap(size).toImage(),
-        "clicking swaps the icon to Pause alongside the text");
+    expectations.expect(button->icon().pixmap(size).toImage() == pauseIcon.pixmap(size).toImage(),
+                        "clicking swaps the icon to Pause alongside the text");
 
     button->click();
-    expectations.expect(
-        button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
-        "clicking again swaps the icon back to Play");
+    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
+                        "clicking again swaps the icon back to Play");
 
     delete editor;
     finishFixture(fixture);

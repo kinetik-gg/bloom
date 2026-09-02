@@ -734,7 +734,8 @@ void TimelineWorkAreaStrip::paintEvent(QPaintEvent* event) {
     // kDisabledOpacity as the "dim" fraction (the same "dimmed ink and disabled ink are the same
     // fade recipe" precedent PropertiesEditor's updateKeyframeIndicator() already uses) rather than
     // inventing a new opacity literal.
-    painter.fillRect(rect(), kit::withOpacity(kit::color(kit::Color::Accent), kit::kDisabledOpacity));
+    painter.fillRect(rect(),
+                     kit::withOpacity(kit::color(kit::Color::Accent), kit::kDisabledOpacity));
 }
 
 TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidget* parent)
