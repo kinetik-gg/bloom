@@ -33,7 +33,7 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
 
-    return addEditor("bloom.viewer", "Compositor",
+    return addEditor("bloom.viewer", "Viewer",
                      [&session, &previewController](QWidget* parent) {
                          return new ViewerEditor(session, previewController, parent);
                      }) &&
