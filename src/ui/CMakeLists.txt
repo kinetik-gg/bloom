@@ -16,16 +16,20 @@ add_library(bloom_ui_kit STATIC)
 target_sources(
     bloom_ui_kit
     PRIVATE
+        kit/button.cpp
         kit/fonts.cpp
         kit/icons.cpp
+        kit/painting.cpp
         kit/theme.cpp
         kit/tokens.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/kit/button.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
+            include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/tokens.hpp
 )

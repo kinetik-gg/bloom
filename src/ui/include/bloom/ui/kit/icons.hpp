@@ -97,8 +97,14 @@ enum class IconWeight : std::uint8_t {
 // A tinted, DPR-aware pixmap. `size` is the icon box in design pixels; the returned pixmap carries
 // its device pixel ratio, so it is `size` logical pixels on a side at any ratio.
 //
-// Results are cached on the full identity the ADR requires: icon id, weight, size, state, resolved
-// tint, and device pixel ratio. `devicePixelRatio` of 0 means "whatever the application is using".
+// Results are cached on the full identity ADR 0010 requires: icon id, weight, size, the resolved
+// tint (which is exactly where the palette role and the interaction state land), and the device
+// pixel ratio. `devicePixelRatio` of 0 means "whatever the application is using".
+[[nodiscard]] QPixmap iconPixmap(IconId id, Size size, const QColor& tint,
+                                 qreal devicePixelRatio = 0.0,
+                                 IconWeight weight = IconWeight::Regular);
+
+// The same, resolving the tint from a palette role and an interaction state.
 [[nodiscard]] QPixmap iconPixmap(IconId id, Size size, Color role, State state = State::Normal,
                                  IconWeight weight = IconWeight::Regular,
                                  qreal devicePixelRatio = 0.0);

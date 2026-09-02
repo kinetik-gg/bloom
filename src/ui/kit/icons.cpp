@@ -89,7 +89,6 @@ struct CacheKey {
     IconId id;
     IconWeight weight;
     Size size;
-    State state;
     QRgb tint;
     int ratioMilli;
 
@@ -97,9 +96,10 @@ struct CacheKey {
 };
 
 [[nodiscard]] std::size_t qHash(const CacheKey& key, const std::size_t seed = 0) noexcept {
+    // The interaction state and the palette role are not separate key components: both exist only
+    // to choose a tint, and two states that resolve to the same tint render the same pixels.
     return qHashMulti(seed, static_cast<int>(key.id), static_cast<int>(key.weight),
-                      static_cast<int>(key.size), static_cast<int>(key.state), key.tint,
-                      key.ratioMilli);
+                      static_cast<int>(key.size), key.tint, key.ratioMilli);
 }
 
 QHash<CacheKey, QPixmap>& cache() {
@@ -192,12 +192,11 @@ QColor iconTint(const Color role, const State state) {
     return color(role);
 }
 
-QPixmap iconPixmap(const IconId id, const Size size, const Color role, const State state,
-                   const IconWeight weight, const qreal devicePixelRatio) {
+QPixmap iconPixmap(const IconId id, const Size size, const QColor& tint,
+                   const qreal devicePixelRatio, const IconWeight weight) {
     const qreal ratio = resolvedDevicePixelRatio(devicePixelRatio);
-    const QColor tint = iconTint(role, state);
-    const CacheKey key{id,    weight,      size,
-                       state, tint.rgba(), static_cast<int>(std::lround(ratio * 1000.0))};
+    const CacheKey key{id, weight, size, tint.rgba(),
+                       static_cast<int>(std::lround(ratio * 1000.0))};
 
     if (const auto found = cache().constFind(key); found != cache().constEnd()) {
         return found.value();
@@ -205,6 +204,11 @@ QPixmap iconPixmap(const IconId id, const Size size, const Color role, const Sta
     QPixmap rendered = renderIcon(iconResourcePath(id, weight), px(size), tint, ratio);
     cache().insert(key, rendered);
     return rendered;
+}
+
+QPixmap iconPixmap(const IconId id, const Size size, const Color role, const State state,
+                   const IconWeight weight, const qreal devicePixelRatio) {
+    return iconPixmap(id, size, iconTint(role, state), devicePixelRatio, weight);
 }
 
 QIcon icon(const IconId id, const Size size, const Color role, const IconWeight weight) {
