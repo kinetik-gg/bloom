@@ -19,6 +19,18 @@ add_executable(bloom_kit_fonts_test
 add_executable(bloom_kit_icons_test
     kit_icons_tests.cpp
 )
+add_executable(bloom_kit_title_bar_test
+    kit_title_bar_tests.cpp
+)
+add_executable(bloom_kit_mnemonic_style_test
+    kit_mnemonic_style_tests.cpp
+)
+add_executable(bloom_third_party_license_catalog_test
+    third_party_license_catalog_tests.cpp
+)
+add_executable(bloom_main_window_chrome_test
+    main_window_chrome_tests.cpp
+)
 add_executable(bloom_kit_range_test
     kit_range_tests.cpp
 )
@@ -98,6 +110,10 @@ target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_title_bar_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_mnemonic_style_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_third_party_license_catalog_test PRIVATE bloom_ui)
+target_link_libraries(bloom_main_window_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kit_range_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_value_field_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_theme_test PRIVATE bloom_ui_kit)
@@ -124,6 +140,10 @@ bloom_enable_warnings(bloom_kit_choice_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_icons_test)
+bloom_enable_warnings(bloom_kit_title_bar_test)
+bloom_enable_warnings(bloom_kit_mnemonic_style_test)
+bloom_enable_warnings(bloom_third_party_license_catalog_test)
+bloom_enable_warnings(bloom_main_window_chrome_test)
 bloom_enable_warnings(bloom_kit_range_test)
 bloom_enable_warnings(bloom_kit_value_field_test)
 bloom_enable_warnings(bloom_kit_theme_test)
@@ -199,6 +219,38 @@ bloom_add_test(
     COMMAND bloom_kit_icons_test
     LABELS ui unit kit
     TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_title_bar
+    COMMAND bloom_kit_title_bar_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_mnemonic_style
+    COMMAND bloom_kit_mnemonic_style_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.third_party_license_catalog
+    COMMAND bloom_third_party_license_catalog_test --root "${PROJECT_SOURCE_DIR}"
+    LABELS ui unit quality
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.main_window_chrome
+    COMMAND bloom_main_window_chrome_test
+    LABELS ui integration
+    TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 

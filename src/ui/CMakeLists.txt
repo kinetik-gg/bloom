@@ -21,12 +21,14 @@ target_sources(
         kit/dropdown_popup.cpp
         kit/fonts.cpp
         kit/icons.cpp
+        kit/mnemonic_style.cpp
         kit/painting.cpp
         kit/radio_group.cpp
         kit/range_selector.cpp
         kit/slider.cpp
         kit/switch_control.cpp
         kit/theme.cpp
+        kit/title_bar.cpp
         kit/tokens.cpp
         kit/value_field.cpp
     PUBLIC
@@ -38,12 +40,14 @@ target_sources(
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
+            include/bloom/ui/kit/mnemonic_style.hpp
             include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/theme.hpp
+            include/bloom/ui/kit/title_bar.hpp
             include/bloom/ui/kit/tokens.hpp
             include/bloom/ui/kit/value_field.hpp
 )
@@ -171,6 +175,11 @@ qt_add_resources(bloom_ui_kit "kinetik_fonts"
         kit/third_party/plus-jakarta-sans/PlusJakartaSans-SemiBold.ttf
 )
 
+# Generates the "Open Source Licenses..." embedded catalog (task U2, issue #118, decision 3) BEFORE
+# bloom_ui's sources are declared, so BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP below names a file that
+# already exists at generate time.
+include("${CMAKE_CURRENT_SOURCE_DIR}/generate_third_party_license_catalog.cmake")
+
 add_library(bloom_ui STATIC)
 
 target_sources(
@@ -184,7 +193,9 @@ target_sources(
         editor_area.cpp
         editor_registry.cpp
         frame_export_controller.cpp
+        frameless_window_support.cpp
         jobs_editor.cpp
+        licenses_window.cpp
         main_window.cpp
         node_editor.cpp
         playback_controller.cpp
@@ -196,6 +207,7 @@ target_sources(
         timeline_ruler.cpp
         viewer_editor.cpp
         workspace_host.cpp
+        "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -208,7 +220,9 @@ target_sources(
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
             include/bloom/ui/frame_export_controller.hpp
+            include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
+            include/bloom/ui/licenses_window.hpp
             include/bloom/ui/main_window.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
@@ -216,6 +230,7 @@ target_sources(
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/third_party_license_catalog.hpp
             include/bloom/ui/timeline_frame_math.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/viewer_editor.hpp
