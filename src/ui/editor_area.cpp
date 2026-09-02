@@ -1,12 +1,15 @@
 #include <bloom/ui/editor_area.hpp>
 
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <QChildEvent>
 #include <QComboBox>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSize>
 #include <QSizePolicy>
 #include <QString>
 #include <QStyle>
@@ -19,6 +22,12 @@
 #include <utility>
 
 namespace bloom::ui {
+namespace {
+
+// The panel header is a dense chrome row, so its icon-only controls take the smallest icon box.
+constexpr auto kHeaderIconSize = kit::Size::IconSmall;
+
+} // namespace
 
 EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialEditorId,
                        QString areaId, QWidget* parent)
@@ -55,10 +64,16 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     contentLayout_->setContentsMargins(0, 0, 0, 0);
     contentLayout_->setSpacing(0);
 
-    auto makeHeaderButton = [header](const QString& text, const QString& toolTip,
+    // The single chokepoint every header control is built through (task U1, issue #117): the
+    // glyphs moved from typed characters ("H", "V", the box, the multiplication sign) to Kinetik
+    // icons here, and nowhere else. Tooltips, accessible names, objectNames, and behavior are
+    // unchanged -- an icon never replaces an accessible name (ADR 0010), so every one of these
+    // icon-only controls still carries both.
+    auto makeHeaderButton = [header](const kit::IconId iconId, const QString& toolTip,
                                      const QString& objectName) {
         auto* button = new QToolButton(header);
-        button->setText(text);
+        button->setIcon(kit::icon(iconId, kHeaderIconSize));
+        button->setIconSize(QSize(kit::px(kHeaderIconSize), kit::px(kHeaderIconSize)));
         button->setToolTip(toolTip);
         button->setAccessibleName(button->toolTip());
         button->setObjectName(objectName);
@@ -66,10 +81,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
         return button;
     };
 
-    splitLeftRightButton_ = makeHeaderButton("H", "Split area left/right", "splitLeftRightButton");
-    splitTopBottomButton_ = makeHeaderButton("V", "Split area top/bottom", "splitTopBottomButton");
-    maximizeButton_ = makeHeaderButton("□", "Maximize area", "maximizeAreaButton");
-    closeButton_ = makeHeaderButton("×", "Close area", "closeAreaButton");
+    splitLeftRightButton_ = makeHeaderButton(kit::IconId::SplitHorizontal, "Split area left/right",
+                                             "splitLeftRightButton");
+    splitTopBottomButton_ = makeHeaderButton(kit::IconId::SplitVertical, "Split area top/bottom",
+                                             "splitTopBottomButton");
+    maximizeButton_ =
+        makeHeaderButton(kit::IconId::Maximize, "Maximize area", "maximizeAreaButton");
+    closeButton_ = makeHeaderButton(kit::IconId::Close, "Close area", "closeAreaButton");
 
     headerLayout->addWidget(editorPicker_);
     headerLayout->addStretch(1);
@@ -152,7 +170,8 @@ void EditorArea::setSplitEnabled(bool enabled) {
 void EditorArea::setCloseEnabled(bool enabled) { closeButton_->setEnabled(enabled); }
 
 void EditorArea::setMaximizedAppearance(bool maximized) {
-    maximizeButton_->setText(maximized ? "▣" : "□");
+    maximizeButton_->setIcon(
+        kit::icon(maximized ? kit::IconId::Restore : kit::IconId::Maximize, kHeaderIconSize));
     maximizeButton_->setToolTip(maximized ? "Restore area" : "Maximize area");
     maximizeButton_->setAccessibleName(maximizeButton_->toolTip());
 }
