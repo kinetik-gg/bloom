@@ -39,8 +39,9 @@ namespace bloom::ui {
 namespace {
 
 // Wheel/menu zoom step (decision 2): each wheel notch or Zoom In/Out menu action multiplies the
-// current effective zoom by this factor (clamped into ViewTransform's [kMinZoom, kMaxZoom]).
-constexpr double kZoomStepFactor = 1.1;
+// current effective zoom by this factor (clamped into ViewTransform's [kMinZoom, kMaxZoom]). The
+// value itself moved to viewer_editor.hpp for task U4 (issue #123) so the Nodes canvas steps by
+// exactly the same amount; nothing about this file's behavior changed.
 
 // The Fit item plus the fixed percentage presets a real gesture never removes (decision 3). A
 // zoom that lands off this ladder (e.g. from a wheel step) gets ONE additional trailing item --

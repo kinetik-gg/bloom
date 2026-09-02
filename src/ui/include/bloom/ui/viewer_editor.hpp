@@ -50,6 +50,13 @@ class CompositionPreviewController;
 // actualPixelRect() about its own center and `pan` translates the result in screen pixels. `pan` is
 // meaningless while `fitToWindow` is true and is always {0, 0} there by construction (see
 // setFit()/materializeZoom() in viewer_editor.cpp).
+// One wheel notch, or one Zoom In/Out menu action: the current effective zoom multiplied by this
+// factor and clamped into [ViewTransform::kMinZoom, ViewTransform::kMaxZoom]. Published here rather
+// than kept file-local to viewer_editor.cpp (task U4, issue #123, decision 1) because the Nodes
+// canvas must step by exactly the same amount for an artist to feel one application; sharing the
+// constant makes that structurally true instead of a number two files happen to agree on.
+inline constexpr double kZoomStepFactor = 1.1;
+
 struct ViewTransform final {
     static constexpr double kMinZoom = 1.0 / 16.0;
     static constexpr double kMaxZoom = 16.0;

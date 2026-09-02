@@ -78,16 +78,6 @@ const document::LayerOutputBoundary* layerBoundary(const document::Composition& 
     return found == boundaries.end() ? nullptr : &*found;
 }
 
-QString sourceDescription(const document::ParameterRecord& parameter) {
-    if (std::holds_alternative<document::AnimationCurveSource>(parameter.source)) {
-        return QStringLiteral("Animated");
-    }
-    if (std::holds_alternative<document::DriverBindingSource>(parameter.source)) {
-        return QStringLiteral("Driven by graph");
-    }
-    return QStringLiteral("Constant");
-}
-
 QString layerName(const document::Composition& composition, const document::LayerId layerId) {
     const auto* boundary = layerBoundary(composition, layerId);
     if (boundary == nullptr || boundary->name.empty()) {
@@ -169,12 +159,6 @@ QString exactNumber(const double value) {
         return QString::number(value, 'g', std::numeric_limits<double>::max_digits10);
     }
     return QString::fromLatin1(buffer.data(), static_cast<qsizetype>(result.ptr - buffer.data()));
-}
-
-QString exactColor(const core::Color4d color) {
-    return QStringLiteral("R %1  G %2  B %3  A %4")
-        .arg(exactNumber(color.red), exactNumber(color.green), exactNumber(color.blue),
-             exactNumber(color.alpha));
 }
 
 QString selectionName(const CompositionSession& session) {
@@ -544,8 +528,8 @@ void addSectionHeader(QVBoxLayout* section, QWidget* parent, const QString& titl
 
 // True when `parameter` carries an animation curve source (issue #120, decision 2: "truth from
 // the session snapshot, no new session API") -- the same std::holds_alternative check
-// sourceDescription() above already uses to report "Animated", read directly rather than by
-// string-comparing that tooltip text.
+// parameterSourceDescription() below already uses to report "Animated", read directly rather than
+// by string-comparing that tooltip text.
 bool isAnimatedParameter(const document::ParameterRecord* parameter) {
     return parameter != nullptr &&
            std::holds_alternative<document::AnimationCurveSource>(parameter->source);
@@ -600,6 +584,46 @@ QString formatDuration(const TimelineFrameContext& context) {
 }
 
 } // namespace
+
+// --- Shared authoring/presentation truth (task U4, issue #123) ---------------------------------
+//
+// Declared in composition_editors.hpp; defined here, beside the anonymous-namespace helpers they
+// already used, so the Nodes canvas calls exactly what the Properties panel and the Timeline's Add
+// menu call rather than re-deriving it. Every one of these is a verbatim lift of code that already
+// lived in this file -- the wording, the numbering rule, the palette, and the command labels are
+// byte-identical to what shipped before, so no existing pinned expectation moves.
+
+QString parameterSourceDescription(const document::ParameterRecord& parameter) {
+    if (std::holds_alternative<document::AnimationCurveSource>(parameter.source)) {
+        return QStringLiteral("Animated");
+    }
+    if (std::holds_alternative<document::DriverBindingSource>(parameter.source)) {
+        return QStringLiteral("Driven by graph");
+    }
+    return QStringLiteral("Constant");
+}
+
+QString exactColorText(const core::Color4d color) {
+    return QStringLiteral("R %1  G %2  B %3  A %4")
+        .arg(exactNumber(color.red), exactNumber(color.green), exactNumber(color.blue),
+             exactNumber(color.alpha));
+}
+
+bool addDefaultSolidLayer(CompositionSession& session) {
+    const auto layerNumber = nextLayerNumber(session, document::kSolidSourceNodeType,
+                                             document::kSolidSourceNodeSchemaVersion);
+    const auto paletteIndex =
+        static_cast<std::size_t>(layerNumber - 1) % kDefaultSolidPalette.size();
+    return session.addSolidLayer(TimelineEditor::tr("Solid %1").arg(layerNumber),
+                                 kDefaultSolidPalette[paletteIndex]);
+}
+
+bool addDefaultTextLayer(CompositionSession& session) {
+    const auto layerNumber = nextLayerNumber(session, document::kTextSourceNodeType,
+                                             document::kTextSourceNodeSchemaVersion);
+    return session.addTextLayer(TimelineEditor::tr("Text %1").arg(layerNumber),
+                                TimelineEditor::tr("Text"));
+}
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
                                CompositionPreviewController& previewController, QWidget* parent)
@@ -730,19 +754,12 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->addWidget(keyframes_);
     layout->addWidget(layers_, 1);
 
-    connect(addSolidAction, &QAction::triggered, this, [this] {
-        const auto layerNumber = nextLayerNumber(session_, document::kSolidSourceNodeType,
-                                                 document::kSolidSourceNodeSchemaVersion);
-        const auto paletteIndex =
-            static_cast<std::size_t>(layerNumber - 1) % kDefaultSolidPalette.size();
-        (void)session_.addSolidLayer(tr("Solid %1").arg(layerNumber),
-                                     kDefaultSolidPalette[paletteIndex]);
-    });
-    connect(addTextAction, &QAction::triggered, this, [this] {
-        const auto layerNumber = nextLayerNumber(session_, document::kTextSourceNodeType,
-                                                 document::kTextSourceNodeSchemaVersion);
-        (void)session_.addTextLayer(tr("Text %1").arg(layerNumber), tr("Text"));
-    });
+    // One definition of the "Add Solid"/"Add Text" default name and proof color, shared with the
+    // Nodes canvas context menu (task U4, issue #123) -- see composition_editors.hpp.
+    connect(addSolidAction, &QAction::triggered, this,
+            [this] { (void)addDefaultSolidLayer(session_); });
+    connect(addTextAction, &QAction::triggered, this,
+            [this] { (void)addDefaultTextLayer(session_); });
     connect(undoButton_, &QToolButton::clicked, &session_, &CompositionSession::undo);
     connect(redoButton_, &QToolButton::clicked, &session_, &CompositionSession::redo);
     connect(playPauseButton_, &QToolButton::clicked, playback_, &PlaybackController::toggle);
@@ -1279,7 +1296,7 @@ void PropertiesEditor::configurePosition() {
     }
     const QString positionTip = position == nullptr
                                     ? tr("Position is not exposed by this selection")
-                                    : sourceDescription(*position);
+                                    : parameterSourceDescription(*position);
     positionX_->setToolTip(positionTip);
     positionY_->setToolTip(positionTip);
     updateKeyframeIndicator(positionKeyframe_, position);
@@ -1292,7 +1309,7 @@ void PropertiesEditor::configureOpacity() {
     const QSignalBlocker blocker(opacity_);
     opacity_->setValue(value.has_value() ? *value * 100.0 : 100.0);
     opacity_->setToolTip(parameter == nullptr ? tr("Opacity is not exposed by this selection")
-                                              : sourceDescription(*parameter));
+                                              : parameterSourceDescription(*parameter));
     updateKeyframeIndicator(opacityKeyframe_, parameter);
 }
 
@@ -1310,8 +1327,8 @@ void PropertiesEditor::configureSolidColor() {
 
     updateKeyframeIndicator(solidColorKeyframe_, parameter);
     const auto value = session_.constantColorValue(parameter->id);
-    solidColorValue_->setText(value.has_value() ? exactColor(*value)
-                                                : sourceDescription(*parameter));
+    solidColorValue_->setText(value.has_value() ? exactColorText(*value)
+                                                : parameterSourceDescription(*parameter));
     solidColorValue_->setToolTip(
         tr("Straight scene-linear authoring values; negative and HDR RGB are not clipped"));
     solidAlphaAssociation_->setText(tr("Straight (unassociated)"));
