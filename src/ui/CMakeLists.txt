@@ -26,9 +26,9 @@ target_sources(
         kit/range_selector.cpp
         kit/slider.cpp
         kit/switch_control.cpp
-        kit/value_field.cpp
         kit/theme.cpp
         kit/tokens.cpp
+        kit/value_field.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -43,9 +43,9 @@ target_sources(
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/switch_control.hpp
-            include/bloom/ui/kit/value_field.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/tokens.hpp
+            include/bloom/ui/kit/value_field.hpp
 )
 
 target_compile_features(bloom_ui_kit PUBLIC cxx_std_20)

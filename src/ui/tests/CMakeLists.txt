@@ -211,16 +211,16 @@ bloom_add_test(
 )
 
 bloom_add_test(
-    NAME bloom.ui.kit_value_field
-    COMMAND bloom_kit_value_field_test
+    NAME bloom.ui.kit_theme
+    COMMAND bloom_kit_theme_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
 bloom_add_test(
-    NAME bloom.ui.kit_theme
-    COMMAND bloom_kit_theme_test
+    NAME bloom.ui.kit_value_field
+    COMMAND bloom_kit_value_field_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
