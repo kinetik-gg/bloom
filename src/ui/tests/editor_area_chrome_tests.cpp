@@ -3,8 +3,10 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QIcon>
+#include <QMenu>
 #include <QSignalSpy>
 #include <QString>
 #include <QToolButton>
@@ -43,36 +45,71 @@ EditorRegistry makeRegistry() {
     return registry;
 }
 
+// task U2, issue #118, decision 4 -- the ONE sanctioned test-contract change: the H/V split
+// QToolButtons (splitLeftRightButton/splitTopBottomButton) are gone, replaced by a single
+// "panelContextMenuButton" QToolButton whose "panelOptionsMenu" QMenu offers four actions
+// (panelSplitHorizontalAction/panelSplitVerticalAction/panelMaximizeAction/panelCloseAction, all
+// new stable objectNames). Maximize and Close keep their original standalone QToolButtons and
+// objectNames unchanged.
+
 void testHeaderControlsAreIconsWithTheirNamesIntact(Expectations& expectations) {
     const EditorRegistry registry = makeRegistry();
     EditorArea area(registry, "bloom.probe", QString{});
+
+    expectations.expect(
+        area.findChild<QToolButton*>(QStringLiteral("splitLeftRightButton")) == nullptr &&
+            area.findChild<QToolButton*>(QStringLiteral("splitTopBottomButton")) == nullptr,
+        "the old split buttons are really gone, not merely relabeled");
 
     struct Contract {
         const char* objectName;
         const char* toolTip;
     };
     for (const auto& [objectName, toolTip] :
-         {Contract{"splitLeftRightButton", "Split area left/right"},
-          Contract{"splitTopBottomButton", "Split area top/bottom"},
+         {Contract{"panelContextMenuButton", "Panel options"},
           Contract{"maximizeAreaButton", "Maximize area"},
           Contract{"closeAreaButton", "Close area"}}) {
         auto* button = area.findChild<QToolButton*>(QString::fromLatin1(objectName));
         expectations.expect(button != nullptr,
-                            std::string{"the header still exposes "} + objectName);
+                            std::string{"the header exposes "} + objectName);
         if (button == nullptr) {
             continue;
         }
         expectations.expect(!button->icon().isNull(),
                             std::string{objectName} + " draws a Kinetik icon");
         expectations.expect(button->text().isEmpty(),
-                            std::string{objectName} + " no longer carries a typed glyph");
+                            std::string{objectName} + " carries no typed glyph");
         expectations.expect(button->toolTip() == QString::fromLatin1(toolTip),
-                            std::string{objectName} + " keeps its tooltip");
+                            std::string{objectName} + " has its tooltip");
         expectations.expect(button->accessibleName() == QString::fromLatin1(toolTip),
-                            std::string{objectName} + " keeps its accessible name: an icon never "
+                            std::string{objectName} + " has its accessible name: an icon never "
                                                       "replaces one");
         expectations.expect(button->iconSize().width() == kit::px(kit::Size::IconSmall),
                             std::string{objectName} + " uses the dense-chrome icon box");
+    }
+
+}
+
+void testTheContextMenuOffersAllFourOperations(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    auto* contextButton =
+        area.findChild<QToolButton*>(QStringLiteral("panelContextMenuButton"));
+    expectations.expect(contextButton != nullptr, "the context-menu button exists");
+    if (contextButton == nullptr) {
+        return;
+    }
+    auto* menu = contextButton->menu();
+    expectations.expect(menu != nullptr && menu->objectName() == QStringLiteral("panelOptionsMenu"),
+                        "the button owns a kit-styled, identifiable QMenu");
+    if (menu == nullptr) {
+        return;
+    }
+    for (const char* objectName :
+         {"panelSplitHorizontalAction", "panelSplitVerticalAction", "panelMaximizeAction",
+          "panelCloseAction"}) {
+        expectations.expect(menu->findChild<QAction*>(QString::fromLatin1(objectName)) != nullptr,
+                            std::string{"the menu offers "} + objectName);
     }
 }
 
@@ -104,35 +141,60 @@ void testMaximizeSwapsIconAndNamesWithoutChangingIdentity(Expectations& expectat
 void testHeaderControlsStillDriveTheirSignals(Expectations& expectations) {
     const EditorRegistry registry = makeRegistry();
     EditorArea area(registry, "bloom.probe", QString{});
+    auto* menu = area.findChild<QMenu*>(QStringLiteral("panelOptionsMenu"));
+    expectations.expect(menu != nullptr, "the panel options menu exists");
+    if (menu == nullptr) {
+        return;
+    }
 
     QSignalSpy splitSpy(&area, &EditorArea::splitRequested);
     QSignalSpy closeSpy(&area, &EditorArea::closeRequested);
     QSignalSpy maximizeSpy(&area, &EditorArea::maximizeRequested);
 
-    area.findChild<QToolButton*>(QStringLiteral("splitLeftRightButton"))->click();
-    area.findChild<QToolButton*>(QStringLiteral("splitTopBottomButton"))->click();
+    // QAction::trigger() fires the same signal a real click on a shown popup would, without
+    // needing to actually open the (offscreen) popup -- the menu's own visibility is not what is
+    // under test here.
+    menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->trigger();
+    menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->trigger();
     area.findChild<QToolButton*>(QStringLiteral("closeAreaButton"))->click();
     area.findChild<QToolButton*>(QStringLiteral("maximizeAreaButton"))->click();
+    // The menu's own Maximize/Close actions route to the SAME signals the standalone buttons do.
+    menu->findChild<QAction*>(QStringLiteral("panelMaximizeAction"))->trigger();
+    menu->findChild<QAction*>(QStringLiteral("panelCloseAction"))->trigger();
 
-    // The split controls keep their behavior in this slice: replacing them with a context menu is
-    // a later slice's decision, not a side effect of an icon change.
-    expectations.expect(splitSpy.count() == 2, "both split controls still request a split");
-    expectations.expect(closeSpy.count() == 1, "the close control still requests a close");
-    expectations.expect(maximizeSpy.count() == 1, "the maximize control still requests a maximize");
+    expectations.expect(splitSpy.count() == 2, "both menu split actions request a split");
+    expectations.expect(closeSpy.count() == 2,
+                        "the close button AND the menu's close action request a close");
+    expectations.expect(maximizeSpy.count() == 2,
+                        "the maximize button AND the menu's maximize action request a maximize");
 }
 
 void testSplitAndCloseEnablementIsUnchanged(Expectations& expectations) {
     const EditorRegistry registry = makeRegistry();
     EditorArea area(registry, "bloom.probe", QString{});
+    auto* menu = area.findChild<QMenu*>(QStringLiteral("panelOptionsMenu"));
+    expectations.expect(menu != nullptr, "the panel options menu exists");
+    if (menu == nullptr) {
+        return;
+    }
+
     area.setSplitEnabled(false);
     area.setCloseEnabled(false);
     expectations.expect(
-        !area.findChild<QToolButton*>(QStringLiteral("splitLeftRightButton"))->isEnabled() &&
-            !area.findChild<QToolButton*>(QStringLiteral("splitTopBottomButton"))->isEnabled(),
-        "split enablement still reaches both controls");
+        !menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->isEnabled() &&
+            !menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->isEnabled(),
+        "split enablement now reaches the menu's two split actions");
     expectations.expect(
-        !area.findChild<QToolButton*>(QStringLiteral("closeAreaButton"))->isEnabled(),
-        "close enablement still reaches its control");
+        !area.findChild<QToolButton*>(QStringLiteral("closeAreaButton"))->isEnabled() &&
+            !menu->findChild<QAction*>(QStringLiteral("panelCloseAction"))->isEnabled(),
+        "close enablement reaches both the standalone button and the menu's close action");
+
+    area.setSplitEnabled(true);
+    area.setCloseEnabled(true);
+    expectations.expect(
+        menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->isEnabled() &&
+            menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->isEnabled(),
+        "and re-enabling reaches them too");
 }
 
 } // namespace
@@ -142,6 +204,7 @@ int main(int argc, char** argv) {
     const QApplication application(argc, argv);
     Expectations expectations;
     testHeaderControlsAreIconsWithTheirNamesIntact(expectations);
+    testTheContextMenuOffersAllFourOperations(expectations);
     testMaximizeSwapsIconAndNamesWithoutChangingIdentity(expectations);
     testHeaderControlsStillDriveTheirSignals(expectations);
     testSplitAndCloseEnablementIsUnchanged(expectations);

@@ -5,21 +5,33 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/frameless_window_support.hpp>
+#include <bloom/ui/kit/title_bar.hpp>
+#include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLatin1StringView>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainterPath>
+#include <QRegion>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <filesystem>
@@ -28,22 +40,38 @@ namespace {
 
 constexpr auto workspaceLayoutKey = "workspace/compositing/layout";
 constexpr auto windowGeometryKey = "window/main/geometry";
+constexpr auto chromeModeKey = "appearance/chrome";
+constexpr auto issueTrackerUrl = "https://github.com/kinetik-gg/bloom/issues/new";
 
 } // namespace
 
 namespace bloom::ui {
 
+ChromeMode chromeModeFromSettings(const QSettings& settings) {
+    const auto value =
+        settings.value(QLatin1StringView(chromeModeKey), QStringLiteral("custom")).toString();
+    return value.compare(QStringLiteral("native"), Qt::CaseInsensitive) == 0 ? ChromeMode::Native
+                                                                             : ChromeMode::Custom;
+}
+
+void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
+    settings.setValue(QLatin1StringView(chromeModeKey),
+                      mode == ChromeMode::Native ? QStringLiteral("native")
+                                                 : QStringLiteral("custom"));
+}
+
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                        ProjectHost& projectHost, FrameExportController& frameExportController,
-                       QWidget* parent)
+                       ChromeMode chromeMode, QWidget* parent)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
-      frameExportController_(frameExportController) {
+      frameExportController_(frameExportController), chromeMode_(chromeMode) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
 
-    createMenus();
-    createWorkspaceSwitcher();
+    createChrome();
+    createMenus(*menuBar_);
+    createWorkspaceSwitcher(*menuBar_);
     createEditorLayout(editorRegistry);
     createCentralStack();
     createWorkspaceActions();
@@ -167,10 +195,92 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     });
 }
 
-void MainWindow::createMenus() {
-    auto* fileMenu = menuBar()->addMenu("&File");
+void MainWindow::changeEvent(QEvent* event) {
+    QMainWindow::changeEvent(event);
+    // Every path to a maximize/restore state change -- the title bar button, its double-click,
+    // an OS action, a keyboard shortcut -- lands here, so this is the one place that keeps the
+    // TitleBar glyph and the window's own corner rounding in sync (decision 1: "maximize state
+    // switches the icon and drops the window corner radius").
+    if (event->type() == QEvent::WindowStateChange) {
+        if (titleBar_ != nullptr) {
+            titleBar_->setMaximized(isMaximized() || isFullScreen());
+        }
+        updateWindowMask();
+    }
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    updateWindowMask();
+}
+
+void MainWindow::createChrome() {
+    if (chromeMode_ == ChromeMode::Native) {
+        // Classic row: QMainWindow's own menu bar, stock window decorations, everything else
+        // identical (decision 1).
+        menuBar_ = menuBar();
+        return;
+    }
+
+    // Custom chrome (decision 1, default on): frameless main window with a Kinetik TitleBar
+    // whose row hosts the SAME QMenuBar the native path would otherwise dock classically
+    // (decision 2, "share one implementation").
+    setWindowFlag(Qt::FramelessWindowHint, true);
+    titleBar_ = new kit::TitleBar(this);
+    menuBar_ = new QMenuBar();
+    titleBar_->setMenuBar(menuBar_);
+    setMenuWidget(titleBar_);
+
+    connect(titleBar_, &kit::TitleBar::minimizeRequested, this, &QWidget::showMinimized);
+    connect(titleBar_, &kit::TitleBar::maximizeOrRestoreRequested, this,
+            &MainWindow::toggleMaximizeRestore);
+    connect(titleBar_, &kit::TitleBar::closeRequested, this, &QWidget::close);
+
+    // Edge-resize on a thin frameless margin (decision 1): see FramelessEdgeResizer's own header
+    // comment for why an application-wide event filter, rather than reserved dead space, is the
+    // mechanism -- and why it is Wayland/X11-correct through Qt's own platform contract.
+    edgeResizer_ = new FramelessEdgeResizer(*this, kit::px(kit::Spacing::XS), this);
+    qApp->installEventFilter(edgeResizer_);
+
+    updateWindowMask();
+}
+
+void MainWindow::updateWindowMask() {
+    if (chromeMode_ != ChromeMode::Custom) {
+        return;
+    }
+    if (isMaximized() || isFullScreen()) {
+        // A maximized/full-screen frameless window fills the screen; rounded corners there would
+        // poke into the visible desktop, so the mask is dropped entirely (decision 1).
+        clearMask();
+        return;
+    }
+    QPainterPath path;
+    const int radius = kit::radiusPx(kit::Radius::Large, 0);
+    path.addRoundedRect(rect(), radius, radius);
+    setMask(QRegion(path.toFillPolygon().toPolygon()));
+}
+
+void MainWindow::toggleFullScreen() {
+    if (isFullScreen()) {
+        showNormal();
+    } else {
+        showFullScreen();
+    }
+}
+
+void MainWindow::toggleMaximizeRestore() {
+    if (isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+void MainWindow::createMenus(QMenuBar& menuBar) {
+    auto* fileMenu = menuBar.addMenu("&File");
     createFileMenu(*fileMenu);
-    auto* editMenu = menuBar()->addMenu("&Edit");
+    auto* editMenu = menuBar.addMenu("&Edit");
     undoAction_ = editMenu->addAction("Undo");
     undoAction_->setObjectName("undoAction");
     undoAction_->setShortcut(QKeySequence::Undo);
@@ -185,9 +295,65 @@ void MainWindow::createMenus() {
     connect(&compositionSession_, &CompositionSession::historyChanged, this,
             &MainWindow::updateEditActions);
 
-    menuBar()->addMenu("&View");
-    windowMenu_ = menuBar()->addMenu("&Window");
-    menuBar()->addMenu("&Help");
+    viewMenu_ = menuBar.addMenu("&View");
+    createViewMenu(*viewMenu_);
+    windowMenu_ = menuBar.addMenu("&Window");
+    auto* helpMenu = menuBar.addMenu("&Help");
+    createHelpMenu(*helpMenu);
+}
+
+void MainWindow::createViewMenu(QMenu& viewMenu) {
+    // Full Screen (decision 2): F11, plain window fullscreen toggle.
+    viewFullScreenAction_ = viewMenu.addAction("Full Screen");
+    viewFullScreenAction_->setObjectName("viewFullScreenAction");
+    viewFullScreenAction_->setCheckable(true);
+    viewFullScreenAction_->setShortcut(QKeySequence(Qt::Key_F11));
+    viewFullScreenAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(viewFullScreenAction_, &QAction::triggered, this, &MainWindow::toggleFullScreen);
+
+    // Maximize Panel (decision 2): routes to the SAME editor-maximize the Window menu's
+    // "Maximize Active Area" already drives -- wired once workspaceHost_ exists, in
+    // createWorkspaceActions(), which also keeps both actions' checked state in sync.
+    viewMaximizePanelAction_ = viewMenu.addAction("Maximize Panel");
+    viewMaximizePanelAction_->setObjectName("viewMaximizePanelAction");
+    viewMaximizePanelAction_->setCheckable(true);
+
+    viewMenu.addSeparator();
+
+    // "Use Native Window Frame" (decision 1): toggles the persisted chrome setting and explains,
+    // honestly, that this slice never re-chromes a live window -- the artist restarts to see it.
+    useNativeFrameAction_ = viewMenu.addAction("Use Native Window Frame");
+    useNativeFrameAction_->setObjectName("useNativeFrameAction");
+    useNativeFrameAction_->setCheckable(true);
+    useNativeFrameAction_->setChecked(chromeMode_ == ChromeMode::Native);
+    useNativeFrameAction_->setStatusTip(
+        tr("Restart Bloom to apply the window frame change."));
+    connect(useNativeFrameAction_, &QAction::triggered, this, [this](const bool checked) {
+        QSettings settings;
+        setChromeModeInSettings(settings, checked ? ChromeMode::Native : ChromeMode::Custom);
+        statusBar()->showMessage(tr("Restart Bloom to use the %1 window frame.")
+                                     .arg(checked ? tr("native") : tr("custom")),
+                                 6000);
+    });
+}
+
+void MainWindow::createHelpMenu(QMenu& helpMenu) {
+    // "Report an Issue…" (decision 2): opens the repository's issue tracker via QDesktopServices,
+    // whose url handler is Qt's own interception seam for tests (QDesktopServices::setUrlHandler).
+    reportIssueAction_ = helpMenu.addAction("Report an Issue…");
+    reportIssueAction_->setObjectName("reportIssueAction");
+    connect(reportIssueAction_, &QAction::triggered, this,
+            [] { QDesktopServices::openUrl(QUrl(QString::fromLatin1(issueTrackerUrl))); });
+
+    // "Open Source Licenses…" (decision 3): a non-modal LicensesWindow, so triggering the action
+    // never blocks the event loop (or an automated test that fires it synchronously).
+    openSourceLicensesAction_ = helpMenu.addAction("Open Source Licenses…");
+    openSourceLicensesAction_->setObjectName("openSourceLicensesAction");
+    connect(openSourceLicensesAction_, &QAction::triggered, this, [this] {
+        auto* dialog = new LicensesWindow(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+    });
 }
 
 void MainWindow::updateEditActions() {
@@ -282,6 +448,12 @@ void MainWindow::updateWindowTitle() {
         path.has_value() ? QString::fromStdString(path->filename().string()) : tr("Untitled");
     setWindowTitle(QStringLiteral("%1[*] — Bloom").arg(name));
     setWindowModified(projectHost_.isDirty());
+    if (titleBar_ != nullptr) {
+        // The TitleBar's own label follows the session the same way (decision 1): "Bloom —
+        // <project name/Untitled>", updated on every dirty/session change alongside the real
+        // OS-level window title above.
+        titleBar_->setTitle(QStringLiteral("Bloom — %1").arg(name));
+    }
 }
 
 void MainWindow::updateContentSurface() {
@@ -310,15 +482,23 @@ void MainWindow::updateContentSurface() {
     centralStack_->setCurrentWidget(readOnlyPlaceholderPage_);
 }
 
-void MainWindow::createWorkspaceSwitcher() {
-    menuBar()->addSeparator();
+void MainWindow::createWorkspaceSwitcher(QMenuBar& menuBar) {
+    menuBar.addSeparator();
 
-    auto* group = new QActionGroup(menuBar());
+    auto* group = new QActionGroup(&menuBar);
     group->setExclusive(true);
 
     const QStringList workspaces = {"Compositing", "Editing", "Grading", "Scripting", "Rendering"};
     for (const QString& workspace : workspaces) {
-        auto* action = menuBar()->addAction(workspace);
+        auto* action = menuBar.addAction(workspace);
+        // Stable per-workspace identity (decision 2: "still actions, same objectNames" -- these
+        // did not carry one before this slice, so each gets one now). The tab-pill restyle itself
+        // (kit::kinetikStyleSheet()'s QMenuBar::item:checked rule) is NOT scoped by this
+        // objectName -- Qt style sheets cannot address one QMenuBar item independently of its
+        // siblings, only the shared subcontrol state -- but these five checkable actions are the
+        // only checkable top-level menu-bar actions this application ever adds, so the shared rule
+        // safely reaches only them.
+        action->setObjectName(QStringLiteral("workspaceSwitcherTab.%1").arg(workspace));
         action->setCheckable(true);
         action->setEnabled(workspace == "Compositing");
         action->setChecked(workspace == "Compositing");
@@ -406,6 +586,11 @@ void MainWindow::createWorkspaceActions() {
     connect(maximizeAreaAction_, &QAction::triggered, workspaceHost_,
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
+    // View menu's "Maximize Panel" (decision 2) routes to the exact same signal -- wired here,
+    // now that workspaceHost_ exists, rather than in createViewMenu().
+    connect(viewMaximizePanelAction_, &QAction::triggered, workspaceHost_,
+            [this] { workspaceHost_->toggleMaximizeActiveArea(); });
+
     windowMenu_->addSeparator();
     auto* resetLayoutAction = windowMenu_->addAction("Reset Compositing Layout");
     resetLayoutAction->setObjectName("resetCompositingLayoutAction");
@@ -433,6 +618,11 @@ void MainWindow::updateWorkspaceActions() {
     maximizeAreaAction_->setChecked(workspaceHost_->isAreaMaximized());
     maximizeAreaAction_->setText(workspaceHost_->isAreaMaximized() ? "Restore Active Area"
                                                                    : "Maximize Active Area");
+    // Kept in lockstep with the Window menu's own action: same underlying state, two menu homes.
+    viewMaximizePanelAction_->setEnabled(hasMultipleAreas);
+    viewMaximizePanelAction_->setChecked(workspaceHost_->isAreaMaximized());
 }
+
+ChromeMode MainWindow::chromeMode() const noexcept { return chromeMode_; }
 
 } // namespace bloom::ui

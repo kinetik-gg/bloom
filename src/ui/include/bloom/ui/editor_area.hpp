@@ -9,7 +9,9 @@
 
 class QComboBox;
 class QEvent;
+class QMenu;
 class QObject;
+class QResizeEvent;
 class QToolButton;
 class QVBoxLayout;
 
@@ -43,19 +45,21 @@ class EditorArea final : public QFrame {
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     void rebuildEditor(int editorIndex);
     int addUnavailableEditor(std::string_view editorId);
     void watchForActivation(QWidget* widget);
+    void updateRoundedMask();
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
     QComboBox* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
     QVBoxLayout* contentLayout_ = nullptr;
-    QToolButton* splitLeftRightButton_ = nullptr;
-    QToolButton* splitTopBottomButton_ = nullptr;
+    QToolButton* contextMenuButton_ = nullptr;
+    QMenu* contextMenu_ = nullptr;
     QToolButton* closeButton_ = nullptr;
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;

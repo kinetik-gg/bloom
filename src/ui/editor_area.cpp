@@ -4,11 +4,16 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QAction>
 #include <QChildEvent>
 #include <QComboBox>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QPainterPath>
+#include <QRegion>
+#include <QResizeEvent>
 #include <QSize>
 #include <QSizePolicy>
 #include <QString>
@@ -52,6 +57,15 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     editorPicker_ = new QComboBox(header);
     editorPicker_->setObjectName("editorTypePicker");
     editorPicker_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    // The panel header's title styling (task U2, issue #118, decision 4): UiSmall already IS
+    // "uppercase, +0.07em tracking" (kit::font()'s own recipe for the role), so giving the
+    // switcher this role is the whole job -- no separate title label, no per-character transform.
+    // Stays a QComboBox rather than becoming a KDropdown (decision 4's own named alternative):
+    // this control also carries the "unavailable editor" placeholder path below via
+    // QComboBox::findData()/setItemData(..., Qt::ToolTipRole), neither of which KDropdown exposes,
+    // and switching its type would silently break every existing "editorTypePicker" QComboBox*
+    // test contract outside this task's sanctioned change.
+    editorPicker_->setFont(kit::font(kit::TypeRole::UiSmall));
 
     for (const auto& editor : registry.editors()) {
         editorPicker_->addItem(editor.displayName, QString::fromStdString(editor.id));
@@ -81,18 +95,44 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
         return button;
     };
 
-    splitLeftRightButton_ = makeHeaderButton(kit::IconId::SplitHorizontal, "Split area left/right",
-                                             "splitLeftRightButton");
-    splitTopBottomButton_ = makeHeaderButton(kit::IconId::SplitVertical, "Split area top/bottom",
-                                             "splitTopBottomButton");
+    // The header context-menu button (task U2, issue #118, decision 4 -- the ONE sanctioned
+    // test-contract change): replaces the separate H/V split QToolButtons with a single
+    // ContextMenu-icon button whose kit-styled QMenu offers all four panel operations under the
+    // SAME signals the old buttons emitted. Maximize and Close stay as their own dedicated
+    // buttons below (unchanged since task U1) -- only the two less-frequent split actions move
+    // into the menu; both are ALSO offered there for a consistent, discoverable, keyboard-
+    // reachable equivalent.
+    contextMenuButton_ =
+        makeHeaderButton(kit::IconId::ContextMenu, "Panel options", "panelContextMenuButton");
+
+    contextMenu_ = new QMenu(contextMenuButton_);
+    contextMenu_->setObjectName("panelOptionsMenu");
+    auto* splitHorizontalAction = contextMenu_->addAction("Split Horizontally");
+    splitHorizontalAction->setObjectName("panelSplitHorizontalAction");
+    connect(splitHorizontalAction, &QAction::triggered, this,
+            [this] { emit splitRequested(this, Qt::Horizontal); });
+    auto* splitVerticalAction = contextMenu_->addAction("Split Vertically");
+    splitVerticalAction->setObjectName("panelSplitVerticalAction");
+    connect(splitVerticalAction, &QAction::triggered, this,
+            [this] { emit splitRequested(this, Qt::Vertical); });
+    contextMenu_->addSeparator();
+    auto* menuMaximizeAction = contextMenu_->addAction("Maximize");
+    menuMaximizeAction->setObjectName("panelMaximizeAction");
+    connect(menuMaximizeAction, &QAction::triggered, this,
+            [this] { emit maximizeRequested(this); });
+    auto* menuCloseAction = contextMenu_->addAction("Close");
+    menuCloseAction->setObjectName("panelCloseAction");
+    connect(menuCloseAction, &QAction::triggered, this, [this] { emit closeRequested(this); });
+    contextMenuButton_->setMenu(contextMenu_);
+    contextMenuButton_->setPopupMode(QToolButton::InstantPopup);
+
     maximizeButton_ =
         makeHeaderButton(kit::IconId::Maximize, "Maximize area", "maximizeAreaButton");
     closeButton_ = makeHeaderButton(kit::IconId::Close, "Close area", "closeAreaButton");
 
     headerLayout->addWidget(editorPicker_);
     headerLayout->addStretch(1);
-    headerLayout->addWidget(splitLeftRightButton_);
-    headerLayout->addWidget(splitTopBottomButton_);
+    headerLayout->addWidget(contextMenuButton_);
     headerLayout->addWidget(maximizeButton_);
     headerLayout->addWidget(closeButton_);
 
@@ -101,10 +141,6 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
 
     connect(editorPicker_, &QComboBox::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
-    connect(splitLeftRightButton_, &QToolButton::clicked, this,
-            [this] { emit splitRequested(this, Qt::Horizontal); });
-    connect(splitTopBottomButton_, &QToolButton::clicked, this,
-            [this] { emit splitRequested(this, Qt::Vertical); });
     connect(closeButton_, &QToolButton::clicked, this, [this] { emit closeRequested(this); });
     connect(maximizeButton_, &QToolButton::clicked, this, [this] { emit maximizeRequested(this); });
 
@@ -163,11 +199,22 @@ void EditorArea::setAreaActive(bool active) {
 bool EditorArea::isAreaActive() const noexcept { return active_; }
 
 void EditorArea::setSplitEnabled(bool enabled) {
-    splitLeftRightButton_->setEnabled(enabled);
-    splitTopBottomButton_->setEnabled(enabled);
+    // The split actions live in the context menu now (decision 4); the button that opens the menu
+    // stays enabled either way -- Maximize and Close inside it are unaffected by this flag.
+    for (auto* action : {contextMenu_->findChild<QAction*>("panelSplitHorizontalAction"),
+                         contextMenu_->findChild<QAction*>("panelSplitVerticalAction")}) {
+        if (action != nullptr) {
+            action->setEnabled(enabled);
+        }
+    }
 }
 
-void EditorArea::setCloseEnabled(bool enabled) { closeButton_->setEnabled(enabled); }
+void EditorArea::setCloseEnabled(bool enabled) {
+    closeButton_->setEnabled(enabled);
+    if (auto* action = contextMenu_->findChild<QAction*>("panelCloseAction")) {
+        action->setEnabled(enabled);
+    }
+}
 
 void EditorArea::setMaximizedAppearance(bool maximized) {
     maximizeButton_->setIcon(
@@ -236,6 +283,23 @@ void EditorArea::watchForActivation(QWidget* widget) {
     for (auto* descendant : descendants) {
         descendant->installEventFilter(this);
     }
+}
+
+void EditorArea::resizeEvent(QResizeEvent* event) {
+    QFrame::resizeEvent(event);
+    updateRoundedMask();
+}
+
+void EditorArea::updateRoundedMask() {
+    // Radius::Large rounded corners over the Background gutter (task U2, issue #118, decision 4):
+    // a real clip rather than only the stylesheet's own border-radius, so the header's Surface
+    // background and whatever the active editor draws never overhang the panel's rounded corners
+    // -- the QFrame's own CSS border-radius (kinetikStyleSheet()'s QFrame#editorArea rule) only
+    // ever paints the frame's OWN background/border, never its children.
+    QPainterPath path;
+    const int radius = kit::radiusPx(kit::Radius::Large, 0);
+    path.addRoundedRect(rect(), radius, radius);
+    setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
 } // namespace bloom::ui
