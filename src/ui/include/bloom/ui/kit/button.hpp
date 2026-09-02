@@ -52,6 +52,13 @@ class KButton final : public QAbstractButton {
     void setIconId(std::optional<IconId> icon);
     [[nodiscard]] std::optional<IconId> iconId() const noexcept;
 
+    // Opt-in, Ghost-only: hover/press take the Danger recipe (Error fill, Foreground ink) while
+    // rest/focus stay plain ghost -- the "close button" convention (title bar, panel header) where
+    // the control reads as chrome-weight until the pointer commits to the destructive action, never
+    // Error-colored at rest the way Variant::Danger itself is. False for every other variant.
+    void setDangerOnHover(bool dangerOnHover);
+    [[nodiscard]] bool dangerOnHover() const noexcept;
+
     // The single state this button is in right now, resolved by one rule so that painting and
     // tests can never disagree about it.
     [[nodiscard]] State visualState() const;
@@ -74,10 +81,13 @@ class KButton final : public QAbstractButton {
     [[nodiscard]] int controlExtent() const;
     [[nodiscard]] Size iconBox() const;
 
+    [[nodiscard]] bool paintsAsDanger(State state) const noexcept;
+
     Variant variant_ = Variant::Secondary;
     ControlSize controlSize_ = ControlSize::Default;
     std::optional<IconId> icon_;
     bool hovered_ = false;
+    bool dangerOnHover_ = false;
 };
 
 } // namespace bloom::ui::kit

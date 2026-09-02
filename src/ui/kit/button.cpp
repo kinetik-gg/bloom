@@ -87,6 +87,24 @@ void KButton::setIconId(std::optional<IconId> icon) {
 
 std::optional<IconId> KButton::iconId() const noexcept { return icon_; }
 
+void KButton::setDangerOnHover(const bool dangerOnHover) {
+    if (dangerOnHover_ == dangerOnHover) {
+        return;
+    }
+    dangerOnHover_ = dangerOnHover;
+    update();
+}
+
+bool KButton::dangerOnHover() const noexcept { return dangerOnHover_; }
+
+bool KButton::paintsAsDanger(const State state) const noexcept {
+    if (variant_ == Variant::Danger) {
+        return true;
+    }
+    return variant_ == Variant::Ghost && dangerOnHover_ &&
+           (state == State::Hover || state == State::Pressed || state == State::Selected);
+}
+
 State KButton::visualState() const {
     // One rule, consulted by both painting and tests. Order matters: disabled outranks everything,
     // because a disabled control has no hover and no press response at all.
@@ -109,10 +127,7 @@ State KButton::visualState() const {
 }
 
 QColor KButton::fillForState(const State state) const {
-    const bool filled =
-        variant_ == Variant::Primary ||
-        (variant_ == Variant::Danger &&
-         (state == State::Hover || state == State::Pressed || state == State::Selected));
+    const bool filled = variant_ == Variant::Primary || paintsAsDanger(state);
 
     if (variant_ == Variant::Primary) {
         // The accent triple states the recipe outright; nothing derived is needed.
@@ -130,8 +145,8 @@ QColor KButton::fillForState(const State state) const {
         }
     }
     if (filled) {
-        // Danger, once committed: the same rest/hover/press relation the accent triple states,
-        // applied to Error.
+        // Danger, once committed (or Ghost with dangerOnHover, once hovered/pressed): the same
+        // rest/hover/press relation the accent triple states, applied to Error.
         const QColor base = color(Color::Error);
         return state == State::Pressed ? pressedFillFor(base) : hoverFillFor(base);
     }
@@ -148,17 +163,19 @@ QColor KButton::inkForVisualState(const State state) const {
         return state == State::Disabled ? withOpacity(color(Color::Foreground), kDisabledOpacity)
                                         : color(Color::Foreground);
     }
-    if (variant_ == Variant::Danger) {
+    if (variant_ == Variant::Danger || (variant_ == Variant::Ghost && dangerOnHover_)) {
         switch (state) {
         case State::Hover:
         case State::Pressed:
         case State::Selected:
             return color(Color::Foreground);
         case State::Disabled:
-            return withOpacity(color(Color::Error), kDisabledOpacity);
+            return variant_ == Variant::Danger ? withOpacity(color(Color::Error), kDisabledOpacity)
+                                               : inkForState(restingInk(variant_), state);
         case State::Normal:
         case State::Focused:
-            return color(Color::Error);
+            return variant_ == Variant::Danger ? color(Color::Error)
+                                               : inkForState(restingInk(variant_), state);
         }
     }
     return inkForState(restingInk(variant_), state);
@@ -242,7 +259,7 @@ void KButton::paintEvent(QPaintEvent* event) {
 
     const QColor fill = fillForState(state);
     QColor border = color(borderForState(state));
-    if (variant_ == Variant::Primary) {
+    if (variant_ == Variant::Primary || paintsAsDanger(state)) {
         border = fill;
     } else if (variant_ == Variant::Danger &&
                (state == State::Normal || state == State::Focused || state == State::Disabled)) {

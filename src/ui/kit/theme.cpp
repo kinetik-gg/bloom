@@ -76,6 +76,10 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("radius.ScrollBarThumb"), radiusPx(Radius::Full, px(Size::ScrollBar))},
         {QLatin1StringView("radius.ScrollBarThumbHover"),
          radiusPx(Radius::Full, px(Size::ScrollBarHover))},
+        // The workspace-switcher tab's checked pill (task U2, issue #118, decision 2): Radius::Full
+        // against the menu bar's own Control-height row, the same "pill against its own extent"
+        // technique the scrollbar thumb above uses.
+        {QLatin1StringView("radius.WorkspaceTabPill"), radiusPx(Radius::Full, px(Size::Control))},
         {QLatin1StringView("border.Hairline"), static_cast<int>(kHairlineWidth)},
         {QLatin1StringView("border.Window"), static_cast<int>(kWindowBorderWidth)},
     });
@@ -175,10 +179,22 @@ QMenuBar::item:selected {
 }
 QMenuBar::item:checked {
     background: {color.SurfaceRaised};
-    border-radius: {radius.Small}px;
+    color: {color.Accent};
+    border-radius: {radius.WorkspaceTabPill}px;
 }
 QMenuBar::item:disabled {
     color: {color.DisabledInk};
+}
+QWidget#kinetikTitleBar {
+    background: {color.Surface};
+    border-bottom: {border.Hairline}px solid {color.Border};
+}
+QWidget#kinetikTitleBar QMenuBar {
+    background: {color.Surface};
+    border-bottom: none;
+}
+QLabel#titleBarTitleLabel {
+    color: {color.Foreground};
 }
 QMenu {
     background: {color.SurfaceRaised};
@@ -205,6 +221,7 @@ QMenu::separator {
 QFrame#editorArea {
     background: {color.Background};
     border: {border.Hairline}px solid {color.Border};
+    border-radius: {radius.Large}px;
 }
 QFrame#editorArea[active="true"] {
     border-color: {color.Accent};
@@ -216,6 +233,18 @@ QWidget#editorHeader {
 }
 QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};
+}
+QToolButton#panelContextMenuButton, QToolButton#maximizeAreaButton, QToolButton#closeAreaButton {
+    border: {border.Hairline}px solid {color.Border};
+    border-radius: {radius.Small}px;
+}
+QToolButton#panelContextMenuButton:hover, QToolButton#maximizeAreaButton:hover {
+    border-color: {color.BorderHover};
+}
+QToolButton#closeAreaButton:hover {
+    background: {color.Error};
+    border-color: {color.Error};
+    color: {color.Foreground};
 }
 QWidget#readOnlyPlaceholderPage {
     background: {color.Background};

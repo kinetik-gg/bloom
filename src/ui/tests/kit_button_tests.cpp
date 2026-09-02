@@ -244,6 +244,39 @@ void testAnIconButtonRendersBothGlyphAndLabel(Expectations& expectations) {
     expectations.expect(sawAccent, "a Primary button really paints its accent fill");
 }
 
+void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
+    // The title bar / panel-header close button convention (task U2, issue #118): flush with its
+    // ghost siblings at rest, Error fill only once the pointer commits.
+    kit::KButton button(kit::IconId::Close, QString{});
+    button.setVariant(kit::KButton::Variant::Ghost);
+    expectations.expect(!button.dangerOnHover(), "dangerOnHover defaults to false");
+
+    button.setDangerOnHover(true);
+    expectations.expect(button.dangerOnHover(), "the flag round-trips");
+
+    expectations.expect(!button.fillForState(kit::State::Normal).isValid(),
+                        "still no surface of its own at rest, exactly like plain Ghost");
+    expectations.expect(button.inkForVisualState(kit::State::Normal) ==
+                            kit::color(kit::Color::Muted),
+                        "resting ink is still the ordinary ghost muted ink, not Error");
+
+    expectations.expect(button.fillForState(kit::State::Hover) ==
+                            kit::hoverFillFor(kit::color(kit::Color::Error)),
+                        "hover fills with the Error recipe once dangerOnHover is set");
+    expectations.expect(button.inkForVisualState(kit::State::Hover) ==
+                            kit::color(kit::Color::Foreground),
+                        "hover ink is legible on the Error fill");
+    expectations.expect(button.fillForState(kit::State::Pressed) ==
+                            kit::pressedFillFor(kit::color(kit::Color::Error)),
+                        "pressed deepens the same Error recipe Danger itself uses");
+
+    // Every other variant ignores the flag entirely: it is a Ghost-only opt-in.
+    button.setVariant(kit::KButton::Variant::Secondary);
+    expectations.expect(button.fillForState(kit::State::Hover) !=
+                            kit::hoverFillFor(kit::color(kit::Color::Error)),
+                        "dangerOnHover has no effect outside Variant::Ghost");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -258,5 +291,6 @@ int main(int argc, char** argv) {
     testDisabledInkIsFortyPercentInEveryVariant(expectations);
     testControlSizesAndTheOutsideFocusRing(expectations);
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
+    testGhostDangerOnHoverStaysGhostAtRest(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
