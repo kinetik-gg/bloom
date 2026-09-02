@@ -11,6 +11,7 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/jobs_editor.hpp>
+#include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
@@ -28,6 +29,12 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setApplicationName("Bloom");
     QCoreApplication::setApplicationVersion("0.1.0");
     QCoreApplication::setOrganizationName("Kinetik");
+
+    // The Kinetik visual language is installed once, application-wide, before any widget exists
+    // (task U1, issue #117). It replaces MainWindow::applyFoundationTheme(): the palette, the
+    // application stylesheet, and the interface font belong to the application, not to one window,
+    // and installing them first means no surface is ever constructed under the default Qt theme.
+    bloom::ui::kit::installKinetikTheme(application);
 
     // ProjectHost (task U1, issue #72) replaces the hand-rolled document/command-stack pair: it
     // owns the application's single live bloom::host::ProjectSession and constructs an initial

@@ -3,3 +3,8 @@
 dependencies/unicode/** -text
 dependencies/licenses/** -text
 assets/ocio/** -text
+
+# Vendored interface assets are digest-bound in their provenance records (src/ui/kit/third_party/
+# */provenance.md): their exact bytes are what those SHA-256 values cover, so they must never be
+# line-ending normalized or otherwise rewritten.
+src/ui/kit/third_party/** -text

@@ -10,15 +10,12 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QApplication>
 #include <QCloseEvent>
-#include <QColor>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QPalette>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -51,7 +48,6 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     createCentralStack();
     createWorkspaceActions();
     updateEditActions();
-    applyFoundationTheme();
 
     connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
@@ -437,76 +433,6 @@ void MainWindow::updateWorkspaceActions() {
     maximizeAreaAction_->setChecked(workspaceHost_->isAreaMaximized());
     maximizeAreaAction_->setText(workspaceHost_->isAreaMaximized() ? "Restore Active Area"
                                                                    : "Maximize Active Area");
-}
-
-void MainWindow::applyFoundationTheme() {
-    QPalette palette = QApplication::palette();
-    palette.setColor(QPalette::Window, QColor(18, 18, 18));
-    palette.setColor(QPalette::WindowText, QColor(215, 215, 215));
-    palette.setColor(QPalette::Base, QColor(14, 14, 14));
-    palette.setColor(QPalette::AlternateBase, QColor(25, 25, 25));
-    palette.setColor(QPalette::Text, QColor(215, 215, 215));
-    palette.setColor(QPalette::Button, QColor(28, 28, 28));
-    palette.setColor(QPalette::ButtonText, QColor(215, 215, 215));
-    palette.setColor(QPalette::Highlight, QColor(23, 142, 230));
-    palette.setColor(QPalette::HighlightedText, Qt::white);
-    QApplication::setPalette(palette);
-
-    setStyleSheet(R"(
-        QMainWindow, QMenuBar, QMenu {
-            background: #121212;
-            color: #d7d7d7;
-        }
-        QMenuBar::item:checked {
-            background: #303030;
-            border-radius: 4px;
-        }
-        QFrame#editorArea {
-            background: #111111;
-            border: 1px solid #292929;
-        }
-        QFrame#editorArea[active="true"] {
-            border-color: #178ee6;
-        }
-        QWidget#editorHeader {
-            background: #171717;
-            border-bottom: 1px solid #292929;
-        }
-        QLabel#editorPlaceholder {
-            color: #777777;
-        }
-        QWidget#readOnlyPlaceholderPage {
-            background: #111111;
-        }
-        QLabel#readOnlyPlaceholderHeading {
-            color: #d7d7d7;
-            font-size: 20px;
-            font-weight: 600;
-        }
-        QLabel#readOnlyPlaceholderFileName {
-            color: #178ee6;
-            font-weight: 600;
-        }
-        QLabel#readOnlyPlaceholderBody {
-            color: #a0a0a0;
-        }
-        QComboBox {
-            background: #1b1b1b;
-            border: 1px solid #303030;
-            border-radius: 4px;
-            padding: 3px 8px;
-        }
-        QToolButton {
-            color: #bcbcbc;
-            padding: 2px 4px;
-        }
-        QToolButton:hover {
-            background: #303030;
-        }
-        QSplitter::handle {
-            background: #292929;
-        }
-    )");
 }
 
 } // namespace bloom::ui

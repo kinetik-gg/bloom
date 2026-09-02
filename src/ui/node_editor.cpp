@@ -1,6 +1,7 @@
 #include <bloom/ui/node_editor.hpp>
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
@@ -36,6 +37,9 @@ namespace {
 constexpr qreal kNodeWidth = 190.0;
 constexpr qreal kNodeHeaderHeight = 30.0;
 constexpr qreal kNodeRowHeight = 22.0;
+// The node card's corner, in the graph's own coordinates: Radius::Medium in design pixels, applied
+// at 1x -- the view's zoom scales it along with everything else.
+constexpr auto kNodeCornerRadius = static_cast<qreal>(kit::Radius::Medium);
 
 QString displayTypeName(const std::string_view typeId) {
     QString name = QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size()));
@@ -116,24 +120,30 @@ class NodeItem final : public QGraphicsObject {
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override {
         const QRectF bounds = boundingRect();
-        const QColor border = option->state.testFlag(QStyle::State_Selected) ? QColor(44, 158, 232)
-                                                                             : QColor(71, 74, 80);
+        const bool selected = option->state.testFlag(QStyle::State_Selected);
+        // Selection is a 2px inset accent edge, exactly as the States token says; unselected nodes
+        // carry the hover-weight border because a hairline Border on Background would vanish at
+        // graph zoom levels.
+        const QColor border =
+            selected ? kit::color(kit::Color::Accent) : kit::color(kit::Color::BorderHover);
         painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(border, option->state.testFlag(QStyle::State_Selected) ? 2.0 : 1.0));
-        painter->setBrush(QColor(35, 37, 41));
-        painter->drawRoundedRect(bounds, 7.0, 7.0);
+        painter->setPen(QPen(border, selected ? 2.0 : 1.0));
+        painter->setBrush(kit::color(kit::Color::SurfaceRaised));
+        painter->drawRoundedRect(bounds, kNodeCornerRadius, kNodeCornerRadius);
 
         QPainterPath header;
-        header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), kNodeHeaderHeight), 7.0, 7.0);
-        header.addRect(QRectF(0.0, kNodeHeaderHeight - 7.0, bounds.width(), 7.0));
-        painter->fillPath(header, QColor(48, 51, 57));
+        header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), kNodeHeaderHeight),
+                              kNodeCornerRadius, kNodeCornerRadius);
+        header.addRect(
+            QRectF(0.0, kNodeHeaderHeight - kNodeCornerRadius, bounds.width(), kNodeCornerRadius));
+        painter->fillPath(header, kit::color(kit::Color::Field));
 
-        painter->setPen(QColor(235, 237, 240));
+        painter->setPen(kit::color(kit::Color::Foreground));
         painter->drawText(QRectF(12.0, 0.0, bounds.width() - 24.0, kNodeHeaderHeight),
                           Qt::AlignVCenter | Qt::AlignLeft, title_);
 
         if (parameterRows_.empty()) {
-            painter->setPen(QColor(139, 144, 153));
+            painter->setPen(kit::color(kit::Color::Faint));
             painter->drawText(
                 QRectF(12.0, kNodeHeaderHeight, bounds.width() - 24.0, kNodeRowHeight + 10.0),
                 Qt::AlignCenter, QStringLiteral("No exposed parameters"));
@@ -142,10 +152,10 @@ class NodeItem final : public QGraphicsObject {
 
         qreal y = kNodeHeaderHeight + 5.0;
         for (const auto& [role, value] : parameterRows_) {
-            painter->setPen(QColor(174, 178, 186));
+            painter->setPen(kit::color(kit::Color::Muted));
             painter->drawText(QRectF(12.0, y, bounds.width() * 0.54, kNodeRowHeight),
                               Qt::AlignVCenter | Qt::AlignLeft, role);
-            painter->setPen(QColor(222, 224, 229));
+            painter->setPen(kit::color(kit::Color::Foreground));
             painter->drawText(
                 QRectF(bounds.width() * 0.52, y, bounds.width() * 0.42 - 12.0, kNodeRowHeight),
                 Qt::AlignVCenter | Qt::AlignRight, value);
@@ -171,7 +181,8 @@ class NodeEdgeItem final : public QGraphicsPathItem {
     NodeEdgeItem(NodeItem& source, NodeItem& destination)
         : source_(source), destination_(destination) {
         setZValue(-1.0);
-        setPen(QPen(QColor(102, 170, 224), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        setPen(
+            QPen(kit::color(kit::Color::Accent), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         source_.addEdge(*this);
         destination_.addEdge(*this);
         updatePath();
@@ -245,7 +256,7 @@ std::size_t layoutColumn(const document::NodeRecord& node) {
 
 NodeGraphicsScene::NodeGraphicsScene(QObject* parent) : QGraphicsScene(parent) {
     setObjectName("nodeGraphicsScene");
-    setBackgroundBrush(QColor(25, 26, 29));
+    setBackgroundBrush(kit::color(kit::Color::Background));
     setItemIndexMethod(QGraphicsScene::BspTreeIndex);
 }
 

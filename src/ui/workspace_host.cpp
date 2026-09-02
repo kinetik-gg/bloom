@@ -11,10 +11,12 @@
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
+
 #include <QString>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -581,7 +583,10 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     auto* splitter = new QSplitter(orientation);
     splitter->setObjectName("workspaceSplitter");
     splitter->setChildrenCollapsible(false);
-    splitter->setHandleWidth(2);
+    // The gutter (task U1, issue #117): panels are separated by a visible Background gap of
+    // Spacing::Gutter, not by a hairline seam. The handle's own fill comes from the theme's
+    // QSplitter::handle rule; this is the width that makes the gap real and grabbable.
+    splitter->setHandleWidth(kit::px(kit::Spacing::Gutter));
     splitter->setOpaqueResize(true);
     return splitter;
 }

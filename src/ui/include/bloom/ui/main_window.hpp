@@ -57,7 +57,6 @@ class MainWindow final : public QMainWindow {
     void updateExportAction();
     void updateWindowTitle();
     void updateContentSurface();
-    void applyFoundationTheme();
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
