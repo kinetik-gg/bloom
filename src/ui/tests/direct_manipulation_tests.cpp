@@ -27,6 +27,8 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -408,8 +410,17 @@ void sendRelease(QWidget& widget, const QPointF& local) {
 
 // Mirrors ViewerEditor::currentMapping()'s display-rect derivation so the test can compute the
 // expected composition displacement the same way production code does, without hardcoding it.
+//
+// Task U3 (issue #119), decision 2, THE SEAM: canvasRect() replaces the pre-U3 28px-inset
+// viewerFrame() (the canvas is now full-bleed, minus only the bottom status bar strip -- see
+// ViewerEditor::canvasRect()/statusBarRect() in viewer_editor.cpp), and
+// viewTransformedDisplayRect(..., transform) replaces the unconditional fitDisplayRect() call --
+// the frozen mapping rectangle now reflects the ACTIVE view transform at gesture begin, not always
+// the fit-to-window rectangle. `transform` defaults to the identity Fit transform, so every
+// pre-existing call site below (all at implicit zoom 1x/pan 0) is unchanged in behavior.
 QRectF expectedDisplayRect(const QWidget& viewer,
-                           const bloom::ui::CompositionPreviewController& controller) {
+                           const bloom::ui::CompositionPreviewController& controller,
+                           const bloom::ui::ViewTransform& transform = {}) {
     using namespace bloom;
     const auto& frame = controller.state().frame;
     if (frame == nullptr) {
@@ -424,9 +435,10 @@ QRectF expectedDisplayRect(const QWidget& viewer,
     if (!descriptorResult.has_value()) {
         return {};
     }
-    const QRectF frameRect = QRectF(viewer.rect()).adjusted(28.0, 28.0, -28.0, -28.0);
-    return ui::fitDisplayRect(frameRect, descriptorResult->displayWindow().extent(),
-                              descriptorResult->pixelAspect());
+    const qreal statusBarHeight = ui::kit::px(ui::kit::Size::Control);
+    const QRectF frameRect = QRectF(viewer.rect()).adjusted(0.0, 0.0, 0.0, -statusBarHeight);
+    return ui::viewTransformedDisplayRect(frameRect, descriptorResult->displayWindow().extent(),
+                                          descriptorResult->pixelAspect(), transform);
 }
 
 // document::Document is non-movable/non-copyable (its constructor and snapshot() own the live
@@ -519,6 +531,189 @@ void testDragMovesSelectedSolidLayerCommitsAndUndoes(Expectations& expectations)
     fixture.bridge.beginShutdown();
     expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
                         "the drag fixture reaches asynchronous scheduler quiescence");
+}
+
+// Selects the dropdown item whose visible text is `label` (never hardcodes an index -- the fixed
+// Fit/25/50/100/200/400 order is ViewerEditor's own construction detail, not this test's).
+void selectZoomPreset(bloom::ui::kit::KDropdown& dropdown, const QString& label) {
+    for (int index = 0; index < dropdown.count(); ++index) {
+        if (dropdown.itemText(index) == label) {
+            dropdown.setCurrentIndex(index);
+            return;
+        }
+    }
+    std::abort();
+}
+
+// THE SEAM, pinned directly (task U3, issue #119, decision 2): a direct-manipulation drag begun at
+// a NON-IDENTITY zoom (200%, no fit-to-window) still lands exactly under the cursor. Before this
+// task, ViewerEditor::currentMapping() always froze fitDisplayRect()'s rectangle regardless of any
+// zoom; this pins that the frozen mapping now reflects the ACTIVE zoom instead -- at 200% a screen
+// displacement maps to HALF the composition displacement it would at Fit/100%, because the same
+// document extent now occupies twice the screen pixels.
+void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Drag Zoomed Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the initial frame becomes ready before dragging");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the fixture layer is added and selected");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the frame becomes ready again for the post-add revision");
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    expectations.expect(position != nullptr, "the new solid layer exposes a position parameter");
+    if (position == nullptr) {
+        return;
+    }
+    const auto positionId = position->id;
+    const auto base = fixture.session.constantVec2Value(positionId);
+    expectations.expect(base.has_value(),
+                        "the new layer's position starts as a resolvable constant");
+    if (!base.has_value()) {
+        return;
+    }
+
+    selectZoomPreset(*fixture.viewer.zoomDropdownForTest(), QStringLiteral("200%"));
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow &&
+                            fixture.viewer.viewTransformForTest().zoom == 2.0,
+                        "the fixture is now zoomed to 200%, out of Fit mode");
+
+    const QRectF displayRect = expectedDisplayRect(fixture.viewer, fixture.controller,
+                                                   fixture.viewer.viewTransformForTest());
+    expectations.expect(!displayRect.isEmpty() && displayRect.width() > 1000.0,
+                        "at 200% the display rectangle is visibly larger than the 1000-wide "
+                        "composition itself -- this test is genuinely exercising a non-identity "
+                        "zoom, not accidentally still at Fit's own scale");
+
+    const QPointF pressPoint(200.0, 150.0);
+    const QPointF releasePoint(260.0, 110.0);
+    const QPointF delta = releasePoint - pressPoint;
+
+    sendPress(fixture.viewer, pressPoint);
+    expectations.expect(
+        fixture.session.positionInteractionActive(),
+        "pressing on the zoomed viewer with a selected layer begins the interaction");
+    // Begin base: the frozen base value is exactly the pre-drag constant, unmoved, before any move
+    // event lands.
+    const auto beginOverride = fixture.session.positionInteractionOverride();
+    expectations.expect(beginOverride.has_value(), "the begun interaction carries an override");
+    if (beginOverride.has_value()) {
+        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride->value);
+        expectations.expect(beginValue != nullptr && *beginValue == *base,
+                            "the interaction's begin-base document-space position is the exact "
+                            "unmoved pre-drag constant, regardless of zoom");
+    }
+    sendMove(fixture.viewer, releasePoint);
+    sendRelease(fixture.viewer, releasePoint);
+
+    expectations.expect(!fixture.session.positionInteractionActive(),
+                        "release ends the interaction");
+
+    // Committed key: the document-space position lands exactly where the ZOOMED mapping (half the
+    // Fit-implied displacement, since the same screen delta now covers less document distance at
+    // 200%) says it should -- never the Fit-derived value the pre-U3 seam would have produced.
+    const document::Vec2d expectedAtZoom{base->x + delta.x() / displayRect.width() * 1000.0,
+                                         base->y + delta.y() / displayRect.height() * 500.0};
+    const document::Vec2d expectedAtFit{base->x + delta.x() / 1000.0 * 1000.0,
+                                        base->y + delta.y() / 500.0 * 500.0};
+    expectations.expect(fixture.session.constantVec2Value(positionId) == expectedAtZoom,
+                        "the committed document-space position matches base plus the ZOOM-AWARE "
+                        "screen-to-composition mapped displacement");
+    expectations.expect(fixture.session.constantVec2Value(positionId) != expectedAtFit,
+                        "the committed position is genuinely different from what the pre-U3 "
+                        "always-Fit seam would have produced -- proving the seam change actually "
+                        "changed the mapping geometry, not just its call signature");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the zoomed-drag fixture reaches asynchronous scheduler quiescence");
+}
+
+// THE SEAM, combined with a non-zero pan (task U3, issue #119, decision 2): a direct-manipulation
+// drag begun at 200% zoom AND a panned view still lands exactly under the cursor. Pan only
+// translates the frozen rectangle's position, never its size, so the SAME zoom-derived
+// composition-per-screen-pixel ratio as the zoom-only test above applies unchanged; this pins that
+// panning (itself driven through the real space-drag gesture, not by reaching into private state)
+// does not perturb the mapping's scale, only where the gesture reads its frozen displayRect from.
+void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Drag Zoomed Panned Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the initial frame becomes ready before dragging");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the fixture layer is added and selected");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the frame becomes ready again for the post-add revision");
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    expectations.expect(position != nullptr, "the new solid layer exposes a position parameter");
+    if (position == nullptr) {
+        return;
+    }
+    const auto positionId = position->id;
+    const auto base = fixture.session.constantVec2Value(positionId);
+    expectations.expect(base.has_value(),
+                        "the new layer's position starts as a resolvable constant");
+    if (!base.has_value()) {
+        return;
+    }
+
+    selectZoomPreset(*fixture.viewer.zoomDropdownForTest(), QStringLiteral("200%"));
+
+    // Pan through the real space-drag gesture (mirrors viewer_editor_tests.cpp's own space-pan
+    // test) rather than reaching into ViewerEditor's private transform_ -- the resulting pan offset
+    // is read back afterward via the same public test accessor used to compute the expected
+    // mapping below, so this test never needs to duplicate the pan materialization formula.
+    QKeyEvent spaceDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &spaceDown);
+    sendPress(fixture.viewer, QPointF(40.0, 40.0));
+    sendMove(fixture.viewer, QPointF(75.0, 15.0));
+    sendRelease(fixture.viewer, QPointF(75.0, 15.0));
+    QKeyEvent spaceUp(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &spaceUp);
+
+    const auto transform = fixture.viewer.viewTransformForTest();
+    expectations.expect(!transform.fitToWindow && transform.zoom == 2.0 &&
+                            (transform.pan.x() != 0.0 || transform.pan.y() != 0.0),
+                        "the fixture is now both zoomed to 200% and panned by a non-zero offset");
+
+    const QRectF displayRect = expectedDisplayRect(fixture.viewer, fixture.controller, transform);
+    expectations.expect(!displayRect.isEmpty(), "the fixture's zoomed+panned display rectangle is "
+                                                "non-empty");
+
+    const QPointF pressPoint(220.0, 160.0);
+    const QPointF releasePoint(190.0, 205.0);
+    const QPointF delta = releasePoint - pressPoint;
+
+    sendPress(fixture.viewer, pressPoint);
+    expectations.expect(fixture.session.positionInteractionActive(),
+                        "pressing on the zoomed+panned viewer with a selected layer begins the "
+                        "interaction");
+    const auto beginOverride = fixture.session.positionInteractionOverride();
+    if (beginOverride.has_value()) {
+        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride->value);
+        expectations.expect(beginValue != nullptr && *beginValue == *base,
+                            "the interaction's begin-base document-space position is unaffected "
+                            "by zoom or pan");
+    }
+    sendMove(fixture.viewer, releasePoint);
+    sendRelease(fixture.viewer, releasePoint);
+    expectations.expect(!fixture.session.positionInteractionActive(),
+                        "release ends the interaction");
+
+    const document::Vec2d expected{base->x + delta.x() / displayRect.width() * 1000.0,
+                                   base->y + delta.y() / displayRect.height() * 500.0};
+    expectations.expect(fixture.session.constantVec2Value(positionId) == expected,
+                        "the committed document-space position matches base plus the "
+                        "zoom-AND-pan-aware screen-to-composition mapped displacement");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the zoomed-and-panned-drag fixture reaches asynchronous scheduler "
+                        "quiescence");
 }
 
 void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
@@ -638,6 +833,8 @@ int main(int argc, char** argv) {
     testControllerAttachesOverrideOnlyToArmedInteractiveRequests(expectations);
     testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(expectations);
     testDragMovesSelectedSolidLayerCommitsAndUndoes(expectations);
+    testDragAtNonIdentityZoomLandsExactlyUnderCursor(expectations);
+    testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(expectations);
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);
