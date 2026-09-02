@@ -18,8 +18,8 @@
 #include <QAction>
 #include <QContextMenuEvent>
 #include <QImage>
-#include <QListView>
 #include <QKeyEvent>
+#include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPaintEvent>
@@ -228,10 +228,10 @@ void drawFrameShadow(QPainter& painter, const QRectF& displayRect) {
         QColor layerColor = token.color;
         layerColor.setAlphaF(static_cast<float>(layerColor.alphaF() / kLayers));
         const qreal spread = token.blurRadius * t;
-        const QRectF layerRect = displayRect
-                                     .translated(static_cast<qreal>(token.offsetX),
-                                                 static_cast<qreal>(token.offsetY))
-                                     .adjusted(-spread, -spread, spread, spread);
+        const QRectF layerRect =
+            displayRect
+                .translated(static_cast<qreal>(token.offsetX), static_cast<qreal>(token.offsetY))
+                .adjusted(-spread, -spread, spread, spread);
         painter.setBrush(layerColor);
         painter.drawRoundedRect(layerRect, 2.0, 2.0);
     }
@@ -324,7 +324,7 @@ QRectF actualPixelRect(const QRectF& available, const render::ImageExtent extent
     const auto width = static_cast<qreal>(displayWidth);
     const auto height = static_cast<qreal>(displayHeight);
     return QRectF(available.center().x() - width / 2.0, available.center().y() - height / 2.0,
-                 width, height);
+                  width, height);
 }
 
 QRectF viewTransformedDisplayRect(const QRectF& available, const render::ImageExtent extent,
@@ -346,8 +346,9 @@ QRectF viewTransformedDisplayRect(const QRectF& available, const render::ImageEx
 }
 
 ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& available,
-                            const render::ImageExtent extent, const core::PixelAspectRatio pixelAspect,
-                            const QPointF screenPoint, const double factor) noexcept {
+                             const render::ImageExtent extent,
+                             const core::PixelAspectRatio pixelAspect, const QPointF screenPoint,
+                             const double factor) noexcept {
     const QRectF actual = actualPixelRect(available, extent, pixelAspect);
     const QRectF current = viewTransformedDisplayRect(available, extent, pixelAspect, transform);
     if (actual.isEmpty() || current.isEmpty() || !(actual.width() > 0.0) ||
@@ -438,7 +439,7 @@ kit::KDropdown* ViewerEditor::zoomDropdownForTest() const noexcept { return zoom
 QRectF ViewerEditor::statusBarRect() const {
     const qreal barHeight = kit::px(kit::Size::Control);
     return QRectF(0.0, static_cast<qreal>(height()) - barHeight, static_cast<qreal>(width()),
-                 barHeight);
+                  barHeight);
 }
 
 QRectF ViewerEditor::canvasRect() const {
@@ -455,8 +456,8 @@ void ViewerEditor::layoutStatusBar() {
     const QRectF bar = statusBarRect();
     const QSize hint = zoomDropdown_->sizeHint();
     const int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
-    const int y = static_cast<int>(bar.top()) +
-                 (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
+    const int y =
+        static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
     zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
 }
 
@@ -645,12 +646,14 @@ void ViewerEditor::paintStatusBarSurface(QPainter& painter) {
             : bar.left();
     const qreal maxChipWidth = std::max<qreal>(0.0, bar.width() * 0.4);
     const QString elidedChipText = painter.fontMetrics().elidedText(
-        chipState.text, Qt::ElideRight, static_cast<int>(std::max<qreal>(0.0, maxChipWidth - 16.0)));
+        chipState.text, Qt::ElideRight,
+        static_cast<int>(std::max<qreal>(0.0, maxChipWidth - 16.0)));
     const qreal chipWidth = std::min<qreal>(
         maxChipWidth, painter.fontMetrics().horizontalAdvance(elidedChipText) + 16.0);
     const qreal chipLeft =
         std::max<qreal>(chipLeftBound, bar.right() - chipWidth - kit::px(kit::Spacing::S));
-    const QRectF chipRect(chipLeft, chipTop, std::max<qreal>(0.0, bar.right() - chipLeft - kit::px(kit::Spacing::S)),
+    const QRectF chipRect(chipLeft, chipTop,
+                          std::max<qreal>(0.0, bar.right() - chipLeft - kit::px(kit::Spacing::S)),
                           chipHeight);
     paintChip(painter, chipRect, chipState.text, kit::color(chipState.colorToken));
 
@@ -660,8 +663,8 @@ void ViewerEditor::paintStatusBarSurface(QPainter& painter) {
     painter.setFont(kit::font(kit::TypeRole::Value));
     painter.setPen(kit::color(kit::Color::Foreground));
     const qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
-    const QRectF centerRect(chipLeftBound, bar.top(), std::max<qreal>(0.0, centerRight - chipLeftBound),
-                            bar.height());
+    const QRectF centerRect(chipLeftBound, bar.top(),
+                            std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
     painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session_));
 
     painter.restore();
@@ -805,9 +808,8 @@ void ViewerEditor::updatePanCursor() {
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
-            geometry.has_value() &&
-            (event->button() == Qt::MiddleButton ||
-             (event->button() == Qt::LeftButton && spaceHeld_))) {
+            geometry.has_value() && (event->button() == Qt::MiddleButton ||
+                                     (event->button() == Qt::LeftButton && spaceHeld_))) {
             beginPan(event->button(), event->position(), *geometry);
             event->accept();
             return;

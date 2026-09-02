@@ -119,7 +119,8 @@ void testViewTransformFitMatchesFitDisplayRect(Expectations& expectations) {
     const QRectF available(0.0, 0.0, 640.0, 360.0);
     const auto square = core::PixelAspectRatio::square();
     const ui::ViewTransform fit{}; // default: fitToWindow == true
-    const QRectF viaTransform = ui::viewTransformedDisplayRect(available, extent(1920, 1080), square, fit);
+    const QRectF viaTransform =
+        ui::viewTransformedDisplayRect(available, extent(1920, 1080), square, fit);
     const QRectF viaFit = ui::fitDisplayRect(available, extent(1920, 1080), square);
     expectations.expect(near(viaTransform.left(), viaFit.left()) &&
                             near(viaTransform.top(), viaFit.top()) &&
@@ -138,9 +139,9 @@ void testViewTransformActualSizeMatchesActualPixelRect(Expectations& expectation
     const QRectF viaActual = ui::actualPixelRect(available, extent(200, 100), square);
     expectations.expect(near(viaTransform.width(), 200.0) && near(viaTransform.height(), 100.0),
                         "100% (zoom == 1.0, not Fit) shows content at its own pixel size");
-    expectations.expect(near(viaTransform.left(), viaActual.left()) &&
-                            near(viaTransform.top(), viaActual.top()),
-                        "100% reproduces actualPixelRect() exactly, centered like fitDisplayRect()");
+    expectations.expect(
+        near(viaTransform.left(), viaActual.left()) && near(viaTransform.top(), viaActual.top()),
+        "100% reproduces actualPixelRect() exactly, centered like fitDisplayRect()");
 }
 
 void testViewTransformZoomAndPanCompose(Expectations& expectations) {
@@ -148,14 +149,16 @@ void testViewTransformZoomAndPanCompose(Expectations& expectations) {
     const QRectF available(0.0, 0.0, 640.0, 360.0);
     const auto square = core::PixelAspectRatio::square();
     const ui::ViewTransform doubled{.fitToWindow = false, .zoom = 2.0, .pan = {30.0, -15.0}};
-    const QRectF rect = ui::viewTransformedDisplayRect(available, extent(200, 100), square, doubled);
+    const QRectF rect =
+        ui::viewTransformedDisplayRect(available, extent(200, 100), square, doubled);
     expectations.expect(near(rect.width(), 400.0) && near(rect.height(), 200.0),
                         "zoom scales actualPixelRect() by the transform's own factor");
     const QRectF actual = ui::actualPixelRect(available, extent(200, 100), square);
     const QPointF expectedTopLeft(available.center().x() - rect.width() / 2.0 + 30.0,
                                   available.center().y() - rect.height() / 2.0 - 15.0);
     Q_UNUSED(actual)
-    expectations.expect(near(rect.left(), expectedTopLeft.x()) && near(rect.top(), expectedTopLeft.y()),
+    expectations.expect(near(rect.left(), expectedTopLeft.x()) &&
+                            near(rect.top(), expectedTopLeft.y()),
                         "pan translates the zoomed rectangle in screen pixels, on top of zoom");
 }
 
@@ -166,7 +169,8 @@ void testZoomAboutCursorInvariantHoldsAtNonIdentityZoom(Expectations& expectatio
     // Start from a non-trivial, already-panned/zoomed transform -- not just the identity -- so this
     // pins the invariant at exactly the zoom != 1, pan != 0 condition the task calls out.
     const ui::ViewTransform start{.fitToWindow = false, .zoom = 2.0, .pan = {12.0, -8.0}};
-    const QRectF before = ui::viewTransformedDisplayRect(available, extent(200, 100), square, start);
+    const QRectF before =
+        ui::viewTransformedDisplayRect(available, extent(200, 100), square, start);
     const QPointF cursor(410.0, 190.0); // an arbitrary point, not the rect's own center
     const double fractionXBefore = (cursor.x() - before.left()) / before.width();
     const double fractionYBefore = (cursor.y() - before.top()) / before.height();
@@ -204,12 +208,12 @@ void testZoomClampsToTheDocumentedRange(Expectations& expectations) {
     const QRectF available(0.0, 0.0, 640.0, 360.0);
     const auto square = core::PixelAspectRatio::square();
     const ui::ViewTransform start{.fitToWindow = false, .zoom = 1.0, .pan = {0.0, 0.0}};
-    const ui::ViewTransform zoomedOut = ui::zoomAboutPoint(start, available, extent(200, 100), square,
-                                                           available.center(), 0.0001);
+    const ui::ViewTransform zoomedOut =
+        ui::zoomAboutPoint(start, available, extent(200, 100), square, available.center(), 0.0001);
     expectations.expect(near(zoomedOut.zoom, ui::ViewTransform::kMinZoom),
                         "zooming out clamps at 1/16, never below");
-    const ui::ViewTransform zoomedIn = ui::zoomAboutPoint(start, available, extent(200, 100), square,
-                                                          available.center(), 10000.0);
+    const ui::ViewTransform zoomedIn =
+        ui::zoomAboutPoint(start, available, extent(200, 100), square, available.center(), 10000.0);
     expectations.expect(near(zoomedIn.zoom, ui::ViewTransform::kMaxZoom),
                         "zooming in clamps at 16, never above");
 }
@@ -473,7 +477,8 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
 
     expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
                         "the viewer starts in Fit mode");
-    expectations.expect(fixture.viewer.zoomDropdownForTest()->currentText() == QStringLiteral("Fit"),
+    expectations.expect(fixture.viewer.zoomDropdownForTest()->currentText() ==
+                            QStringLiteral("Fit"),
                         "the zoom dropdown starts on \"Fit\"");
 
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3); // "100%"
@@ -509,7 +514,8 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
                         "the zoom-dropdown fixture reaches asynchronous scheduler quiescence");
 }
 
-// The status bar's center readout reuses the timeline's own exact display shape ("Frame N · S.mmms")
+// The status bar's center readout reuses the timeline's own exact display shape ("Frame N ·
+// S.mmms")
 // -- including an honest truncated (not rounded) subframe display, never a binary64 rounding of a
 // non-terminating decimal (docs/architecture/animation-and-time.md).
 void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& expectations) {
@@ -518,7 +524,8 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the fixture's initial frame becomes ready");
 
-    expectations.expect(fixture.viewer.statusBarReadoutTextForTest() == QStringLiteral("Frame 0 · 0.000s"),
+    expectations.expect(fixture.viewer.statusBarReadoutTextForTest() ==
+                            QStringLiteral("Frame 0 · 0.000s"),
                         "the readout starts at frame 0, exact zero seconds");
 
     // 1/3 s has no terminating decimal expansion: truncated to 3 places this is EXACTLY "0.333s",

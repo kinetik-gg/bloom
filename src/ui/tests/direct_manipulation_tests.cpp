@@ -568,7 +568,8 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
     }
     const auto positionId = position->id;
     const auto base = fixture.session.constantVec2Value(positionId);
-    expectations.expect(base.has_value(), "the new layer's position starts as a resolvable constant");
+    expectations.expect(base.has_value(),
+                        "the new layer's position starts as a resolvable constant");
     if (!base.has_value()) {
         return;
     }
@@ -578,8 +579,8 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
                             fixture.viewer.viewTransformForTest().zoom == 2.0,
                         "the fixture is now zoomed to 200%, out of Fit mode");
 
-    const QRectF displayRect =
-        expectedDisplayRect(fixture.viewer, fixture.controller, fixture.viewer.viewTransformForTest());
+    const QRectF displayRect = expectedDisplayRect(fixture.viewer, fixture.controller,
+                                                   fixture.viewer.viewTransformForTest());
     expectations.expect(!displayRect.isEmpty() && displayRect.width() > 1000.0,
                         "at 200% the display rectangle is visibly larger than the 1000-wide "
                         "composition itself -- this test is genuinely exercising a non-identity "
@@ -590,8 +591,9 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
     const QPointF delta = releasePoint - pressPoint;
 
     sendPress(fixture.viewer, pressPoint);
-    expectations.expect(fixture.session.positionInteractionActive(),
-                        "pressing on the zoomed viewer with a selected layer begins the interaction");
+    expectations.expect(
+        fixture.session.positionInteractionActive(),
+        "pressing on the zoomed viewer with a selected layer begins the interaction");
     // Begin base: the frozen base value is exactly the pre-drag constant, unmoved, before any move
     // event lands.
     const auto beginOverride = fixture.session.positionInteractionOverride();
@@ -605,7 +607,8 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
     sendMove(fixture.viewer, releasePoint);
     sendRelease(fixture.viewer, releasePoint);
 
-    expectations.expect(!fixture.session.positionInteractionActive(), "release ends the interaction");
+    expectations.expect(!fixture.session.positionInteractionActive(),
+                        "release ends the interaction");
 
     // Committed key: the document-space position lands exactly where the ZOOMED mapping (half the
     // Fit-implied displacement, since the same screen delta now covers less document distance at
@@ -651,7 +654,8 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
     }
     const auto positionId = position->id;
     const auto base = fixture.session.constantVec2Value(positionId);
-    expectations.expect(base.has_value(), "the new layer's position starts as a resolvable constant");
+    expectations.expect(base.has_value(),
+                        "the new layer's position starts as a resolvable constant");
     if (!base.has_value()) {
         return;
     }
@@ -696,7 +700,8 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
     }
     sendMove(fixture.viewer, releasePoint);
     sendRelease(fixture.viewer, releasePoint);
-    expectations.expect(!fixture.session.positionInteractionActive(), "release ends the interaction");
+    expectations.expect(!fixture.session.positionInteractionActive(),
+                        "release ends the interaction");
 
     const document::Vec2d expected{base->x + delta.x() / displayRect.width() * 1000.0,
                                    base->y + delta.y() / displayRect.height() * 500.0};

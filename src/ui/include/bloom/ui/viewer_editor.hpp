@@ -79,9 +79,9 @@ struct ViewTransform final {
 // the step (the zoom-about-cursor invariant, pinned by tests). Degenerate geometry (empty
 // `available`, zero-extent content) is a no-op that returns `transform` unchanged.
 [[nodiscard]] ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& available,
-                                          render::ImageExtent extent,
-                                          core::PixelAspectRatio pixelAspect, QPointF screenPoint,
-                                          double factor) noexcept;
+                                           render::ImageExtent extent,
+                                           core::PixelAspectRatio pixelAspect, QPointF screenPoint,
+                                           double factor) noexcept;
 
 class ViewerEditor final : public QWidget {
     Q_OBJECT
@@ -104,9 +104,9 @@ class ViewerEditor final : public QWidget {
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). press ->
     // beginPositionInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
     // cadence); move -> updatePositionInteraction; release -> commit + disarm; Escape or a detected
-    // resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A middle-button
-    // press, or a left-button press while Space is held, begins a PAN gesture instead (decision 2)
-    // and never touches CompositionSession.
+    // resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
+    // middle-button press, or a left-button press while Space is held, begins a PAN gesture instead
+    // (decision 2) and never touches CompositionSession.
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
