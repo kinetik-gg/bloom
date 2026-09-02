@@ -65,8 +65,13 @@ struct CompositionSelection {
 // CompositionSession::beginPositionInteraction; the session freezes it into the session-only
 // PositionInteraction and never recomputes it.
 struct PositionInteractionMapping final {
-    // The frozen fitted composition rectangle (already accounts for proxy scaling and pixel
-    // aspect -- see fitDisplayRect() in viewer_editor.cpp).
+    // The frozen composition display rectangle (already accounts for proxy scaling and pixel
+    // aspect). Before task U3 (issue #119) this was always fitDisplayRect()'s fit-to-window
+    // rectangle; ViewerEditor now derives it from the Viewer's own active zoom/pan ViewTransform at
+    // gesture begin (viewTransformedDisplayRect() in viewer_editor.cpp) -- fitDisplayRect() exactly
+    // when the transform is in Fit mode, or the actively zoomed/panned rectangle otherwise. The
+    // freeze contract here is unchanged: this struct still doesn't know or care which geometry
+    // source produced the rectangle, only that it was non-empty and is now frozen.
     QRectF displayRect;
     // The frozen composition format; its width/height are the "compositionWidth"/
     // "compositionHeight" of the displacement formulas.
