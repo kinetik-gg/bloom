@@ -5,7 +5,6 @@
 #include <QWidget>
 
 class QAction;
-class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
 class QToolButton;
@@ -17,6 +16,10 @@ class CompositionPreviewController;
 class CompositionSession;
 class TimelineKeyframePanel;
 class TimelineRuler;
+
+namespace kit {
+class KValueField;
+} // namespace kit
 
 class TimelineEditor final : public QWidget {
     Q_OBJECT
@@ -78,18 +81,41 @@ class PropertiesEditor final : public QWidget {
 
   private:
     void rebuild();
+    void configurePosition();
     void configureOpacity();
     void configureSolidColor();
+    // Issue #120, decision 3: composition/document properties shown in place of an empty panel
+    // when nothing is selected. Toggles documentSection_/selectionSection_ visibility and fills
+    // documentSection_'s rows from composition()'s own read-only format/duration -- never a new
+    // CompositionSession API.
+    void configureDocumentProperties();
 
     CompositionSession& session_;
     QLabel* selectionLabel_ = nullptr;
-    QDoubleSpinBox* positionX_ = nullptr;
-    QDoubleSpinBox* positionY_ = nullptr;
-    QDoubleSpinBox* opacity_ = nullptr;
+
+    // The selection-driven groups (Transform/Appearance/source-specific), shown together and
+    // hidden as one unit whenever configureDocumentProperties() shows documentSection_ instead
+    // (issue #120, decision 3).
+    QWidget* selectionSection_ = nullptr;
+    kit::KValueField* positionX_ = nullptr;
+    kit::KValueField* positionY_ = nullptr;
+    QLabel* positionKeyframe_ = nullptr;
+    kit::KValueField* opacity_ = nullptr;
+    QLabel* opacityKeyframe_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
+    QLabel* solidColorKeyframe_ = nullptr;
     QLabel* solidColorValue_ = nullptr;
     QLabel* solidAlphaAssociation_ = nullptr;
     QLabel* solidColorEncoding_ = nullptr;
+
+    // The no-selection document/composition view (issue #120, decision 3).
+    QWidget* documentSection_ = nullptr;
+    QLabel* documentName_ = nullptr;
+    QLabel* documentFormat_ = nullptr;
+    QLabel* documentFrameRate_ = nullptr;
+    QLabel* documentDuration_ = nullptr;
+    QLabel* documentPixelAspect_ = nullptr;
+
     bool rebuilding_ = false;
 };
 
