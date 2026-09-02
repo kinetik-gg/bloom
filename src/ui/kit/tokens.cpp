@@ -1,5 +1,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <bloom/ui/kit/fonts.hpp>
+
 #include <QByteArray>
 #include <QGuiApplication>
 #include <QRgb>
@@ -112,18 +114,18 @@ QString monospaceFontFamily() { return QStringLiteral("Geist Mono"); }
 
 QFont font(const TypeRole role) {
     QFont value;
-    // A families list rather than a single family: if the bundled face never registered, Qt walks
-    // straight on to the platform's own sans-serif or monospace family instead of rendering a
-    // wrong or missing face. The interface never depends on the bundled asset being present.
+    // A families list rather than a single family, resolved by the font module: the exact bundled
+    // face for this role's weight first, its base family next, and the platform's own sans-serif
+    // or monospace family last. If nothing bundled registered, the interface simply runs on the
+    // platform family -- degraded and reported, never missing or crashed.
+    value.setFamilies(fontFamiliesForRole(role));
     switch (role) {
     case TypeRole::Ui:
-        value.setFamilies({interfaceFontFamily()});
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(12.5));
         value.setWeight(QFont::Medium);
         break;
     case TypeRole::UiSmall:
-        value.setFamilies({interfaceFontFamily()});
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(11.0));
         value.setWeight(QFont::Medium);
@@ -131,14 +133,12 @@ QFont font(const TypeRole role) {
         value.setLetterSpacing(QFont::PercentageSpacing, 107.0);
         break;
     case TypeRole::Value:
-        value.setFamilies({monospaceFontFamily()});
         value.setStyleHint(QFont::Monospace);
         value.setFixedPitch(true);
         value.setPointSizeF(pointSizeForDesignPixels(11.5));
         value.setWeight(QFont::Medium);
         break;
     case TypeRole::Title:
-        value.setFamilies({interfaceFontFamily()});
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(13.0));
         value.setWeight(QFont::DemiBold);

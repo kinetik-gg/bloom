@@ -1,6 +1,9 @@
 add_executable(bloom_editor_area_chrome_test
     editor_area_chrome_tests.cpp
 )
+add_executable(bloom_kit_fonts_test
+    kit_fonts_tests.cpp
+)
 add_executable(bloom_kit_icons_test
     kit_icons_tests.cpp
 )
@@ -71,6 +74,7 @@ add_executable(bloom_main_window_readonly_placeholder_test
 )
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_theme_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_tokens_test PRIVATE bloom_ui_kit)
@@ -90,6 +94,7 @@ target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
+bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_icons_test)
 bloom_enable_warnings(bloom_kit_theme_test)
 bloom_enable_warnings(bloom_kit_tokens_test)
@@ -114,6 +119,14 @@ include(BloomTesting)
 bloom_add_test(
     NAME bloom.ui.editor_area_chrome
     COMMAND bloom_editor_area_chrome_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_fonts
+    COMMAND bloom_kit_fonts_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

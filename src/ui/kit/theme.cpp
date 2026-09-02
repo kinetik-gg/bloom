@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/theme.hpp>
 
+#include <bloom/ui/kit/fonts.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QApplication>
@@ -404,6 +405,10 @@ void installKinetikTheme(QApplication& application) {
     if (auto* style = QStyleFactory::create(QStringLiteral("Fusion")); style != nullptr) {
         QApplication::setStyle(style);
     }
+    // Bundled faces are registered before the application font is set, so the very first widget
+    // already renders in Plus Jakarta Sans rather than flashing the platform family. A face that
+    // will not load produces a diagnostic and a platform fallback, never a failure to open.
+    (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
     QApplication::setFont(font(TypeRole::Ui));
     application.setStyleSheet(kinetikStyleSheet());
