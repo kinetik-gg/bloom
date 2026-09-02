@@ -119,7 +119,8 @@ base-4 scale, not rounded to a nearby step.
 | `IconMedium` | `16` | Default |
 | `IconLarge` | `20` | Prominent actions |
 | `TitleBar` | `34` | The application title bar |
-| `PanelHeader` | `30` | An editor panel's header row |
+| `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
+| `EditorHeader` | `48` | An editor panel's header row |
 | `TimelineRow` | `34` | One timeline row |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 

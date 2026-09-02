@@ -7,13 +7,16 @@
 #include <string>
 #include <string_view>
 
-class QComboBox;
 class QEvent;
 class QMenu;
 class QObject;
 class QResizeEvent;
 class QToolButton;
 class QVBoxLayout;
+
+namespace bloom::ui::kit {
+class KPanelSwitcher;
+} // namespace bloom::ui::kit
 
 namespace bloom::ui {
 
@@ -55,7 +58,7 @@ class EditorArea final : public QFrame {
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
-    QComboBox* editorPicker_ = nullptr;
+    kit::KPanelSwitcher* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
     QVBoxLayout* contentLayout_ = nullptr;
     // task U8, issue #131, fix 4: the header itself opens panelOptionsMenu_ on right-click

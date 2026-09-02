@@ -2,14 +2,15 @@
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAction>
 #include <QChildEvent>
-#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QMenu>
 #include <QPainterPath>
@@ -31,13 +32,15 @@
 namespace bloom::ui {
 namespace {
 
-// The panel header is a dense chrome row, so its icon-only controls take the smallest icon box.
-constexpr auto kHeaderIconSize = kit::Size::IconSmall;
+// task U8, issue #131, formal amendment 2, A9: the header's one remaining icon-only button
+// takes a full IconMedium glyph now (the earlier IconSmall/dense-chrome sizing read as
+// illegible at the button's own corrected size).
+constexpr auto kHeaderIconSize = kit::Size::IconMedium;
 
 // task U8, issue #131, formal amendment 1, A5: the panel-switcher glyph per editor kind. Media
 // reuses Folder (already vendored for the data-kind vocabulary) rather than a duplicate asset. An
 // editor id outside this table (an unavailable-editor placeholder, or a test's own probe id) gets
-// no icon at all -- exactly QComboBox's own no-icon default.
+// no icon at all -- KPanelSwitcher's own null-QIcon default.
 [[nodiscard]] std::optional<kit::IconId> iconForEditorId(const std::string& editorId) {
     if (editorId == "bloom.media") {
         return kit::IconId::Folder;
@@ -57,14 +60,12 @@ constexpr auto kHeaderIconSize = kit::Size::IconSmall;
     return std::nullopt;
 }
 
-// task U8, issue #131, fix 7: "the header QToolButtons must also be square: fixed size
-// Size::Control minus header padding, uniform." The header row reserves Spacing::PanelHeader
-// design pixels of vertical padding above and below its controls (headerLayout's own
-// setContentsMargins() below); task U8 formal amendment 1, A4 gave that padding its own named
-// token (10, deliberately off the base-4 scale) in place of the ad hoc 4 fix 7 originally used,
-// so a header button's square extent is the Control token less that one padding unit.
-constexpr int kHeaderVerticalPadding = kit::px(kit::Spacing::PanelHeader);
-constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control) - kHeaderVerticalPadding;
+// task U8, issue #131, fix 7 (revised by formal amendment 2, A9): the header's one remaining
+// icon-only button is a plain, bordered Size::Control square -- amendment 1's "Control minus
+// header padding" formula produced an illegible 16px button once Spacing::PanelHeader grew to
+// 10, and A9 explicitly reverts the button's own extent to Size::Control while leaving
+// Spacing::PanelHeader governing the header row's own padding (below), not the button.
+constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
 
 } // namespace
 
@@ -85,32 +86,28 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     header_ = new QWidget(this);
     header_->setObjectName("editorHeader");
     auto* headerLayout = new QHBoxLayout(header_);
-    headerLayout->setContentsMargins(6, kHeaderVerticalPadding, 4, kHeaderVerticalPadding);
+    // task U8, issue #131, formal amendment 2, A10: 10px side padding (Spacing::PanelHeader,
+    // reused on all four edges now that the switcher and the header button are no longer sized
+    // off the header's own margins); contents are explicitly vertically centered below rather
+    // than relying on margin arithmetic to land them in the 48px row (Size::EditorHeader).
+    const auto headerPadding = kit::px(kit::Spacing::PanelHeader);
+    headerLayout->setContentsMargins(headerPadding, 0, headerPadding, 0);
     headerLayout->setSpacing(4);
 
-    editorPicker_ = new QComboBox(header_);
+    // task U8, issue #131, formal amendment 2, A7/A8: a purpose-built kit switcher, not a
+    // QComboBox -- the QSS-on-QComboBox approach could not render the design (no chevron
+    // rendered, the shared QComboBox rule's uppercase transform leaked in, and the field
+    // stretched to fill the header row). KPanelSwitcher hugs its own content and sets its own
+    // Type::UI font (natural case, never UiSmall's uppercase) internally.
+    editorPicker_ = new kit::KPanelSwitcher(header_);
     editorPicker_->setObjectName("editorTypePicker");
-    editorPicker_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    // The panel header's title styling (task U2, issue #118, decision 4): UiSmall already IS
-    // "uppercase, +0.07em tracking" (kit::font()'s own recipe for the role), so giving the
-    // switcher this role is the whole job -- no separate title label, no per-character transform.
-    // Stays a QComboBox rather than becoming a KDropdown (decision 4's own named alternative):
-    // this control also carries the "unavailable editor" placeholder path below via
-    // QComboBox::findData()/setItemData(..., Qt::ToolTipRole), neither of which KDropdown exposes,
-    // and switching its type would silently break every existing "editorTypePicker" QComboBox*
-    // test contract outside this task's sanctioned change.
-    editorPicker_->setFont(kit::font(kit::TypeRole::UiSmall));
 
     for (const auto& editor : registry.editors()) {
-        // task U8, issue #131, formal amendment 1, A5: setItemIcon() (via this addItem() overload)
-        // renders natively in both the closed field's current-item icon and every popup row --
-        // this is plain QComboBox item-icon rendering, not the down-arrow QSS limitation fix 3 hit.
-        if (const auto iconId = iconForEditorId(editor.id); iconId.has_value()) {
-            editorPicker_->addItem(kit::icon(*iconId, kit::Size::IconSmall), editor.displayName,
-                                   QString::fromStdString(editor.id));
-        } else {
-            editorPicker_->addItem(editor.displayName, QString::fromStdString(editor.id));
-        }
+        // task U8, formal amendment 1, A5 (icon) + formal amendment 2, A7 (native item icon
+        // rendering via KPanelSwitcher, ported from the old QComboBox::addItem(icon, ...) call).
+        const auto iconId = iconForEditorId(editor.id);
+        const QIcon icon = iconId.has_value() ? kit::icon(*iconId, kit::Size::IconMedium) : QIcon{};
+        editorPicker_->addItem(icon, editor.displayName, QString::fromStdString(editor.id));
     }
 
     auto* content = new QWidget(this);
@@ -174,11 +171,14 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     headerLayout->addWidget(editorPicker_);
     headerLayout->addStretch(1);
     headerLayout->addWidget(maximizeButton_);
+    // task U8, formal amendment 2, A10: contents vertically centered within the 48px header row.
+    headerLayout->setAlignment(editorPicker_, Qt::AlignVCenter);
+    headerLayout->setAlignment(maximizeButton_, Qt::AlignVCenter);
 
     layout->addWidget(header_);
     layout->addWidget(content, 1);
 
-    connect(editorPicker_, &QComboBox::currentIndexChanged, this,
+    connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
     connect(maximizeButton_, &QToolButton::clicked, this, [this] { emit maximizeRequested(this); });
 
@@ -304,10 +304,12 @@ void EditorArea::rebuildEditor(int editorIndex) {
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {
     const auto id = QString::fromUtf8(editorId.data(), static_cast<qsizetype>(editorId.size()));
-    editorPicker_->addItem("Editor unavailable", id);
+    // task U8, formal amendment 2, A7: ported verbatim from the old QComboBox path -- no icon
+    // (KPanelSwitcher's null-QIcon default), and the tooltip carries through
+    // setItemToolTip() exactly as QComboBox's own Qt::ToolTipRole item data did.
+    editorPicker_->addItem(QIcon{}, "Editor unavailable", id);
     const int index = editorPicker_->count() - 1;
-    editorPicker_->setItemData(index, QStringLiteral("Unavailable editor: %1").arg(id),
-                               Qt::ToolTipRole);
+    editorPicker_->setItemToolTip(index, QStringLiteral("Unavailable editor: %1").arg(id));
     return index;
 }
 

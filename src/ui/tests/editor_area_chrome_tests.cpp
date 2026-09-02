@@ -1,13 +1,14 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAction>
 #include <QApplication>
-#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QFont>
 #include <QIcon>
 #include <QMenu>
 #include <QPoint>
@@ -17,6 +18,7 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -99,8 +101,9 @@ void testTheMaximizeButtonIsTheOnlyRemainingHeaderButtonAndIsAFullscreenToggle(
                         "resting wording is Fullscreen, not Maximize area");
     expectations.expect(button->accessibleName() == QStringLiteral("Fullscreen"),
                         "the accessible name matches: an icon never replaces one");
-    expectations.expect(button->iconSize().width() == kit::px(kit::Size::IconSmall),
-                        "maximizeAreaButton uses the dense-chrome icon box");
+    // task U8, formal amendment 2, A9: IconMedium (16px), not the dense-chrome IconSmall box.
+    expectations.expect(button->iconSize().width() == kit::px(kit::Size::IconMedium),
+                        "maximizeAreaButton uses the corrected 16px glyph box");
 
     const qint64 restingIcon = button->icon().cacheKey();
     area.setMaximizedAppearance(true);
@@ -128,11 +131,12 @@ void testTheHeaderQToolButtonsAreSquare(Expectations& expectations) {
     }
     expectations.expect(button->width() == button->height(),
                         "the header's one remaining icon-only QToolButton is square");
-    // task U8, formal amendment 1, A4 gave the header's own vertical padding a named token
-    // (Spacing::PanelHeader = 10), replacing fix 7's original ad hoc 4.
-    expectations.expect(
-        button->width() == kit::px(kit::Size::Control) - kit::px(kit::Spacing::PanelHeader),
-        "square at Size::Control minus the header's own vertical padding, per fix 7");
+    // task U8, formal amendment 2, A9: reverted to a plain, bordered Size::Control (26x26)
+    // square -- amendment 1's "Control minus header padding" formula (fix 7) produced an
+    // illegible 16px button once Spacing::PanelHeader grew to 10, and A9 explicitly undoes that
+    // coupling; Spacing::PanelHeader now governs only the header row's own padding.
+    expectations.expect(button->width() == kit::px(kit::Size::Control),
+                        "square at exactly Size::Control, per formal amendment 2's A9");
 }
 
 void testTheContextMenuOffersAllFourOperationsWithFullscreenWording(Expectations& expectations) {
@@ -244,13 +248,14 @@ void testSplitAndCloseEnablementIsUnchanged(Expectations& expectations) {
                         "re-enabling reaches the close action too");
 }
 
-// task U8, issue #131, formal amendment 1, A5: pins the panel-switcher icon mapping. setItemIcon
-// (via the addItem(icon, text, data) overload) renders natively in both the closed field's
-// current-item icon and the popup row, so one assertion per id covers both.
+// task U8, issue #131, formal amendment 1, A5 (mapping) / formal amendment 2, A7 (native
+// KPanelSwitcher item-icon rendering, ported from QComboBox::setItemIcon): pins the
+// panel-switcher icon mapping. One assertion per id covers both the closed field's current-item
+// icon and the popup row, since KPanelSwitcher's own model backs both.
 void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
     const EditorRegistry registry = makeRealIdRegistry();
     EditorArea area(registry, "bloom.viewer", QString{});
-    auto* picker = area.findChild<QComboBox*>(QStringLiteral("editorTypePicker"));
+    auto* picker = area.findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
     expectations.expect(picker != nullptr, "the panel switcher exists");
     if (picker == nullptr) {
         return;
@@ -260,7 +265,9 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
         const char* id;
         kit::IconId icon;
     };
-    const auto sampleSize = QSize(kit::px(kit::Size::IconSmall), kit::px(kit::Size::IconSmall));
+    // task U8, formal amendment 2, A7: the crop's own "panel icon 16px" -- IconMedium, not the
+    // IconSmall size formal amendment 1 originally used.
+    const auto sampleSize = QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
     for (const auto& [id, iconId] :
          {Mapping{"bloom.media", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
           Mapping{"bloom.timeline", kit::IconId::Clock},
@@ -273,11 +280,63 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
         }
         const QIcon actual = picker->itemIcon(index);
         expectations.expect(!actual.isNull(), std::string{id} + " carries an icon");
-        const QIcon expected = kit::icon(iconId, kit::Size::IconSmall);
+        const QIcon expected = kit::icon(iconId, kit::Size::IconMedium);
         expectations.expect(actual.pixmap(sampleSize).toImage() ==
                                 expected.pixmap(sampleSize).toImage(),
                             std::string{id} + " maps to its documented glyph");
     }
+}
+
+// task U8, issue #131, formal amendment 2, A7/A8: the switcher hugs its content (never
+// stretches), keeps its objectName, ports the unavailable-editor placeholder/tooltip behavior,
+// and its label is natural Title case (no uppercase transform).
+void testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(Expectations& expectations) {
+    const EditorRegistry registry = makeRealIdRegistry();
+    EditorArea area(registry, "bloom.viewer", QString{});
+    auto* picker = area.findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
+    expectations.expect(picker != nullptr, "the panel switcher exists and keeps its objectName");
+    if (picker == nullptr) {
+        return;
+    }
+
+    expectations.expect(picker->font().capitalization() != QFont::AllUppercase,
+                        "the switcher label is NOT uppercase-transformed (A8)");
+    expectations.expect(picker->itemText(picker->currentIndex()) == QStringLiteral("Viewer"),
+                        "the registry's own Title-case display name renders verbatim");
+
+    // Content-hugging: the field's sizeHint is well short of a typical header row's own width,
+    // proving it does not stretch to fill the layout the way the old QComboBox did.
+    expectations.expect(picker->sizeHint().width() < 200,
+                        "the switcher hugs its content rather than stretching wide");
+
+    // The unavailable-editor placeholder path, ported: an id the registry does not know about
+    // still becomes a selectable, tooltip-carrying entry (setEditorId()'s own contract).
+    expectations.expect(area.setEditorId("bloom.nonexistent"),
+                        "setEditorId() still succeeds for an id the registry does not know");
+    expectations.expect(area.editorId() == "bloom.nonexistent",
+                        "the unavailable id becomes the current value");
+    expectations.expect(picker->toolTip() ==
+                            QStringLiteral("Unavailable editor: bloom.nonexistent"),
+                        "the closed field's tooltip carries the ported placeholder message");
+}
+
+// task U8, issue #131, formal amendment 2, A10: header proportions per the design crops.
+void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    auto* header = area.findChild<QWidget*>(QStringLiteral("editorHeader"));
+    auto* picker = area.findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
+    expectations.expect(header != nullptr && picker != nullptr,
+                        "the header and switcher both exist");
+    if (header == nullptr || picker == nullptr) {
+        return;
+    }
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 48,
+                        "the header row's own height token is 48");
+    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
+    expectations.expect(picker->sizeHint().height() ==
+                            kit::px(kit::Size::ControlRoomy) + ringMargin,
+                        "the switcher field is ControlRoomy (32) tall");
 }
 
 } // namespace
@@ -294,5 +353,7 @@ int main(int argc, char** argv) {
     testHeaderControlsAndMenuActionsStillDriveTheirSignals(expectations);
     testSplitAndCloseEnablementIsUnchanged(expectations);
     testThePanelSwitcherPinsTheIconMapping(expectations);
+    testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(expectations);
+    testHeaderProportionsMatchTheDesignCrops(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

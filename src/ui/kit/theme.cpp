@@ -73,6 +73,7 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("size.IconLarge"), px(Size::IconLarge)},
         {QLatin1StringView("size.TitleBar"), px(Size::TitleBar)},
         {QLatin1StringView("size.PanelHeader"), px(Size::PanelHeader)},
+        {QLatin1StringView("size.EditorHeader"), px(Size::EditorHeader)},
         {QLatin1StringView("size.TimelineRow"), px(Size::TimelineRow)},
         {QLatin1StringView("size.ScrollBar"), px(Size::ScrollBar)},
         {QLatin1StringView("size.ScrollBarHover"), px(Size::ScrollBarHover)},
@@ -233,7 +234,7 @@ QFrame#editorArea[active="true"] {
 QWidget#editorHeader {
     background: {color.Surface};
     border-bottom: {border.Hairline}px solid {color.Border};
-    min-height: {size.PanelHeader}px;
+    min-height: {size.EditorHeader}px;
 }
 QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};

@@ -114,6 +114,10 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Size::IconLarge) == 20, "IconLarge is 20");
     expectations.expect(kit::px(kit::Size::TitleBar) == 34, "TitleBar is 34");
     expectations.expect(kit::px(kit::Size::PanelHeader) == 30, "PanelHeader is 30");
+    // task U8, issue #131, formal amendment 2, A10: the EditorArea header's OWN height (48) is a
+    // distinct token from PanelHeader above, which stays 30 -- node_editor.cpp's card header
+    // height and row pitch still resolve through PanelHeader unchanged.
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 48, "EditorHeader is 48");
     expectations.expect(kit::px(kit::Size::TimelineRow) == 34, "TimelineRow is 34");
     expectations.expect(kit::px(kit::Size::ScrollBar) == 8, "ScrollBar is 8");
     expectations.expect(kit::px(kit::Size::ScrollBarHover) == 12, "ScrollBar hover width is 12");

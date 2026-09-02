@@ -9,6 +9,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -17,7 +18,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QByteArray>
-#include <QComboBox>
 #include <QDir>
 #include <QFocusEvent>
 #include <QJsonArray>
@@ -42,6 +42,7 @@ using bloom::ui::EditorArea;
 using bloom::ui::EditorRegistry;
 using bloom::ui::WorkspaceHost;
 using bloom::ui::WorkspaceLayoutRestoreResult;
+using bloom::ui::kit::KPanelSwitcher;
 
 bool require(bool condition, int code) {
     if (!condition) {
@@ -150,7 +151,9 @@ int testSplitCloseAndActivation(const EditorRegistry& registry) {
 
     const auto areas = host.findChildren<EditorArea*>();
     for (const auto* area : areas) {
-        const auto* picker = area->findChild<QComboBox*>("editorTypePicker");
+        // task U8, issue #131, formal amendment 2, A7: the switcher is a KPanelSwitcher now, not
+        // a QComboBox -- the QSS-on-QComboBox approach could not render the design.
+        const auto* picker = area->findChild<KPanelSwitcher*>("editorTypePicker");
         if (!require(picker != nullptr && picker->count() == 5, 14)) {
             return 14;
         }
