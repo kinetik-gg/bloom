@@ -54,4 +54,15 @@ void drawFocusRing(QPainter& painter, const QRectF& bounds, Radius radius);
 // Attaches (or clears, for Elevation::Flat) the token drop shadow for an elevated surface.
 void applyElevation(QWidget& widget, Elevation elevation);
 
+// Task U6 (issue #121): the two-tone grid every translucent-color surface paints behind itself --
+// a color chip, the alpha bar in KColorPicker's Square HSV form -- so partial alpha reads against
+// a neutral ground instead of silently blending into whatever the widget happens to sit on. Added
+// here rather than duplicated in each color widget because it is exactly what this header already
+// promises ("the painting primitives every kit widget draws with"), and it composes only from the
+// existing surface-ladder tokens: the two checker tones are Color::Surface and its neighbor one
+// step up the ladder, never a literal gray of their own. `cellPx` is the edge length of one square
+// in the checker in device-independent pixels; `radius` clips the pattern to `bounds`' rounded
+// corners so it never bleeds past a chip's own outline.
+void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx, Radius radius);
+
 } // namespace bloom::ui::kit
