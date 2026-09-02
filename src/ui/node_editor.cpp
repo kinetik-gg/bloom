@@ -276,13 +276,34 @@ class NodeItem final : public QGraphicsObject {
         relayout();
     }
 
-    void setSockets(const bool hasInput, const bool hasOutput) {
-        if (hasInput != hasInputSocket_ || hasOutput != hasOutputSocket_) {
-            hasInputSocket_ = hasInput;
-            hasOutputSocket_ = hasOutput;
+    // Sockets ACCUMULATE across the edges that touch this card, and are cleared once per
+    // projection. A node in the middle of the chain -- a layer output, the layer stack -- is both
+    // an edge source and an edge destination, so a setter that assigned both flags at once would
+    // let whichever edge happened to be visited last erase the other end's dot.
+    void clearSockets() {
+        if (hasInputSocket_ || hasOutputSocket_) {
+            hasInputSocket_ = false;
+            hasOutputSocket_ = false;
             update();
         }
     }
+
+    void markInputSocket() {
+        if (!hasInputSocket_) {
+            hasInputSocket_ = true;
+            update();
+        }
+    }
+
+    void markOutputSocket() {
+        if (!hasOutputSocket_) {
+            hasOutputSocket_ = true;
+            update();
+        }
+    }
+
+    [[nodiscard]] bool hasInputSocket() const noexcept { return hasInputSocket_; }
+    [[nodiscard]] bool hasOutputSocket() const noexcept { return hasOutputSocket_; }
 
     [[nodiscard]] QPointF inputAnchor() const {
         return mapToScene(QPointF(0.0, kCardHeaderHeight / 2.0));
@@ -866,7 +887,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
     }
     for (const auto& [id, item] : existing) {
         item->clearEdges();
-        item->setSockets(false, false);
+        item->clearSockets();
     }
 
     std::array<int, 4> rows{};
@@ -924,6 +945,12 @@ QWidget* NodeGraphicsScene::nodeFieldForTest(const document::NodeId nodeId,
     return item == nullptr ? nullptr : item->fieldWidget(fieldObjectName);
 }
 
+NodeSockets NodeGraphicsScene::nodeSocketsForTest(const document::NodeId nodeId) const {
+    const auto* item = dynamic_cast<const NodeItem*>(findNodeItem(nodeId));
+    return item == nullptr ? NodeSockets{}
+                           : NodeSockets{item->hasInputSocket(), item->hasOutputSocket()};
+}
+
 void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
     for (const auto& edge : composition.graph().edges()) {
         auto* source = dynamic_cast<NodeItem*>(findNodeItem(edge.source.nodeId));
@@ -931,8 +958,8 @@ void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
             dynamic_cast<NodeItem*>(findNodeItem(destinationNodeId(edge.destination)));
         if (source != nullptr && destination != nullptr) {
             addItem(new NodeEdgeItem(*source, *destination));
-            source->setSockets(false, true);
-            destination->setSockets(true, false);
+            source->markOutputSocket();
+            destination->markInputSocket();
         }
     }
 }

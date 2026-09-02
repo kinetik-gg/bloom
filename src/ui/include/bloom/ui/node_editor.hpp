@@ -55,6 +55,16 @@ inline constexpr int kNodeStableIdRole = Qt::UserRole + 2;
 // would be exactly the speculative palette this decision forbids.
 [[nodiscard]] kit::Color socketColorToken(runtime::SocketValueKind kind) noexcept;
 
+// Which ends of a card's header line carry a port dot: an input on the left, an output on the
+// right. Both accumulate from the edges that actually touch the node, so a card in the middle of
+// the chain carries both.
+struct NodeSockets final {
+    bool hasInput = false;
+    bool hasOutput = false;
+
+    friend bool operator==(const NodeSockets&, const NodeSockets&) = default;
+};
+
 class NodeGraphicsScene final : public QGraphicsScene {
     Q_OBJECT
 
@@ -79,6 +89,9 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // findChild() cannot reach it.
     [[nodiscard]] QWidget* nodeFieldForTest(document::NodeId nodeId,
                                             const QString& fieldObjectName) const;
+    // Likewise: the port dots are painted, not separate items, so this is the only way to assert
+    // that a mid-chain card carries BOTH ends rather than only whichever edge was visited last.
+    [[nodiscard]] NodeSockets nodeSocketsForTest(document::NodeId nodeId) const;
 
   protected:
     void drawBackground(QPainter* painter, const QRectF& rect) override;

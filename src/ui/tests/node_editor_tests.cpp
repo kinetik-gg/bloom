@@ -348,6 +348,37 @@ void testEveryProjectedEdgeIsAPathItemBetweenTwoCards(Expectations& expectations
                         "and exactly one wire per graph edge");
 }
 
+// A card in the middle of the chain is BOTH an edge source and an edge destination, so it carries
+// both port dots. Sockets accumulate across the edges that touch a node; assigning both flags from
+// each edge in turn would let whichever edge was visited last erase the other end.
+void testMidChainCardsCarryBothPortDots(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Node Socket Test"));
+    const auto layerId = addSolid(fixture.session);
+    if (!layerId.has_value()) {
+        expectations.expect(false, "the fixture can add a solid layer");
+        return;
+    }
+    const auto boundaryNodeId = fixture.session.boundaryNodeForLayer(*layerId);
+    const auto sourceNodeId = fixture.session.directSourceNodeForLayer(*layerId);
+    const auto* composition = fixture.session.composition();
+    if (!boundaryNodeId.has_value() || !sourceNodeId.has_value() || composition == nullptr) {
+        expectations.expect(false, "the solid layer resolves its boundary and source nodes");
+        return;
+    }
+
+    expectations.expect(fixture.scene()->nodeSocketsForTest(*sourceNodeId) ==
+                            ui::NodeSockets{false, true},
+                        "a source card carries only an output dot: nothing feeds into it");
+    expectations.expect(fixture.scene()->nodeSocketsForTest(*boundaryNodeId) ==
+                            ui::NodeSockets{true, true},
+                        "the layer boundary card carries both: it consumes the source and feeds "
+                        "the stack");
+    expectations.expect(
+        fixture.scene()->nodeSocketsForTest(composition->graph().layerStack().nodeId()) ==
+            ui::NodeSockets{true, true},
+        "and so does the layer stack");
+}
+
 // --- Decision 4: context menu offers only what the command layer can do -------------------------
 
 void testContextMenuOffersOnlyRealCommands(Expectations& expectations) {
@@ -564,6 +595,7 @@ int runAll() {
     testSelectionFollowsTheSessionInBothDirections(expectations);
     testConnectorTypingIsPinnedPerSocketKind(expectations);
     testEveryProjectedEdgeIsAPathItemBetweenTwoCards(expectations);
+    testMidChainCardsCarryBothPortDots(expectations);
     testContextMenuOffersOnlyRealCommands(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
