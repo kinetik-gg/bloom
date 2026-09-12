@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-02
+Updated: 2026-09-12
 
 ## Purpose
 
@@ -98,11 +98,11 @@ rest (a `KValueField` cell) paints its resting border transparent and gains the 
 hover or focus. `kit::borderForInteraction()` is the one implementation;
 `src/ui/tests/kit_focus_border_tests.cpp` pins every control at all four points.
 
-The color widgets are the documented exception: `KColorChip`, `KColorSwatches`, `KColorPicker`, and
-`KRangeSelector` still draw an accent ring outside their own rectangle (`1.5`,
-`kit::drawFocusRing()`), because their focusable target is a color field or a swatch whose border
-color is the artist's data rather than a state channel, so a border-color change there could not
-carry focus at all.
+The color widgets are the documented exception: `KColorChip` and `KRangeSelector` (through
+`kit::drawFocusRing()`) and `KColorSwatches` and `KColorPicker` (through accent pens of their own)
+still draw a `1.5` accent ring outside the focused element, because their focusable target is a
+color field, a swatch, or a handle whose own border color is the artist's data rather than a state
+channel -- a border-color change there could not carry focus at all.
 
 ### Spacing
 
