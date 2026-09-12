@@ -157,6 +157,19 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool addTextLayer(const QString& name, const QString& text);
     [[nodiscard]] bool setSelectedPosition(double x, double y);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
+    // Task P3 (issue #120 follow-up, owner review 2026-09-12): the properties panel's editable
+    // RGBA cells write through this, exactly mirroring setSelectedOpacity()'s shape -- resolve the
+    // selection's document::kSolidColorParameterRole parameter, then a single
+    // commands::SetParameterSource carrying the whole core::Color4d as its ConstantValueSource
+    // (the same generic command Position/Opacity already use for their own constant branch), one
+    // transaction per call. Unlike Position, there is no animated branch:
+    // CreateAnimationForParameter only accepts the opacity/position schemas today
+    // (src/commands/animation_operations.cpp) and commands::SetKeyframeAtTime has no core::Color4d
+    // overload, so a solid color parameter can never actually become an AnimationCurveSource
+    // through the existing command surface -- a non-constant source (driven, or the
+    // otherwise-unreachable animated case) is refused the same way setSelectionScalarParameter()'s
+    // driven branch is. See this task's raw report.
+    [[nodiscard]] bool setSelectedSolidColor(core::Color4d color);
     [[nodiscard]] bool
     moveLayerBefore(document::LayerSlotId slotId,
                     std::optional<document::LayerSlotId> beforeSlotId = std::nullopt);
