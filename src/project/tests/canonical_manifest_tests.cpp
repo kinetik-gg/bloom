@@ -173,7 +173,7 @@ void testFixedConstantsAndSchemaVersions(Expectations& expectations) {
     expectError(manifest, CanonicalManifestError::InvalidDocumentSchemaVersion,
                 "a document schema major other than one is rejected");
     manifest = {};
-    manifest.documentSchemaVersion = {1, 1};
+    manifest.documentSchemaVersion = {1, 3};
     expectations.expect(
         static_cast<bool>(bloom::project::canonicalManifestSize(manifest)),
         "a same-major newer document minor is accepted for round-tripped document truth");
