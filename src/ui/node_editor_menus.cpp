@@ -103,6 +103,7 @@ void NodeGraphEditor::handleCanvasKey(const int key, const Qt::KeyboardModifiers
 }
 
 QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
+    addRevision_ = session_.snapshot().revision();
     auto* menu = new QMenu(parent);
     menu->setObjectName(nodeMenu ? QStringLiteral("nodeContextMenu")
                                  : QStringLiteral("nodeCanvasMenu"));

@@ -237,6 +237,11 @@ void testSearchKeyboardAndMenus() {
                named(menu, "nodeFitAction") && named(menu, "nodeActualSizeAction") &&
                named(menu, "nodeZoomInAction") && named(menu, "nodeZoomOutAction"),
            "canvas menu offers Add search, view actions and Select All");
+    const auto aliasRevision = f.session.snapshot().revision();
+    if (auto* solid = named(menu, "nodeAddSolidLayerAction"))
+        solid->trigger();
+    expect(f.session.snapshot().revision().value() == aliasRevision.value() + 1,
+           "preserved Add action contracts capture the revision when their menu is constructed");
     delete menu;
 }
 } // namespace bloom::ui::test
