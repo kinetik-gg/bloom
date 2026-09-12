@@ -31,13 +31,18 @@
 namespace bloom::project {
 
 // Coarse stage identifying which checked document-model surface rejected reconstruction. Ordered to
-// match the reconstruction walk: per-composition graph assembly, per-composition store assembly,
-// composition admission, extension admission, whole-project validation, and finally Document
-// construction (the inclusive-watermark check).
+// match the reconstruction walk: node schema upgrades, per-composition graph assembly,
+// per-composition store assembly, composition admission, extension admission, whole-project
+// validation, and finally Document construction (the inclusive-watermark check).
 enum class ReconstructionStage : std::uint8_t {
     // Reserved zero value for a default-constructed (never-failed) ReconstructionRejected; never
     // returned by reconstructDocument() itself.
     None,
+    // A decoded node at an older registered schema version could not be upgraded to the current one
+    // because the document's persisted parameter high water leaves no room for the parameters the
+    // newer schema requires. `recordId` names the node. See upgradeDecodedNodeSchemas() in
+    // document_reconstruct.cpp and docs/architecture/project-format.md, "Node Schema Upgrades".
+    NodeSchemaUpgrade,
     // bloom::document::CanonicalGraph::addNode() rejected a decoded node.
     GraphNode,
     // bloom::document::CanonicalGraph::addEdge() rejected a decoded edge.
@@ -136,6 +141,15 @@ class [[nodiscard]] ReconstructDocumentResult final {
 // success or failure). See the file-level comment above for the exact checked surfaces this walks
 // through and the ordering ReconstructionStage documents. May throw std::bad_alloc; every
 // document-model rejection is reported through the returned result rather than thrown.
+//
+// NODE SCHEMA UPGRADES run first, before anything is installed: a decoded node whose typeId is
+// registered at a NEWER schema version than the file declares is brought forward by injecting the
+// parameters the newer schema added, each at its registered default. The defaults are chosen so an
+// upgraded document evaluates to the pixels the older build produced, so opening an older file is a
+// silent, lossless upgrade rather than a refusal or a visible change. Injected parameters take ids
+// strictly above the document's persisted parameter high water, which is raised to match, keeping
+// the inclusive-watermark rule intact. The upgrade is in-memory only; nothing is written back until
+// the document is saved, at which point it is saved as current truth.
 [[nodiscard]] ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope);
 
 } // namespace bloom::project

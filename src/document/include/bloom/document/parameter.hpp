@@ -19,6 +19,20 @@ inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content"
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
 inline constexpr std::string_view kTextColorParameterSchemaKey = "bloom.text.color";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
+// Layer-space anchor, in full-resolution composition pixels, measured from the LAYER CENTRE -- so
+// the default Vec2d{} is exactly "the layer centre" without the schema needing to know any
+// composition format. Scale/rotation turn about this point and it is the one point a layer's
+// position parameter places, which is why the two share an origin: position puts the layer centre
+// at its value, so anchor {0, 0} is that same point. See docs/architecture/layer-graph-model.md,
+// "Layer Transform".
+inline constexpr std::string_view kAnchorParameterSchemaKey = "bloom.transform.anchor";
+// Unitless per-axis scale factor. 1 is unscaled; a negative factor mirrors the axis; 0 collapses
+// the layer to nothing, which evaluation renders as an empty layer rather than an error.
+inline constexpr std::string_view kScaleParameterSchemaKey = "bloom.transform.scale";
+// Clockwise screen rotation in DEGREES (Bloom's y axis points down, so a positive value turns the
+// layer clockwise, matching every timeline-based compositor). Unbounded: 450 and 90 evaluate
+// identically but are distinct authored values so a rotation curve can wind past a full turn.
+inline constexpr std::string_view kRotationParameterSchemaKey = "bloom.transform.rotation";
 inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opacity";
 
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
@@ -44,6 +58,35 @@ struct Vec2d {
 
     friend bool operator==(const Vec2d&, const Vec2d&) = default;
 };
+
+// The Layer Output transform defaults, in one place so the node definition registry, the layer
+// creation commands, and Project I/O's version-1 node upgrade cannot drift apart. Together they are
+// the identity transform: no anchor offset, no scaling, no rotation.
+inline constexpr Vec2d kDefaultAnchor{};
+inline constexpr Vec2d kDefaultScale{1.0, 1.0};
+inline constexpr double kDefaultRotationDegrees = 0.0;
+
+// The animatable schema set, split by the curve value kind each member requires. These three
+// predicates are the single authority every layer asks -- document validation, the animation
+// commands, and the snapshot compiler's override gate -- so the set cannot be widened in one place
+// and stay narrow in another. A schema key that satisfies neither predicate is constant-only, which
+// is every source parameter (solid colour, text content/size/colour) and every unregistered key.
+[[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
+           schemaKey == kScaleParameterSchemaKey;
+}
+
+[[nodiscard]] constexpr bool
+isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey;
+}
+
+// Whether a scalar value under this schema is confined to [0, 1]. Opacity is the only one: rotation
+// degrees must be free to wind past a full turn in either direction, so the unit domain belongs to
+// the schema rather than to "scalar values" as a class.
+[[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kOpacityParameterSchemaKey;
+}
 
 using ParameterValue =
     std::variant<bool, std::int64_t, double, Vec2d, core::Color4d, std::string, core::RationalTime>;

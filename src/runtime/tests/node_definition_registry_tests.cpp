@@ -156,12 +156,46 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "the text schema names no font");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
-    expectations.expect(layer != nullptr && layer->parameters.size() == 2 &&
-                            layer->parameters[0].supportsAnimation &&
-                            layer->parameters[1].supportsAnimation && solid != nullptr &&
-                            !solid->parameters.front().supportsAnimation && text != nullptr &&
-                            !text->parameters.front().supportsAnimation,
+    // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
+    // assertion now covers all five rather than the original pair -- the property it pins is
+    // unchanged (animation support is declared per parameter, and a source parameter declares
+    // none).
+    expectations.expect(layer != nullptr && layer->parameters.size() == 5 &&
+                            std::ranges::all_of(layer->parameters,
+                                                [](const auto& parameter) {
+                                                    return parameter.supportsAnimation;
+                                                }) &&
+                            solid != nullptr && !solid->parameters.front().supportsAnimation &&
+                            text != nullptr && !text->parameters.front().supportsAnimation,
                         "animation support is an explicit per-parameter evaluator capability");
+    expectations.expect(
+        layer != nullptr && layer->parameters.size() == 5 &&
+            layer->parameters[0].role == document::kPositionParameterRole &&
+            layer->parameters[0].schemaKey == document::kPositionParameterSchemaKey &&
+            layer->parameters[0].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[1].role == document::kAnchorParameterRole &&
+            layer->parameters[1].schemaKey == document::kAnchorParameterSchemaKey &&
+            layer->parameters[1].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[2].role == document::kScaleParameterRole &&
+            layer->parameters[2].schemaKey == document::kScaleParameterSchemaKey &&
+            layer->parameters[2].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[3].role == document::kRotationParameterRole &&
+            layer->parameters[3].schemaKey == document::kRotationParameterSchemaKey &&
+            layer->parameters[3].valueKind == runtime::ParameterValueKind::Float64 &&
+            layer->parameters[4].role == document::kOpacityParameterRole &&
+            layer->parameters[4].schemaKey == document::kOpacityParameterSchemaKey &&
+            layer->parameters[4].valueKind == runtime::ParameterValueKind::Float64,
+        "the Layer Output schema is exactly position, anchor, scale, rotation, and opacity, in the "
+        "registered order");
+    expectations.expect(layer != nullptr && layer->parameters.size() == 5 &&
+                            layer->parameters[1].defaultValue ==
+                                document::ParameterValue{document::kDefaultAnchor} &&
+                            layer->parameters[2].defaultValue ==
+                                document::ParameterValue{document::kDefaultScale} &&
+                            layer->parameters[3].defaultValue ==
+                                document::ParameterValue{document::kDefaultRotationDegrees},
+                        "the transform defaults are the identity transform: centre anchor, unit "
+                        "scale, no rotation");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,
                         "registration is closed after freeze");

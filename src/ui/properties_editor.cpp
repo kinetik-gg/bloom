@@ -76,14 +76,16 @@ QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* la
 // exists for a narrower purpose (a field-local "X"/"Y" prefix inside the cell itself), so the row's
 // OUTER label column, which names the whole parameter, is measured independently here.
 int propertyLabelColumnWidth() {
-    static const std::array<QString, 14> kLabels{
-        PropertiesEditor::tr("Position"), PropertiesEditor::tr("Opacity"),
-        PropertiesEditor::tr("RGBA"),     PropertiesEditor::tr("Alpha"),
-        PropertiesEditor::tr("Encoding"), PropertiesEditor::tr("Name"),
-        PropertiesEditor::tr("Format"),   PropertiesEditor::tr("Frame Rate"),
-        PropertiesEditor::tr("Duration"), PropertiesEditor::tr("Pixel Aspect"),
-        PropertiesEditor::tr("Content"),  PropertiesEditor::tr("Size"),
-        PropertiesEditor::tr("Color"),    PropertiesEditor::tr("Font"),
+    static const std::array<QString, 17> kLabels{
+        PropertiesEditor::tr("Position"),     PropertiesEditor::tr("Anchor"),
+        PropertiesEditor::tr("Scale"),        PropertiesEditor::tr("Rotation"),
+        PropertiesEditor::tr("Opacity"),      PropertiesEditor::tr("RGBA"),
+        PropertiesEditor::tr("Alpha"),        PropertiesEditor::tr("Encoding"),
+        PropertiesEditor::tr("Name"),         PropertiesEditor::tr("Format"),
+        PropertiesEditor::tr("Frame Rate"),   PropertiesEditor::tr("Duration"),
+        PropertiesEditor::tr("Pixel Aspect"), PropertiesEditor::tr("Content"),
+        PropertiesEditor::tr("Size"),         PropertiesEditor::tr("Color"),
+        PropertiesEditor::tr("Font"),
     };
     const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
     int widest = 0;
@@ -276,6 +278,92 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Position"), labelColumnWidth, selectionSection_),
                    positionKeyframe_, positionFields);
+
+    // Anchor, Scale, and Rotation complete the Transform group, in the registered parameter order
+    // (see src/document/node_definition_registry.cpp). Each mirrors Position's own construction --
+    // one paired X/Y field group or one single field, one keyframe indicator, one row -- so the
+    // three read as siblings of Position rather than as a separate kind of control.
+    //
+    // The anchor is in the same pixel space Position is, so it takes Position's range, decimals,
+    // step, and unit verbatim. Like Position's, that range is "unbounded in practice" rather than
+    // truly unbounded: kit::KValueField's setRange() always clamps, and +-infinity or the finite
+    // double extremes both wreck sizeHint() (see the solid colour cells below for the full
+    // reasoning), so +-1'000'000 px stands in for no limit.
+    anchorX_ = new kit::KValueField(selectionSection_);
+    anchorY_ = new kit::KValueField(selectionSection_);
+    for (auto* field : {anchorX_, anchorY_}) {
+        field->setRange(-1'000'000.0, 1'000'000.0);
+        field->setDecimals(2);
+        field->setSingleStep(1.0);
+        field->setUnit(QStringLiteral("px"));
+    }
+    anchorX_->setObjectName("anchorXEditor");
+    anchorX_->setAccessibleName(tr("Anchor X"));
+    anchorX_->setLabel(QStringLiteral("X"));
+    anchorY_->setObjectName("anchorYEditor");
+    anchorY_->setAccessibleName(tr("Anchor Y"));
+    anchorY_->setLabel(QStringLiteral("Y"));
+
+    auto* anchorFields = new QWidget(selectionSection_);
+    anchorFields->setObjectName(QStringLiteral("anchorFieldGroup"));
+    auto* anchorFieldsLayout = new QHBoxLayout(anchorFields);
+    anchorFieldsLayout->setContentsMargins(0, 0, 0, 0);
+    anchorFieldsLayout->setSpacing(kit::px(kit::Spacing::S));
+    anchorFieldsLayout->addWidget(anchorX_);
+    anchorFieldsLayout->addWidget(anchorY_);
+
+    anchorKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    addPropertyRow(selectionLayout, selectionSection_,
+                   makePropertyRowLabel(tr("Anchor"), labelColumnWidth, selectionSection_),
+                   anchorKeyframe_, anchorFields);
+
+    // Scale is authored as a PERCENTAGE in the panel and stored as a unitless factor, exactly the
+    // way Opacity is authored as a percentage and stored in [0, 1]. The scrub step is 1%, the
+    // smallest step that reads as a deliberate size change. Negative percentages are reachable
+    // because a negative factor is a legitimate mirror of the axis.
+    scaleX_ = new kit::KValueField(selectionSection_);
+    scaleY_ = new kit::KValueField(selectionSection_);
+    for (auto* field : {scaleX_, scaleY_}) {
+        field->setRange(-100'000.0, 100'000.0);
+        field->setDecimals(2);
+        field->setSingleStep(1.0);
+        field->setUnit(QStringLiteral("%"));
+    }
+    scaleX_->setObjectName("scaleXEditor");
+    scaleX_->setAccessibleName(tr("Scale X"));
+    scaleX_->setLabel(QStringLiteral("X"));
+    scaleY_->setObjectName("scaleYEditor");
+    scaleY_->setAccessibleName(tr("Scale Y"));
+    scaleY_->setLabel(QStringLiteral("Y"));
+
+    auto* scaleFields = new QWidget(selectionSection_);
+    scaleFields->setObjectName(QStringLiteral("scaleFieldGroup"));
+    auto* scaleFieldsLayout = new QHBoxLayout(scaleFields);
+    scaleFieldsLayout->setContentsMargins(0, 0, 0, 0);
+    scaleFieldsLayout->setSpacing(kit::px(kit::Spacing::S));
+    scaleFieldsLayout->addWidget(scaleX_);
+    scaleFieldsLayout->addWidget(scaleY_);
+
+    scaleKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    addPropertyRow(selectionLayout, selectionSection_,
+                   makePropertyRowLabel(tr("Scale"), labelColumnWidth, selectionSection_),
+                   scaleKeyframe_, scaleFields);
+
+    // Rotation is a single degree field with a 1 degree scrub step. Its range is deliberately wider
+    // than one turn: the schema accepts any finite angle so a rotation curve can wind, and a field
+    // that clamped at 360 would silently refuse an authored 450.
+    rotation_ = new kit::KValueField(selectionSection_);
+    rotation_->setObjectName("rotationEditor");
+    rotation_->setAccessibleName(tr("Rotation"));
+    rotation_->setRange(-100'000.0, 100'000.0);
+    rotation_->setDecimals(2);
+    rotation_->setSingleStep(1.0);
+    rotation_->setUnit(QString::fromUtf8("\u00b0"));
+
+    rotationKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    addPropertyRow(selectionLayout, selectionSection_,
+                   makePropertyRowLabel(tr("Rotation"), labelColumnWidth, selectionSection_),
+                   rotationKeyframe_, rotation_);
 
     addSectionHeader(selectionLayout, selectionSection_, tr("Appearance"));
 
@@ -486,6 +574,25 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     };
     connect(positionX_, &kit::KValueField::valueChanged, this, commitPosition);
     connect(positionY_, &kit::KValueField::valueChanged, this, commitPosition);
+    const auto commitAnchor = [this] {
+        if (!rebuilding_) {
+            (void)session_.setSelectedAnchor(anchorX_->value(), anchorY_->value());
+        }
+    };
+    connect(anchorX_, &kit::KValueField::valueChanged, this, commitAnchor);
+    connect(anchorY_, &kit::KValueField::valueChanged, this, commitAnchor);
+    const auto commitScale = [this] {
+        if (!rebuilding_) {
+            (void)session_.setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
+        }
+    };
+    connect(scaleX_, &kit::KValueField::valueChanged, this, commitScale);
+    connect(scaleY_, &kit::KValueField::valueChanged, this, commitScale);
+    connect(rotation_, &kit::KValueField::valueChanged, this, [this](const double value) {
+        if (!rebuilding_) {
+            (void)session_.setSelectedRotation(value);
+        }
+    });
     connect(opacity_, &kit::KValueField::valueChanged, this, [this](const double value) {
         if (!rebuilding_) {
             (void)session_.setSelectedOpacity(value / 100.0);
@@ -534,6 +641,9 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
 void PropertiesEditor::rebuild() {
     rebuilding_ = true;
     configurePosition();
+    configureAnchor();
+    configureScale();
+    configureRotation();
     configureOpacity();
     configureSolidColor();
     configureTextSource();
@@ -560,6 +670,52 @@ void PropertiesEditor::configurePosition() {
     positionX_->setToolTip(positionTip);
     positionY_->setToolTip(positionTip);
     updateKeyframeIndicator(positionKeyframe_, position);
+}
+
+void PropertiesEditor::configureAnchor() {
+    const auto* anchor = session_.parameterForSelection(document::kAnchorParameterRole);
+    const auto value = anchor == nullptr ? std::nullopt : session_.constantVec2Value(anchor->id);
+    const bool editable = value.has_value();
+    for (auto* field : {anchorX_, anchorY_}) {
+        field->setEnabled(editable);
+        field->setToolTip(anchor == nullptr ? tr("Anchor is not exposed by this selection")
+                                            : parameterSourceDescription(*anchor));
+    }
+    if (editable) {
+        const QSignalBlocker blockX(anchorX_);
+        const QSignalBlocker blockY(anchorY_);
+        anchorX_->setValue(value->x);
+        anchorY_->setValue(value->y);
+    }
+    updateKeyframeIndicator(anchorKeyframe_, anchor);
+}
+
+void PropertiesEditor::configureScale() {
+    const auto* scale = session_.parameterForSelection(document::kScaleParameterRole);
+    const auto value = scale == nullptr ? std::nullopt : session_.constantVec2Value(scale->id);
+    const bool editable = value.has_value();
+    for (auto* field : {scaleX_, scaleY_}) {
+        field->setEnabled(editable);
+        field->setToolTip(scale == nullptr ? tr("Scale is not exposed by this selection")
+                                           : parameterSourceDescription(*scale));
+    }
+    const QSignalBlocker blockX(scaleX_);
+    const QSignalBlocker blockY(scaleY_);
+    // Stored as a unitless factor, shown as a percentage: an unscaled layer reads 100%.
+    scaleX_->setValue(editable ? value->x * 100.0 : 100.0);
+    scaleY_->setValue(editable ? value->y * 100.0 : 100.0);
+    updateKeyframeIndicator(scaleKeyframe_, scale);
+}
+
+void PropertiesEditor::configureRotation() {
+    const auto* parameter = session_.parameterForSelection(document::kRotationParameterRole);
+    const auto value = parameter == nullptr ? std::nullopt : session_.constantValue(parameter->id);
+    rotation_->setEnabled(value.has_value());
+    const QSignalBlocker blocker(rotation_);
+    rotation_->setValue(value.value_or(0.0));
+    rotation_->setToolTip(parameter == nullptr ? tr("Rotation is not exposed by this selection")
+                                               : parameterSourceDescription(*parameter));
+    updateKeyframeIndicator(rotationKeyframe_, parameter);
 }
 
 void PropertiesEditor::configureOpacity() {

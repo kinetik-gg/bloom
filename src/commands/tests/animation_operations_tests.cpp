@@ -135,16 +135,16 @@ void testCreateAnimationOutputsUndoAndRedo(TestContext& test) {
     requireFixture(
         unsupportedComposition != nullptr &&
             unsupportedComposition->parameters().insert(
-                {document::ParameterId::fromRaw(64), std::string(document::kTextParameterSchemaKey),
+                {document::ParameterId::fromRaw(80), std::string(document::kTextParameterSchemaKey),
                  document::ConstantValueSource{std::string("Text")}}),
         "unsupported animation fixture must add a text parameter");
     Document unsupportedDocument(std::move(unsupportedProject));
     CommandStack unsupportedStack(unsupportedDocument);
     Transaction unsupported("Reject text animation", unsupportedDocument.snapshot().revision());
     unsupported.emplace<CreateAnimationForParameter>(
-        kCompositionId, document::ParameterId::fromRaw(64), initialTime);
+        kCompositionId, document::ParameterId::fromRaw(80), initialTime);
     test.expect(unsupportedStack.execute(std::move(unsupported)).status == CommandStatus::Rejected,
-                "creation accepts only constant position and opacity schemas");
+                "creation accepts only the animatable transform and opacity schemas");
 }
 
 void testRejectedTransactionDoesNotConsumeIds(TestContext& test) {

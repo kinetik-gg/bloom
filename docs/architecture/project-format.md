@@ -751,6 +751,38 @@ Open editability is explicit:
 - `PreservedReadOnly` cannot construct trusted complete core truth; it retains the original archive
   and permits inspection or byte-preserving Save Copy only.
 
+### Node Schema Upgrades
+
+A node's own `schemaVersion` is independent of the document's. A document may therefore declare a node
+at an older registered schema version than this build knows, and that is an expected, non-exceptional
+state: it is what every file written before a node type gained a parameter contains.
+
+Such a node is upgraded in memory between trusted decode and reconstruction, never refused and never
+routed to preservation. The rule:
+
+- The upgrade runs before any record is installed, so the live document model only ever sees current
+  truth and every existing checked adder and validation applies unchanged.
+- Parameters the newer schema added are injected at their registered defaults, and those defaults are
+  chosen so the upgraded document evaluates to the pixels the older build produced. Opening an older
+  file is therefore a silent, lossless upgrade, not a visible change.
+- Injected parameters take ids strictly above the document's persisted `idAllocation.highestIssued`
+  parameter value, and that value is raised to match, so a new id can collide with nothing the file
+  declares and the inclusive-watermark rule still holds.
+- A node that already binds an added role keeps its own binding; only missing roles are injected.
+- Upgraded bindings are put into canonical order, so an upgraded node is indistinguishable in ordering
+  from one the canonical writer emitted.
+- The upgrade is in-memory only. Nothing is written back until the document is saved, at which point
+  it is saved as current truth with the current node `schemaVersion`.
+- The upgrade is per node TYPE, not a generic "inject whatever the registry declares" loop: a future
+  type's upgrade may need to derive a value rather than take a default, and that decision belongs to
+  the type.
+- The only failure mode is a persisted parameter high water with no room left for the required ids,
+  which is reported as a typed `ReconstructionStage::NodeSchemaUpgrade` rejection naming the node.
+
+The one upgrade that exists today is `bloom.layer-output` version 1 to version 2, which injects
+`bloom.transform.anchor`, `bloom.transform.scale`, and `bloom.transform.rotation` at the identity
+transform (see [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform").
+
 ## Project I/O Boundary
 
 The public surface remains concrete rather than becoming a generic serializer. The conceptual

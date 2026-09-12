@@ -299,16 +299,26 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto input = findInputOperation(node.id, kLayerOutputContentInputPort, indices);
     const auto boundary = layerOutputs_.find(node.id);
     const auto* positionBinding = findParameterBinding(node, kPositionParameterRole);
+    const auto* anchorBinding = findParameterBinding(node, kAnchorParameterRole);
+    const auto* scaleBinding = findParameterBinding(node, kScaleParameterRole);
+    const auto* rotationBinding = findParameterBinding(node, kRotationParameterRole);
     const auto* opacityBinding = findParameterBinding(node, kOpacityParameterRole);
     const auto position = compiledVec2Parameter(positionBinding);
+    const auto anchor = compiledVec2Parameter(anchorBinding);
+    const auto scale = compiledVec2Parameter(scaleBinding);
+    const auto rotation = compiledScalarParameter(rotationBinding);
     const auto opacity = compiledScalarParameter(opacityBinding);
     if (!input || boundary == layerOutputs_.end() || positionBinding == nullptr ||
-        opacityBinding == nullptr || !position.has_value() || !opacity.has_value()) {
+        anchorBinding == nullptr || scaleBinding == nullptr || rotationBinding == nullptr ||
+        opacityBinding == nullptr || !position.has_value() || !anchor.has_value() ||
+        !scale.has_value() || !rotation.has_value() || !opacity.has_value()) {
         addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledLayerOutput{node.id, boundary->second->layerId, *input, *position,
-                                        *opacity};
+    return runtime::CompiledLayerOutput{node.id,   boundary->second->layerId,
+                                        *input,   *position,
+                                        *anchor,  *scale,
+                                        *rotation, *opacity};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

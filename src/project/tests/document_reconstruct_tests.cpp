@@ -236,7 +236,13 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(3),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
@@ -284,7 +290,16 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
                                  ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
                             composition.parameters().insert(
                                 {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
+                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(8), std::string(kAnchorParameterSchemaKey),
+                                 ConstantValueSource{kDefaultAnchor}}) &&
+                            composition.parameters().insert({ParameterId::fromRaw(9),
+                                                             std::string(kScaleParameterSchemaKey),
+                                                             ConstantValueSource{kDefaultScale}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
+                                 ConstantValueSource{kDefaultRotationDegrees}}),
                         "composed round trip: fixture parameters insert");
 
     ScalarAnimationCurve curve;
@@ -305,7 +320,7 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 7,
+                                         .parameter = 10,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -742,6 +757,101 @@ void testProjectValidateRejection(Expectations& expectations) {
     }
 }
 
+void testVersionOneLayerOutputUpgradesOnReconstruct(Expectations& expectations) {
+    // A complete, valid version-1 Layer Output branch: exactly what every file written before the
+    // transform breadth slice contains. Reconstruction must bring it forward silently -- no
+    // refusal, no preservation fallback -- by injecting anchor, scale, and rotation at the identity
+    // transform, which is the set of values that makes the upgraded document evaluate to the
+    // version-1 picture.
+    using namespace bloom::document;
+    auto envelope = minimalEnvelope();
+    auto& composition = envelope.compositions.front();
+
+    composition.graph.nodes.front() = {
+        NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
+    composition.graph.nodes.push_back(
+        {NodeId::fromRaw(3),
+         std::string(kLayerOutputNodeType),
+         {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+         1});
+    composition.graph.compositionOutput = {NodeId::fromRaw(2),
+                                           std::string(kCompositionOutputOutputPort)};
+    composition.graph.edges.push_back(
+        {EdgeId::fromRaw(2),
+         {NodeId::fromRaw(3), std::string(kLayerOutputOutputPort)},
+         LayerStackInputRef{NodeId::fromRaw(1), LayerSlotId::fromRaw(1),
+                            std::string(kLayerStackContentInputRole)}});
+    composition.graph.layerOutputs.push_back(
+        {NodeId::fromRaw(3), LayerId::fromRaw(1), "Layer", std::string(kLayerOutputOutputPort)});
+    composition.graph.layerStack.entries.push_back({LayerSlotId::fromRaw(1), LayerId::fromRaw(1)});
+    composition.parameters.push_back({ParameterId::fromRaw(3),
+                                      std::string(kOpacityParameterSchemaKey),
+                                      ConstantValueSource{0.5}});
+    composition.parameters.push_back({ParameterId::fromRaw(5),
+                                      std::string(kPositionParameterSchemaKey),
+                                      ConstantValueSource{Vec2d{96.0, -48.0}}});
+    envelope.highWater.node = 3;
+    envelope.highWater.edge = 2;
+    envelope.highWater.layer = 1;
+    envelope.highWater.layerSlot = 1;
+    envelope.highWater.parameter = 5;
+
+    auto reconstructed = bloom::project::reconstructDocument(std::move(envelope));
+    expectations.expect(static_cast<bool>(reconstructed),
+                        "a version-1 Layer Output reconstructs rather than being refused");
+    if (!reconstructed) {
+        return;
+    }
+    const auto snapshot = reconstructed.value()->document->snapshot();
+    const auto* live = snapshot.project().findComposition(CompositionId::fromRaw(1));
+    const auto* node = live == nullptr ? nullptr : live->graph().findNode(NodeId::fromRaw(3));
+    expectations.expect(node != nullptr, "the upgraded Layer Output node survives");
+    if (node == nullptr || live == nullptr) {
+        return;
+    }
+    expectations.expect(node->schemaVersion == kLayerOutputNodeSchemaVersion &&
+                            node->parameters.size() == 5,
+                        "the upgraded node declares the current schema version and all five roles");
+    const auto boundId = [node](const std::string_view role) {
+        const auto binding = std::ranges::find(node->parameters, role, &ParameterBinding::role);
+        return binding == node->parameters.end() ? ParameterId{} : binding->parameterId;
+    };
+    // The ids the file already declared are untouched; the three injected ones take the next values
+    // strictly above the persisted parameter high water, in the registered parameter order.
+    expectations.expect(boundId("opacity") == ParameterId::fromRaw(3) &&
+                            boundId("position") == ParameterId::fromRaw(5) &&
+                            boundId("anchor") == ParameterId::fromRaw(6) &&
+                            boundId("scale") == ParameterId::fromRaw(7) &&
+                            boundId("rotation") == ParameterId::fromRaw(8),
+                        "injected parameters take ids strictly above the persisted high water");
+    const auto constant = [live](const ParameterId id) -> const ParameterValue* {
+        const auto* record = live->parameters().find(id);
+        const auto* source =
+            record == nullptr ? nullptr : std::get_if<ConstantValueSource>(&record->source);
+        return source == nullptr ? nullptr : &source->value;
+    };
+    const auto* anchorValue = constant(boundId("anchor"));
+    const auto* scaleValue = constant(boundId("scale"));
+    const auto* rotationValue = constant(boundId("rotation"));
+    expectations.expect(anchorValue != nullptr && *anchorValue == ParameterValue{kDefaultAnchor} &&
+                            scaleValue != nullptr && *scaleValue == ParameterValue{kDefaultScale} &&
+                            rotationValue != nullptr &&
+                            *rotationValue == ParameterValue{kDefaultRotationDegrees},
+                        "the injected parameters carry the identity transform, so the upgraded "
+                        "document renders the version-1 picture");
+    const auto* positionValue = constant(ParameterId::fromRaw(5));
+    const auto* opacityValue = constant(ParameterId::fromRaw(3));
+    expectations.expect(positionValue != nullptr &&
+                            *positionValue == ParameterValue{Vec2d{96.0, -48.0}} &&
+                            opacityValue != nullptr && *opacityValue == ParameterValue{0.5},
+                        "the values the file did declare survive the upgrade unchanged");
+    // The raised high water is what keeps the inclusive-watermark rule true: the next allocation
+    // must come after the injected ids, never re-issue one of them.
+    auto draft = reconstructed.value()->document->draft(snapshot);
+    expectations.expect(draft.ids().allocateParameter() == ParameterId::fromRaw(9),
+                        "the persisted parameter high water rises to cover the injected ids");
+}
+
 void testDocumentConstructRejection(Expectations& expectations) {
     // The graph/store/composition/extension admission and Project::validate() all succeed; only the
     // decoded high water is wrong (below the highest declared node id), so the failure can only
@@ -783,6 +893,7 @@ int main() {
         testExtensionRejections(expectations);
         testGraphStoreRejections(expectations);
         testProjectValidateRejection(expectations);
+        testVersionOneLayerOutputUpgradesOnReconstruct(expectations);
         testDocumentConstructRejection(expectations);
         testWellFormedEnvelopeReconstructs(expectations);
         return expectations.failures() == 0 ? 0 : 1;

@@ -34,6 +34,8 @@ using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
 using bloom::render::ImageStatus;
 using bloom::render::ImageWindow;
+using bloom::render::LayerTransform;
+using bloom::render::layerTransformBilinearRow;
 using bloom::render::mapLinearRec709SceneToSrgbRow;
 using bloom::render::PreparedReferenceDisplayBuffer;
 using bloom::render::ReferenceDisplayBufferBuilder;
@@ -119,6 +121,14 @@ template <typename T>
         throw std::logic_error("invalid pixel fixture");
     }
     return *result.value();
+}
+
+// Rgba32f has no default state by design, so a scratch row has to be filled with the one value that
+// is always meaningful: exact transparent black.
+template <std::size_t Size> [[nodiscard]] std::array<Rgba32f, Size> transparentRow() {
+    return []<std::size_t... Index>(std::index_sequence<Index...>) {
+        return std::array<Rgba32f, Size>{((void)Index, Rgba32f::transparent())...};
+    }(std::make_index_sequence<Size>{});
 }
 
 [[nodiscard]] Rgba32fImageDescriptor descriptor(const ImageWindow dataWindow,
@@ -218,7 +228,7 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 3,
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 4,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});
@@ -343,6 +353,276 @@ void testTranslationAndOpacity(Expectations& expectations) {
                                                  *identity.value(), identityRow),
                      ImageErrorCode::CoordinateOutOfBounds),
         "translation row reports malformed storage, source state, and coordinates distinctly");
+}
+
+// The affine layer resample. Every expectation here is a hand-computed consequence of the
+// documented model -- inverse map, then pixel-centre bilinear gather with transparent taps outside
+// the source -- never a value copied out of the implementation.
+[[nodiscard]] LayerTransform transform(const LayerTransform::Authored authored,
+                                       const ImageWindow sourceWindow,
+                                       const double proxyScaleX = 1.0,
+                                       const double proxyScaleY = 1.0) {
+    const auto result = LayerTransform::create(authored, sourceWindow, proxyScaleX, proxyScaleY);
+    if (!result) {
+        throw std::logic_error("invalid layer transform fixture");
+    }
+    return *result.value();
+}
+
+void testLayerTransformTranslationIsBitIdenticalToThePreviousPrimitive(Expectations& expectations) {
+    // The pin the task's "identical output to today for scale 1 / rotation 0" requirement names:
+    // the retained pre-S4 primitive and the new one must agree BIT FOR BIT on a subpixel
+    // translation, and must keep agreeing when an anchor is authored, because an anchor is
+    // algebraically irrelevant to a translate-only layer and must therefore be numerically
+    // irrelevant too.
+    const auto imageWindow = window(0, 0, 4, 3);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const std::array sourcePixels{
+        pixel(0.25F, 0.5F, 0.75F, 1.0F),    pixel(1.0F, 0.0F, 0.0F, 1.0F),
+        pixel(0.0F, 0.125F, 0.0F, 0.25F),   pixel(0.5F, 0.5F, 0.5F, 0.5F),
+        pixel(0.0F, 0.0F, 1.0F, 1.0F),      pixel(0.125F, 0.25F, 0.375F, 0.5F),
+        pixel(1.0F, 1.0F, 1.0F, 1.0F),      Rgba32f::transparent(),
+        pixel(0.75F, 0.25F, 0.0F, 0.75F),   pixel(0.0F, 0.5F, 0.5F, 0.5F),
+        pixel(0.0625F, 0.0F, 0.0F, 0.125F), pixel(0.9F, 0.8F, 0.7F, 1.0F),
+    };
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "layer transform source view fixture succeeds");
+        return;
+    }
+
+    constexpr double kSubpixelX = 0.3;
+    constexpr double kSubpixelY = -0.7;
+    constexpr double kOpacity = 0.625;
+    const auto legacy = TranslationOpacity::create(kSubpixelX, kSubpixelY, kOpacity);
+    if (!legacy) {
+        expectations.expect(false, "legacy translation fixture succeeds");
+        return;
+    }
+    // A deliberately off-centre anchor, an exact 360 degree rotation, and unit scale: all three
+    // resolve to the translate-only path.
+    const auto affine = transform({.translationX = kSubpixelX,
+                                   .translationY = kSubpixelY,
+                                   .anchorX = -37.25,
+                                   .anchorY = 11.5,
+                                   .rotationDegrees = -360.0,
+                                   .opacity = kOpacity},
+                                  imageWindow);
+    expectations.expect(
+        affine.isTranslationOnly(),
+        "unit scale with a whole-turn rotation resolves to the translate-only path");
+
+    bool identical = true;
+    for (std::int64_t y = imageWindow.originY(); y < imageWindow.maxYExclusive(); ++y) {
+        auto legacyRow = transparentRow<4>();
+        auto affineRow = transparentRow<4>();
+        const auto legacyStatus = translateOpacityBilinearRow(*sourceView.value(), imageWindow, y,
+                                                              *legacy.value(), legacyRow);
+        const auto affineStatus =
+            layerTransformBilinearRow(*sourceView.value(), imageWindow, y, affine, affineRow);
+        identical = identical && !legacyStatus.has_value() && !affineStatus.has_value() &&
+                    legacyRow == affineRow;
+    }
+    expectations.expect(identical,
+                        "a translate-only layer resamples bit-identically to the retained pre-S4 "
+                        "primitive, anchor included");
+}
+
+void testLayerTransformQuarterTurnsAreExact(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 2, 2);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const std::array sourcePixels{
+        pixel(1.0F, 0.0F, 0.0F, 1.0F),
+        pixel(0.0F, 1.0F, 0.0F, 1.0F),
+        pixel(0.0F, 0.0F, 1.0F, 1.0F),
+        pixel(1.0F, 1.0F, 0.0F, 1.0F),
+    };
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "quarter turn source view fixture succeeds");
+        return;
+    }
+    const auto rowsOf = [&](const LayerTransform& value) {
+        std::array<std::array<Rgba32f, 2>, 2> rows{transparentRow<2>(), transparentRow<2>()};
+        bool ok = true;
+        for (std::int64_t y = 0; y < 2; ++y) {
+            ok = ok && !layerTransformBilinearRow(*sourceView.value(), imageWindow, y, value,
+                                                  rows[static_cast<std::size_t>(y)])
+                            .has_value();
+        }
+        return std::pair{ok, rows};
+    };
+
+    // A 2x2 layer's pixel-area centre is (0.5, 0.5). A quarter turn clockwise about it maps source
+    // (u, v) to output (1 - v, u), so output (x, y) samples source (y, 1 - x) -- every sample
+    // coordinate an exact integer, every bilinear factor exactly zero, every output pixel therefore
+    // an exact copy of one source pixel.
+    const auto [quarterOk, quarter] = rowsOf(transform({.rotationDegrees = 90.0}, imageWindow));
+    expectations.expect(quarterOk && quarter[0][0] == sourcePixels[2] &&
+                            quarter[0][1] == sourcePixels[0] && quarter[1][0] == sourcePixels[3] &&
+                            quarter[1][1] == sourcePixels[1],
+                        "a 90 degree rotation is an exact clockwise permutation of pixel centres");
+
+    // Half a turn is the exact reversal of both axes.
+    const auto [halfOk, half] = rowsOf(transform({.rotationDegrees = 180.0}, imageWindow));
+    expectations.expect(halfOk && half[0][0] == sourcePixels[3] && half[0][1] == sourcePixels[2] &&
+                            half[1][0] == sourcePixels[1] && half[1][1] == sourcePixels[0],
+                        "a 180 degree rotation is an exact reversal of both axes");
+
+    // 270 and -90 name the same quarter turn, and both must be exact.
+    const auto [threeQuarterOk, threeQuarter] =
+        rowsOf(transform({.rotationDegrees = 270.0}, imageWindow));
+    const auto [negativeOk, negative] = rowsOf(transform({.rotationDegrees = -90.0}, imageWindow));
+    expectations.expect(
+        threeQuarterOk && negativeOk && threeQuarter == negative &&
+            threeQuarter[0][0] == sourcePixels[1] && threeQuarter[0][1] == sourcePixels[3] &&
+            threeQuarter[1][0] == sourcePixels[0] && threeQuarter[1][1] == sourcePixels[2],
+        "270 and -90 degrees are the same exact quarter turn");
+
+    // 450 degrees winds past a full turn and must land exactly where 90 does: the wrap is exact
+    // arithmetic, not an approximation.
+    const auto [woundOk, wound] = rowsOf(transform({.rotationDegrees = 450.0}, imageWindow));
+    expectations.expect(woundOk && wound == quarter,
+                        "a rotation wound past a full turn is exactly its reduced angle");
+
+    // Anchored at the top-left pixel centre instead -- anchor (-0.5, -0.5) offsets the centre by
+    // half a pixel on each axis -- half a turn carries every other pixel off the layer, leaving
+    // only the anchored pixel itself.
+    const auto [cornerOk, corner] = rowsOf(
+        transform({.anchorX = -0.5, .anchorY = -0.5, .rotationDegrees = 180.0}, imageWindow));
+    expectations.expect(
+        cornerOk && corner[0][0] == sourcePixels[0] && corner[0][1] == Rgba32f::transparent() &&
+            corner[1][0] == Rgba32f::transparent() && corner[1][1] == Rgba32f::transparent(),
+        "an anchor at a corner pivots about that corner, not about the centre");
+}
+
+void testLayerTransformScaleAndBounds(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 2, 2);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const auto white = pixel(1.0F, 1.0F, 1.0F, 1.0F);
+    const std::array sourcePixels{white, Rgba32f::transparent(), Rgba32f::transparent(), white};
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "scale source view fixture succeeds");
+        return;
+    }
+
+    // Half scale about the centre (0.5, 0.5) inverts to u = 0.5 + 2 (x - 0.5), so the four output
+    // pixel centres sample at -0.5 and 1.5 on each axis. Each in-range sample sits exactly half a
+    // pixel outside the checker's white corner, so it reads half that corner against a transparent
+    // tap on one axis and half again on the other: one quarter of white.
+    const auto halved = transform({.scaleX = 0.5, .scaleY = 0.5}, imageWindow);
+    const auto quarterWhite = pixel(0.25F, 0.25F, 0.25F, 0.25F);
+    auto firstRow = transparentRow<2>();
+    auto secondRow = transparentRow<2>();
+    const auto firstStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 0, halved, firstRow);
+    const auto secondStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, halved, secondRow);
+    expectations.expect(!firstStatus.has_value() && !secondStatus.has_value() &&
+                            firstRow[0] == quarterWhite && firstRow[1] == Rgba32f::transparent() &&
+                            secondRow[0] == Rgba32f::transparent() && secondRow[1] == quarterWhite,
+                        "half scale resamples a 2x2 checker to exact quarter-weighted corners");
+
+    // Bounds. The bilinear support of a 2x2 layer is the closed box [-1, 2] on each axis, so an
+    // unscaled, unmoved layer covers the whole 2x2 composition.
+    const auto identity = transform({}, imageWindow);
+    const auto identityBounds = identity.supportBounds(imageWindow);
+    expectations.expect(identityBounds.has_value() && *identityBounds == imageWindow,
+                        "an unmoved layer's data window is the whole composition");
+
+    // Moved one pixel right, the support starts at output column 0 still (the -1 tap) but the layer
+    // can no longer reach anything left of it; clipped to the composition it is columns 0..1.
+    const auto moved = transform({.translationX = 1.0}, imageWindow);
+    const auto movedBounds = moved.supportBounds(imageWindow);
+    expectations.expect(movedBounds.has_value() && *movedBounds == imageWindow,
+                        "a one-pixel move still reaches every column of a 2x2 composition");
+
+    // Far enough away and the layer reaches nothing at all, so it needs no image.
+    const auto gone = transform({.translationX = 100.0, .translationY = 100.0}, imageWindow);
+    expectations.expect(!gone.supportBounds(imageWindow).has_value(),
+                        "a layer carried off the composition has no data window at all");
+
+    // A larger composition shows the clipping doing real work: moved three pixels right inside an
+    // 8x8 frame, a 2x2 layer's support is output columns 2..5 and rows -1..2 clipped to 0..2.
+    const auto frame = window(0, 0, 8, 8);
+    const auto insideFrame = transform({.translationX = 3.0}, imageWindow);
+    const auto frameBounds = insideFrame.supportBounds(frame);
+    expectations.expect(frameBounds.has_value() && *frameBounds == window(2, 0, 4, 3),
+                        "a layer's data window is its transformed bounds clipped to the frame");
+}
+
+void testLayerTransformProxyAndRejections(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 4, 4);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    auto sourcePixels = transparentRow<16>();
+    sourcePixels[5] = pixel(1.0F, 0.0F, 0.0F, 1.0F);
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "proxy source view fixture succeeds");
+        return;
+    }
+
+    // Proxy factors scale the authored translation and anchor into device pixels. At twice the
+    // composition extent an authored one-pixel move is a two-pixel device move, which is what keeps
+    // a proxy frame the same picture at a different size.
+    const auto proxied = transform({.translationX = 1.0}, imageWindow, 2.0, 2.0);
+    auto proxyRow = transparentRow<4>();
+    const auto proxyStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, proxied, proxyRow);
+    expectations.expect(!proxyStatus.has_value() && proxyRow[3] == sourcePixels[5] &&
+                            proxyRow[1] == Rgba32f::transparent(),
+                        "a proxy factor scales the authored translation into device pixels");
+
+    const auto identity = transform({}, imageWindow);
+    auto row = transparentRow<4>();
+    const auto otherWindow = window(1, 0, 4, 4);
+    expectations.expect(
+        hasError(layerTransformBilinearRow(*sourceView.value(), otherWindow, 0,
+                                           transform({}, otherWindow), row),
+                 ImageErrorCode::IncompatibleImageDescriptor),
+        "the resample refuses a source whose data window is not the one it was built for");
+    expectations.expect(
+        hasError(layerTransformBilinearRow(Rgba32fImageView{}, imageWindow, 0, identity, row),
+                 ImageErrorCode::InvalidState) &&
+            hasError(layerTransformBilinearRow(*sourceView.value(), imageWindow, 9, identity, row),
+                     ImageErrorCode::CoordinateOutOfBounds),
+        "the resample reports source state and coordinate failures distinctly");
+    auto wrongSize = transparentRow<1>();
+    expectations.expect(hasError(layerTransformBilinearRow(*sourceView.value(), imageWindow, 0,
+                                                           identity, wrongSize),
+                                 ImageErrorCode::InvalidStorageSize),
+                        "the resample reports a row span that does not match its window");
+
+    const auto rejects = [&](const LayerTransform::Authored authored, const double proxyX = 1.0,
+                             const double proxyY = 1.0) {
+        const auto result = LayerTransform::create(authored, imageWindow, proxyX, proxyY);
+        return !result && result.error() != nullptr &&
+               (result.error()->code == ImageErrorCode::InvalidParameter ||
+                result.error()->code == ImageErrorCode::NonFiniteResult);
+    };
+    const auto infinity = std::numeric_limits<double>::infinity();
+    expectations.expect(rejects({.scaleX = 0.0}) && rejects({.scaleY = 0.0}),
+                        "a collapsed layer has no inverse and is refused rather than resampled");
+    expectations.expect(rejects({.translationX = infinity}) && rejects({.anchorY = infinity}) &&
+                            rejects({.rotationDegrees = infinity}) && rejects({.opacity = -0.5}) &&
+                            rejects({.opacity = 1.5}) && rejects({}, 0.0) && rejects({}, 1.0, -2.0),
+                        "non-finite values, an out-of-range opacity, and a non-positive proxy "
+                        "factor are all refused");
+
+    // A negative scale factor is authorable and mirrors the axis: a 4x4 layer's centre is 1.5, so
+    // x mirrors to 3 - x.
+    const auto mirrored = transform({.scaleX = -1.0}, imageWindow);
+    auto mirroredRow = transparentRow<4>();
+    expectations.expect(
+        !layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, mirrored, mirroredRow)
+                .has_value() &&
+            mirroredRow[2] == sourcePixels[5] && mirroredRow[1] == Rgba32f::transparent(),
+        "a negative scale factor mirrors the axis exactly");
 }
 
 void testSourceOver(Expectations& expectations) {
@@ -490,6 +770,10 @@ int main() {
         testDisplayBuilder(expectations);
         testSolidAndParameters(expectations);
         testTranslationAndOpacity(expectations);
+        testLayerTransformTranslationIsBitIdenticalToThePreviousPrimitive(expectations);
+        testLayerTransformQuarterTurnsAreExact(expectations);
+        testLayerTransformScaleAndBounds(expectations);
+        testLayerTransformProxyAndRejections(expectations);
         testSourceOver(expectations);
         testReferenceDisplayMapping(expectations);
         testFloatingPointEnvironment(expectations);

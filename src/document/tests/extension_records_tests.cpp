@@ -123,6 +123,9 @@ struct FixtureIds final {
     ParameterId positionParameter = id<ParameterId>(10);
     ParameterId opacityParameter = id<ParameterId>(11);
     ParameterId animationParameter = id<ParameterId>(12);
+    ParameterId anchorParameter = id<ParameterId>(13);
+    ParameterId scaleParameter = id<ParameterId>(14);
+    ParameterId rotationParameter = id<ParameterId>(15);
     AnimationCurveId animationCurve = id<AnimationCurveId>(20);
     KeyframeId keyframe = id<KeyframeId>(20);
 };
@@ -143,6 +146,9 @@ inline constexpr FixtureIds kIds;
         std::string(bloom::document::kLayerOutputNodeType),
         {
             {std::string(bloom::document::kPositionParameterRole), kIds.positionParameter},
+            {std::string(bloom::document::kAnchorParameterRole), kIds.anchorParameter},
+            {std::string(bloom::document::kScaleParameterRole), kIds.scaleParameter},
+            {std::string(bloom::document::kRotationParameterRole), kIds.rotationParameter},
             {std::string(bloom::document::kOpacityParameterRole), kIds.opacityParameter},
         },
         bloom::document::kLayerOutputNodeSchemaVersion,
@@ -155,6 +161,15 @@ inline constexpr FixtureIds kIds;
         first->parameters().insert({kIds.positionParameter,
                                     std::string(bloom::document::kPositionParameterSchemaKey),
                                     ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        first->parameters().insert({kIds.anchorParameter,
+                                    std::string(bloom::document::kAnchorParameterSchemaKey),
+                                    ConstantValueSource{bloom::document::kDefaultAnchor}}) &&
+        first->parameters().insert({kIds.scaleParameter,
+                                    std::string(bloom::document::kScaleParameterSchemaKey),
+                                    ConstantValueSource{bloom::document::kDefaultScale}}) &&
+        first->parameters().insert(
+            {kIds.rotationParameter, std::string(bloom::document::kRotationParameterSchemaKey),
+             ConstantValueSource{bloom::document::kDefaultRotationDegrees}}) &&
         first->parameters().insert({kIds.opacityParameter,
                                     std::string(bloom::document::kOpacityParameterSchemaKey),
                                     ConstantValueSource{1.0}}) &&

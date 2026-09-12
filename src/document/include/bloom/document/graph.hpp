@@ -22,7 +22,12 @@ inline constexpr std::string_view kLayerStackNodeType = "bloom.layer-stack";
 inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
-inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 1;
+// Bumped to 2 by the layer transform breadth slice (task S4): a Layer Output now binds anchor,
+// scale, and rotation alongside position and opacity. A version-1 node is not rejected -- Project
+// I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
+// the version-1 picture exactly (see src/project/document_node_schema_upgrade.cpp and
+// docs/architecture/project-format.md, "Node Schema Upgrades").
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 1;
@@ -48,6 +53,9 @@ inline constexpr std::string_view kTextSizeParameterRole = "size";
 // what keep their validation and defaults separate.
 inline constexpr std::string_view kTextColorParameterRole = "color";
 inline constexpr std::string_view kPositionParameterRole = "position";
+inline constexpr std::string_view kAnchorParameterRole = "anchor";
+inline constexpr std::string_view kScaleParameterRole = "scale";
+inline constexpr std::string_view kRotationParameterRole = "rotation";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
 
 struct NodeRecord {

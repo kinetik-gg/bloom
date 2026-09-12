@@ -18,10 +18,12 @@
 
 namespace bloom::runtime {
 
-// Bumped to 3 by the CPU text path (task S3): the evaluator now produces pixels for a text source
-// it previously refused, so a frame identity from before this change must not compare equal to one
-// from after it.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 3;
+// Bumped to 4 by the layer transform breadth slice (task S4): the Layer Output stage now resolves
+// five parameters instead of two, resamples through an affine transform, and sizes each layer's
+// data window to its own transformed bounds rather than the whole composition. A frame identity
+// from before this change must not compare equal to one from after it, even where the pixels
+// coincide.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 4;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,
