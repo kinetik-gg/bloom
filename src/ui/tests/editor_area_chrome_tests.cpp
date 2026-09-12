@@ -48,6 +48,30 @@ class Expectations final {
 
 using namespace bloom::ui;
 
+// FORMAL AMENDMENT 1 (task C1): a minimal test double for an editor that offers EditorArea a
+// footer -- exercises the generic EditorFooterProvider seam without needing ViewerEditor's real
+// CompositionSession/CompositionPreviewController wiring (that pin belongs in
+// viewer_editor_tests.cpp, which already has that fixture machinery).
+class FakeFooterProvidingEditor final : public QWidget, public EditorFooterProvider {
+  public:
+    explicit FakeFooterProvidingEditor(QWidget* parent) : QWidget(parent) {}
+
+    QWidget* takeFooterWidget() override {
+        if (footerTaken_) {
+            return nullptr;
+        }
+        footerTaken_ = true;
+        auto* footer = new QWidget();
+        // EditorArea overwrites objectName to "editorFooter" once it takes this widget, so
+        // identity is checked with a dynamic property instead (survives the rename).
+        footer->setProperty("fakeFooterMarker", true);
+        return footer;
+    }
+
+  private:
+    bool footerTaken_ = false;
+};
+
 EditorRegistry makeRegistry() {
     EditorRegistry registry;
     (void)registry.registerEditor(
@@ -69,6 +93,14 @@ EditorRegistry makeRealIdRegistry() {
     addTrivial("bloom.timeline", "Timeline");
     addTrivial("bloom.media", "Media");
     addTrivial("bloom.properties", "Properties");
+    return registry;
+}
+
+EditorRegistry makeFooterProvidingRegistry() {
+    EditorRegistry registry;
+    (void)registry.registerEditor(
+        {"bloom.footerProbe", "Footer Probe",
+         [](QWidget* parent) -> QWidget* { return new FakeFooterProvidingEditor(parent); }});
     return registry;
 }
 
@@ -342,21 +374,35 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
                         "the switcher field is ControlRoomy (32) tall");
 }
 
-// task C1, item C5 (owner: "panels should have header and footer that self contain them"): every
-// EditorArea now has a footer strip mirroring the header -- Size::Control tall, its own objectName
-// -- even though it stays empty for every editor today (see this task's final report for why the
-// viewer's status bar and the timeline's transport are not moved into it yet).
-void testTheFooterStripExistsAndIsSizeControlTall(Expectations& expectations) {
-    const EditorRegistry registry = makeRegistry();
-    EditorArea area(registry, "bloom.probe", QString{});
+// FORMAL AMENDMENT 1 (task C1, after the first report; owner: "an empty reserved strip on every
+// panel is NOT wanted"). An editor that implements EditorFooterProvider and offers a real footer
+// widget gets one hosted under objectName "editorFooter", holding exactly the widget it handed
+// back.
+void testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(Expectations& expectations) {
+    const EditorRegistry registry = makeFooterProvidingRegistry();
+    EditorArea area(registry, "bloom.footerProbe", QString{});
     auto* footer = area.findChild<QWidget*>(QStringLiteral("editorFooter"));
-    expectations.expect(footer != nullptr, "the footer strip exists and carries its objectName");
+    expectations.expect(footer != nullptr,
+                        "the footer-providing editor's footer is hosted under objectName "
+                        "\"editorFooter\"");
     if (footer == nullptr) {
         return;
     }
-    expectations.expect(footer->height() == kit::px(kit::Size::Control),
-                        "the footer is exactly Size::Control tall, matching the header's own "
-                        "Surface-chrome sizing convention");
+    expectations.expect(
+        footer->property("fakeFooterMarker").toBool(),
+        "the hosted footer really is the exact widget the provider handed back, not a copy or a "
+        "wrapper");
+}
+
+// FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/media,
+// none of which implement EditorFooterProvider) has no "editorFooter" child at all -- not an
+// empty reserved strip, per the amendment's correction of this task's first report.
+void testAFooterLessEditorHasNoEditorFooterChildAtAll(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    expectations.expect(area.findChild<QWidget*>(QStringLiteral("editorFooter")) == nullptr,
+                        "an editor that never implements EditorFooterProvider gets no footer row "
+                        "at all");
 }
 
 // task C1, item C5 (owner: "cut rounded corners because the background is not clipped by the
@@ -415,7 +461,8 @@ int main(int argc, char** argv) {
     testThePanelSwitcherPinsTheIconMapping(expectations);
     testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(expectations);
     testHeaderProportionsMatchTheDesignCrops(expectations);
-    testTheFooterStripExistsAndIsSizeControlTall(expectations);
+    testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(expectations);
+    testAFooterLessEditorHasNoEditorFooterChildAtAll(expectations);
     testTheFourCornersAreClippedToWindowBackground(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

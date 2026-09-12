@@ -23,6 +23,26 @@ namespace bloom::ui {
 
 class EditorRegistry;
 
+// FORMAL AMENDMENT 1 (task C1, after the first report): the footer slot is OPTIONAL, not a
+// reserved strip on every panel. An editor widget that also implements this interface -- multiple
+// inheritance alongside its usual QWidget base, e.g. `class ViewerEditor final : public QWidget,
+// public EditorFooterProvider` -- gets a footer row hosting exactly the widget it hands back;
+// one that does not implement it (or returns nullptr) gets no footer row at all, and its body
+// extends all the way to the panel's own bottom border (still clipped by the rounded corners).
+// Deliberately NOT a new EditorRegistry ABI: EditorDescriptor::create() still returns a single
+// QWidget*, and EditorArea discovers this interface with a dynamic_cast on the widget it already
+// created, so a footer-less editor pays nothing extra to register or construct.
+class EditorFooterProvider {
+  public:
+    virtual ~EditorFooterProvider() = default;
+
+    // Called once, immediately after EditorArea creates the editor widget in rebuildEditor().
+    // Returns the footer widget for EditorArea to host (and take ownership of, by reparenting) in
+    // its own footer slot, or nullptr for an editor with no footer to offer. A provider that has
+    // already given its footer away (or never has one) returns nullptr on every subsequent call.
+    [[nodiscard]] virtual QWidget* takeFooterWidget() = 0;
+};
+
 class EditorArea final : public QFrame {
     Q_OBJECT
 
@@ -61,16 +81,21 @@ class EditorArea final : public QFrame {
     QString areaId_;
     kit::KPanelSwitcher* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
+    // The outer header/content/footer column (task C1, FORMAL AMENDMENT 1): stored so
+    // rebuildEditor() can add/remove the OPTIONAL footer widget from it every time the editor
+    // changes, not just at construction.
+    QVBoxLayout* layout_ = nullptr;
     QVBoxLayout* contentLayout_ = nullptr;
     // task U8, issue #131, fix 4: the header itself opens panelOptionsMenu_ on right-click
     // (contextMenuEvent, routed through EditorArea's own eventFilter -- see watchForActivation());
     // there is no longer a dedicated button that owns the menu.
     QWidget* header_ = nullptr;
-    // Self-containment (task C1, item C5): a footer strip mirroring the header -- Size::Control
-    // tall, Surface background, the same Border hairline -- so every panel has both a header AND
-    // a footer that belong to it, not just a header. Empty for now: see layoutCornerMasks()'s own
-    // comment and this task's final report for why an existing editor's own bottom bar (the
-    // viewer's status bar, the timeline's transport) is not moved into this slot yet.
+    // Self-containment (task C1, item C5, corrected by FORMAL AMENDMENT 1): OPTIONAL. Non-null
+    // only while the current editor widget implements EditorFooterProvider and offered a real
+    // footer widget (ViewerEditor is the only one today); nullptr for every other editor, which
+    // gets no footer row at all -- its content extends to the panel's own bottom border instead.
+    // Owned by EditorArea from the moment it is taken (reparented here in rebuildEditor()),
+    // rebuilt every time the editor changes.
     QWidget* footer_ = nullptr;
     // The real clip this container needs (task C1, item C5; owner: "cut rounded corners because
     // the background is not clipped by the panel"): four small overlay widgets, one per corner,

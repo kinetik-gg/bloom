@@ -2,7 +2,6 @@
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
-#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -69,29 +68,6 @@ constexpr auto kHeaderIconSize = kit::Size::IconMedium;
 // 10, and A9 explicitly reverts the button's own extent to Size::Control while leaving
 // Spacing::PanelHeader governing the header row's own padding (below), not the button.
 constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
-
-// Panel self-containment (task C1, item C5; owner: "panels should have header and footer that
-// self contain them"). A footer strip mirroring the header's own chrome exactly: Size::Control
-// tall, Surface background, and the SAME Border hairline the header draws, just on its top edge
-// instead of its bottom. Painted directly (rather than through kit::kinetikStyleSheet(), which
-// this task's ownership scopes to the menu bar only) so this container owns its own chrome
-// end-to-end, the same way its rounded corners below are painted rather than styled.
-class PanelFooterStrip final : public QWidget {
-  public:
-    explicit PanelFooterStrip(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("editorFooter"));
-        setFixedHeight(kit::px(kit::Size::Control));
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.fillRect(rect(), kit::color(kit::Color::Surface));
-        kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
-        const qreal y = painter.pen().widthF() / 2.0;
-        painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(width()), y));
-    }
-};
 
 // The real clip a bordered, rounded container needs (task C1, item C5; owner: "cut rounded
 // corners because the background is not clipped by the panel"). QFrame#editorArea's own QSS
@@ -161,9 +137,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::ClickFocus);
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout_ = new QVBoxLayout(this);
+    layout_->setContentsMargins(0, 0, 0, 0);
+    layout_->setSpacing(0);
 
     header_ = new QWidget(this);
     header_->setObjectName("editorHeader");
@@ -263,18 +239,12 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     headerLayout->setAlignment(editorPicker_, Qt::AlignVCenter);
     headerLayout->setAlignment(maximizeButton_, Qt::AlignVCenter);
 
-    layout->addWidget(header_);
-    layout->addWidget(content, 1);
+    layout_->addWidget(header_);
+    layout_->addWidget(content, 1);
 
-    // The footer slot (task C1, item C5): reserved and empty for every editor today. The owner's
-    // ask was for the viewer's status bar and the timeline's transport to move into this slot when
-    // an editor already has one of its own -- both are painted as an internal part of a single
-    // custom-painted widget in viewer_editor.cpp/timeline_editor.cpp rather than as a separable
-    // child widget, and this task's ownership permits only a sanctioned COMMENT-only edit to
-    // viewer_editor.cpp and no edit at all to timeline_editor.cpp, so extracting either bar into
-    // this slot is out of reach here. Reported as blocked in this task's final report.
-    footer_ = new PanelFooterStrip(this);
-    layout->addWidget(footer_);
+    // FORMAL AMENDMENT 1: the footer slot itself is built here (empty: `layout_` has header and
+    // content only so far), but whether it is ever populated is entirely rebuildEditor()'s call --
+    // see the EditorFooterProvider dynamic_cast there.
 
     connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
@@ -383,8 +353,17 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
 void EditorArea::rebuildEditor(int editorIndex) {
     if (editorWidget_ != nullptr) {
         contentLayout_->removeWidget(editorWidget_);
+        // The old editor widget is destroyed BEFORE the footer it may have handed out below: Qt
+        // severs every signal connection made through it as part of its own destructor, so nothing
+        // it might otherwise still notify (e.g. a footer widget's repaint-on-state-change wiring)
+        // can fire against a footer that is about to be deleted out from under it.
         delete editorWidget_;
         editorWidget_ = nullptr;
+    }
+    if (footer_ != nullptr) {
+        layout_->removeWidget(footer_);
+        delete footer_;
+        footer_ = nullptr;
     }
 
     if (editorIndex < 0) {
@@ -410,6 +389,31 @@ void EditorArea::rebuildEditor(int editorIndex) {
     editorWidget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentLayout_->addWidget(editorWidget_);
     watchForActivation(editorWidget_);
+
+    // FORMAL AMENDMENT 1: the footer slot is OPTIONAL. An editor widget that also implements
+    // EditorFooterProvider (ViewerEditor is the only one today) may hand back a real footer
+    // widget, which EditorArea takes ownership of by reparenting it here; an editor that does not
+    // implement the interface, or returns nullptr, gets no footer row at all -- content already
+    // extends to the panel's own bottom border via `layout_`'s own stretch factor on `content`.
+    if (auto* footerProvider = dynamic_cast<EditorFooterProvider*>(editorWidget_)) {
+        if (auto* offeredFooter = footerProvider->takeFooterWidget()) {
+            footer_ = offeredFooter;
+            footer_->setObjectName(QStringLiteral("editorFooter"));
+            footer_->setParent(this);
+            layout_->addWidget(footer_);
+        }
+    }
+
+    // A freshly created/reparented footer is a new child of `this`, stacked above whatever
+    // siblings already existed -- including the corner-mask overlays constructed once, up front.
+    // Re-raising them here (a no-op the very first time, before they exist yet) keeps the
+    // rounded-corner clip on top regardless of how many times the editor picker swaps footers in
+    // and out.
+    for (auto* mask : cornerMasks_) {
+        if (mask != nullptr) {
+            mask->raise();
+        }
+    }
 }
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {
