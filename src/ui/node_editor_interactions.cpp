@@ -292,6 +292,10 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         if (!selection.contains(card->id()))
             selection = {card->id()};
         session_->selectNodes(selection, card->id());
+        if (fieldAt(*this, event->scenePos())) {
+            QGraphicsScene::mousePressEvent(event);
+            return;
+        }
         event->accept();
         if (!submit_)
             return;
