@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <limits>
+#include <numbers>
 #include <optional>
 
 namespace {
@@ -182,6 +183,62 @@ static_assert(std::is_sorted(kSrgbHalfCodeLinearThresholds.begin(),
     return static_cast<std::uint8_t>(quantized);
 }
 
+// Exact cosine/sine of a rotation in DEGREES. A rotation that is an exact quarter turn is resolved
+// to exact 0 and +/-1 rather than std::cos/std::sin of a rounded radian value, so a 90, 180, or 270
+// degree layer maps pixel centres onto pixel centres and the bilinear resample interpolates nothing
+// at all. std::fmod is exact, and the wrap keeps an authored -90 or 450 as exact as a 270 or 90.
+struct RotationCosSin final {
+    double cosine = 1.0;
+    double sine = 0.0;
+};
+
+[[nodiscard]] RotationCosSin rotationCosSin(const double degrees) noexcept {
+    const auto wrapped = std::fmod(degrees, 360.0);
+    const auto turns = wrapped < 0.0 ? wrapped + 360.0 : wrapped;
+    if (turns == 0.0) {
+        return {1.0, 0.0};
+    }
+    if (turns == 90.0) {
+        return {0.0, 1.0};
+    }
+    if (turns == 180.0) {
+        return {-1.0, 0.0};
+    }
+    if (turns == 270.0) {
+        return {0.0, -1.0};
+    }
+    const auto radians = turns * (std::numbers::pi / 180.0);
+    return {std::cos(radians), std::sin(radians)};
+}
+
+// Inclusive integer span of a real interval, clamped into [low, high]. Doubles do the clamping
+// because the real interval can be astronomically wide (a large scale factor) while `low` and
+// `high` are always small enough to be exact as doubles, so no int64 conversion can overflow.
+struct ClampedSpan final {
+    std::int64_t low = 0;
+    std::int64_t high = -1;
+
+    [[nodiscard]] constexpr bool empty() const noexcept { return high < low; }
+    [[nodiscard]] constexpr std::uint64_t extent() const noexcept {
+        return empty() ? 0 : static_cast<std::uint64_t>(high - low) + 1;
+    }
+};
+
+[[nodiscard]] ClampedSpan clampedSpan(const double minimum, const double maximum,
+                                      const std::int64_t low, const std::int64_t high) noexcept {
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum) {
+        return {};
+    }
+    const auto lowBound = static_cast<double>(low);
+    const auto highBound = static_cast<double>(high);
+    const auto first = std::max(std::floor(minimum), lowBound);
+    const auto last = std::min(std::ceil(maximum), highBound);
+    if (first > last) {
+        return {};
+    }
+    return {static_cast<std::int64_t>(first), static_cast<std::int64_t>(last)};
+}
+
 [[nodiscard]] std::uint8_t displayChannelByte(const float premultiplied,
                                               const float alpha) noexcept {
     if (premultiplied <= 0.0F) {
@@ -311,6 +368,237 @@ ImageStatus translateOpacityBilinearRow(const Rgba32fImageView source,
         if (parameters.opacity() != 1.0F) {
             for (auto& component : sampled) {
                 component *= parameters.opacity();
+            }
+        }
+        const auto pixel = checkedProcessPixel(sampled);
+        if (!pixel) {
+            return *pixel.error();
+        }
+        output[outputX] = *pixel.value();
+    }
+    return std::nullopt;
+}
+
+ImageResult<LayerTransform> LayerTransform::create(const Authored authored,
+                                                   const ImageWindow sourceWindow,
+                                                   const double proxyScaleX,
+                                                   const double proxyScaleY) noexcept {
+    const std::array authoredValues{
+        authored.translationX, authored.translationY, authored.anchorX,         authored.anchorY,
+        authored.scaleX,       authored.scaleY,       authored.rotationDegrees, authored.opacity};
+    if (std::ranges::any_of(authoredValues,
+                            [](const double value) { return !std::isfinite(value); }) ||
+        !std::isfinite(proxyScaleX) || !std::isfinite(proxyScaleY)) {
+        return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::InvalidParameter));
+    }
+    if (!supportedEnvironment()) {
+        return ImageResult<LayerTransform>::failure(
+            codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment));
+    }
+    if (authored.opacity < 0.0 || authored.opacity > 1.0 || proxyScaleX <= 0.0 ||
+        proxyScaleY <= 0.0) {
+        return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::InvalidParameter));
+    }
+    // A zero scale factor collapses the layer onto a line or a point: there is no inverse to map an
+    // output pixel back through, and nothing with area to resample. The Layer Output stage treats
+    // that as an empty layer before it ever gets here, so reaching this is a caller error.
+    if (authored.scaleX == 0.0 || authored.scaleY == 0.0) {
+        return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::InvalidParameter));
+    }
+
+    State state{.sourceWindow = sourceWindow};
+    state.opacity = static_cast<float>(authored.opacity);
+    // Exactly the pre-S4 expression, so a translate-only layer's device translation is the same
+    // double the version-3 Layer Output stage computed.
+    state.deviceTranslationX = authored.translationX * proxyScaleX;
+    state.deviceTranslationY = authored.translationY * proxyScaleY;
+
+    const auto rotation = rotationCosSin(authored.rotationDegrees);
+    state.translationOnly =
+        authored.scaleX == 1.0 && authored.scaleY == 1.0 && rotation.cosine == 1.0;
+    if (state.translationOnly) {
+        // Deliberately leave the linear maps at their identity defaults and the anchor out of the
+        // resolved state entirely: inverseMap() must not compute with the anchor on this path,
+        // because adding and subtracting it would perturb the last bit of a subpixel translation
+        // that version 3 produced exactly.
+        return ImageResult<LayerTransform>::success(LayerTransform(state));
+    }
+
+    // Forward linear map in full-resolution space, M = R(rotation) * S(scale), and its inverse
+    // S^-1 * R(-rotation). Both are written out rather than inverted numerically: the closed form
+    // keeps a quarter turn exact, which a general 2x2 inversion would not.
+    const auto fullForwardA = rotation.cosine * authored.scaleX;
+    const auto fullForwardB = -rotation.sine * authored.scaleY;
+    const auto fullForwardC = rotation.sine * authored.scaleX;
+    const auto fullForwardD = rotation.cosine * authored.scaleY;
+    const auto fullInverseA = rotation.cosine / authored.scaleX;
+    const auto fullInverseB = rotation.sine / authored.scaleX;
+    const auto fullInverseC = -rotation.sine / authored.scaleY;
+    const auto fullInverseD = rotation.cosine / authored.scaleY;
+
+    // Conjugation by the per-axis proxy factor: the off-diagonal terms carry the axis ratio, the
+    // diagonal ones are unitless and carry nothing. With equal factors every ratio is exactly 1 and
+    // the device maps are the full-resolution maps unchanged.
+    const auto ratio = proxyScaleX / proxyScaleY;
+    const auto inverseRatio = proxyScaleY / proxyScaleX;
+    state.inverseA = fullInverseA;
+    state.inverseB = fullInverseB * ratio;
+    state.inverseC = fullInverseC * inverseRatio;
+    state.inverseD = fullInverseD;
+    state.forwardA = fullForwardA;
+    state.forwardB = fullForwardB * ratio;
+    state.forwardC = fullForwardC * inverseRatio;
+    state.forwardD = fullForwardD;
+    if (!std::isfinite(state.inverseA) || !std::isfinite(state.inverseB) ||
+        !std::isfinite(state.inverseC) || !std::isfinite(state.inverseD) ||
+        !std::isfinite(state.forwardA) || !std::isfinite(state.forwardB) ||
+        !std::isfinite(state.forwardC) || !std::isfinite(state.forwardD)) {
+        return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::NonFiniteResult));
+    }
+
+    // The layer centre is the centre of its own pixel AREA, and the anchor is measured from there.
+    // Pixel centres have integer local coordinates, so a w-wide image occupies [-0.5, w - 0.5] and
+    // its centre sits at (w - 1) / 2 -- not at w / 2. That half-pixel matters: a quarter turn about
+    // (w - 1) / 2 maps pixel centres exactly onto pixel centres, while a turn about w / 2 would
+    // shift the layer half a pixel and blur every pixel of an otherwise exact rotation.
+    //
+    // The position parameter measures from w / 2 instead, because a position of w / 2 is what means
+    // "unmoved" in composition coordinates. The two are not in conflict: position supplies a
+    // DISPLACEMENT, which is origin-independent, while the anchor names a POINT, which is not.
+    const auto centreLocalX = (static_cast<double>(sourceWindow.extent().width()) - 1.0) / 2.0;
+    const auto centreLocalY = (static_cast<double>(sourceWindow.extent().height()) - 1.0) / 2.0;
+    state.anchorLocalX = centreLocalX + authored.anchorX * proxyScaleX;
+    state.anchorLocalY = centreLocalY + authored.anchorY * proxyScaleY;
+    state.pivotOutputX =
+        static_cast<double>(sourceWindow.originX()) + state.anchorLocalX + state.deviceTranslationX;
+    state.pivotOutputY =
+        static_cast<double>(sourceWindow.originY()) + state.anchorLocalY + state.deviceTranslationY;
+    if (!std::isfinite(state.anchorLocalX) || !std::isfinite(state.anchorLocalY) ||
+        !std::isfinite(state.pivotOutputX) || !std::isfinite(state.pivotOutputY)) {
+        return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::NonFiniteResult));
+    }
+    return ImageResult<LayerTransform>::success(LayerTransform(state));
+}
+
+LayerTransform::SamplePoint LayerTransform::inverseMap(const double outputX,
+                                                       const double outputY) const noexcept {
+    if (state_.translationOnly) {
+        // The pre-S4 arithmetic: the output pixel's source-local column minus the translation, in
+        // that order and with no other term.
+        return {(outputX - static_cast<double>(state_.sourceWindow.originX())) -
+                    state_.deviceTranslationX,
+                (outputY - static_cast<double>(state_.sourceWindow.originY())) -
+                    state_.deviceTranslationY};
+    }
+    const auto offsetX = outputX - state_.pivotOutputX;
+    const auto offsetY = outputY - state_.pivotOutputY;
+    return {state_.anchorLocalX + (state_.inverseA * offsetX + state_.inverseB * offsetY),
+            state_.anchorLocalY + (state_.inverseC * offsetX + state_.inverseD * offsetY)};
+}
+
+std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip) const noexcept {
+    // Bilinear support, in source-local coordinates: a tap is fetched whenever the sample
+    // coordinate is strictly inside (-1, extent), so the closed box [-1, extent] bounds every
+    // output pixel the resample can write a non-transparent value to.
+    const auto lowX = -1.0;
+    const auto lowY = -1.0;
+    const auto highX = static_cast<double>(state_.sourceWindow.extent().width());
+    const auto highY = static_cast<double>(state_.sourceWindow.extent().height());
+
+    auto forward = [this](const double localX, const double localY) noexcept {
+        if (state_.translationOnly) {
+            return SamplePoint{static_cast<double>(state_.sourceWindow.originX()) + localX +
+                                   state_.deviceTranslationX,
+                               static_cast<double>(state_.sourceWindow.originY()) + localY +
+                                   state_.deviceTranslationY};
+        }
+        const auto offsetX = localX - state_.anchorLocalX;
+        const auto offsetY = localY - state_.anchorLocalY;
+        return SamplePoint{
+            state_.pivotOutputX + (state_.forwardA * offsetX + state_.forwardB * offsetY),
+            state_.pivotOutputY + (state_.forwardC * offsetX + state_.forwardD * offsetY)};
+    };
+
+    const std::array corners{forward(lowX, lowY), forward(highX, lowY), forward(lowX, highY),
+                             forward(highX, highY)};
+    auto minimumX = corners.front().x;
+    auto maximumX = corners.front().x;
+    auto minimumY = corners.front().y;
+    auto maximumY = corners.front().y;
+    for (const auto corner : corners) {
+        minimumX = std::min(minimumX, corner.x);
+        maximumX = std::max(maximumX, corner.x);
+        minimumY = std::min(minimumY, corner.y);
+        maximumY = std::max(maximumY, corner.y);
+    }
+
+    const auto columns = clampedSpan(minimumX, maximumX, clip.originX(), clip.maxXExclusive() - 1);
+    const auto rows = clampedSpan(minimumY, maximumY, clip.originY(), clip.maxYExclusive() - 1);
+    if (columns.empty() || rows.empty()) {
+        return std::nullopt;
+    }
+    const auto window = ImageWindow::create(columns.low, rows.low, columns.extent(), rows.extent());
+    if (!window) {
+        return std::nullopt;
+    }
+    return *window.value();
+}
+
+ImageStatus layerTransformBilinearRow(const Rgba32fImageView source, const ImageWindow outputWindow,
+                                      const std::int64_t outputY, const LayerTransform& transform,
+                                      const std::span<Rgba32f> output) noexcept {
+    const auto sourceDescriptorValue = source.descriptor();
+    if (!sourceDescriptorValue.has_value() ||
+        source.pixels().size() != sourceDescriptorValue->layout().pixelCount) {
+        return codeError(ImageErrorCode::InvalidState);
+    }
+    if (sourceDescriptorValue->dataWindow() != transform.sourceWindow()) {
+        return codeError(ImageErrorCode::IncompatibleImageDescriptor);
+    }
+    if (outputY < outputWindow.originY() || outputY >= outputWindow.maxYExclusive()) {
+        return codeError(ImageErrorCode::CoordinateOutOfBounds);
+    }
+    const auto expectedBytes =
+        static_cast<std::size_t>(outputWindow.extent().width()) * sizeof(Rgba32f);
+    if (output.size_bytes() != expectedBytes) {
+        return ImageError::storageSizeMismatch(output.size_bytes(), expectedBytes);
+    }
+    if (spansOverlap(source.pixels(), output)) {
+        return codeError(ImageErrorCode::InvalidParameter);
+    }
+    if (!supportedEnvironment()) {
+        return codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment);
+    }
+    if (transform.opacity() == 0.0F) {
+        fillSolidRow(output, Rgba32f::transparent());
+        return std::nullopt;
+    }
+
+    const auto sourceWidth = transform.sourceWindow().extent().width();
+    const auto sourceHeight = transform.sourceWindow().extent().height();
+    const auto rowY = static_cast<double>(outputY);
+    for (std::size_t outputX = 0; outputX < output.size(); ++outputX) {
+        const auto sample = transform.inverseMap(
+            static_cast<double>(outputWindow.originX() + static_cast<std::int64_t>(outputX)), rowY);
+        if (sample.x <= -1.0 || sample.x >= static_cast<double>(sourceWidth) || sample.y <= -1.0 ||
+            sample.y >= static_cast<double>(sourceHeight)) {
+            output[outputX] = Rgba32f::transparent();
+            continue;
+        }
+        const auto baseX = static_cast<std::int64_t>(std::floor(sample.x));
+        const auto factorX = static_cast<float>(sample.x - static_cast<double>(baseX));
+        const auto baseY = static_cast<std::int64_t>(std::floor(sample.y));
+        const auto factorY = static_cast<float>(sample.y - static_cast<double>(baseY));
+        const auto top = interpolatePixels(
+            sampleLocal(source.pixels(), sourceWidth, sourceHeight, baseX, baseY),
+            sampleLocal(source.pixels(), sourceWidth, sourceHeight, baseX + 1, baseY), factorX);
+        const auto bottom = interpolatePixels(
+            sampleLocal(source.pixels(), sourceWidth, sourceHeight, baseX, baseY + 1),
+            sampleLocal(source.pixels(), sourceWidth, sourceHeight, baseX + 1, baseY + 1), factorX);
+        auto sampled = interpolatePixels(top, bottom, factorY);
+        if (transform.opacity() != 1.0F) {
+            for (auto& component : sampled) {
+                component *= transform.opacity();
             }
         }
         const auto pixel = checkedProcessPixel(sampled);
