@@ -49,6 +49,7 @@ using bloom::document::EdgeId;
 using bloom::document::EdgeRecord;
 using bloom::document::FrameRate;
 using bloom::document::kDefaultAnchor;
+using bloom::document::kDefaultBlendModeValue;
 using bloom::document::kDefaultRotationDegrees;
 using bloom::document::kDefaultScale;
 using bloom::document::LayerId;
@@ -130,6 +131,10 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
     constexpr auto scaleB = id<ParameterId>(47);
     constexpr auto rotationA = id<ParameterId>(48);
     constexpr auto rotationB = id<ParameterId>(49);
+    // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding, so the
+    // fixture declares one per layer at the schema default.
+    constexpr auto blendModeA = id<ParameterId>(50);
+    constexpr auto blendModeB = id<ParameterId>(51);
 
     CanonicalGraph graph(stackNode);
     NodeRecord sourceNodeA{sourceA, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
@@ -142,6 +147,7 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
             {std::string(bloom::document::kScaleParameterRole), scaleA},
             {std::string(bloom::document::kRotationParameterRole), rotationA},
             {std::string(bloom::document::kOpacityParameterRole), opacityA},
+            {std::string(bloom::document::kBlendModeParameterRole), blendModeA},
         },
         bloom::document::kLayerOutputNodeSchemaVersion};
     NodeRecord sourceNodeB{sourceB, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
@@ -154,6 +160,7 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
             {std::string(bloom::document::kScaleParameterRole), scaleB},
             {std::string(bloom::document::kRotationParameterRole), rotationB},
             {std::string(bloom::document::kOpacityParameterRole), opacityB},
+            {std::string(bloom::document::kBlendModeParameterRole), blendModeB},
         },
         bloom::document::kLayerOutputNodeSchemaVersion};
     NodeRecord stackRecord{stackNode,
@@ -226,7 +233,13 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
                                           ConstantValueSource{kDefaultRotationDegrees}}) ||
         !composition.parameters().insert({rotationB,
                                           std::string(bloom::document::kRotationParameterSchemaKey),
-                                          ConstantValueSource{kDefaultRotationDegrees}})) {
+                                          ConstantValueSource{kDefaultRotationDegrees}}) ||
+        !composition.parameters().insert({blendModeA,
+                                          std::string(bloom::document::kBlendModeParameterSchemaKey),
+                                          ConstantValueSource{kDefaultBlendModeValue}}) ||
+        !composition.parameters().insert({blendModeB,
+                                          std::string(bloom::document::kBlendModeParameterSchemaKey),
+                                          ConstantValueSource{kDefaultBlendModeValue}})) {
         throw std::logic_error("Could not create parameters");
     }
 

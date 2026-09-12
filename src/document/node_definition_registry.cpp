@@ -114,12 +114,13 @@ template <typename Definition>
     case NodeLoweringKind::LayerOutput:
         // Parameter ORDER is the authoring order the properties grid, the node card, and the
         // timeline all read: where the layer sits, the point it turns about, how big it is, how far
-        // round it is turned, then how much of it shows through. Opacity stays last because it is
-        // the only one of the five that is not part of the geometric transform.
+        // round it is turned, how much of it shows through, then how it combines with what is
+        // beneath it. The two appearance values come after the four geometric ones, and the blend
+        // mode comes last because it is the only one that is not a continuous value at all.
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasImageInput(definition, kLayerOutputContentInputPort) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
-               definition.parameters.size() == 5 &&
+               definition.parameters.size() == 6 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
                hasParameter(definition, 1, kAnchorParameterRole, kAnchorParameterSchemaKey,
@@ -130,6 +131,8 @@ template <typename Definition>
                             ParameterValueKind::Float64, true) &&
                hasParameter(definition, 4, kOpacityParameterRole, kOpacityParameterSchemaKey,
                             ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 5, kBlendModeParameterRole, kBlendModeParameterSchemaKey,
+                            ParameterValueKind::Integer) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
@@ -192,7 +195,13 @@ template <typename Definition>
              {std::string(kRotationParameterRole), std::string(kRotationParameterSchemaKey),
               ParameterValueKind::Float64, true, true, kDefaultRotationDegrees},
              {std::string(kOpacityParameterRole), std::string(kOpacityParameterSchemaKey),
-              ParameterValueKind::Float64, true, true, 1.0}},
+              ParameterValueKind::Float64, true, true, 1.0},
+             // supportsAnimation is false, and deliberately so: there is no meaningful value
+             // between Multiply and Screen, so a curve over this parameter could only hold or jump,
+             // which an enable/disable keyframe model would express and an interpolated curve
+             // would not.
+             {std::string(kBlendModeParameterRole), std::string(kBlendModeParameterSchemaKey),
+              ParameterValueKind::Integer, true, false, kDefaultBlendModeValue}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Layers};

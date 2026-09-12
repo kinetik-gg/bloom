@@ -453,6 +453,19 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "                \"value\": 0.0\n"
         "              }\n"
         "            }\n"
+        "          },\n"
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode parameter,
+        // persisted as the int64 its stable mapping gives it (Normal = 0).
+        "          {\n"
+        "            \"id\": \"11\",\n"
+        "            \"schemaKey\": \"bloom.layer.blend-mode\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"int64\",\n"
+        "                \"value\": \"0\"\n"
+        "              }\n"
+        "            }\n"
         "          }\n"
         "        ],\n"
         "        \"animationCurves\": [\n"
@@ -503,11 +516,16 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "            {\n"
         "              \"id\": \"3\",\n"
         "              \"typeId\": \"bloom.layer-output\",\n"
-        "              \"schemaVersion\": 2,\n"
+        // ADAPTED (blend modes): the Layer Output node schema version is now 3.
+        "              \"schemaVersion\": 3,\n"
         "              \"parameters\": [\n"
         "                {\n"
         "                  \"role\": \"anchor\",\n"
         "                  \"parameterId\": \"8\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"blendMode\",\n"
+        "                  \"parameterId\": \"11\"\n"
         "                },\n"
         "                {\n"
         "                  \"role\": \"opacity\",\n"
@@ -648,7 +666,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "      \"edge\": \"3\",\n"
         "      \"layer\": \"1\",\n"
         "      \"layerSlot\": \"1\",\n"
-        "      \"parameter\": \"10\",\n"
+        "      \"parameter\": \"11\",\n"
         "      \"animationCurve\": \"9\",\n"
         "      \"keyframe\": \"22\",\n"
         "      \"driverBinding\": \"0\",\n"
@@ -677,7 +695,10 @@ void testComposedGoldenBytes(Expectations& expectations) {
         std::string(kLayerOutputNodeType),
         // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
         // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
         {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
          {"opacity", ParameterId::fromRaw(3)},
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
@@ -738,7 +759,11 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                                              ConstantValueSource{kDefaultScale}}) &&
                             composition.parameters().insert(
                                 {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
-                                 ConstantValueSource{kDefaultRotationDegrees}}),
+                                 ConstantValueSource{kDefaultRotationDegrees}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(11),
+                                 std::string(kBlendModeParameterSchemaKey),
+                                 ConstantValueSource{kDefaultBlendModeValue}}),
                         "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
@@ -760,7 +785,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 10,
+                                         .parameter = 11,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -1820,7 +1845,10 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
         std::string(kLayerOutputNodeType),
         // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
         // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
         {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
          {"opacity", ParameterId::fromRaw(3)},
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
@@ -1868,7 +1896,10 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                          ConstantValueSource{kDefaultScale}}) &&
         composition.parameters().insert({ParameterId::fromRaw(10),
                                          std::string(kRotationParameterSchemaKey),
-                                         ConstantValueSource{kDefaultRotationDegrees}});
+                                         ConstantValueSource{kDefaultRotationDegrees}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(11),
+                                         std::string(kBlendModeParameterSchemaKey),
+                                         ConstantValueSource{kDefaultBlendModeValue}});
     if (!paramsInserted) {
         std::abort();
     }
@@ -1892,7 +1923,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
     highWater.edge = 2;
     highWater.layer = 1;
     highWater.layerSlot = 1;
-    highWater.parameter = 10;
+    highWater.parameter = 11;
     highWater.extensionRecord = 1;
     return Document{std::move(project), highWater};
 }

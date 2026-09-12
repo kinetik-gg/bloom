@@ -28,6 +28,7 @@ inline constexpr std::string_view kAddTextLayerAnchorParameterOutput = "anchorPa
 inline constexpr std::string_view kAddTextLayerScaleParameterOutput = "scaleParameter";
 inline constexpr std::string_view kAddTextLayerRotationParameterOutput = "rotationParameter";
 inline constexpr std::string_view kAddTextLayerOpacityParameterOutput = "opacityParameter";
+inline constexpr std::string_view kAddTextLayerBlendModeParameterOutput = "blendModeParameter";
 inline constexpr std::string_view kAddTextLayerTextToLayerEdgeOutput = "textToLayerEdge";
 inline constexpr std::string_view kAddTextLayerLayerToStackEdgeOutput = "layerToStackEdge";
 
@@ -41,6 +42,7 @@ inline constexpr std::string_view kAddSolidLayerAnchorParameterOutput = "anchorP
 inline constexpr std::string_view kAddSolidLayerScaleParameterOutput = "scaleParameter";
 inline constexpr std::string_view kAddSolidLayerRotationParameterOutput = "rotationParameter";
 inline constexpr std::string_view kAddSolidLayerOpacityParameterOutput = "opacityParameter";
+inline constexpr std::string_view kAddSolidLayerBlendModeParameterOutput = "blendModeParameter";
 inline constexpr std::string_view kAddSolidLayerSolidToLayerEdgeOutput = "solidToLayerEdge";
 inline constexpr std::string_view kAddSolidLayerLayerToStackEdgeOutput = "layerToStackEdge";
 

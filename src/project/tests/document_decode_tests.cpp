@@ -458,7 +458,10 @@ void testComposedRoundTrip(Expectations& expectations) {
         std::string(kLayerOutputNodeType),
         // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
         // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
         {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
          {"opacity", ParameterId::fromRaw(3)},
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
@@ -519,7 +522,11 @@ void testComposedRoundTrip(Expectations& expectations) {
                                                              ConstantValueSource{kDefaultScale}}) &&
                             composition.parameters().insert(
                                 {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
-                                 ConstantValueSource{kDefaultRotationDegrees}}),
+                                 ConstantValueSource{kDefaultRotationDegrees}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(11),
+                                 std::string(kBlendModeParameterSchemaKey),
+                                 ConstantValueSource{kDefaultBlendModeValue}}),
                         "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
@@ -540,7 +547,7 @@ void testComposedRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 10,
+                                         .parameter = 11,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
