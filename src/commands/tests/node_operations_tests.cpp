@@ -126,6 +126,18 @@ void testValidityQuery(TestContext& test) {
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
+        // Task S1, item 5: a OnePerComposition type is refused once the composition already holds
+        // one. The fixture's composition carries a Layer Stack from the start, so that one refuses
+        // immediately; the composition output is the same rule proved from the other side -- the
+        // first is accepted below and a second is refused right after it.
+        if (definition.cardinality == NodeCardinality::OnePerComposition &&
+            std::ranges::any_of(
+                composition(fixture.document.snapshot()).graph().nodes(),
+                [&](const auto& existing) { return existing.typeId == definition.key.typeId; })) {
+            refuse<AddNode>(test, fixture, OperationIssueCode::Unsupported, definition.key.typeId,
+                            Vec2d{17, -31});
+            continue;
+        }
         const auto beforeSlots =
             composition(fixture.document.snapshot()).graph().layerStack().entries().size();
         const auto result = exercise<AddNode>(test, fixture, definition.key.typeId, Vec2d{17, -31});
@@ -147,6 +159,20 @@ void testAddAndLayout(TestContext& test) {
                                 ParameterSource{ConstantValueSource{parameter.defaultValue}},
                         "registry default is copied exactly into an independent parameter");
         }
+        if (definition.cardinality == NodeCardinality::OnePerComposition) {
+            refuse<AddNode>(test, fixture, OperationIssueCode::Unsupported, definition.key.typeId,
+                            Vec2d{17, -31});
+        }
+    }
+    // The rule lives on the definition, so it is the definition that says which types are
+    // singletons
+    // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
+    for (const auto& definition : builtInNodeDefinitions().definitions()) {
+        const bool singleton = definition.key.typeId == kLayerStackNodeType ||
+                               definition.key.typeId == kCompositionOutputNodeType;
+        test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
+                    "exactly the Layer Stack and the composition output are one per composition: " +
+                        definition.key.typeId);
     }
     const auto id = addSource(fixture);
     exercise<MoveNodes>(test, fixture,
@@ -285,6 +311,10 @@ void testRemoveAndDissolve(TestContext& test) {
     const auto compositionOutput =
         apply<AddNode>(fixture, std::string(kCompositionOutputNodeType), Vec2d{})
             .outputId<NodeId>(kAddNodeOutput);
+    // And a second one is refused, here as well as in testAddAndLayout: this is the fixture that
+    // actually holds a composition output, so it is where the refusal is worth restating.
+    refuse<AddNode>(test, fixture, OperationIssueCode::Unsupported,
+                    std::string(kCompositionOutputNodeType), Vec2d{});
     if (!(compositionOutput.has_value()))
         throw std::logic_error("output fixture");
     refuse<RemoveNodes>(test, fixture, OperationIssueCode::Unsupported,

@@ -1,11 +1,23 @@
 #include "node_interaction_test_support.hpp"
+#include <QAbstractItemModel>
 #include <QAction>
+#include <QModelIndex>
 #include <QShortcut>
 
 namespace bloom::ui::test {
 namespace {
 QAction* named(QMenu* menu, const char* name) {
     return menu->findChild<QAction*>(QString::fromLatin1(name));
+}
+// A search result addressed by the node type it would add, rather than by its row number: the rows
+// a filter produces are the popup's business and a row index pins nothing worth pinning.
+QModelIndex rowForKey(const QAbstractItemModel* model, const std::string_view typeId) {
+    for (int row = 0; row < model->rowCount(); ++row) {
+        const auto index = model->index(row, 0);
+        if (index.data(Qt::UserRole).toString() == QString::fromUtf8(typeId))
+            return index;
+    }
+    return {};
 }
 kit::KSearchPopup* search(Fixture& f) {
     auto* popup = f.editor.findChild<kit::KSearchPopup*>();
@@ -129,6 +141,19 @@ void testSearchKeyboardAndMenus() {
                list->model()->rowCount() ==
                    static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
            "Shift A opens all registered node kinds at the cursor");
+    // Task S1, item 5: the composition's one evaluation endpoint and its one Layer Stack are
+    // already present, so search offers them as refusals rather than as commands.
+    for (const auto typeId :
+         {document::kCompositionOutputNodeType, document::kLayerStackNodeType}) {
+        const auto row = rowForKey(list->model(), typeId);
+        expect(row.isValid() && !row.flags().testFlag(Qt::ItemIsEnabled) &&
+                   row.data(Qt::ToolTipRole).toString().contains(QStringLiteral("Only one")),
+               "a one-per-composition kind is listed disabled, with the command's own refusal");
+    }
+    expect(rowForKey(list->model(), document::kLayerOutputNodeType)
+               .flags()
+               .testFlag(Qt::ItemIsEnabled),
+           "while a kind a composition may hold many of stays addable");
     field->setText(QStringLiteral("text"));
     expect(list->model()->rowCount() == 1 &&
                !list->model()->index(0, 0).flags().testFlag(Qt::ItemIsEnabled) &&
@@ -192,10 +217,15 @@ void testSearchKeyboardAndMenus() {
     popup = search(f);
     field = popup->findChild<QLineEdit*>();
     list = popup->findChild<QListView*>();
-    field->setText(QStringLiteral("composition"));
+    // Solid rather than the composition output this case used before task S1: the composition
+    // output is one per composition (item 5), so the open composition's existing one now makes its
+    // row a refusal -- which the cardinality case above is what pins, and a disabled row is not
+    // something a click can add.
+    field->setText(QStringLiteral("solid"));
     history = f.stack.size();
-    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier,
-                      list->visualRect(list->model()->index(0, 0)).center());
+    QTest::mouseClick(
+        list->viewport(), Qt::LeftButton, Qt::NoModifier,
+        list->visualRect(rowForKey(list->model(), document::kSolidSourceNodeType)).center());
     expect(f.stack.size() == history + 1 && !popup->isVisible(),
            "clicking a search result adds and closes the popup");
     f.session.clearSelection();

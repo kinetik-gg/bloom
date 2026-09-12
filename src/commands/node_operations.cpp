@@ -4,6 +4,8 @@
 
 #include <bloom/document/persisted_text.hpp>
 
+#include <algorithm>
+
 namespace bloom::commands {
 bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& operation) {
     document::Document isolated(snapshot.project(), snapshot.ids().highWater());
@@ -31,6 +33,17 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     if (!definition)
         return OperationResult::rejected(OperationIssueCode::Unsupported,
                                          "Node type is not registered: " + nodeTypeId_);
+    // Cardinality (task S1, item 5). Checked here rather than in each surface that offers an Add,
+    // so the keyboard, the menu and the search popup cannot disagree about whether a second one is
+    // allowed -- and so the search popup can read the refusal back from a dry run of this very
+    // operation instead of keeping its own copy of the rule.
+    if (definition->cardinality == document::NodeCardinality::OnePerComposition &&
+        std::ranges::any_of(composition->graph().nodes(), [this](const auto& existing) {
+            return existing.typeId == nodeTypeId_;
+        }))
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "Only one " + nodeTypeId_ +
+                                             " node is allowed per composition");
     const auto nodeId = draft.ids().allocateNode();
     if (!nodeId)
         return detail::exhaustedIds();

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-13
 
 ## Purpose
 
@@ -304,6 +304,19 @@ inputs left and outputs right. Collapsed cards keep their sockets on the header 
 set uses Accent outlines and its primary uses Foreground. The set and primary flow through
 `CompositionSession::selectNodes`, `toggleNodeSelection` and `clearSelection`; Properties and
 Timeline retain their existing primary/context contracts.
+
+### Node Cardinality
+
+`NodeDefinition::cardinality` declares how many instances of a node type one composition may hold.
+`Many` is the default. `OnePerComposition` marks a structural singleton, and exactly two built-in
+types carry it: the `Layer Stack` operator and the `Composition Output` endpoint. A second one is not
+a graph a composition can mean.
+
+`AddNode` enforces it and refuses with the type it refused, so every Add surface -- keyboard, menu,
+search -- inherits one rule instead of keeping its own copy. The Add search reads the refusal back
+from a dry run of the same operation and lists the type as a disabled result carrying that message;
+it does not reimplement the check. Cardinality constrains authoring only: it is not a validation rule,
+and a document that already holds more than one is neither rejected nor repaired by it.
 
 ### Application Integration Limit
 

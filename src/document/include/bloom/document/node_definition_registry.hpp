@@ -68,6 +68,15 @@ struct LayerSlotInputDefinition {
                            const LayerSlotInputDefinition&) = default;
 };
 
+// How many instances of a node type one composition may hold (task S1, item 5). The composition's
+// single evaluation endpoint and its single layer-stack operator are structural singletons: a
+// second one is not a graph a composition can mean, which is why the refusal belongs to the
+// definition rather than to each surface that offers an Add.
+enum class NodeCardinality : std::uint8_t {
+    Many,
+    OnePerComposition,
+};
+
 enum class NodeLoweringKind {
     Solid,
     LayerOutput,
@@ -83,6 +92,7 @@ struct NodeDefinition {
     std::vector<OutputPortDefinition> outputs;
     std::vector<ParameterDefinition> parameters;
     std::optional<LayerSlotInputDefinition> layerSlotInput;
+    NodeCardinality cardinality = NodeCardinality::Many;
 
     friend bool operator==(const NodeDefinition&, const NodeDefinition&) = default;
 };

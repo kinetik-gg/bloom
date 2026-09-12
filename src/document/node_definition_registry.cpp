@@ -15,6 +15,7 @@ namespace {
 
 using bloom::document::InputPortDefinition;
 using bloom::document::LayerSlotInputDefinition;
+using bloom::document::NodeCardinality;
 using bloom::document::NodeDefinition;
 using bloom::document::NodeLoweringKind;
 using bloom::document::OutputPortDefinition;
@@ -106,6 +107,7 @@ template <typename Definition>
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
+               definition.cardinality == NodeCardinality::OnePerComposition &&
                definition.inputs.empty() && hasImageOutput(definition, kLayerStackOutputPort) &&
                definition.parameters.empty() && definition.layerSlotInput.has_value() &&
                definition.layerSlotInput->role == kLayerStackContentInputRole &&
@@ -114,6 +116,7 @@ template <typename Definition>
     case NodeLoweringKind::CompositionOutput:
         return hasCanonicalKey(definition, kCompositionOutputNodeType,
                                kCompositionOutputNodeSchemaVersion) &&
+               definition.cardinality == NodeCardinality::OnePerComposition &&
                hasImageInput(definition, kCompositionOutputInputPort) &&
                hasImageOutput(definition, kCompositionOutputOutputPort) &&
                definition.parameters.empty() && !definition.layerSlotInput.has_value();
@@ -167,7 +170,8 @@ template <typename Definition>
             {{std::string(kLayerStackOutputPort), SocketValueKind::Image}},
             {},
             LayerSlotInputDefinition{std::string(kLayerStackContentInputRole),
-                                     SocketValueKind::Image, true}};
+                                     SocketValueKind::Image, true},
+            NodeCardinality::OnePerComposition};
 }
 
 [[nodiscard]] NodeDefinition compositionOutputDefinition() {
@@ -177,7 +181,8 @@ template <typename Definition>
             {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, true}},
             {{std::string(kCompositionOutputOutputPort), SocketValueKind::Image}},
             {},
-            std::nullopt};
+            std::nullopt,
+            NodeCardinality::OnePerComposition};
 }
 
 [[nodiscard]] NodeDefinition textDefinition() {
