@@ -392,6 +392,13 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                             firstLayer->opacity.id == kFirstOpacity && firstOpacity != nullptr &&
                             *firstOpacity == 0.8,
                         "Layer Output preserves typed input and static properties");
+    // The blend mode lowers to a resolved enumerator plus its own parameter identity, never to a
+    // curve index: the schema declares it non-animatable.
+    expectations.expect(firstLayer != nullptr && firstLayer->blendModeParameterId == kFirstBlendMode,
+                        "Layer Output carries the blend mode's own parameter identity");
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendMode == bloom::core::kDefaultBlendMode,
+                        "a layer with the schema default lowers to Normal");
     expectations.expect(stack != nullptr && stack->entries.size() == 2 &&
                             stack->entries[0] ==
                                 runtime::CompiledLayerStackEntry{
@@ -745,6 +752,46 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
         "driver source stays unsupported until its Batch 4 typed output contract");
 }
 
+// An authored blend mode lowers from its stored integer through core::BlendMode's one mapping, and
+// an integer naming no implemented mode never reaches lowering at all: ParameterStore refuses it on
+// write, so the lowering path has no "unknown mode" branch to guess in.
+void testBlendModeLowersFromItsStoredInteger(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "blend-mode fixture composition must exist");
+    auto& parameters = composition->parameters();
+    expectations.expect(
+        !parameters.setSource(kFirstBlendMode,
+                              document::ConstantValueSource{
+                                  bloom::core::blendModeStoredValue(
+                                      bloom::core::BlendMode::Difference) +
+                                  1}),
+        "an integer naming no implemented blend mode is refused by the document layer");
+    expectations.expect(!parameters.setSource(kFirstBlendMode,
+                                             document::ConstantValueSource{std::int64_t{-1}}),
+                        "a negative stored blend mode is refused by the document layer");
+    require(parameters.setSource(
+                kFirstBlendMode,
+                document::ConstantValueSource{
+                    bloom::core::blendModeStoredValue(bloom::core::BlendMode::Overlay)}),
+            "an implemented blend mode must be publishable");
+    require(project.validate().ok(), "blend-mode fixture must remain valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    const auto* layer = result.plan == nullptr
+                            ? nullptr
+                            : std::get_if<runtime::CompiledLayerOutput>(
+                                  &result.plan->operations()[1]);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled &&
+                            layer != nullptr &&
+                            layer->blendMode == bloom::core::BlendMode::Overlay,
+                        "an authored blend mode lowers to its own enumerator");
+}
+
 void testRequestScopedParameterOverrides(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -1026,6 +1073,7 @@ int main() {
         testReachableSchemaDiagnostics(expectations);
         testTypedParameterDiagnostics(expectations);
         testParameterSourcesAndDiagnosticIds(expectations);
+        testBlendModeLowersFromItsStoredInteger(expectations);
         testRequestScopedParameterOverrides(expectations);
         testMidWorkCancellationIsBounded(expectations);
     } catch (const std::exception& error) {

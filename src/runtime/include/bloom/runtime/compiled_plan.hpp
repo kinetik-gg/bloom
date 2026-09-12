@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
@@ -156,10 +157,15 @@ struct CompiledText {
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
 
-// A lowered Layer Output boundary. The five parameters appear in the registered authoring order --
-// position, anchor, scale, rotation, opacity -- and each one carries its own parameter identity so
-// a diagnostic can name the exact parameter that failed. All five are animatable, so each is either
-// a resolved constant or an index into the plan's curve tables.
+// A lowered Layer Output boundary. The six parameters appear in the registered authoring order --
+// position, anchor, scale, rotation, opacity, blend mode -- and each one carries its own parameter
+// identity so a diagnostic can name the exact parameter that failed. The first five are animatable,
+// so each is either a resolved constant or an index into the plan's curve tables.
+//
+// The blend mode is a resolved constant, like CompiledText's three values and for the same reason:
+// the schema declares it non-animatable and no command in the surface can put it on a curve. It
+// lives HERE, on the layer boundary that owns it, rather than on the stack entry that consumes it --
+// the stack entry is the ordering of layers, and the mode is a property of the layer.
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
@@ -169,6 +175,8 @@ struct CompiledLayerOutput {
     CompiledVec2Parameter scale;
     CompiledScalarParameter rotation;
     CompiledScalarParameter opacity;
+    document::ParameterId blendModeParameterId;
+    core::BlendMode blendMode = core::kDefaultBlendMode;
 
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };

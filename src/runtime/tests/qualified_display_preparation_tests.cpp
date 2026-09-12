@@ -59,6 +59,7 @@ constexpr auto kOpacityParam = bloom::document::ParameterId::fromRaw(42);
 constexpr auto kAnchorParam = bloom::document::ParameterId::fromRaw(43);
 constexpr auto kScaleParam = bloom::document::ParameterId::fromRaw(44);
 constexpr auto kRotationParam = bloom::document::ParameterId::fromRaw(45);
+constexpr auto kBlendModeParam = bloom::document::ParameterId::fromRaw(46);
 
 [[nodiscard]] bloom::document::CompositionFormat format(const std::uint32_t width = 4,
                                                         const std::uint32_t height = 2) {
@@ -85,7 +86,8 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat = format
         CompiledVec2Parameter{kAnchorParam, bloom::document::kDefaultAnchor},
         CompiledVec2Parameter{kScaleParam, bloom::document::kDefaultScale},
         CompiledScalarParameter{kRotationParam, bloom::document::kDefaultRotationDegrees},
-        CompiledScalarParameter{kOpacityParam, 1.0}});
+        CompiledScalarParameter{kOpacityParam, 1.0}, kBlendModeParam,
+        bloom::core::kDefaultBlendMode});
     operations.emplace_back(
         CompiledLayerStack{kStackNode, {{kSlot, kLayer, OperationIndex::fromRaw(1)}}});
     operations.emplace_back(CompiledCompositionOutput{kOutputNode, OperationIndex::fromRaw(2)});

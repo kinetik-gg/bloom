@@ -201,9 +201,11 @@ template <typename Value>
                     std::ranges::all_of(
                         vec2Parameters,
                         [](const auto* parameter) { return parameter->id.isValid(); }) &&
-                    std::ranges::all_of(scalarParameters, [](const auto* parameter) {
-                        return parameter->id.isValid();
-                    });
+                    std::ranges::all_of(scalarParameters,
+                                        [](const auto* parameter) {
+                                            return parameter->id.isValid();
+                                        }) &&
+                    layer.blendModeParameterId.isValid();
                 if (!identitiesValid) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
@@ -1185,6 +1187,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                 .total = totalRows});
                                 continue;
                             }
+                            // The mode comes off the Layer Output the entry names, which is where
+                            // the layer's own blend mode lives. hasExpectedInputKinds() has already
+                            // proven that operation is a CompiledLayerOutput whose layerId matches
+                            // this entry, so the lookup cannot legitimately fail; the check stays
+                            // because a silent fall back to Normal would composite the wrong
+                            // picture rather than report anything.
+                            const auto* layerOutput = std::get_if<CompiledLayerOutput>(
+                                &plan->operations()[entry->input.value()]);
+                            if (layerOutput == nullptr) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InternalInvariant,
+                                    "Layer Stack entry does not name a Layer Output", {},
+                                    operationSubject);
+                                return;
+                            }
+                            const auto blendMode = layerOutput->blendMode;
                             auto sourceView = slots[entry->input.value()]->view();
                             if (!sourceView) {
                                 operationFailure =
@@ -1248,14 +1266,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         "Layer Stack destination row could not be addressed");
                                     return;
                                 }
-                                if (const auto rowStatus = render::sourceOverLinearRec709SceneRow(
-                                        *sourceRow.value(),
+                                if (const auto rowStatus = render::blendLinearRec709SceneRow(
+                                        blendMode, *sourceRow.value(),
                                         destinationRow.value()->subspan(
                                             static_cast<std::size_t>(columnOffset),
                                             sourceWindow.extent().width()))) {
                                     operationFailure = imageDiagnostic(
                                         *rowStatus, operationSubject,
-                                        "Layer Stack source-over could not be evaluated");
+                                        "Layer Stack blend could not be evaluated");
                                     return;
                                 }
                                 reportRow();

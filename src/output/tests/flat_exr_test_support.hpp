@@ -64,6 +64,7 @@ constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x66);
 constexpr auto kShellAnchorParameterId = document::ParameterId::fromRaw(0x67);
 constexpr auto kShellScaleParameterId = document::ParameterId::fromRaw(0x68);
 constexpr auto kShellRotationParameterId = document::ParameterId::fromRaw(0x69);
+constexpr auto kShellBlendModeParameterId = document::ParameterId::fromRaw(0x6a);
 
 [[nodiscard]] inline render::Rgba32f pixel(const float red, const float green, const float blue,
                                            const float alpha) {
@@ -135,7 +136,8 @@ constexpr auto kShellRotationParameterId = document::ParameterId::fromRaw(0x69);
         runtime::CompiledVec2Parameter{kShellScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kShellRotationParameterId,
                                          document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0},
+        kShellBlendModeParameterId, core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

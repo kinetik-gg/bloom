@@ -74,6 +74,7 @@ constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x76);
 constexpr auto kShellAnchorParameterId = document::ParameterId::fromRaw(0x77);
 constexpr auto kShellScaleParameterId = document::ParameterId::fromRaw(0x78);
 constexpr auto kShellRotationParameterId = document::ParameterId::fromRaw(0x79);
+constexpr auto kShellBlendModeParameterId = document::ParameterId::fromRaw(0x7a);
 
 // The revision fixture bytes both `expectedOcioRevision` and the built `DisplayProcessorIdentityV1`
 // embed -- the doc's own cross-check ("the separate expected OCIO revision must equal ... the
@@ -155,7 +156,8 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
         runtime::CompiledVec2Parameter{kShellScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kShellRotationParameterId,
                                          document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0},
+        kShellBlendModeParameterId, core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

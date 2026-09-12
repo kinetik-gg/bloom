@@ -18,12 +18,18 @@
 
 namespace bloom::runtime {
 
+// Bumped to 5 by the blend-mode slice: the Layer Stack stage reads each entry's Layer Output blend
+// mode and folds through render::blendLinearRec709SceneRow() instead of compositing source-over
+// unconditionally. A composition whose every layer is Normal evaluates to bit-identical pixels, but
+// a frame identity from before this change must not compare equal to one from after it, because the
+// same plan value can now mean a different picture.
+//
 // Bumped to 4 by the layer transform breadth slice (task S4): the Layer Output stage now resolves
 // five parameters instead of two, resamples through an affine transform, and sizes each layer's
 // data window to its own transformed bounds rather than the whole composition. A frame identity
 // from before this change must not compare equal to one from after it, even where the pixels
 // coincide.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 4;
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 5;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,

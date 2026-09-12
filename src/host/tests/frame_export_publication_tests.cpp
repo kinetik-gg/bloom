@@ -126,6 +126,7 @@ constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(0x200c);
 constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(0x200d);
 constexpr auto kScaleParameterId = document::ParameterId::fromRaw(0x200e);
 constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x200f);
+constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x2010);
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> smallSolidPlan() {
     const auto format = document::CompositionFormat::create(2, 2);
@@ -144,7 +145,8 @@ constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x200f);
         runtime::CompiledVec2Parameter{kAnchorParameterId, document::kDefaultAnchor},
         runtime::CompiledVec2Parameter{kScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
+        bloom::core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNodeId, {{kSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
