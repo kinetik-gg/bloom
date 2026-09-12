@@ -15,6 +15,8 @@ class SchemaCheckError final : public std::runtime_error {
 
 void validateManifestSchema(const json::Value& schema);
 void validateDocumentSchema(const json::Value& schema);
+void validateManifestSchemaV1_1(const json::Value& schema);
+void validateDocumentSchemaV1_1(const json::Value& schema);
 void checkProjectSchemas(const std::filesystem::path& repositoryRoot);
 
 } // namespace bloom::quality

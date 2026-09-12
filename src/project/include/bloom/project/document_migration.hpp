@@ -39,17 +39,10 @@
 // follow that capture work, not precede it, since a manifest step would need the same DOM-in/
 // bytes-out shape this module already establishes.
 //
-// Registry: kProductionDocumentMigrationSteps below is the real production table -- currently
-// empty, because schema {1,0} is the only version Bloom has ever shipped. document_decode.hpp's
-// own gates (UnsupportedMajorVersion via DomainViolation for an unrecognized major; the
-// newer-minor RT1 capture/PreservationRequired route for a same-major newer minor) already reject
-// or redirect everything that is not exactly {1,0}, without this module ever being consulted for
-// either case -- see save_archive.cpp's runReopenChain(), the one production call site, for the
-// exact routing condition that keeps this module out of both paths. migrateDocumentDom() itself is
-// fully generic and injectable over both the step table and the "current" version it migrates to,
-// which is what lets document_migration_tests.cpp prove the chaining/failure/determinism machinery
-// end-to-end with a synthetic version pair no production schema uses, without needing a production
-// seam of its own.
+// Registry: kProductionDocumentMigrationSteps upgrades document 1.0 to 1.1 by assigning the
+// original four-column node layout. Same-major newer minors bypass migration and retain their
+// additive members; unknown majors follow the existing rejection/preservation route. The generic
+// runner remains injectable for deterministic chain, failure, and resource-budget tests.
 //
 // Version detection is not this module's job: the caller already lexically reads the document
 // root's schemaVersion before trusted decode, as part of its own existing version-agreement check

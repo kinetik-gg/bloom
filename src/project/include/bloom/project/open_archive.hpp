@@ -58,10 +58,10 @@ enum class OpenArchivePreservedReadOnlySide : std::uint8_t {
 struct OpenedArchive final {
     std::unique_ptr<document::Document> document;
     document::ColorSettings colorSettings;
-    // Present only for a same-major newer-minor (schema {1, minor > 0}) document whose unknown
-    // additive members were all safely captured; nullopt for an exact {1,0} document.
+    // Present only for a same-major newer-minor document whose unknown additive members
+    // were safely captured; nullopt for current or migrated known-schema documents.
     std::optional<RoundTripState> roundTrip;
-    // The document root's decoded schemaVersion.minor (0 for an exact {1,0} document).
+    // The effective decoded minor after any supported older-schema migration.
     std::uint32_t schemaMinor = 0;
     // Verbatim from the decoded manifest's requirement set (manifest_requirements.hpp); coverage
     // against the reconstructed project has already been validated by the shared chain.

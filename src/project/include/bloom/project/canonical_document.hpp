@@ -51,23 +51,23 @@ inline constexpr std::size_t kCanonicalDocumentNoIndex = static_cast<std::size_t
 // counting/write two-pass discipline (canonicalDocumentSize/encodeCanonicalDocument) already
 // takes one CanonicalDocumentV1 by const reference -- a parallel struct would only duplicate that
 // plumbing for no behavioral gain. `roundTrip` and `schemaMinor` both default to their plain-write
-// values (null, 0), so every existing call site compiles and behaves unchanged.
+// values (null, current minor).
 struct CanonicalDocumentV1 final {
     const bloom::document::Snapshot* snapshot = nullptr;
     const bloom::document::ColorSettings* colorSettings = nullptr;
     std::span<char> payloadScratch{};
     std::span<std::size_t> sortScratch{};
     // Optional RT2 overlay (see docs/architecture/project-format.md, "Versions, Migrations, And
-    // Preservation"). Null (the default) reproduces the plain v1.0 writer exactly: no attachment
-    // lookup is ever performed, byte-identical to every pre-RT2 golden. When non-null, every
+    // Preservation"). Null (the default) emits the current known schema without attachment
+    // lookup. When non-null, every
     // retained attachment point in *roundTrip is re-emitted after the last known member of its
     // corresponding object, and `schemaMinor` should name the exact minor this state was captured
     // against (a mismatched minor still encodes, but the result would not describe the schema
     // version it claims). The pointee must outlive the call.
     const RoundTripState* roundTrip = nullptr;
-    // The document schema minor to emit at the document root ({1, schemaMinor}). Defaults to 0
-    // (the only schema `1.0` writes before RT2). An overlay rewrite of a {1, minor > 0} document
-    // must pass that same minor back so the emitted schemaVersion matches what was opened.
+    // The document schema minor to emit at the document root. Defaults to the current minor;
+    // older requests are upgraded to it. An overlay rewrite of a newer-minor document must
+    // pass that same minor back so the emitted schemaVersion matches what was opened.
     std::uint32_t schemaMinor = kCanonicalDocumentSchemaVersionV1.minor;
 };
 

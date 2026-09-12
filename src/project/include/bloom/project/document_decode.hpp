@@ -31,8 +31,9 @@
 //
 // Scope (R2): the document envelope and every durable value inside a composition -- schemaVersion,
 // project id/name/colorSettings, and per-composition id/name/duration/format/parameters/
-// animationCurves/graph. A composition object is now closed: it must contain exactly those seven
-// members in exact order, and an unrecognized or trailing member is a typed decode error. Within a
+// animationCurves/graph/nodeLayout. Known-schema compositions contain these eight members in
+// order (legacy 1.0 has seven and receives default layout). Unknown trailing members are retained
+// only for a compatible newer minor. Within a
 // composition, cross-references are checked against records decoded elsewhere in that same
 // composition -- a parameter binding's parameterId, an animation-curve source's curveId, and every
 // edge/Layer Output/Layer Stack/compositionOutput node id must each name a record this module
@@ -53,7 +54,7 @@
 // RT1: unknown-additive-member capture for a same-major newer-minor document (schemaVersion
 // {1, minor > 0}) is implemented; the writer-side overlay that reconciles retained data back onto
 // a canonical rewrite remains a later slice (see docs/architecture/project-format.md, "Versions,
-// Migrations, And Preservation"). An exact {1,0} document keeps the original strict behavior: an
+// Migrations, And Preservation"). Exact supported schemas keep the strict behavior: an
 // unrecognized member anywhere is a typed UnknownMember/MemberOutOfOrder decode error and no
 // RoundTripState is ever produced. A {1, minor > 0} document additionally accepts a trailing
 // unknown member on any closed object -- but only strictly after every known member of that same
@@ -313,7 +314,7 @@ enum class DocumentDecodeOutcome : std::uint8_t {
     // decodeDocumentEnvelope() found a typed decode error; error()/path() are valid.
     Failed,
     // A DecodedDocumentEnvelope was constructed; value() is non-null. classification()
-    // distinguishes an exact {1,0} document (no RoundTripState; roundTrip() is nullptr) from a
+    // distinguishes an exact supported document (no RoundTripState; roundTrip() is nullptr) from a
     // same-major newer-minor document with only safely additive unknown members
     // (EditableWithRoundTrip; roundTrip() is non-null, though it may be empty()).
     Decoded,
@@ -326,10 +327,10 @@ enum class DocumentDecodeOutcome : std::uint8_t {
 enum class DocumentClassification : std::uint8_t {
     // Not meaningful unless outcome() == Decoded.
     None,
-    // schemaVersion is exactly {1, 0}; no unknown additive members are possible (the 1.0 writer
-    // never emits them) and no RoundTripState is produced.
+    // Historical API name: exact supported schemas 1.0 and 1.1 produce no RoundTripState.
     ExactSchemaV1_0,
-    // schemaVersion is {1, minor > 0} and every unknown additive member encountered was safely
+    // schemaVersion is {1, minor > current} and every unknown additive member encountered was
+    // safely
     // captured; roundTrip() names the (possibly empty) retained state.
     EditableWithRoundTrip,
 };

@@ -4,16 +4,17 @@ Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.0` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.1` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
 staged-artifact close/reopen verification foundation, the version 1 canonical document writer
 over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
-container reader and writer are implemented. Migration, format-specific semantic verification of
+container reader and writer, and the document `1.0` → `1.1` node-layout migration are implemented.
+Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-08-29
+Updated: 2026-09-12
 
 ## Purpose And Ownership
 
@@ -40,20 +41,21 @@ The original document `1.0` artifact is retained for migration fixtures. Version
 JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.0.schema.json` and `schemas/project/document-1.0.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.0` and
-`urn:kinetik:bloom:schema:project-document:1.0`. They declare the 2020-12 `$schema` and use only
+`schemas/project/manifest-1.1.schema.json` and `schemas/project/document-1.1.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.1` and
+`urn:kinetik:bloom:schema:project-document:1.1`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.1`. Both historical `1.0` artifacts remain checked. They declare the 2020-12 `$schema` and use only
 repository-local `$ref` targets during validation. A generic schema validator is useful for
 fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
 cross-reference, allocator, graph, and preservation validation.
 
-`document-1.0.schema.json` contains required `$defs` named `colorSettings-1.0`,
+`document-1.1.schema.json` retains required `$defs` named `colorSettings-1.0`,
 `ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
 definition requires `colorSettings`; the OCIO reference definition requires every member specified
 below and selects one closed locator shape with `oneOf`. These definitions validate structure and
 lexical bounds. Project I/O additionally validates locator normalization, digest spelling, sorted
 context variables, locator/portability agreement, and the fixed v1 process Color Interop ID.
-`manifest-1.0.schema.json` contains a required `requirement-1.0` definition with the exact provider,
+`manifest-1.1.schema.json` retains a required `requirement-1.0` definition with the exact provider,
 capability, schema-version, and node-type-coverage members specified below.
 
 Known versioned object definitions permit additional members through
