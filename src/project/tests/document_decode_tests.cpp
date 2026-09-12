@@ -456,7 +456,13 @@ void testComposedRoundTrip(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(3),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
@@ -504,7 +510,16 @@ void testComposedRoundTrip(Expectations& expectations) {
                                  ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
                             composition.parameters().insert(
                                 {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
+                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(8), std::string(kAnchorParameterSchemaKey),
+                                 ConstantValueSource{kDefaultAnchor}}) &&
+                            composition.parameters().insert({ParameterId::fromRaw(9),
+                                                             std::string(kScaleParameterSchemaKey),
+                                                             ConstantValueSource{kDefaultScale}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
+                                 ConstantValueSource{kDefaultRotationDegrees}}),
                         "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
@@ -525,7 +540,7 @@ void testComposedRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 7,
+                                         .parameter = 10,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,

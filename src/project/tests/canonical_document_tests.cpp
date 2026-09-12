@@ -416,6 +416,41 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "                \"alpha\": 1.0\n"
         "              }\n"
         "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"8\",\n"
+        "            \"schemaKey\": \"bloom.transform.anchor\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"vec2\",\n"
+        "                \"x\": 0.0,\n"
+        "                \"y\": 0.0\n"
+        "              }\n"
+        "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"9\",\n"
+        "            \"schemaKey\": \"bloom.transform.scale\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"vec2\",\n"
+        "                \"x\": 1.0,\n"
+        "                \"y\": 1.0\n"
+        "              }\n"
+        "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"10\",\n"
+        "            \"schemaKey\": \"bloom.transform.rotation\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"float64\",\n"
+        "                \"value\": 0.0\n"
+        "              }\n"
+        "            }\n"
         "          }\n"
         "        ],\n"
         "        \"animationCurves\": [\n"
@@ -466,8 +501,12 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "            {\n"
         "              \"id\": \"3\",\n"
         "              \"typeId\": \"bloom.layer-output\",\n"
-        "              \"schemaVersion\": 1,\n"
+        "              \"schemaVersion\": 2,\n"
         "              \"parameters\": [\n"
+        "                {\n"
+        "                  \"role\": \"anchor\",\n"
+        "                  \"parameterId\": \"8\"\n"
+        "                },\n"
         "                {\n"
         "                  \"role\": \"opacity\",\n"
         "                  \"parameterId\": \"3\"\n"
@@ -475,6 +514,14 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "                {\n"
         "                  \"role\": \"position\",\n"
         "                  \"parameterId\": \"5\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"rotation\",\n"
+        "                  \"parameterId\": \"10\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"scale\",\n"
+        "                  \"parameterId\": \"9\"\n"
         "                }\n"
         "              ]\n"
         "            },\n"
@@ -598,7 +645,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "      \"edge\": \"3\",\n"
         "      \"layer\": \"1\",\n"
         "      \"layerSlot\": \"1\",\n"
-        "      \"parameter\": \"7\",\n"
+        "      \"parameter\": \"10\",\n"
         "      \"animationCurve\": \"9\",\n"
         "      \"keyframe\": \"22\",\n"
         "      \"driverBinding\": \"0\",\n"
@@ -624,7 +671,13 @@ void testComposedGoldenBytes(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(3),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
@@ -672,7 +725,16 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                  ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
                             composition.parameters().insert(
                                 {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
+                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(8), std::string(kAnchorParameterSchemaKey),
+                                 ConstantValueSource{kDefaultAnchor}}) &&
+                            composition.parameters().insert({ParameterId::fromRaw(9),
+                                                             std::string(kScaleParameterSchemaKey),
+                                                             ConstantValueSource{kDefaultScale}}) &&
+                            composition.parameters().insert(
+                                {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
+                                 ConstantValueSource{kDefaultRotationDegrees}}),
                         "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
@@ -694,7 +756,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 7,
+                                         .parameter = 10,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -1749,7 +1811,13 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(2),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(3),
                                            std::string(kCompositionOutputNodeType),
@@ -1784,7 +1852,16 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                          ConstantValueSource{1.0}}) &&
         composition.parameters().insert({ParameterId::fromRaw(5),
                                          std::string(kPositionParameterSchemaKey),
-                                         ConstantValueSource{Vec2d{0.0, 0.0}}});
+                                         ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(8),
+                                         std::string(kAnchorParameterSchemaKey),
+                                         ConstantValueSource{kDefaultAnchor}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(9),
+                                         std::string(kScaleParameterSchemaKey),
+                                         ConstantValueSource{kDefaultScale}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(10),
+                                         std::string(kRotationParameterSchemaKey),
+                                         ConstantValueSource{kDefaultRotationDegrees}});
     if (!paramsInserted) {
         std::abort();
     }
@@ -1808,7 +1885,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
     highWater.edge = 2;
     highWater.layer = 1;
     highWater.layerSlot = 1;
-    highWater.parameter = 5;
+    highWater.parameter = 10;
     highWater.extensionRecord = 1;
     return Document{std::move(project), highWater};
 }
