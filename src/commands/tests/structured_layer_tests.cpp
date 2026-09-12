@@ -154,28 +154,167 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
            left.graph().compositionOutput() == right.graph().compositionOutput();
 }
 
-void testAddTextLayerRefusesUntilRenderable(TestContext& test) {
+// ADAPTED (task S3): this was testAddTextLayerRefusesUntilRenderable, which pinned the
+// Unsupported refusal AddTextLayer returned while no portable CPU text renderer existed. Text
+// layers now build the same canonical structured-layer topology a solid does, so what is pinned
+// here is that topology, its parameter schemas and values, and that the whole thing is one undoable
+// history entry. The atomicity proof the old case carried (a rejected operation publishes nothing,
+// not even IDs) moves to testAddTextLayerRejectsInvalidInputs() below, which still has real
+// refusals to exercise.
+void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
     const auto before = document.snapshot();
+    const auto color = core::Color4d{0.9, 0.8, 0.7, 1.0};
     Transaction add("Add text layer", before.revision());
-    add.emplace<SetProjectName>("Must not publish");
-    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960, 540}, 0.75);
+    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960, 540}, 0.75, 48.0,
+                              color);
     const auto result = stack.execute(std::move(add));
-    test.expect(result.status == CommandStatus::Rejected && result.outputs.empty() &&
-                    result.operationFailures.size() == 1 &&
-                    result.operationFailures.front().issue.code ==
-                        OperationIssueCode::Unsupported &&
-                    result.operationFailures.front().issue.message.find("CPU text rendering") !=
-                        std::string::npos,
-                "text creation refuses clearly until CPU text rendering exists");
+    test.expect(result.changed(), "text layer creation applies");
+
+    const auto layerId = result.outputId<LayerId>(kAddTextLayerLayerOutput);
+    const auto slotId = result.outputId<LayerSlotId>(kAddTextLayerSlotOutput);
+    const auto textNodeId = result.outputId<NodeId>(kAddTextLayerTextNodeOutput);
+    const auto layerOutputNodeId = result.outputId<NodeId>(kAddTextLayerLayerOutputNodeOutput);
+    const auto contentParameterId = result.outputId<ParameterId>(kAddTextLayerTextParameterOutput);
+    const auto sizeParameterId = result.outputId<ParameterId>(kAddTextLayerSizeParameterOutput);
+    const auto colorParameterId = result.outputId<ParameterId>(kAddTextLayerColorParameterOutput);
+    const auto positionParameterId =
+        result.outputId<ParameterId>(kAddTextLayerPositionParameterOutput);
+    const auto opacityParameterId =
+        result.outputId<ParameterId>(kAddTextLayerOpacityParameterOutput);
+    const auto textToLayerEdgeId = result.outputId<EdgeId>(kAddTextLayerTextToLayerEdgeOutput);
+    const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
+    if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
+        !sizeParameterId || !colorParameterId || !positionParameterId || !opacityParameterId ||
+        !textToLayerEdgeId || !layerToStackEdgeId) {
+        test.fail("text branch should return all eleven durable IDs");
+        return;
+    }
+    const std::array textParameters{*contentParameterId, *sizeParameterId, *colorParameterId,
+                                    *positionParameterId, *opacityParameterId};
+    test.expect(std::ranges::adjacent_find(textParameters) == textParameters.end(),
+                "every parameter in a text branch has its own identity");
+
+    const auto& value = composition(document.snapshot());
+    const NodeRecord expectedTextNode{
+        *textNodeId,
+        std::string(document::kTextSourceNodeType),
+        {
+            {std::string(document::kTextParameterRole), *contentParameterId},
+            {std::string(document::kTextSizeParameterRole), *sizeParameterId},
+            {std::string(document::kTextColorParameterRole), *colorParameterId},
+        },
+        document::kTextSourceNodeSchemaVersion,
+    };
+    const auto* textNode = value.graph().findNode(*textNodeId);
+    test.expect(textNode != nullptr && *textNode == expectedTextNode,
+                "text source should bind content, size, and color in the registered order");
+
+    const ParameterRecord expectedContent{*contentParameterId,
+                                          std::string(document::kTextParameterSchemaKey),
+                                          ConstantValueSource{std::string("Hello, Bloom!")}};
+    const ParameterRecord expectedSize{*sizeParameterId,
+                                       std::string(document::kTextSizeParameterSchemaKey),
+                                       ConstantValueSource{48.0}};
+    const ParameterRecord expectedColor{*colorParameterId,
+                                        std::string(document::kTextColorParameterSchemaKey),
+                                        ConstantValueSource{color}};
+    const auto* content = value.parameters().find(*contentParameterId);
+    const auto* size = value.parameters().find(*sizeParameterId);
+    const auto* storedColor = value.parameters().find(*colorParameterId);
+    test.expect(content != nullptr && *content == expectedContent,
+                "text content parameter should preserve exact schema and UTF-8 value");
+    test.expect(size != nullptr && *size == expectedSize,
+                "text size parameter should preserve exact schema and em pixel value");
+    test.expect(storedColor != nullptr && *storedColor == expectedColor,
+                "text color parameter should preserve exact schema and straight authoring value");
+
+    const LayerOutputBoundary expectedBoundary{*layerOutputNodeId, *layerId, "Title",
+                                               std::string(document::kLayerOutputOutputPort)};
+    test.expect(std::ranges::find(value.graph().layerOutputs(), expectedBoundary) !=
+                    value.graph().layerOutputs().end(),
+                "text layer boundary should preserve exact name, port, and stable IDs");
+    const EdgeRecord expectedTextToLayerEdge{
+        *textToLayerEdgeId,
+        {*textNodeId, std::string(document::kTextSourceOutputPort)},
+        NodeInputRef{*layerOutputNodeId, std::string(document::kLayerOutputContentInputPort)},
+    };
+    test.expect(std::ranges::find(value.graph().edges(), expectedTextToLayerEdge) !=
+                    value.graph().edges().end(),
+                "text source edge should reach the Layer Output content port");
+    test.expect(value.graph().layerStack().find(*slotId) != nullptr,
+                "text layer should occupy its own stable stack slot");
+    test.expect(value.parameters().find(*positionParameterId) != nullptr &&
+                    value.parameters().find(*opacityParameterId) != nullptr,
+                "a text layer owns the same position and opacity parameters a solid does");
+
+    test.expect(stack.size() == 1 && stack.canUndo(),
+                "text layer creation is exactly one history entry");
+    test.expect(stack.undo().changed() &&
+                    hasSameTruth(composition(document.snapshot()), composition(before)),
+                "AddTextLayer undo should restore exact prior composition truth");
+    test.expect(document.snapshot()
+                        .project()
+                        .findComposition(kCompositionId)
+                        ->graph()
+                        .findNode(*textNodeId) == nullptr,
+                "and leave no text node behind");
+    test.expect(stack.redo().changed() && document.snapshot()
+                                                  .project()
+                                                  .findComposition(kCompositionId)
+                                                  ->graph()
+                                                  .findNode(*textNodeId) != nullptr,
+                "AddTextLayer should redo as one history entry");
+}
+
+void testAddTextLayerRejectsInvalidInputs(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto before = document.snapshot();
+    const auto rejects = [&](std::string name, std::string content, const Vec2d position,
+                             const double opacityValue, const double size,
+                             const core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0}) {
+        Transaction transaction("Reject invalid text", before.revision());
+        // A second operation in the same transaction proves the refusal is atomic across the whole
+        // transaction, which is what the old refusal case proved with SetProjectName.
+        transaction.emplace<SetProjectName>("Must not publish");
+        transaction.emplace<AddTextLayer>(kCompositionId, std::move(name), std::move(content),
+                                          position, opacityValue, size, color);
+        return stack.execute(std::move(transaction)).status == CommandStatus::Rejected;
+    };
+
+    test.expect(rejects("", "Body", {}, 1.0, 72.0), "text layer should reject an empty name");
+    test.expect(rejects("Size", "Body", {}, 1.0, 0.0),
+                "text layer should reject a size of zero pixels");
+    test.expect(rejects("Size", "Body", {}, 1.0, document::kMaximumTextSizePixels + 1.0),
+                "text layer should reject a size past the schema maximum");
+    test.expect(rejects("Size", "Body", {}, 1.0, std::numeric_limits<double>::infinity()),
+                "text layer should reject a non-finite size");
+    test.expect(rejects("Color", "Body", {}, 1.0, 72.0, {0.0, 0.0, 0.0, 1.5}),
+                "text layer should reject color alpha outside the unit interval");
+    test.expect(rejects("Content", std::string("\xff\xfe"), {}, 1.0, 72.0),
+                "text layer should reject content that is not valid UTF-8");
+    test.expect(
+        rejects("Position", "Body", {std::numeric_limits<double>::infinity(), 0.0}, 1.0, 72.0),
+        "text layer should reject a non-finite position");
+    test.expect(rejects("Opacity", "Body", {}, -0.1, 72.0),
+                "text layer should reject opacity outside the unit interval");
+
     const auto after = document.snapshot();
     test.expect(after.revision() == before.revision() &&
                     after.project().name() == before.project().name() &&
                     after.ids().highWater() == before.ids().highWater() &&
                     hasSameTruth(composition(after), composition(before)) && stack.size() == 0 &&
                     !stack.canUndo() && !stack.canRedo(),
-                "text refusal is atomic including IDs and history");
+                "every text refusal is atomic including IDs, names, and history");
+
+    // Empty content is deliberately NOT a refusal: an artist adds a text layer and then types into
+    // it, so a layer with nothing typed yet has to be a real, selectable, editable layer.
+    Transaction empty("Add empty text layer", before.revision());
+    empty.emplace<AddTextLayer>(kCompositionId, "Untyped", "", Vec2d{0.0, 0.0});
+    test.expect(stack.execute(std::move(empty)).changed(),
+                "a text layer with no content yet is accepted");
 }
 
 void testCompositionFormatCommand(TestContext& test) {
@@ -308,7 +447,8 @@ void testAddSolidLayerRejectsInvalidInputs(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
-        bloom::commands::test::testAddTextLayerRefusesUntilRenderable(test);
+        bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
+        bloom::commands::test::testAddTextLayerRejectsInvalidInputs(test);
         bloom::commands::test::testCompositionFormatCommand(test);
         bloom::commands::test::testAddSolidLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testPublishedSolidBranchIdsAreNeverReused(test);

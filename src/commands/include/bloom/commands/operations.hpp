@@ -21,6 +21,8 @@ inline constexpr std::string_view kAddTextLayerSlotOutput = "slot";
 inline constexpr std::string_view kAddTextLayerTextNodeOutput = "textNode";
 inline constexpr std::string_view kAddTextLayerLayerOutputNodeOutput = "layerOutputNode";
 inline constexpr std::string_view kAddTextLayerTextParameterOutput = "textParameter";
+inline constexpr std::string_view kAddTextLayerSizeParameterOutput = "sizeParameter";
+inline constexpr std::string_view kAddTextLayerColorParameterOutput = "colorParameter";
 inline constexpr std::string_view kAddTextLayerPositionParameterOutput = "positionParameter";
 inline constexpr std::string_view kAddTextLayerOpacityParameterOutput = "opacityParameter";
 inline constexpr std::string_view kAddTextLayerTextToLayerEdgeOutput = "textToLayerEdge";
@@ -54,12 +56,22 @@ class AddSolidLayer final : public Operation {
     double opacity_ = 1.0;
 };
 
+// Creates the same canonical structured-layer topology AddSolidLayer does -- source node, Layer
+// Output boundary, stack slot, and the two edges between them -- with a bloom.text-source in the
+// source position. `size` is the em size in pixels and `color` is a straight reference-linear-sRGB
+// authoring value, the same encoding a solid color uses; both default to the registered text
+// definition's own defaults so a caller that only has content does not have to restate them.
+//
+// The font is not a parameter: the CPU reference path has exactly one embedded face today, so there
+// is nothing to select and nothing to persist (see bloom/render/text_raster.hpp).
 class AddTextLayer final : public Operation {
   public:
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text,
-                 document::Vec2d position, double opacity = 1.0)
+                 document::Vec2d position, double opacity = 1.0,
+                 double size = document::kDefaultTextSizePixels,
+                 core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0})
         : compositionId_(compositionId), name_(std::move(name)), text_(std::move(text)),
-          position_(position), opacity_(opacity) {}
+          position_(position), opacity_(opacity), size_(size), color_(color) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -70,6 +82,8 @@ class AddTextLayer final : public Operation {
     std::string text_;
     document::Vec2d position_;
     double opacity_ = 1.0;
+    double size_ = document::kDefaultTextSizePixels;
+    core::Color4d color_{1.0, 1.0, 1.0, 1.0};
 };
 
 class SetProjectName final : public Operation {
