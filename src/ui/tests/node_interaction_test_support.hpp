@@ -1,5 +1,5 @@
 #pragma once
-#include "../node_editor_interactions.hpp"
+#include "node_editor_interactions.hpp"
 #include <QApplication>
 #include <QLineEdit>
 #include <QListView>
