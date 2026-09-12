@@ -5,6 +5,8 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -16,10 +18,12 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/render/embedded_fonts.hpp>
 
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPalette>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -72,12 +76,14 @@ QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* la
 // exists for a narrower purpose (a field-local "X"/"Y" prefix inside the cell itself), so the row's
 // OUTER label column, which names the whole parameter, is measured independently here.
 int propertyLabelColumnWidth() {
-    static const std::array<QString, 10> kLabels{
+    static const std::array<QString, 14> kLabels{
         PropertiesEditor::tr("Position"), PropertiesEditor::tr("Opacity"),
         PropertiesEditor::tr("RGBA"),     PropertiesEditor::tr("Alpha"),
         PropertiesEditor::tr("Encoding"), PropertiesEditor::tr("Name"),
         PropertiesEditor::tr("Format"),   PropertiesEditor::tr("Frame Rate"),
         PropertiesEditor::tr("Duration"), PropertiesEditor::tr("Pixel Aspect"),
+        PropertiesEditor::tr("Content"),  PropertiesEditor::tr("Size"),
+        PropertiesEditor::tr("Color"),    PropertiesEditor::tr("Font"),
     };
     const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
     int widest = 0;
@@ -364,6 +370,59 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                    nullptr, solidColorEncoding_);
 
     selectionLayout->addWidget(solidColorPanel_);
+
+    // --- Text Source (task S3) ----------------------------------------------------------------
+    textSourcePanel_ = new QWidget(selectionSection_);
+    textSourcePanel_->setObjectName("textSourceProperties");
+    auto* textLayout = new QVBoxLayout(textSourcePanel_);
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(kit::px(kit::Spacing::XS));
+    addSectionHeader(textLayout, textSourcePanel_, tr("Text Source"));
+
+    // The kit has no string field, and adding one is a kit change outside this task's fence, so the
+    // content cell is a plain QLineEdit styled by the application palette like every other text
+    // entry. It commits on editingFinished and returnPressed rather than on textChanged: a
+    // per-keystroke commit would make typing one word a dozen undo steps and a dozen recompiles.
+    textContent_ = new QLineEdit(textSourcePanel_);
+    textContent_->setObjectName("textContentEditor");
+    textContent_->setAccessibleName(tr("Text content"));
+    textContent_->setFont(kit::font(kit::TypeRole::Ui));
+    textContent_->setClearButtonEnabled(false);
+    addPropertyRow(textLayout, textSourcePanel_,
+                   makePropertyRowLabel(tr("Content"), labelColumnWidth, textSourcePanel_), nullptr,
+                   textContent_);
+
+    textSize_ = new kit::KValueField(textSourcePanel_);
+    textSize_->setObjectName("textSizeEditor");
+    textSize_->setAccessibleName(tr("Text size"));
+    // The range is the text size schema's own domain, not a spelled UI guess: the document refuses
+    // anything outside it, so a cell that could scrub past it would only produce refusals.
+    textSize_->setRange(1.0, document::kMaximumTextSizePixels);
+    textSize_->setDecimals(1);
+    textSize_->setSingleStep(1.0);
+    textSize_->setUnit(QStringLiteral("px"));
+    addPropertyRow(textLayout, textSourcePanel_,
+                   makePropertyRowLabel(tr("Size"), labelColumnWidth, textSourcePanel_), nullptr,
+                   textSize_);
+
+    textColor_ = new kit::KColorChip(textSourcePanel_);
+    textColor_->setObjectName("textColorChip");
+    textColor_->setAccessibleName(tr("Text color"));
+    textColorKeyframe_ = makeKeyframeIndicator(textSourcePanel_);
+    addPropertyRow(textLayout, textSourcePanel_,
+                   makePropertyRowLabel(tr("Color"), labelColumnWidth, textSourcePanel_),
+                   textColorKeyframe_, textColor_);
+
+    // The face is fixed, so this row is read-only by honesty rather than by omission: showing a
+    // font dropdown would promise a selection neither the document schema nor the renderer has.
+    textFontName_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, textSourcePanel_);
+    textFontName_->setObjectName("textFontName");
+    textFontName_->setAccessibleName(tr("Text font"));
+    addPropertyRow(textLayout, textSourcePanel_,
+                   makePropertyRowLabel(tr("Font"), labelColumnWidth, textSourcePanel_), nullptr,
+                   textFontName_);
+
+    selectionLayout->addWidget(textSourcePanel_);
     selectionLayout->addStretch(1);
     layout->addWidget(selectionSection_);
 
@@ -443,6 +502,24 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                               solidColorBlue_->value(), solidColorAlpha_->value()});
         }
     };
+    const auto commitTextContent = [this] {
+        if (!rebuilding_) {
+            (void)session_.setSelectedTextContent(textContent_->text());
+        }
+    };
+    connect(textContent_, &QLineEdit::editingFinished, this, commitTextContent);
+    connect(textSize_, &kit::KValueField::valueChanged, this, [this](const double value) {
+        if (!rebuilding_) {
+            (void)session_.setSelectedTextSize(value);
+        }
+    });
+    connect(textColor_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
+        if (!rebuilding_) {
+            (void)session_.setSelectedTextColor(
+                core::Color4d{static_cast<double>(color.red), static_cast<double>(color.green),
+                              static_cast<double>(color.blue), static_cast<double>(color.alpha)});
+        }
+    });
     connect(solidColorRed_, &kit::KValueField::valueChanged, this, commitSolidColor);
     connect(solidColorGreen_, &kit::KValueField::valueChanged, this, commitSolidColor);
     connect(solidColorBlue_, &kit::KValueField::valueChanged, this, commitSolidColor);
@@ -459,6 +536,7 @@ void PropertiesEditor::rebuild() {
     configurePosition();
     configureOpacity();
     configureSolidColor();
+    configureTextSource();
     configureDocumentProperties();
     rebuilding_ = false;
 }
@@ -533,6 +611,68 @@ void PropertiesEditor::configureSolidColor() {
     solidColorEncoding_->setText(
         QString::fromUtf8(document::kSolidColorEncoding.data(),
                           static_cast<qsizetype>(document::kSolidColorEncoding.size())));
+}
+
+void PropertiesEditor::configureTextSource() {
+    const auto* sourceNode = selectedPresentationSource(session_);
+    const bool isText = isKnownSource(sourceNode, document::kTextSourceNodeType,
+                                      document::kTextSourceNodeSchemaVersion);
+    const auto* content = session_.parameterForSelection(document::kTextParameterRole);
+    const auto* size = session_.parameterForSelection(document::kTextSizeParameterRole);
+    const auto* color = session_.parameterForSelection(document::kTextColorParameterRole);
+    const bool resolved = isText && content != nullptr && size != nullptr && color != nullptr &&
+                          content->schemaKey == document::kTextParameterSchemaKey &&
+                          size->schemaKey == document::kTextSizeParameterSchemaKey &&
+                          color->schemaKey == document::kTextColorParameterSchemaKey;
+    textSourcePanel_->setVisible(resolved);
+    if (!resolved) {
+        return;
+    }
+
+    const auto contentValue = session_.constantStringValue(content->id);
+    textContent_->setEnabled(contentValue.has_value());
+    if (contentValue.has_value() && textContent_->text() != *contentValue) {
+        const QSignalBlocker blocker(textContent_);
+        textContent_->setText(*contentValue);
+    }
+    textContent_->setPlaceholderText(tr("Type the layer's text"));
+    textContent_->setToolTip(parameterSourceDescription(*content));
+
+    const auto sizeValue = session_.constantValue(size->id);
+    textSize_->setEnabled(sizeValue.has_value());
+    if (sizeValue.has_value()) {
+        const QSignalBlocker blocker(textSize_);
+        textSize_->setValue(*sizeValue);
+    }
+    textSize_->setToolTip(parameterSourceDescription(*size));
+
+    const auto colorValue = session_.constantColorValue(color->id);
+    textColor_->setEnabled(colorValue.has_value());
+    if (colorValue.has_value()) {
+        const QSignalBlocker blocker(textColor_);
+        textColor_->setColor(kit::KColor::fromRgba(
+            static_cast<float>(colorValue->red), static_cast<float>(colorValue->green),
+            static_cast<float>(colorValue->blue), static_cast<float>(colorValue->alpha)));
+    }
+    // The chip's own value model is 8-bit-displayable straight RGBA in [0, 1], so an HDR or
+    // negative authored channel cannot be shown in the swatch or round-tripped through the picker.
+    // The exact stored value travels in the tooltip, and the tooltip says what committing through
+    // the chip would do to such a value.
+    textColor_->setToolTip(
+        colorValue.has_value()
+            ? tr("%1\nEditing here commits a color inside the displayable [0, 1] range")
+                  .arg(exactColorText(*colorValue))
+            : parameterSourceDescription(*color));
+    updateKeyframeIndicator(textColorKeyframe_, color);
+
+    textFontName_->setText(
+        tr("%1 %2 (embedded)")
+            .arg(QString::fromUtf8(
+                render::kEmbeddedDejaVuSansFamilyName.data(),
+                static_cast<qsizetype>(render::kEmbeddedDejaVuSansFamilyName.size())))
+            .arg(QString::fromUtf8(
+                render::kEmbeddedDejaVuSansStyleName.data(),
+                static_cast<qsizetype>(render::kEmbeddedDejaVuSansStyleName.size()))));
 }
 
 void PropertiesEditor::configureDocumentProperties() {

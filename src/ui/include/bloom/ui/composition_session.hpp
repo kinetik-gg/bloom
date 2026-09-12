@@ -7,6 +7,7 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -160,9 +161,17 @@ class CompositionSession final : public QObject {
     constantVec2Value(document::ParameterId parameterId) const;
     [[nodiscard]] std::optional<core::Color4d>
     constantColorValue(document::ParameterId parameterId) const;
+    // The String-valued counterpart of the three readers above (the text content schema). Returns
+    // nullopt for a missing, non-constant, or wrong-typed parameter, exactly like they do.
+    [[nodiscard]] std::optional<QString>
+    constantStringValue(document::ParameterId parameterId) const;
 
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
-    [[nodiscard]] bool addTextLayer(const QString& name, const QString& text);
+    // `size` is the em size in pixels and `color` a straight reference-linear-sRGB authoring value;
+    // both default to the registered text schema's own defaults.
+    [[nodiscard]] bool addTextLayer(const QString& name, const QString& text,
+                                    double size = document::kDefaultTextSizePixels,
+                                    core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0});
     [[nodiscard]] bool setSelectedPosition(double x, double y);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
     // Task P3 (issue #120 follow-up, owner review 2026-09-12): the properties panel's editable
@@ -178,6 +187,17 @@ class CompositionSession final : public QObject {
     // otherwise-unreachable animated case) is refused the same way setSelectionScalarParameter()'s
     // driven branch is. See this task's raw report.
     [[nodiscard]] bool setSelectedSolidColor(core::Color4d color);
+    // Task S3: the three text parameters, written through exactly the paths their solid/opacity
+    // counterparts already use -- one commands::SetParameterSource per call, one transaction, one
+    // undo step. Content goes through its own method rather than setSelectionScalarParameter()
+    // because the value is a string; size goes straight through that shared scalar helper; color
+    // shares setSelectionColorParameter() with setSelectedSolidColor(), which is why a text color
+    // and a solid color cannot drift apart. Each is a no-op returning false (with the usual
+    // commandRejected() message) when the selection exposes no such parameter, and a committing
+    // no-op returning true when the value is already what was asked for.
+    [[nodiscard]] bool setSelectedTextContent(const QString& content);
+    [[nodiscard]] bool setSelectedTextSize(double size);
+    [[nodiscard]] bool setSelectedTextColor(core::Color4d color);
     [[nodiscard]] bool
     moveLayerBefore(document::LayerSlotId slotId,
                     std::optional<document::LayerSlotId> beforeSlotId = std::nullopt);
@@ -286,6 +306,13 @@ class CompositionSession final : public QObject {
     parameterForNode(const document::NodeRecord& node, std::string_view role) const noexcept;
     [[nodiscard]] bool setSelectionScalarParameter(std::string_view role, double value,
                                                    const QString& commandLabel);
+    // The one command-selection decision for writing a Color4d-valued parameter, shared by
+    // setSelectedSolidColor() and setSelectedTextColor(). A driven source is refused exactly as the
+    // scalar helper refuses one; there is no animated branch, because no command in the surface can
+    // put a color parameter on a curve (CreateAnimationForParameter accepts only the position and
+    // opacity schemas, and SetKeyframeAtTime has no Color4d overload).
+    [[nodiscard]] bool setSelectionColorParameter(std::string_view role, core::Color4d color,
+                                                  const QString& commandLabel);
     // The one command-selection decision for writing a position value (constant source ->
     // SetParameterSource; animation source -> SetKeyframeAtTime at `time`; driver source ->
     // rejected), executed as exactly one transaction. setSelectedPosition() calls this with its

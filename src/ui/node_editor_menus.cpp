@@ -173,12 +173,13 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
         auto* item = addMenu->addAction(displayTypeName(definition.key.typeId));
         item->setObjectName(addActionName(definition.key.typeId));
         if (!scene_->canSubmit()) {
+            // Without a submission adapter only the two session-level Add paths exist, and both of
+            // them now work: task S3 gave the text source a CPU rasterizer, so the Text row is
+            // enabled and carries no refusal tooltip.
             const bool solid = definition.key.typeId == document::kSolidSourceNodeType;
             const bool text = definition.key.typeId == document::kTextSourceNodeType;
             item->setVisible(solid || text);
-            item->setEnabled(solid && session_.composition() != nullptr);
-            if (text)
-                item->setToolTip(tr("Text requires a portable CPU font pipeline"));
+            item->setEnabled((solid || text) && session_.composition() != nullptr);
         }
         connect(item, &QAction::triggered, this,
                 [this, type = QString::fromStdString(definition.key.typeId)] { addNode(type); });
@@ -248,7 +249,8 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
                 .apply(draft);
         if (!result.issues.empty())
             refusal = QString::fromStdString(result.issues.front().message);
-        else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType)
+        else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType &&
+                 definition.key.typeId != document::kTextSourceNodeType)
             refusal = tr("Node command submission is unavailable");
         entries.push_back({QString::fromStdString(definition.key.typeId),
                            displayTypeName(definition.key.typeId), keywords, refusal});
@@ -265,9 +267,14 @@ void NodeGraphEditor::addNode(const QString& type) {
             (void)addDefaultTextLayer(session_);
         return;
     }
-    commands::Transaction transaction(
-        type.toStdString() == document::kSolidSourceNodeType ? "Add Solid Layer" : "Add Node",
-        addRevision_);
+    const auto typeId = type.toStdString();
+    const char* label = "Add Node";
+    if (typeId == document::kSolidSourceNodeType) {
+        label = "Add Solid Layer";
+    } else if (typeId == document::kTextSourceNodeType) {
+        label = "Add Text Layer";
+    }
+    commands::Transaction transaction(label, addRevision_);
     transaction.emplace<AddEditorNode>(session_.compositionId(), type.toStdString(),
                                        document::Vec2d{addPosition_.x(), addPosition_.y()},
                                        addInput_, addOutput_);

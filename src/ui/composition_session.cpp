@@ -3,6 +3,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/utf8.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -459,6 +461,24 @@ CompositionSession::constantColorValue(const document::ParameterId parameterId) 
     return value == nullptr ? std::nullopt : std::optional<core::Color4d>(*value);
 }
 
+std::optional<QString>
+CompositionSession::constantStringValue(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    if (current == nullptr) {
+        return std::nullopt;
+    }
+    const auto* parameter = current->parameters().find(parameterId);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    const auto* source = std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    const auto* value = std::get_if<std::string>(&source->value);
+    return value == nullptr ? std::nullopt : std::optional<QString>(QString::fromStdString(*value));
+}
+
 bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d color) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
@@ -480,7 +500,8 @@ bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d 
     return true;
 }
 
-bool CompositionSession::addTextLayer(const QString& name, const QString& text) {
+bool CompositionSession::addTextLayer(const QString& name, const QString& text, const double size,
+                                      const core::Color4d color) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     if (current == nullptr) {
@@ -489,7 +510,8 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text) 
     }
     commands::Transaction transaction("Add Text Layer", snapshot_.revision());
     transaction.emplace<commands::AddTextLayer>(compositionId_, name.toStdString(),
-                                                text.toStdString(), compositionCenter(*current));
+                                                text.toStdString(), compositionCenter(*current),
+                                                1.0, size, color);
     const auto result = commandStack_->execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {
@@ -593,16 +615,68 @@ bool CompositionSession::setSelectedOpacity(const double opacity) {
                                        QStringLiteral("Set Opacity"));
 }
 
+bool CompositionSession::setSelectedTextContent(const QString& content) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto utf8 = content.toStdString();
+    if (!core::isValidUtf8(utf8)) {
+        reportUnavailable(QStringLiteral("The text content must be valid UTF-8"));
+        return false;
+    }
+    const auto* parameter = parameterForSelection(document::kTextParameterRole);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose text content"));
+        return false;
+    }
+    const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (constantSource == nullptr || std::get_if<std::string>(&constantSource->value) == nullptr) {
+        // The content schema is String, which CreateAnimationForParameter refuses and
+        // SetKeyframeAtTime has no overload for, so a non-constant source here is a pre-existing
+        // document inconsistency rather than anything this command created -- refused the same way
+        // the driven-parameter branches above are.
+        reportUnavailable(QStringLiteral("Disconnect the driven text content before editing it"));
+        return false;
+    }
+    if (*std::get_if<std::string>(&constantSource->value) == utf8) {
+        return true;
+    }
+    commands::Transaction transaction("Set Text Content", snapshot_.revision());
+    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                      document::ConstantValueSource{utf8});
+    return execute(std::move(transaction));
+}
+
+bool CompositionSession::setSelectedTextSize(const double size) {
+    if (!std::isfinite(size) || size <= 0.0 || size > document::kMaximumTextSizePixels) {
+        reportUnavailable(QStringLiteral("The text size must be between zero and %1 pixels")
+                              .arg(document::kMaximumTextSizePixels));
+        return false;
+    }
+    return setSelectionScalarParameter(document::kTextSizeParameterRole, size,
+                                       QStringLiteral("Set Text Size"));
+}
+
+bool CompositionSession::setSelectedTextColor(const core::Color4d color) {
+    return setSelectionColorParameter(document::kTextColorParameterRole, color,
+                                      QStringLiteral("Set Text Color"));
+}
+
 bool CompositionSession::setSelectedSolidColor(const core::Color4d color) {
+    return setSelectionColorParameter(document::kSolidColorParameterRole, color,
+                                      QStringLiteral("Set Solid Color"));
+}
+
+bool CompositionSession::setSelectionColorParameter(const std::string_view role,
+                                                    const core::Color4d color,
+                                                    const QString& commandLabel) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!std::isfinite(color.red) || !std::isfinite(color.green) || !std::isfinite(color.blue) ||
         !std::isfinite(color.alpha)) {
         reportUnavailable(QStringLiteral("Color values must be finite"));
         return false;
     }
-    const auto* parameter = parameterForSelection(document::kSolidColorParameterRole);
+    const auto* parameter = parameterForSelection(role);
     if (parameter == nullptr) {
-        reportUnavailable(QStringLiteral("The selected object does not expose a solid color"));
+        reportUnavailable(QStringLiteral("The selected object does not expose a color"));
         return false;
     }
     const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
@@ -621,7 +695,7 @@ bool CompositionSession::setSelectedSolidColor(const core::Color4d color) {
         reportUnavailable(QStringLiteral("The color value does not match its schema"));
         return false;
     }
-    commands::Transaction transaction("Set Solid Color", snapshot_.revision());
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
                                                       document::ConstantValueSource{color});
     return execute(std::move(transaction));

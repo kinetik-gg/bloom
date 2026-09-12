@@ -129,15 +129,18 @@ void testSearchKeyboardAndMenus() {
                list->model()->rowCount() ==
                    static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
            "Shift A opens all registered node kinds at the cursor");
+    // ADAPTED (task S3): text used to be listed as a DISABLED row carrying AddTextLayer's actual
+    // "portable CPU text rendering" refusal, and Enter on it had to do nothing. The command now
+    // succeeds, so the same mechanism -- the search reads each kind's real command result --
+    // reports no refusal and leaves the row enabled. Creating through it is exercised below, after
+    // the rest of this popup's keyboard sequence, so the cursor-placement assertion that follows
+    // keeps using the same still-open popup it always did.
     field->setText(QStringLiteral("text"));
     expect(list->model()->rowCount() == 1 &&
-               !list->model()->index(0, 0).flags().testFlag(Qt::ItemIsEnabled) &&
-               list->model()->index(0, 0).data().toString().contains(QStringLiteral("CPU")),
-           "text remains listed with actual command refusal as a disabled row");
+               list->model()->index(0, 0).flags().testFlag(Qt::ItemIsEnabled) &&
+               !list->model()->index(0, 0).data().toString().contains(QStringLiteral("CPU")),
+           "text is listed as an enabled row with no refusal to report");
     history = f.stack.size();
-    QTest::keyClick(field, Qt::Key_Return);
-    expect(f.stack.size() == history && popup->isVisible(),
-           "Enter cannot activate a disabled text result");
     field->setText(QStringLiteral("layer output image"));
     expect(list->model()->rowCount() == 1, "search combines display-name and socket-kind filters");
     QTest::keyClick(field, Qt::Key_Return);
@@ -157,6 +160,20 @@ void testSearchKeyboardAndMenus() {
                f.session.composition()->graph().layerOutputs().size() == 1,
            "armed search adds a structured solid layer and connects its compatible port in one "
            "transaction");
+    // Task S3: the same armed-search path creates a real text layer, in one transaction.
+    f.editor.openAddSearch({560, 460}, global);
+    popup = search(f);
+    field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
+    field->setText(QStringLiteral("text"));
+    history = f.stack.size();
+    const auto boundariesBeforeText = f.session.composition()->graph().layerOutputs().size();
+    QTest::keyClick(field, Qt::Key_Return);
+    selected = f.session.selectedNode();
+    expect(f.stack.size() == history + 1 && selected != nullptr &&
+               selected->typeId == document::kTextSourceNodeType &&
+               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText + 1,
+           "Enter on the text result adds a structured text layer in one transaction");
+
     const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
     f.session.selectLayer(layerId);
     const auto boundary = f.session.selectedNode()->id;
