@@ -4,11 +4,17 @@
 
 #include "node_interaction_test_support.hpp"
 
+#include <bloom/core/blend_mode.hpp>
+#include <bloom/ui/composition_authoring.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+
 #include <QFontMetricsF>
 #include <QGraphicsProxyWidget>
+#include <QVariant>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace bloom::ui::test {
 namespace {
@@ -39,9 +45,11 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     if (card == nullptr)
         return;
     const auto hosted = hostedControls(*card);
-    // ADAPTED (task S4): the Layer Output card now hosts position X/Y, anchor X/Y, scale X/Y,
-    // rotation and opacity -- eight fields, one per transform component plus opacity.
-    expect(hosted.size() == 8, "the layer output card hosts its transform and opacity fields");
+    // ADAPTED (task S4, then blend modes): the Layer Output card now hosts position X/Y, anchor
+    // X/Y, scale X/Y, rotation, opacity and the blending dropdown -- nine controls, one per
+    // transform component plus the two appearance values.
+    expect(hosted.size() == 9,
+           "the layer output card hosts its transform, opacity and blending controls");
     for (const auto& [proxy, widget] : hosted) {
         expect(proxy->scale() == 1.0,
                "a hosted control is never scaled: a fractional scale resampled its hairlines, "
@@ -191,6 +199,47 @@ void testNodeTypesAreNamedForWhatTheyAre() {
            "and a node named after its own type carries no eyebrow");
 }
 
+// The Layer card's Blending dropdown: the third surface over the same parameter, committing through
+// the same session method, with undo parity. Pinned here rather than in the properties test because
+// what is specific to the card is that the control is a hosted proxy whose edit has to select the
+// card's own node first.
+void testBlendingDropdownOnALayerCardCommits() {
+    Fixture f;
+    expect(f.session.addSolidLayer(QStringLiteral("Blended"), core::Color4d{1, 0, 0, 1}),
+           "layer fixture");
+    const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
+    const auto boundary = f.session.boundaryNodeForLayer(layerId);
+    expect(boundary.has_value(), "the layer resolves its boundary node");
+    if (!boundary.has_value())
+        return;
+
+    auto* dropdown = qobject_cast<kit::KDropdown*>(
+        f.scene()->nodeFieldForTest(*boundary, QStringLiteral("nodeBlendModeDropdown")));
+    expect(dropdown != nullptr, "the layer card hosts a blending dropdown");
+    if (dropdown == nullptr)
+        return;
+    expect(dropdown->count() == static_cast<int>(core::kBlendModes.size()) &&
+               dropdown->currentText() == blendModeDisplayName(core::kDefaultBlendMode),
+           "it offers the same vocabulary the other two surfaces do, starting at Normal");
+
+    int screenRow = -1;
+    for (int index = 0; index < dropdown->count(); ++index) {
+        if (dropdown->itemData(index).value<std::int64_t>() ==
+            core::blendModeStoredValue(core::BlendMode::Screen))
+            screenRow = index;
+    }
+    expect(screenRow >= 0, "the vocabulary includes Screen");
+    if (screenRow < 0)
+        return;
+
+    dropdown->setCurrentIndex(screenRow);
+    expect(f.session.blendModeForLayer(layerId) == core::BlendMode::Screen,
+           "picking a mode on the card commits it to the layer");
+    expect(f.session.canUndo() && f.session.undo() &&
+               f.session.blendModeForLayer(layerId) == core::kDefaultBlendMode,
+           "and it is one undoable command");
+}
+
 // Item 7, Merge. One ordered multi-input for the whole stack, with the slot model untouched
 // beneath.
 void testMergeRendersOneOrderedMultiInput() {
@@ -330,6 +379,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testCardMinimumWidthIsItsContent();
         bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
         bloom::ui::test::testNodeTypesAreNamedForWhatTheyAre();
+        bloom::ui::test::testBlendingDropdownOnALayerCardCommits();
         bloom::ui::test::testMergeRendersOneOrderedMultiInput();
         bloom::ui::test::testEnterAndDoubleClickRenameALayerCard();
     } catch (const std::exception& error) {

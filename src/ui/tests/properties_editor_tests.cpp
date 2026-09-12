@@ -7,6 +7,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -15,10 +16,12 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -32,9 +35,11 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointF>
+#include <QVariant>
 #include <QWidget>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -539,6 +544,70 @@ void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
         "undo restores the exact identity transform");
 }
 
+// The Appearance group's Blending row: a real control over a real parameter, one undoable command
+// per change, reading back what the document stores. It carries no keyframe indicator on purpose --
+// the blend-mode schema is not animatable -- which is why this case lives beside the transform-row
+// case rather than inside the keyframe-indicator one below.
+void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Blending Row Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* blending = properties.findChild<ui::kit::KDropdown*>("blendModeEditor");
+    expectations.expect(blending != nullptr, "the Appearance group exposes a Blending row");
+    if (blending == nullptr) {
+        return;
+    }
+    expectations.expect(blending->isEnabled() &&
+                            blending->count() == static_cast<int>(core::kBlendModes.size()) &&
+                            blending->currentText() ==
+                                ui::blendModeDisplayName(core::kDefaultBlendMode),
+                        "a new layer's Blending row is enabled, offers every mode, and reads Normal");
+
+    const auto overlayRow = [blending] {
+        const auto stored = core::blendModeStoredValue(core::BlendMode::Overlay);
+        for (int index = 0; index < blending->count(); ++index) {
+            if (blending->itemData(index).value<std::int64_t>() == stored) {
+                return index;
+            }
+        }
+        return -1;
+    }();
+    expectations.expect(overlayRow >= 0, "the vocabulary includes Overlay");
+    if (overlayRow < 0) {
+        return;
+    }
+
+    const auto revisionBefore = document.snapshot().revision();
+    blending->setCurrentIndex(overlayRow);
+    expectations.expect(session.blendModeForLayer(ids.layer) == core::BlendMode::Overlay,
+                        "picking a mode commits it to the layer's own parameter");
+    expectations.expect(document.snapshot().revision() != revisionBefore && session.canUndo() &&
+                            session.undoLabel() == QStringLiteral("Set Blend Mode"),
+                        "the edit is exactly one undoable command, named for what it did");
+    expectations.expect(session.undo() &&
+                            session.blendModeForLayer(ids.layer) == core::kDefaultBlendMode,
+                        "undo restores the authored Normal");
+    expectations.expect(blending->currentText() ==
+                            ui::blendModeDisplayName(core::kDefaultBlendMode),
+                        "and the row follows the undone document rather than its own last choice");
+
+    // A committing no-op: re-picking the mode the layer already has must publish no revision and no
+    // history entry, exactly as the text-content row's equal-value path does.
+    const auto settled = document.snapshot().revision();
+    const auto historyBefore = session.canUndo();
+    blending->setCurrentIndex(blending->currentIndex());
+    expectations.expect(document.snapshot().revision() == settled &&
+                            session.canUndo() == historyBefore,
+                        "re-picking the current mode commits nothing");
+}
+
 // Every Transform row carries its own keyframe indicator, and each must light up for its own
 // parameter only -- the three new rows are animatable exactly as position and opacity are.
 void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations) {
@@ -839,6 +908,7 @@ int main(int argc, char** argv) {
     testSelectionSwapUpdatesRows(expectations);
     testRgbaCellsEditThroughCommandWithUndo(expectations);
     testTransformRowsEditThroughCommandsWithUndo(expectations);
+    testBlendingRowEditsThroughOneCommandWithUndo(expectations);
     testTransformRowsShowTheirOwnKeyframeIndicators(expectations);
     testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
     testScrubOnRgbaCellChangesValue(expectations);

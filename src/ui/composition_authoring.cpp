@@ -9,6 +9,8 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 
+#include <QCoreApplication>
+
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -64,6 +66,35 @@ QString parameterSourceDescription(const document::ParameterRecord& parameter) {
         return QStringLiteral("Driven by graph");
     }
     return QStringLiteral("Constant");
+}
+
+QString blendModeDisplayName(const core::BlendMode mode) {
+    // QCoreApplication::translate() rather than QStringLiteral: this is an artist-facing vocabulary
+    // shown in three controls, so it has to be translatable, and a free function has no tr() of its
+    // own. The context is the vocabulary, not any one widget, because all three surfaces show the
+    // same words.
+    const auto* const name = [mode]() -> const char* {
+        switch (mode) {
+        case core::BlendMode::Normal:
+            return "Normal";
+        case core::BlendMode::Add:
+            return "Add";
+        case core::BlendMode::Multiply:
+            return "Multiply";
+        case core::BlendMode::Screen:
+            return "Screen";
+        case core::BlendMode::Overlay:
+            return "Overlay";
+        case core::BlendMode::Darken:
+            return "Darken";
+        case core::BlendMode::Lighten:
+            return "Lighten";
+        case core::BlendMode::Difference:
+            return "Difference";
+        }
+        return "Normal";
+    }();
+    return QCoreApplication::translate("bloom::ui::BlendMode", name);
 }
 
 QString exactColorText(const core::Color4d color) {
