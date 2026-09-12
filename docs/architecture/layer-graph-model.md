@@ -226,24 +226,41 @@ remain preservable. Existing ports are Image. Known incompatible socket kinds ar
 
 ### Text And Mute Lowering
 
-Text source records remain readable, but `AddTextLayer` refuses creation with an explicit message
-until portable CPU text rendering exists. A reachable unmuted text source produces a scoped
-`UnsupportedNode` diagnostic. The repository has no Qt-free glyph rasterization facility;
-UI font assets and Qt painting are not a portable document evaluator.
+`bloom.text-source` is a lowered, evaluable node. Its schema is exactly three parameters in this
+order -- content (String), size (Float64, pixels per em, default 72), color (Color4d, straight
+`bloom.reference.linear-srgb`, default opaque white) -- and no font parameter, because the reference
+path has exactly one embedded face (see
+[`evaluation-primitives.md`](evaluation-primitives.md)'s "Text Rasterization Version 1"). None of the
+three is animatable. The color parameter's node-local ROLE is the same string a solid color's is,
+while its schema key is its own: a role names which binding of a node a parameter fills, the schema
+key is the global identity of the value's meaning, and a text color means what a solid color means,
+which is what lets one properties row, one node-card chip, and one session write path serve both.
+
+`kTextSourceNodeSchemaVersion` stays `1` across this change. `AddTextLayer` had never succeeded, so no
+project can contain a version-1 text record written against the earlier content-only shape, and a
+version bump would only have invalidated records that cannot exist.
+
+`AddTextLayer` builds the same canonical structured-layer topology `AddSolidLayer` builds, with a
+text source in the source position. It refuses a non-finite or out-of-domain size, an invalid color,
+and content that is not well-formed UTF-8; it accepts EMPTY content, because an artist adds a text
+layer and then types into it. A reachable unmuted text source produces no diagnostic: the
+`UnsupportedNode` diagnostic it used to raise is now raised only by node types that genuinely have no
+compiled operation.
 
 Mute lowers in the compiler: the first Image input passes to the first Image output, or an
 unconnected/source image becomes transparent. A muted Layer Output is omitted from stack
 participation; other graph consumers can still receive its bypassed input. A muted stack uses
 only its first stable slot, and a muted composition endpoint passes through its input (empty
-when disconnected). Unused branches and bypassed parameter sources are not evaluated. The CPU
-evaluator primitives are unchanged.
+when disconnected). Unused branches and bypassed parameter sources are not evaluated. A muted text
+source contributes nothing, exactly like a muted solid, and a muted Layer Output prunes its upstream
+text source entirely.
 
 ## Node Authoring Commands
 
 `AddNode(typeId, layoutPosition)` creates one node at a finite position and independent parameter
 records from the frozen registry's latest definition defaults. Even source and Layer Output types
-stay graph-only: this command never creates a layer boundary or slot. `AddSolidLayer` remains the
-structured layer constructor; `AddTextLayer` refuses until rendering is available.
+stay graph-only: this command never creates a layer boundary or slot. `AddSolidLayer` and
+`AddTextLayer` are the structured layer constructors, and both build the same topology.
 
 `RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
 layout records, and parameters that no surviving node references. Orphaned owned animation curves
@@ -314,8 +331,8 @@ Consequently **node command authoring is not enabled in the application yet**. P
 sockets, session click/Shift/box selection, Ctrl+A, Home/F/Z, zoom/pan, existing in-node parameter
 edits and legacy Add Solid work. Command gestures show no draggable cursor without an adapter;
 command-only node menus and cursor-positioned Add search are not offered. The legacy Add menu
-keeps Solid creation and a disabled Text row. Keyboard authoring requests report unavailability
-through the existing session status signal.
+keeps Solid and Text creation, both through their own session paths. Keyboard authoring requests
+report unavailability through the existing session status signal.
 
 Enabling the following command interactions requires one public session submission method which
 executes a transaction, passes its result through the existing snapshot/history/refusal publication,
@@ -348,8 +365,9 @@ With that adapter supplied, the following behavior is implemented and covered by
   same transaction as the move. Any command refusal rolls the entire transaction back.
 - Shift+A and canvas Add… open `KSearchPopup` at the cursor. Case-insensitive word filtering matches
   readable node type names and socket-kind names. Enter, arrows, pointer selection and Escape use
-  the kit popup machinery. Every built-in registry kind is listed. Text retains the actual
-  `AddTextLayer` refusal in a disabled row. Solid uses `AddSolidLayer`; other kinds use `AddNode`.
+  the kit popup machinery. Every built-in registry kind is listed, each carrying its own command's
+  real refusal when it has one. Solid uses `AddSolidLayer` and Text uses `AddTextLayer`, both building
+  a structured layer; other kinds use `AddNode`.
   Creation, cursor layout and the first compatible armed-port connection share one transaction.
   The editor's compound operation delegates all durable writes to existing commands and only reads
   the returned IDs to resolve subsequent operations.
