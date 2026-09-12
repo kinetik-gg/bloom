@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include <QCoreApplication>
 #include <QPainterPathStroker>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
@@ -21,6 +22,32 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
 }
 
 namespace node_editor {
+QString nodeCategoryName(const document::NodeCategory category) {
+    switch (category) {
+    case document::NodeCategory::Sources:
+        return QCoreApplication::translate("node_editor", "Sources");
+    case document::NodeCategory::Layers:
+        return QCoreApplication::translate("node_editor", "Layers");
+    case document::NodeCategory::Compositing:
+        return QCoreApplication::translate("node_editor", "Compositing");
+    case document::NodeCategory::Values:
+        return QCoreApplication::translate("node_editor", "Values");
+    case document::NodeCategory::Output:
+        return QCoreApplication::translate("node_editor", "Output");
+    case document::NodeCategory::Utilities:
+        return QCoreApplication::translate("node_editor", "Utilities");
+    }
+    return {};
+}
+
+std::span<const document::NodeCategory> nodeCategoryOrder() {
+    static constexpr std::array kOrder{
+        document::NodeCategory::Sources,     document::NodeCategory::Layers,
+        document::NodeCategory::Compositing, document::NodeCategory::Values,
+        document::NodeCategory::Output,      document::NodeCategory::Utilities};
+    return kOrder;
+}
+
 QString displayTypeName(const std::string_view typeId) {
     QString name = QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size()));
     if (name.startsWith(QStringLiteral("bloom."))) {

@@ -305,6 +305,19 @@ set uses Accent outlines and its primary uses Foreground. The set and primary fl
 `CompositionSession::selectNodes`, `toggleNodeSelection` and `clearSelection`; Properties and
 Timeline retain their existing primary/context contracts.
 
+### Node Categories
+
+`NodeDefinition::category` declares which Add-surface section a node type is listed under:
+`Sources`, `Layers`, `Compositing`, `Values`, `Output`, `Utilities`. The vocabulary is the artist's --
+what a node is for -- so it is declared beside the type rather than derived from `NodeLoweringKind`,
+which spans several sections at once. The built-ins are Solid and Text under `Sources`, the layer
+boundary under `Layers`, Merge under `Compositing`, and Output under `Output`; `Values` and
+`Utilities` have no built-in members yet and are therefore never headed.
+
+Add surfaces list entries in that category order and alphabetically inside each one, and
+`KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
+heading, and the list is exactly as tall as the rows and headings it holds.
+
 ### Node Cardinality
 
 `NodeDefinition::cardinality` declares how many instances of a node type one composition may hold.

@@ -2,7 +2,9 @@
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QModelIndex>
+#include <QRegion>
 #include <QShortcut>
+#include <QStringList>
 
 namespace bloom::ui::test {
 namespace {
@@ -18,6 +20,20 @@ QModelIndex rowForKey(const QAbstractItemModel* model, const std::string_view ty
             return index;
     }
     return {};
+}
+int resultRows(const QAbstractItemModel* model) {
+    int rows = 0;
+    for (int row = 0; row < model->rowCount(); ++row)
+        if (!model->index(row, 0).data(kit::kSearchSectionRole).toBool())
+            ++rows;
+    return rows;
+}
+QStringList sectionHeadings(const QAbstractItemModel* model) {
+    QStringList headings;
+    for (int row = 0; row < model->rowCount(); ++row)
+        if (model->index(row, 0).data(kit::kSearchSectionRole).toBool())
+            headings.push_back(model->index(row, 0).data().toString());
+    return headings;
 }
 kit::KSearchPopup* search(Fixture& f) {
     auto* popup = f.editor.findChild<kit::KSearchPopup*>();
@@ -138,9 +154,29 @@ void testSearchKeyboardAndMenus() {
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
     expect(popup->isVisible() &&
-               list->model()->rowCount() ==
+               resultRows(list->model()) ==
                    static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
            "Shift A opens all registered node kinds at the cursor");
+    // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
+    // heading only for a section that actually has results under it.
+    expect(sectionHeadings(list->model()) ==
+               QStringList{QStringLiteral("Sources"), QStringLiteral("Layers"),
+                           QStringLiteral("Compositing"), QStringLiteral("Output")},
+           "every populated section is headed, in category order, and the empty ones are absent");
+    expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
+               list->model()->index(0, 0).flags() == Qt::NoItemFlags,
+           "a heading is not a row the artist can reach");
+    // Exactly the rows and headings, with no dead surface under the last one.
+    int expectedHeight = 0;
+    for (int row = 0; row < list->model()->rowCount(); ++row)
+        expectedHeight += list->model()->index(row, 0).data(Qt::SizeHintRole).toSize().height();
+    expect(list->height() == expectedHeight,
+           "the list is exactly as tall as the rows and headings it holds");
+    // The popup's corners come from the shared dropdown surface alone: the list sits below the
+    // filter field, so its own top edge must stay square rather than carving notches under it.
+    const QRegion mask = list->mask();
+    expect(mask.contains(QPoint(0, 0)) && mask.contains(QPoint(list->width() - 1, 0)),
+           "the list is not rounded again where it meets the filter field");
     // Task S1, item 5: the composition's one evaluation endpoint and its one Layer Stack are
     // already present, so search offers them as refusals rather than as commands.
     for (const auto typeId :
@@ -155,16 +191,25 @@ void testSearchKeyboardAndMenus() {
                .testFlag(Qt::ItemIsEnabled),
            "while a kind a composition may hold many of stays addable");
     field->setText(QStringLiteral("text"));
-    expect(list->model()->rowCount() == 1 &&
-               !list->model()->index(0, 0).flags().testFlag(Qt::ItemIsEnabled) &&
-               list->model()->index(0, 0).data().toString().contains(QStringLiteral("CPU")),
+    const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
+    expect(resultRows(list->model()) == 1 && textRow.isValid() &&
+               !textRow.flags().testFlag(Qt::ItemIsEnabled) &&
+               textRow.data(Qt::ToolTipRole).toString().contains(QStringLiteral("CPU")),
            "text remains listed with actual command refusal as a disabled row");
+    // Item 4: the reason is in the tooltip and NOWHERE else. A refusal appended to the label would
+    // make the list's widest row an error message and read as part of the node's name.
+    expect(textRow.data().toString() ==
+                   node_editor::displayTypeName(document::kTextSourceNodeType) &&
+               !textRow.data().toString().contains(QStringLiteral("CPU")),
+           "and its label is the node's name alone");
+    expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources")},
+           "a filter that empties a section drops that section's heading with it");
     history = f.stack.size();
     QTest::keyClick(field, Qt::Key_Return);
     expect(f.stack.size() == history && popup->isVisible(),
            "Enter cannot activate a disabled text result");
     field->setText(QStringLiteral("layer output image"));
-    expect(list->model()->rowCount() == 1, "search combines display-name and socket-kind filters");
+    expect(resultRows(list->model()) == 1, "search combines display-name and socket-kind filters");
     QTest::keyClick(field, Qt::Key_Return);
     selected = f.session.selectedNode();
     expect(selected && selected->typeId == document::kLayerOutputNodeType &&

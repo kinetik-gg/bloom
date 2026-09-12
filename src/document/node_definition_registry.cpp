@@ -16,6 +16,7 @@ namespace {
 using bloom::document::InputPortDefinition;
 using bloom::document::LayerSlotInputDefinition;
 using bloom::document::NodeCardinality;
+using bloom::document::NodeCategory;
 using bloom::document::NodeDefinition;
 using bloom::document::NodeLoweringKind;
 using bloom::document::OutputPortDefinition;
@@ -146,7 +147,9 @@ template <typename Definition>
             {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
             {{std::string(kSolidColorParameterRole), std::string(kSolidColorParameterSchemaKey),
               ParameterValueKind::Color4d, true, false, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
-            std::nullopt};
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
 }
 
 [[nodiscard]] NodeDefinition layerOutputDefinition() {
@@ -159,7 +162,9 @@ template <typename Definition>
               ParameterValueKind::Vec2d, true, true, Vec2d{}},
              {std::string(kOpacityParameterRole), std::string(kOpacityParameterSchemaKey),
               ParameterValueKind::Float64, true, true, 1.0}},
-            std::nullopt};
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Layers};
 }
 
 [[nodiscard]] NodeDefinition layerStackDefinition() {
@@ -171,7 +176,8 @@ template <typename Definition>
             {},
             LayerSlotInputDefinition{std::string(kLayerStackContentInputRole),
                                      SocketValueKind::Image, true},
-            NodeCardinality::OnePerComposition};
+            NodeCardinality::OnePerComposition,
+            NodeCategory::Compositing};
 }
 
 [[nodiscard]] NodeDefinition compositionOutputDefinition() {
@@ -182,7 +188,8 @@ template <typename Definition>
             {{std::string(kCompositionOutputOutputPort), SocketValueKind::Image}},
             {},
             std::nullopt,
-            NodeCardinality::OnePerComposition};
+            NodeCardinality::OnePerComposition,
+            NodeCategory::Output};
 }
 
 [[nodiscard]] NodeDefinition textDefinition() {
@@ -193,7 +200,9 @@ template <typename Definition>
             {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
             {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
               ParameterValueKind::String, true, false, std::string{}}},
-            std::nullopt};
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
 }
 
 } // namespace

@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/theme.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <QFrame>
 #include <QGuiApplication>
@@ -10,6 +11,7 @@
 #include <QListView>
 #include <QMouseEvent>
 #include <QScreen>
+#include <QSize>
 #include <QStandardItemModel>
 #include <QVBoxLayout>
 
@@ -17,6 +19,20 @@
 #include <utility>
 
 namespace bloom::ui::kit {
+namespace {
+
+// A result row and a section heading. A heading is deliberately the shorter of the two: it labels
+// the rows under it rather than competing with them.
+[[nodiscard]] int resultRowHeight() { return px(Size::Control); }
+[[nodiscard]] int sectionRowHeight() { return px(Size::ControlCompact); }
+
+// How much of the list may be on screen before it scrolls. A floor-free height means a short list
+// is exactly its own rows; this is the other end -- a long one stops growing instead of running off
+// the screen.
+[[nodiscard]] int maximumListHeight() { return resultRowHeight() * 12; }
+
+} // namespace
+
 KSearchPopup::KSearchPopup(QWidget* parent) : QWidget(parent, Qt::Popup) {
     setObjectName(QStringLiteral("kSearchPopup"));
     setAccessibleName(tr("Add node search"));
@@ -42,6 +58,9 @@ QLineEdit#kSearchFilter:focus { border-color: {color.Accent}; }
     static_cast<QVBoxLayout*>(dropdown_->surface()->layout())->insertWidget(0, field_);
     model_ = new QStandardItemModel(this);
     dropdown_->setModel(model_);
+    // Headings and results are different heights, so the view may not assume one row height for all
+    // of them -- and the height the list is pinned to below is the sum of the real ones.
+    dropdown_->view()->setUniformItemSizes(false);
     field_->installEventFilter(this);
     dropdown_->view()->installEventFilter(this);
     connect(field_, &QLineEdit::textChanged, this, &KSearchPopup::filter);
@@ -57,28 +76,50 @@ void KSearchPopup::setEntries(std::vector<SearchEntry> entries) {
 void KSearchPopup::filter() {
     model_->clear();
     const auto words = field_->text().simplified().split(' ', Qt::SkipEmptyParts);
+    QString openSection;
+    bool sectionOpen = false;
+    int height = 0;
     for (const auto& entry : entries_) {
         const QString haystack = entry.label + ' ' + entry.keywords;
         if (!std::ranges::all_of(words, [&](const auto& word) {
                 return haystack.contains(word, Qt::CaseInsensitive);
             }))
             continue;
-        auto* item = new QStandardItem(entry.refusal.isEmpty()
-                                           ? entry.label
-                                           : entry.label + QStringLiteral(" — ") + entry.refusal);
+        // A heading is emitted only once the section has something to head, so a filter that
+        // matches nothing in a section leaves no empty heading behind.
+        if (!entry.section.isEmpty() && (!sectionOpen || entry.section != openSection)) {
+            auto* heading = new QStandardItem(entry.section);
+            heading->setData(true, kSearchSectionRole);
+            heading->setData(QSize(0, sectionRowHeight()), Qt::SizeHintRole);
+            heading->setFont(kit::font(TypeRole::UiSmall));
+            heading->setForeground(color(Color::Faint));
+            // No flags at all: a heading is neither selectable nor choosable, which is also what
+            // keeps keyboard navigation -- which steps over anything not enabled -- unchanged.
+            heading->setFlags(Qt::NoItemFlags);
+            model_->appendRow(heading);
+            height += sectionRowHeight();
+            openSection = entry.section;
+            sectionOpen = true;
+        }
+        // The label alone. A refused result's reason is its tooltip and nothing else.
+        auto* item = new QStandardItem(entry.label);
         item->setData(entry.key, Qt::UserRole);
+        item->setData(QSize(0, resultRowHeight()), Qt::SizeHintRole);
         item->setToolTip(entry.refusal);
         item->setEnabled(entry.refusal.isEmpty());
         model_->appendRow(item);
+        height += resultRowHeight();
     }
     if (model_->rowCount() == 0) {
         auto* item = new QStandardItem(tr("No matching nodes"));
+        item->setData(QSize(0, resultRowHeight()), Qt::SizeHintRole);
         item->setEnabled(false);
         model_->appendRow(item);
+        height = resultRowHeight();
     }
     dropdown_->view()->setCurrentIndex({});
     step(1);
-    dropdown_->view()->setFixedHeight(std::min(8, model_->rowCount()) * px(Size::ControlRoomy));
+    dropdown_->view()->setFixedHeight(std::min(height, maximumListHeight()));
     adjustSize();
 }
 

@@ -230,8 +230,23 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         search_ = new kit::KSearchPopup(this);
         connect(search_, &kit::KSearchPopup::entryChosen, this, &NodeGraphEditor::addNode);
     }
+    // Listed in the category order the sections are read in, and alphabetically inside each one.
+    // The registry's own order is by type id, which is neither.
+    std::vector<const document::NodeDefinition*> ordered;
+    for (const auto category : nodeCategoryOrder()) {
+        std::vector<const document::NodeDefinition*> section;
+        for (const auto& definition : document::builtInNodeDefinitions().definitions())
+            if (definition.category == category)
+                section.push_back(&definition);
+        std::ranges::sort(section, [](const auto* left, const auto* right) {
+            return displayTypeName(left->key.typeId) < displayTypeName(right->key.typeId);
+        });
+        ordered.insert(ordered.end(), section.begin(), section.end());
+    }
+
     std::vector<kit::SearchEntry> entries;
-    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+    for (const auto* candidate : ordered) {
+        const auto& definition = *candidate;
         QString keywords = QString::fromStdString(definition.key.typeId);
         for (const auto& port : definition.inputs)
             keywords += ' ' + socketKindName(port.valueKind);
@@ -251,7 +266,8 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType)
             refusal = tr("Node command submission is unavailable");
         entries.push_back({QString::fromStdString(definition.key.typeId),
-                           displayTypeName(definition.key.typeId), keywords, refusal});
+                           displayTypeName(definition.key.typeId), keywords, refusal,
+                           nodeCategoryName(definition.category)});
     }
     search_->setEntries(std::move(entries));
     search_->openAt(screenPosition);

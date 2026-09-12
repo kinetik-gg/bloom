@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -70,6 +71,12 @@ inline constexpr qreal kSelectionEdgeWidth = 2.0;
 class NodeEdgeItem;
 class NodeItem;
 QString displayTypeName(std::string_view typeId);
+// The artist-facing heading a node category is listed under in an Add surface (task S1, item 4).
+QString nodeCategoryName(document::NodeCategory category);
+// The order the headings appear in: the pipeline's own order, from what makes an image to what
+// consumes one. Add surfaces list their entries in this order, and the search popup emits a heading
+// whenever the order moves on.
+[[nodiscard]] std::span<const document::NodeCategory> nodeCategoryOrder();
 QString nodeDisplayName(const document::Composition& composition, const document::NodeRecord& node);
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
                                                   const document::Composition& composition,

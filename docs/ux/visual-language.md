@@ -365,7 +365,7 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Incompatible drag | Error link ink; release publishes nothing |
 | Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
 | Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
-| Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field; disabled results show their refusal using DisabledInk |
+| Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field. Results are grouped under `UiSmall`/`Faint` section headings that are neither selectable nor choosable; the list is exactly as tall as its rows and headings. A refused result is a disabled row carrying its reason in its tooltip alone -- never in its label. The popup rounds once, at the shared dropdown surface: the list's own mask rounds only the edges it shares with that surface, so the edge beneath the filter field stays square |
 | Unavailable command adapter | Cards have an arrow cursor and sockets a forbidden cursor with explanation; application offers only its existing working authoring paths |
 
 `KSearchPopup` object names are `kSearchPopup` and `kSearchFilter`; its reused dropdown subtree

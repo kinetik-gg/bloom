@@ -68,6 +68,19 @@ struct LayerSlotInputDefinition {
                            const LayerSlotInputDefinition&) = default;
 };
 
+// Which section of an Add surface a node type is listed under (task S1, item 4). The vocabulary is
+// the artist's, not the lowering's: what a node is FOR, which is why it is declared beside the type
+// rather than derived from NodeLoweringKind (several unrelated lowerings are Sources, and the
+// Unsupported lowering spans every section).
+enum class NodeCategory : std::uint8_t {
+    Sources,
+    Layers,
+    Compositing,
+    Values,
+    Output,
+    Utilities,
+};
+
 // How many instances of a node type one composition may hold (task S1, item 5). The composition's
 // single evaluation endpoint and its single layer-stack operator are structural singletons: a
 // second one is not a graph a composition can mean, which is why the refusal belongs to the
@@ -93,6 +106,7 @@ struct NodeDefinition {
     std::vector<ParameterDefinition> parameters;
     std::optional<LayerSlotInputDefinition> layerSlotInput;
     NodeCardinality cardinality = NodeCardinality::Many;
+    NodeCategory category = NodeCategory::Utilities;
 
     friend bool operator==(const NodeDefinition&, const NodeDefinition&) = default;
 };
