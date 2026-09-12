@@ -103,6 +103,9 @@ constexpr auto kShellStackNodeId = document::NodeId::fromRaw(0x63);
 constexpr auto kShellSlotId = document::LayerSlotId::fromRaw(0x64);
 constexpr auto kShellPositionParameterId = document::ParameterId::fromRaw(0x65);
 constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x66);
+constexpr auto kShellAnchorParameterId = document::ParameterId::fromRaw(0x67);
+constexpr auto kShellScaleParameterId = document::ParameterId::fromRaw(0x68);
+constexpr auto kShellRotationParameterId = document::ParameterId::fromRaw(0x69);
 
 constexpr std::string_view kCompositionPixelDigest =
     "db7f7d3db2e78643177715f34b8dcca6fd50399509094b9da0a9873016ba5ac9";
@@ -318,6 +321,10 @@ shellPlan(const std::uint32_t width, const std::uint32_t height) {
         runtime::CompiledVec2Parameter{
             kShellPositionParameterId,
             document::Vec2d{static_cast<double>(width) / 2.0, static_cast<double>(height) / 2.0}},
+        runtime::CompiledVec2Parameter{kShellAnchorParameterId, document::kDefaultAnchor},
+        runtime::CompiledVec2Parameter{kShellScaleParameterId, document::kDefaultScale},
+        runtime::CompiledScalarParameter{kShellRotationParameterId,
+                                         document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}});
     operations.emplace_back(runtime::CompiledLayerStack{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});

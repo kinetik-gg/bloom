@@ -48,19 +48,19 @@ using namespace std::chrono_literals;
 
 // An independent byte-oriented oracle assembled every frozen field with explicit big-endian
 // packing. These lengths and SHA-256 values cover the complete tiny PNG and EXR preimages.
-// Re-derived for the task S3 semantics-version bumps (CPU composition evaluator 2 -> 3, CPU image
-// primitive 2 -> 3). Both are frozen fields of the process-frame semantic identity these preimages
+// Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
+// primitive 3 -> 4). Both are frozen fields of the process-frame semantic identity these preimages
 // embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
 // from the same kind of independent byte-oriented oracle that produced the originals -- a
 // standalone script that packs each frozen field itself with explicit big-endian integers and
 // hashes the result, linking no Bloom code -- and that oracle was validated by reproducing the
-// PREVIOUS goldens byte for byte when fed the previous version numbers.
+// BOTH previously checked-in golden sets byte for byte when fed their own version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "c98edd8af56e7cfc02272f9c9f04bbae7775a6ff41dd264e4e791ba7311e751d";
+    "8768f3e62742b325378cb4bfae967929d6c8f9b03700a55a40b8aa538d36a321";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "84b9c3cbb26aa07dd04e556d9d64070f833e13f52012d234255130585c48e3ab";
+    "206d3348034058221c6cdaf2a6e463f4b38aae345d583827989cb54347fd05eb";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "01145046b0c891b3a1f77c034d01263d4914f32a322ebfdd873da4a2fe00b3f5";
+    "cc908d21c2a61fe2f7989a2c1d1af11c115797c82a0fe2fafdfa551a14236424";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
@@ -391,6 +391,10 @@ tinyFrameWithPixelAspect(const core::PixelAspectRatio pixelAspect) {
     operations.emplace_back(runtime::CompiledLayerOutput{
         test::kLayerNodeId, test::kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{test::kPositionParameterId, document::Vec2d{0.5, 0.5}},
+        runtime::CompiledVec2Parameter{test::kAnchorParameterId, document::kDefaultAnchor},
+        runtime::CompiledVec2Parameter{test::kScaleParameterId, document::kDefaultScale},
+        runtime::CompiledScalarParameter{test::kRotationParameterId,
+                                         document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{test::kOpacityParameterId, 1.0}});
     operations.emplace_back(runtime::CompiledLayerStack{
         test::kStackNodeId,
