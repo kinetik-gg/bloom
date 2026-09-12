@@ -118,10 +118,18 @@ bool layout(const JsonValue& composition, Buffer& output) {
 // in its object, which is canonical precisely because a strictly-decodable source document of the
 // step's own version carries no trailing unknown members to be pushed behind -- an unknown member
 // at a supported minor is a decode error, not retained data, so there is nothing to order against.
-enum class Step { NodeLayout, NodeGroups };
+// AnimationBreadth is the version-only step (1.2 -> 1.3): it appends no member anywhere, because
+// what 1.3 adds is a new animation-curve KIND and a new interpolation TOKEN, neither of which an
+// older file can contain. It still walks the whole document through the same copy/rewrite path so
+// every numeric spelling is preserved byte for byte and the version rewrite is the only difference.
+enum class Step { NodeLayout, NodeGroups, AnimationBreadth };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
+    // A version-only step adds nothing, so there is no member whose presence could prove it already
+    // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
+    if (step == Step::AnimationBreadth)
+        return false;
     if (scope == Scope::Composition)
         return value.findMember(step == Step::NodeLayout ? "nodeLayout" : "nodeGroups") != nullptr;
     return scope == Scope::HighestIssued && value.findMember("nodeGroup") != nullptr;
@@ -143,13 +151,14 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             return transform(member.value(), child, step, output);
         };
         if (scope == Scope::Root && member.key() == "schemaVersion") {
-            append(output, step == Step::NodeLayout ? "{\"major\":1,\"minor\":1}"
-                                                    : "{\"major\":1,\"minor\":2}");
+            append(output, step == Step::NodeLayout   ? "{\"major\":1,\"minor\":1}"
+                           : step == Step::NodeGroups ? "{\"major\":1,\"minor\":2}"
+                                                      : "{\"major\":1,\"minor\":3}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
         } else if (scope == Scope::Root && member.key() == "idAllocation" &&
-                   step == Step::NodeGroups) {
+                   step == Step::NodeGroups) { // NOLINT(bugprone-branch-clone)
             if (!descend(Scope::IdAllocation))
                 return false;
         } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
@@ -176,12 +185,12 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             append(output, ",\"nodeLayout\":");
             if (!layout(value, output))
                 return false;
-        } else {
+        } else if (step == Step::NodeGroups) {
             // A 1.1 file has no groups: the feature did not exist, so there is nothing to infer.
             append(output, ",\"nodeGroups\":[]");
         }
     }
-    if (scope == Scope::HighestIssued)
+    if (scope == Scope::HighestIssued && step == Step::NodeGroups)
         append(output, ",\"nodeGroup\":\"0\"");
     append(output, "}");
     return true;
@@ -212,6 +221,16 @@ MigrationStepOutcome migrateNodeGroupsV1_1(const JsonValue& root,
     if (!sourceVersionIs(root, "1"))
         return MigrationStepOutcome::failure("/schemaVersion");
     if (!transform(root, Scope::Root, Step::NodeGroups, output))
+        return MigrationStepOutcome::failure("/project/compositions");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateAnimationBreadthV1_2(const JsonValue& root,
+                                                 std::pmr::memory_resource* /*resource*/,
+                                                 Buffer& output) {
+    if (!sourceVersionIs(root, "2"))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    if (!transform(root, Scope::Root, Step::AnimationBreadth, output))
         return MigrationStepOutcome::failure("/project/compositions");
     return MigrationStepOutcome::success();
 }

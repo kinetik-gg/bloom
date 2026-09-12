@@ -274,13 +274,17 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
 }
 
 [[nodiscard]] runtime::NodeDefinition customSolidDefinition() {
+    // ADAPTED (task S5): the Solid lowering's shape check now requires the colour parameter's
+    // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, which is true
+    // for a solid colour since task S5 made it animatable -- so this custom definition declares it
+    // too, or the registry refuses the definition outright.
     return {{"example.solid", 17},
             runtime::NodeLoweringKind::Solid,
             {},
             {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
             {{std::string(document::kSolidColorParameterRole),
               std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true}},
+              runtime::ParameterValueKind::Color4d, true, true}},
             std::nullopt};
 }
 
@@ -380,9 +384,13 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                                     : std::get_if<document::Vec2d>(&firstLayer->position.source);
     const auto* firstOpacity =
         firstLayer == nullptr ? nullptr : std::get_if<double>(&firstLayer->opacity.source);
+    // Task S5: a solid's colour is a typed operand, so its constant travels inside the operand's
+    // own source variant rather than as a bare field.
+    const auto* solidColor =
+        solid == nullptr ? nullptr : std::get_if<core::Color4d>(&solid->color.source);
     expectations.expect(solid != nullptr && solid->sourceNodeId == kFirstSolidNode &&
-                            solid->colorParameterId == kFirstColor &&
-                            solid->color == core::Color4d{1.5, 0.25, 0.5, 0.75},
+                            solid->color.id == kFirstColor && solidColor != nullptr &&
+                            *solidColor == core::Color4d{1.5, 0.25, 0.5, 0.75},
                         "solid preserves straight HDR authoring color and typed identity");
     expectations.expect(firstLayer != nullptr && firstLayer->input.value() == 0 &&
                             firstLayer->layerId == kFirstLayer &&
@@ -532,17 +540,21 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
         textResult.plan && !textResult.plan->operations().empty()
             ? std::get_if<runtime::CompiledText>(&textResult.plan->operations().front())
             : nullptr;
+    const auto* textSize =
+        compiledText == nullptr ? nullptr : std::get_if<double>(&compiledText->size.source);
+    const auto* textColor =
+        compiledText == nullptr ? nullptr : std::get_if<core::Color4d>(&compiledText->color.source);
     expectations.expect(compiledText != nullptr && compiledText->sourceNodeId == kFirstSolidNode &&
-                            compiledText->content == "Title" && compiledText->size == 48.0 &&
-                            compiledText->color == textColorValue,
+                            compiledText->content == "Title" && textSize != nullptr &&
+                            *textSize == 48.0 && textColor != nullptr &&
+                            *textColor == textColorValue,
                         "the lowered text operation carries the exact authored content, size, and "
                         "color");
-    expectations.expect(compiledText != nullptr &&
-                            compiledText->contentParameterId == kFirstColor &&
-                            compiledText->sizeParameterId == kTextSize &&
-                            compiledText->colorParameterId == kTextColor,
-                        "and each parameter identity, so an evaluation diagnostic can name the "
-                        "exact parameter that failed");
+    expectations.expect(
+        compiledText != nullptr && compiledText->contentParameterId == kFirstColor &&
+            compiledText->size.id == kTextSize && compiledText->color.id == kTextColor,
+        "and each parameter identity, so an evaluation diagnostic can name the "
+        "exact parameter that failed");
 
     // A size the schema refuses never reaches the evaluator: the document rejects the value at
     // insertion, so there is no "valid document, unrenderable plan" state to lower.

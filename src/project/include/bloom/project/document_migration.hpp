@@ -41,10 +41,13 @@
 //
 // Registry: kProductionDocumentMigrationSteps upgrades document 1.0 to 1.1 by assigning the
 // original four-column node layout, then 1.1 to 1.2 by giving every composition an empty node
-// group collection and the allocator its nodeGroup high water. Same-major newer minors bypass
-// migration and retain their additive members; unknown majors follow the existing rejection/
-// preservation route. The generic runner remains injectable for deterministic chain, failure, and
-// resource-budget tests.
+// group collection and the allocator its nodeGroup high water, then 1.2 to 1.3 by changing nothing
+// but the version. 1.3 is purely additive in the VALUE space rather than the member space (a third
+// animation-curve kind and a third keyframe interpolation token), and an older file contains
+// neither, so there is nothing to add or infer -- the step exists so the chain has no hole, not
+// because a 1.2 file is missing anything. Same-major newer minors bypass migration and retain their
+// additive members; unknown majors follow the existing rejection/preservation route. The generic
+// runner remains injectable for deterministic chain, failure, and resource-budget tests.
 //
 // Version detection is not this module's job: the caller already lexically reads the document
 // root's schemaVersion before trusted decode, as part of its own existing version-agreement check
@@ -137,9 +140,13 @@ struct MigrationStepDescriptor final {
 [[nodiscard]] MigrationStepOutcome migrateNodeGroupsV1_1(const JsonValue& root,
                                                          std::pmr::memory_resource* resource,
                                                          std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateAnimationBreadthV1_2(const JsonValue& root,
+                                                               std::pmr::memory_resource* resource,
+                                                               std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
-    MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1}};
+    MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
+    MigrationStepDescriptor{{1, 2}, {1, 3}, migrateAnimationBreadthV1_2}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

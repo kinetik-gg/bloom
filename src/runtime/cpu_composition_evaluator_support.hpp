@@ -36,6 +36,7 @@ struct ResolvedEvaluation final {
     std::vector<std::size_t> remainingConsumers;
     std::vector<ResolvedCurveSample<double>> scalarCurveValues;
     std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;
+    std::vector<ResolvedCurveSample<core::Color4d>> color4CurveValues;
 };
 
 struct PreflightOutcome final {

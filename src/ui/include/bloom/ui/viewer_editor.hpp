@@ -122,6 +122,9 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] QString statusBarColorChipTextForTest() const;
+    // Task S5, item 3b: the footer's dropped-frame text, empty whenever counting is disarmed (so
+    // outside a playback run the footer claims nothing at all). Same seam shape as the two above.
+    [[nodiscard]] QString statusBarDroppedFrameTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
 
   protected:

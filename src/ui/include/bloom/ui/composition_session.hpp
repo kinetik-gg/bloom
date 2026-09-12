@@ -5,6 +5,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
@@ -119,6 +120,23 @@ enum class PositionInteractionRejection : std::uint8_t {
     EmptyMapping,
 };
 
+// One parameter's value, whatever kind it is: the three animatable value kinds a curve can carry
+// and a constant can hold. Named once so sampleParameterValue() and the effective*Value() readers
+// cannot drift apart about what a "parameter value" is in this layer.
+using ParameterSample = std::variant<double, document::Vec2d, core::Color4d>;
+
+// What a keyframe diamond shows for one parameter at the session's current time (task S5, item 0;
+// docs/architecture/animation-and-time.md, "The Keyframe Gesture"). The three authored states are
+// exactly the three AE diamond shapes -- empty, outlined, filled -- and Unsupported is the fourth,
+// honest case: the selection exposes no such parameter, or its schema declares no animation at all,
+// so there is no diamond to click.
+enum class KeyframeDiamondState : std::uint8_t {
+    Unsupported,
+    Constant,
+    AnimatedWithoutKey,
+    AnimatedWithKey,
+};
+
 class CompositionSession final : public QObject {
     Q_OBJECT
 
@@ -189,18 +207,12 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setSelectedScale(double x, double y);
     [[nodiscard]] bool setSelectedRotation(double degrees);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
-    // Task P3 (issue #120 follow-up, owner review 2026-09-12): the properties panel's editable
-    // RGBA cells write through this, exactly mirroring setSelectedOpacity()'s shape -- resolve the
-    // selection's document::kSolidColorParameterRole parameter, then a single
-    // commands::SetParameterSource carrying the whole core::Color4d as its ConstantValueSource
-    // (the same generic command Position/Opacity already use for their own constant branch), one
-    // transaction per call. Unlike Position, there is no animated branch:
-    // CreateAnimationForParameter accepts only the animatable transform and opacity schemas
-    // (src/commands/animation_operations.cpp) and commands::SetKeyframeAtTime has no core::Color4d
-    // overload, so a solid color parameter can never actually become an AnimationCurveSource
-    // through the existing command surface -- a non-constant source (driven, or the
-    // otherwise-unreachable animated case) is refused the same way setSelectionScalarParameter()'s
-    // driven branch is. See this task's raw report.
+    // The properties panel's editable RGBA cells write through this, exactly mirroring
+    // setSelectedOpacity()'s shape -- resolve the selection's document::kSolidColorParameterRole
+    // parameter, then one transaction. Task S5 gave it Position's full branch set: a constant
+    // source takes commands::SetParameterSource, an ANIMATED one takes commands::SetKeyframeAtTime
+    // at the session time (a colour parameter can be animated now), and a driven one is refused the
+    // way setSelectionScalarParameter()'s driven branch is.
     [[nodiscard]] bool setSelectedSolidColor(core::Color4d color);
     // Task S3: the three text parameters, written through exactly the paths their solid/opacity
     // counterparts already use -- one commands::SetParameterSource per call, one transaction, one
@@ -227,6 +239,65 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool
     moveLayerBefore(document::LayerSlotId slotId,
                     std::optional<document::LayerSlotId> beforeSlotId = std::nullopt);
+
+    // --- The keyframe gesture (task S5, item 0) ------------------------------------------------
+    // What the diamond for `role` on the CURRENT selection should paint, at the current session
+    // time. Pure projection: no command, no mutation, nothing cached.
+    [[nodiscard]] KeyframeDiamondState keyframeDiamondState(std::string_view role) const;
+    // The same question keyed by PARAMETER rather than by the current selection's role. This is the
+    // primitive; the role overload above resolves the role against the selection and delegates. The
+    // node canvas needs this one: a card paints the diamond for ITS OWN node's parameter, which is
+    // not necessarily the selected one, and reading it must never move the selection.
+    [[nodiscard]] KeyframeDiamondState
+    keyframeDiamondStateForParameter(document::ParameterId parameterId) const;
+    // The AE diamond click, end to end, as exactly ONE undoable transaction per call:
+    //   * a constant parameter becomes a curve with one key at the current value and time
+    //     (CreateAnimationForParameter + SetKeyframeAtTimeForParameter together -- the second
+    //     operation is parameter-keyed precisely so it can see the curve the first one created);
+    //   * an animated parameter with no key at the current time gains one, valued at the curve's
+    //   own
+    //     exactly sampled value there, so inserting a key never moves the picture;
+    //   * an animated parameter WITH a key at the current time loses it;
+    //   * losing the LAST key converts the parameter back to a constant holding that key's value.
+    // Refused (no transaction, message through commandRejected()) when the selection exposes no
+    // such parameter, the schema declares no animation, or the source is driven.
+    [[nodiscard]] bool toggleKeyframe(std::string_view role);
+    // The gesture keyed by PARAMETER. Also the primitive: the role overload above is exactly this
+    // one after resolving the role against the current selection. A card's diamond calls this
+    // directly, so clicking it neither requires nor causes a selection change -- unlike the card's
+    // VALUE fields, which write through the selection-based setSelected*() methods and therefore
+    // still select their own node first.
+    [[nodiscard]] bool toggleKeyframeForParameter(document::ParameterId parameterId);
+    // The selected key's outgoing interpolation (task S5, item 2). A no-op false with no
+    // transaction when no keyframe is selected or the command layer refuses (notably the final key,
+    // whose interpolation is canonical Linear).
+    [[nodiscard]] bool
+    setSelectedKeyframeInterpolation(document::KeyframeInterpolation interpolation);
+    // The selected key's CURRENT outgoing interpolation, for a menu that has to show which choice
+    // is active and which is unavailable. nullopt when no key is selected or it no longer resolves.
+    [[nodiscard]] std::optional<document::KeyframeInterpolation>
+    selectedKeyframeInterpolation() const;
+    // Whether the selected key is its curve's FINAL key, which is the one key whose interpolation
+    // is pinned to Linear -- so a menu can disable Hold/Ease rather than offer a refusal.
+    [[nodiscard]] bool selectedKeyframeIsFinal() const;
+
+    // The value a row or card field should DISPLAY for `role` at the current session time: the
+    // constant for a constant source, or the curve's exactly sampled value for an animated one
+    // (task S5, item 0 -- "editing a value of an animated parameter at a time with no key inserts a
+    // key", which is only reachable if the field is live and shows the animated value in the first
+    // place). nullopt for a missing parameter, a driven source, or a value that is not of the
+    // requested kind.
+    [[nodiscard]] std::optional<double> effectiveScalarValue(std::string_view role) const;
+    [[nodiscard]] std::optional<document::Vec2d> effectiveVec2Value(std::string_view role) const;
+    [[nodiscard]] std::optional<core::Color4d> effectiveColorValue(std::string_view role) const;
+    // The PARAMETER-keyed counterparts, for the same reason keyframeDiamondStateForParameter()
+    // exists: a node card reads its own node's parameters, not the selection's.
+    [[nodiscard]] std::optional<double>
+    effectiveScalarValue(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<document::Vec2d>
+    effectiveVec2Value(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<core::Color4d>
+    effectiveColorValue(document::ParameterId parameterId) const;
 
     // Keyframe delete/move gestures (issue #84; docs/architecture/animation-and-time.md). Command
     // construction lives here, not in the widget -- the same "one place" precedent as
@@ -338,10 +409,9 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setSelectionVec2Parameter(std::string_view role, double x, double y,
                                                  const QString& commandLabel);
     // The one command-selection decision for writing a Color4d-valued parameter, shared by
-    // setSelectedSolidColor() and setSelectedTextColor(). A driven source is refused exactly as the
-    // scalar helper refuses one; there is no animated branch, because no command in the surface can
-    // put a color parameter on a curve (CreateAnimationForParameter accepts only the animatable
-    // transform and opacity schemas, and SetKeyframeAtTime has no Color4d overload).
+    // setSelectedSolidColor() and setSelectedTextColor(). Identical in shape to the scalar and Vec2
+    // helpers since task S5: constant source -> SetParameterSource, animation source ->
+    // SetKeyframeAtTime at the session time, driver source -> refused.
     [[nodiscard]] bool setSelectionColorParameter(std::string_view role, core::Color4d color,
                                                   const QString& commandLabel);
     // The one command-selection decision for writing a position value (constant source ->
@@ -362,8 +432,24 @@ class CompositionSession final : public QObject {
     // branches) or if the curve fails to resolve/sample. Both beginPositionInteraction() (the
     // relaxed animated-base rule) and insertKeyframeAtTime() (the timeline insert gesture) call
     // this one place rather than each re-deriving the curve/sample logic.
-    [[nodiscard]] std::optional<std::variant<double, document::Vec2d>>
+    [[nodiscard]] std::optional<ParameterSample>
     sampleParameterValue(const document::ParameterRecord& parameter, core::RationalTime time) const;
+    // The constant-or-sampled reader behind effectiveScalarValue()/effectiveVec2Value()/
+    // effectiveColorValue(): one place that decides "what is this parameter's value right now",
+    // so the three typed accessors cannot disagree about a driven or missing source.
+    [[nodiscard]] std::optional<ParameterSample>
+    effectiveParameterValue(const document::ParameterRecord* parameter) const;
+    // The key (if any) sitting at EXACTLY `time` on the parameter's curve. The gesture's whole
+    // three-way branch turns on this one question.
+    [[nodiscard]] std::optional<document::KeyframeId>
+    keyframeAtExactTime(const document::ParameterRecord& parameter, core::RationalTime time) const;
+    // The two primitives behind both keyframeDiamondState() overloads and both toggleKeyframe()
+    // overloads: the role-keyed and parameter-keyed public spellings differ only in how they find
+    // the ParameterRecord, never in what they then decide.
+    [[nodiscard]] KeyframeDiamondState
+    diamondStateFor(const document::ParameterRecord* parameter) const;
+    [[nodiscard]] bool toggleKeyframeFor(const document::ParameterRecord* parameter);
+    [[nodiscard]] std::size_t keyframeCount(document::AnimationCurveId curveId) const;
     // Not noexcept (see keyframeSelectionExists()): the KeyframeSelection branch delegates to it.
     [[nodiscard]] bool selectionExists(const CompositionSelection& selection) const;
     // Not noexcept: std::visit over the AnimationCurveStore's curve-kind variant cannot be proven

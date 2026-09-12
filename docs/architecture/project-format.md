@@ -4,14 +4,14 @@ Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.2` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.3` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
 staged-artifact close/reopen verification foundation, the version 1 canonical document writer
 over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
-container reader and writer, and the document `1.0` → `1.1` node-layout and `1.1` → `1.2` node-group
-migrations are implemented.
+container reader and writer, and the document `1.0` → `1.1` node-layout, `1.1` → `1.2` node-group,
+and `1.2` → `1.3` animation-breadth migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
@@ -37,22 +37,23 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.2`.
-The earlier document `1.0` and `1.1` artifacts are retained for migration fixtures. Version objects
+The container version remains `1.0`; the current document schema is `1.3`.
+The earlier document `1.0`, `1.1`, and `1.2` artifacts are retained for migration fixtures. Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.2.schema.json` and `schemas/project/document-1.2.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.2` and
-`urn:kinetik:bloom:schema:project-document:1.2`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.2`. Every historical artifact -- `1.0` and `1.1`, manifest and
+`schemas/project/manifest-1.3.schema.json` and `schemas/project/document-1.3.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.3` and
+`urn:kinetik:bloom:schema:project-document:1.3`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.3`. Every historical artifact -- `1.0`, `1.1`, and `1.2`,
+manifest and
 document -- remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged. They declare the 2020-12
 `$schema` and use only repository-local `$ref` targets during validation. A generic schema validator
 is useful for fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
 cross-reference, allocator, graph, and preservation validation.
 
-`document-1.2.schema.json` retains required `$defs` named `colorSettings-1.0`,
+`document-1.3.schema.json` retains required `$defs` named `colorSettings-1.0`,
 `ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
 definition requires `colorSettings`; the OCIO reference definition requires every member specified
 below and selects one closed locator shape with `oneOf`. These definitions validate structure and
@@ -523,8 +524,20 @@ Animation curve records are sorted by numeric `AnimationCurveId` and have one of
 }
 ```
 
+```json
+{
+  "id": "3",
+  "kind": "color4",
+  "keyframes": []
+}
+```
+
 A scalar key has `id`, `time`, `value`, then `outgoingInterpolation`; a `vec2` key replaces `value`
-with an object containing `x`, then `y`. Interpolation is exactly `hold` or `linear`.
+with an object containing `x`, then `y`; a `color4` key replaces it with an object containing `red`,
+`green`, `blue`, then `alpha` -- the same authoring order and straight-alpha meaning a constant
+`color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is exactly
+`hold`, `linear`, or `ease-in-out`. The `color4` curve kind and the `ease-in-out` token both arrive in
+document `1.3`; see **Animation Breadth In Document 1.3**.
 
 Keys are written in strictly increasing exact rational time. Equal normalized times are invalid, so
 `KeyframeId` never breaks a tie. Curves are non-empty; the final key's interpolation is canonical
@@ -935,7 +948,8 @@ Acquisition, lock, offline build, provenance, and release evidence follow
   zeros, exponent boundaries, and invalid overflow
 - Unicode scalar, combining/non-normalized, astral, control, escaped-key collision, malformed UTF-8,
   and lone-surrogate fixtures
-- scalar/Vec2 animation, curve/key ownership, final-key normalization, graph connectivity, Layer
+- scalar/Vec2/Color4 animation, the `ease-in-out` token, the `1.2` → `1.3` version-only migration and
+  its minor gating, curve/key ownership, final-key normalization, graph connectivity, Layer
   Stack order, future on-disk driver sources producing preserved-read-only results, live
   `DriverBindingSource` producing typed `UnsupportedDocumentFeature` before staging, retained
   `driverBinding` high-water after source removal, and source/schema mismatches
@@ -1012,4 +1026,31 @@ changes only the document schema version, appends an empty `nodeGroups` array to
 and appends a zero `nodeGroup` high water: groups did not exist in `1.1`, so there is nothing to
 infer from an older file. It charges the operation budget and reparses before trusted decode, and
 each step refuses any document that is not its own source version, so the chain cannot be entered
-twice or out of order. Current writes emit at least minor 2.
+twice or out of order.
+
+## Animation Breadth In Document 1.3
+
+`document-1.3.schema.json` adds nothing to the MEMBER space and everything to the animation VALUE
+space. Its whole delta is two additions inside `animationCurves`:
+
+- a third curve kind, `color4`, whose keys carry a `value` object of `red`, `green`, `blue`, then
+  `alpha` in that order -- the authoring order and straight-alpha meaning the constant `color4`
+  parameter value already uses. `red`, `green`, and `blue` are any finite number, so negative and HDR
+  channels survive exactly; `alpha` is confined to `[0, 1]`, which is the authoring-color contract a
+  constant color already satisfies.
+- a third `outgoingInterpolation` token, `ease-in-out`, accepted on every curve kind's keys.
+
+Because the historical `animationCurve-1.0`, `scalarKeyframe-1.0`, and `vec2Keyframe-1.0` definitions
+are frozen, `1.3` mints its own `animationCurve-1.3`, `scalarKeyframe-1.3`, `vec2Keyframe-1.3`,
+`color4Keyframe-1.3`, `color4Value-1.3`, and `keyframeInterpolation-1.3`, and leaves the older ones
+exactly as they shipped -- the same precedent `highestIssued-1.2` set. Both additions are gated on the
+minor that DECLARES them: a file claiming `1.2` while carrying a `color4` curve or an `ease-in-out`
+token is a malformed `1.2` file and is refused, naming the exact member, while a file claiming a later
+minor carries them normally.
+
+The production `1.2` → `1.3` DOM migration is version-only: it preserves all existing fields and
+numeric spellings and changes nothing but the document schema version. A `1.2` file can contain
+neither of `1.3`'s additions, so there is nothing to add or infer -- the step exists so the chain has
+no hole, not because a `1.2` file is missing anything. It charges the operation budget and reparses
+before trusted decode, and each step refuses any document that is not its own source version, so the
+chain cannot be entered twice or out of order. Current writes emit at least minor 3.

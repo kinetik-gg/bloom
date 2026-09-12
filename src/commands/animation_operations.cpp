@@ -47,12 +47,16 @@ OperationResult exhaustedIds() {
 [[nodiscard]] bool
 validInterpolation(const document::KeyframeInterpolation interpolation) noexcept {
     return interpolation == document::KeyframeInterpolation::Hold ||
-           interpolation == document::KeyframeInterpolation::Linear;
+           interpolation == document::KeyframeInterpolation::Linear ||
+           interpolation == document::KeyframeInterpolation::EaseInOut;
 }
 
 template <typename Value> [[nodiscard]] bool finiteValue(const Value& value) noexcept {
     if constexpr (std::is_same_v<Value, double>) {
         return std::isfinite(value);
+    } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+        // The authoring-colour contract, exactly as a constant colour satisfies it.
+        return value.isValid();
     } else {
         return std::isfinite(value.x) && std::isfinite(value.y);
     }
@@ -75,6 +79,8 @@ template <typename Curve>
                                      const document::AnimationCurveId curveId) noexcept {
     if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
         return store.findScalar(curveId);
+    } else if constexpr (std::is_same_v<Curve, document::Color4AnimationCurve>) {
+        return store.findColor4(curveId);
     } else {
         return store.findVec2(curveId);
     }
@@ -84,6 +90,8 @@ template <typename Curve>
 [[nodiscard]] bool curveSchemaMatches(const document::ParameterRecord& owner) noexcept {
     if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
         return document::isScalarAnimatableSchemaKey(owner.schemaKey);
+    } else if constexpr (std::is_same_v<Curve, document::Color4AnimationCurve>) {
+        return document::isColor4AnimatableSchemaKey(owner.schemaKey);
     } else {
         return document::isVec2AnimatableSchemaKey(owner.schemaKey);
     }
@@ -98,10 +106,11 @@ template <typename Curve, typename Value>
         return false;
     }
     if constexpr (std::is_same_v<Value, double>) {
-        // The unit domain is opacity's, not every scalar curve's: a rotation key measures degrees
-        // and is accepted anywhere on the real line.
-        return !document::hasUnitDomainSchemaKey(owner->schemaKey) ||
-               (value >= 0.0 && value <= 1.0);
+        // A scalar DOMAIN is the schema's, not every scalar curve's: opacity is confined to [0, 1]
+        // and text size to (0, kMaximumTextSizePixels], while a rotation key measures degrees and
+        // is accepted anywhere on the real line. One shared predicate, so a key and a constant are
+        // admitted identically.
+        return document::isScalarWithinSchemaDomain(owner->schemaKey, value);
     }
     return true;
 }
@@ -255,12 +264,12 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
     // (rotation, opacity) seed a scalar curve, and anything else is refused as unsupported. The
     // seeded key is always the parameter's existing constant, so turning a parameter into an
     // animation never changes the picture at the initial time.
-    std::variant<double, document::Vec2d> initialValue;
+    std::variant<double, document::Vec2d, core::Color4d> initialValue;
     if (document::isScalarAnimatableSchemaKey(parameter->schemaKey)) {
         const auto* value = std::get_if<double>(&constant->value);
-        const bool withinDomain = value != nullptr && std::isfinite(*value) &&
-                                  (!document::hasUnitDomainSchemaKey(parameter->schemaKey) ||
-                                   (*value >= 0.0 && *value <= 1.0));
+        const bool withinDomain =
+            value != nullptr && std::isfinite(*value) &&
+            document::isScalarWithinSchemaDomain(parameter->schemaKey, *value);
         if (!withinDomain) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Scalar constant is invalid for its schema");
@@ -271,6 +280,13 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         if (value == nullptr || !finiteValue(*value)) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Vec2 constant is invalid for its schema");
+        }
+        initialValue = *value;
+    } else if (document::isColor4AnimatableSchemaKey(parameter->schemaKey)) {
+        const auto* value = std::get_if<core::Color4d>(&constant->value);
+        if (value == nullptr || !finiteValue(*value)) {
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Color constant is invalid for its schema");
         }
         initialValue = *value;
     } else {
@@ -289,11 +305,15 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         inserted = composition->animationCurves().insert(document::ScalarAnimationCurve{
             *curveId,
             {{*keyframeId, initialTime_, *value, document::KeyframeInterpolation::Linear}}});
-    } else {
-        const auto vectorValue = std::get<document::Vec2d>(initialValue);
+    } else if (const auto* vectorValue = std::get_if<document::Vec2d>(&initialValue)) {
         inserted = composition->animationCurves().insert(document::Vec2AnimationCurve{
             *curveId,
-            {{*keyframeId, initialTime_, vectorValue, document::KeyframeInterpolation::Linear}}});
+            {{*keyframeId, initialTime_, *vectorValue, document::KeyframeInterpolation::Linear}}});
+    } else {
+        const auto colorValue = std::get<core::Color4d>(initialValue);
+        inserted = composition->animationCurves().insert(document::Color4AnimationCurve{
+            *curveId,
+            {{*keyframeId, initialTime_, colorValue, document::KeyframeInterpolation::Linear}}});
     }
 
     if (!inserted || !composition->parameters().setSource(
@@ -327,6 +347,16 @@ OperationResult InsertVec2Keyframe::apply(document::Draft& draft) const {
         document::Vec2Keyframe{{}, time_, value_, outgoingInterpolation_});
 }
 
+std::string_view InsertColor4Keyframe::typeId() const noexcept {
+    return "bloom.animation.insert-color4-keyframe";
+}
+
+OperationResult InsertColor4Keyframe::apply(document::Draft& draft) const {
+    return insertKeyframe<document::Color4AnimationCurve>(
+        draft, compositionId_, curveId_,
+        document::Color4Keyframe{{}, time_, value_, outgoingInterpolation_});
+}
+
 std::string_view UpdateScalarKeyframe::typeId() const noexcept {
     return "bloom.animation.update-scalar-keyframe";
 }
@@ -347,6 +377,67 @@ OperationResult UpdateVec2Keyframe::apply(document::Draft& draft) const {
         document::Vec2Keyframe{keyframeId_, time_, value_, outgoingInterpolation_});
 }
 
+std::string_view UpdateColor4Keyframe::typeId() const noexcept {
+    return "bloom.animation.update-color4-keyframe";
+}
+
+OperationResult UpdateColor4Keyframe::apply(document::Draft& draft) const {
+    return updateKeyframe<document::Color4AnimationCurve>(
+        draft, compositionId_, curveId_,
+        document::Color4Keyframe{keyframeId_, time_, value_, outgoingInterpolation_});
+}
+
+std::string_view SetKeyframeInterpolation::typeId() const noexcept {
+    return "bloom.animation.set-keyframe-interpolation";
+}
+
+OperationResult SetKeyframeInterpolation::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    if (composition == nullptr) {
+        return invalidComposition(compositionId_);
+    }
+    if (!validInterpolation(interpolation_)) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Keyframe interpolation mode is unsupported");
+    }
+    const auto* record = composition->animationCurves().find(curveId_);
+    if (record == nullptr) {
+        return invalidCurve(curveId_);
+    }
+    // One visit over the curve-kind variant: the rule is identical for every value kind, because an
+    // interpolation change never touches a value. The key keeps its KeyframeId, exact time, and
+    // value bit-for-bit; only the outgoing mode moves, and the write goes back through the store's
+    // own updateKeyframe() overload for that kind rather than mutating the record in place.
+    return std::visit(
+        [&](const auto& curve) {
+            using Keyframe = std::decay_t<decltype(curve.keyframes.front())>;
+            const auto key = std::ranges::find(curve.keyframes, keyframeId_, &Keyframe::id);
+            if (key == curve.keyframes.end()) {
+                return invalidKeyframe(keyframeId_);
+            }
+            if (key->outgoingInterpolation == interpolation_) {
+                return OperationResult::noChange(keyframeOutput(keyframeId_));
+            }
+            // The final key's outgoing interpolation is canonical Linear and every mutation
+            // normalizes it back, so accepting anything else here would produce a transaction that
+            // silently did nothing -- refuse it instead.
+            if (key + 1 == curve.keyframes.end() &&
+                interpolation_ != document::KeyframeInterpolation::Linear) {
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "The final keyframe interpolation must stay canonical Linear");
+            }
+            Keyframe updated = *key;
+            updated.outgoingInterpolation = interpolation_;
+            if (!composition->animationCurves().updateKeyframe(curveId_, updated)) {
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Keyframe interpolation could not be updated");
+            }
+            return OperationResult::applied(keyframeOutput(keyframeId_));
+        },
+        *record);
+}
+
 std::string_view SetKeyframeAtTime::typeId() const noexcept {
     return "bloom.animation.set-keyframe-at-time";
 }
@@ -356,8 +447,44 @@ OperationResult SetKeyframeAtTime::apply(document::Draft& draft) const {
         return setKeyframeAtTime<document::ScalarAnimationCurve, document::ScalarKeyframe>(
             draft, compositionId_, curveId_, time_, *scalar);
     }
-    return setKeyframeAtTime<document::Vec2AnimationCurve, document::Vec2Keyframe>(
-        draft, compositionId_, curveId_, time_, std::get<document::Vec2d>(value_));
+    if (const auto* vector = std::get_if<document::Vec2d>(&value_)) {
+        return setKeyframeAtTime<document::Vec2AnimationCurve, document::Vec2Keyframe>(
+            draft, compositionId_, curveId_, time_, *vector);
+    }
+    return setKeyframeAtTime<document::Color4AnimationCurve, document::Color4Keyframe>(
+        draft, compositionId_, curveId_, time_, std::get<core::Color4d>(value_));
+}
+
+std::string_view SetKeyframeAtTimeForParameter::typeId() const noexcept {
+    return "bloom.animation.set-keyframe-at-time-for-parameter";
+}
+
+OperationResult SetKeyframeAtTimeForParameter::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    if (composition == nullptr) {
+        return invalidComposition(compositionId_);
+    }
+    const auto* parameter = composition->parameters().find(parameterId_);
+    if (parameter == nullptr) {
+        return invalidParameter(parameterId_);
+    }
+    // Resolved from the DRAFT, so an earlier CreateAnimationForParameter in the same transaction is
+    // already visible here. A parameter that is still constant (or is driven) has no curve to key.
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Parameter does not have an animation source");
+    }
+    if (const auto* scalar = std::get_if<double>(&value_)) {
+        return setKeyframeAtTime<document::ScalarAnimationCurve, document::ScalarKeyframe>(
+            draft, compositionId_, source->curveId, time_, *scalar);
+    }
+    if (const auto* vector = std::get_if<document::Vec2d>(&value_)) {
+        return setKeyframeAtTime<document::Vec2AnimationCurve, document::Vec2Keyframe>(
+            draft, compositionId_, source->curveId, time_, *vector);
+    }
+    return setKeyframeAtTime<document::Color4AnimationCurve, document::Color4Keyframe>(
+        draft, compositionId_, source->curveId, time_, std::get<core::Color4d>(value_));
 }
 
 std::string_view DeleteKeyframe::typeId() const noexcept {
@@ -419,21 +546,28 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
         if (!document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
             composition->animationCurves().findScalar(source->curveId) == nullptr ||
             !std::isfinite(*scalar) ||
-            (document::hasUnitDomainSchemaKey(parameter->schemaKey) &&
-             (*scalar < 0.0 || *scalar > 1.0))) {
+            !document::isScalarWithinSchemaDomain(parameter->schemaKey, *scalar)) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Constant value does not match scalar animation");
         }
         constantValue = *scalar;
-    } else {
-        const auto vector = std::get<document::Vec2d>(value_);
+    } else if (const auto* vector = std::get_if<document::Vec2d>(&value_)) {
         if (!document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
             composition->animationCurves().findVec2(source->curveId) == nullptr ||
-            !finiteValue(vector)) {
+            !finiteValue(*vector)) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Constant value does not match Vec2 animation");
         }
-        constantValue = vector;
+        constantValue = *vector;
+    } else {
+        const auto color = std::get<core::Color4d>(value_);
+        if (!document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
+            composition->animationCurves().findColor4(source->curveId) == nullptr ||
+            !finiteValue(color)) {
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Constant value does not match color animation");
+        }
+        constantValue = color;
     }
 
     const auto curveId = source->curveId;

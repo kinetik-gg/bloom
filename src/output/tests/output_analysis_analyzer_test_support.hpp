@@ -132,7 +132,7 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, kColorParameterId, colorValue});
+    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, {kColorParameterId, colorValue}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kLayerNodeId, kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{

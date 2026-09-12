@@ -1,5 +1,6 @@
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -65,6 +66,29 @@ QString statusMessage(const commands::CommandResult& result) {
 // document whose compositions were inserted out of id order picked the wrong fallback
 // composition). Precondition: `project.compositions()` is non-empty; callers below only invoke
 // this after checking that.
+// The two honest undo labels one diamond click can produce, named from the parameter's own SCHEMA
+// KEY rather than from a generic "Keyframe", so a history entry says which parameter the artist
+// clicked. The schema key is the parameter's identity (a role is node-local and two different
+// schemas deliberately share the role "color" -- see document::kTextColorParameterRole), so the
+// label is derived from its last dotted segment: "bloom.transform.position" reads "Position",
+// "bloom.text.size" reads "Size".
+struct KeyframeCommandLabels final {
+    QString addKey;
+    QString removeKey;
+};
+
+[[nodiscard]] KeyframeCommandLabels keyframeCommandLabel(const std::string_view schemaKey) {
+    const auto lastDot = schemaKey.rfind('.');
+    const auto leaf = lastDot == std::string_view::npos ? schemaKey : schemaKey.substr(lastDot + 1);
+    QString display = QString::fromUtf8(leaf.data(), static_cast<qsizetype>(leaf.size()));
+    display.replace(QLatin1Char('-'), QLatin1Char(' '));
+    if (!display.isEmpty()) {
+        display[0] = display[0].toUpper();
+    }
+    return {QStringLiteral("Add %1 Keyframe").arg(display),
+            QStringLiteral("Remove %1 Keyframe").arg(display)};
+}
+
 [[nodiscard]] document::CompositionId lowestCompositionId(const document::Project& project) {
     const auto compositions = project.compositions();
     auto lowest = compositions.front().id();
@@ -664,10 +688,10 @@ bool CompositionSession::setSelectedTextContent(const QString& content) {
     }
     const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constantSource == nullptr || std::get_if<std::string>(&constantSource->value) == nullptr) {
-        // The content schema is String, which CreateAnimationForParameter refuses and
-        // SetKeyframeAtTime has no overload for, so a non-constant source here is a pre-existing
-        // document inconsistency rather than anything this command created -- refused the same way
-        // the driven-parameter branches above are.
+        // The content schema is String, the one parameter schema that is still constant-only:
+        // CreateAnimationForParameter refuses it and SetKeyframeAtTime has no string overload, so a
+        // non-constant source here is a pre-existing document inconsistency rather than anything
+        // this command created -- refused the same way the driven-parameter branches above are.
         reportUnavailable(QStringLiteral("Disconnect the driven text content before editing it"));
         return false;
     }
@@ -779,26 +803,27 @@ bool CompositionSession::setSelectionColorParameter(const std::string_view role,
         reportUnavailable(QStringLiteral("The selected object does not expose a color"));
         return false;
     }
-    const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
-    if (constantSource == nullptr) {
-        // Position/Opacity's driven-parameter refusal, mirrored here for a driven color source.
-        // Reached defensively rather than in practice: today nothing in the command surface can
-        // put a solid color parameter into an AnimationCurveSource
-        // (CreateAnimationForParameter rejects every schema but the animatable transform and
-        // opacity ones, and SetKeyframeAtTime has no Color4d overload to write one even if it
-        // existed), so an
-        // AnimationCurveSource here would itself be a pre-existing document inconsistency, not
-        // something this command created.
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    if (const auto* constantSource =
+            std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        if (std::get_if<core::Color4d>(&constantSource->value) == nullptr) {
+            reportUnavailable(QStringLiteral("The color value does not match its schema"));
+            return false;
+        }
+        transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                          document::ConstantValueSource{color});
+    } else if (const auto* animationSource =
+                   std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        // Task S5, item 1: a colour parameter can be animated now, so editing one writes a key at
+        // the session time through exactly the branch position and opacity already take. Before
+        // this task no command could put a colour on a curve at all, and this method refused every
+        // non-constant source on that basis.
+        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
+                                                         currentTime_, color);
+    } else {
         reportUnavailable(QStringLiteral("Disconnect the driven color before editing its value"));
         return false;
     }
-    if (std::get_if<core::Color4d>(&constantSource->value) == nullptr) {
-        reportUnavailable(QStringLiteral("The color value does not match its schema"));
-        return false;
-    }
-    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
-    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
-                                                      document::ConstantValueSource{color});
     return execute(std::move(transaction));
 }
 
@@ -1190,7 +1215,7 @@ CompositionSession::parameterForCurve(const document::AnimationCurveId curveId) 
     return std::nullopt;
 }
 
-std::optional<std::variant<double, document::Vec2d>>
+std::optional<ParameterSample>
 CompositionSession::sampleParameterValue(const document::ParameterRecord& parameter,
                                          const core::RationalTime time) const {
     const auto* current = composition();
@@ -1210,7 +1235,7 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
-        return std::variant<double, document::Vec2d>(*sample.value);
+        return ParameterSample(*sample.value);
     }
     if (const auto* vec2Curve = current->animationCurves().findVec2(source->curveId)) {
         const auto sample =
@@ -1218,9 +1243,302 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
-        return std::variant<double, document::Vec2d>(*sample.value);
+        return ParameterSample(*sample.value);
+    }
+    if (const auto* colorCurve = current->animationCurves().findColor4(source->curveId)) {
+        const auto sample =
+            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*colorCurve), time);
+        if (!sample || !sample.value.has_value()) {
+            return std::nullopt;
+        }
+        return ParameterSample(*sample.value);
     }
     return std::nullopt;
+}
+
+std::optional<ParameterSample>
+CompositionSession::effectiveParameterValue(const document::ParameterRecord* parameter) const {
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        if (const auto* scalar = std::get_if<double>(&constant->value)) {
+            return ParameterSample(*scalar);
+        }
+        if (const auto* vector = std::get_if<document::Vec2d>(&constant->value)) {
+            return ParameterSample(*vector);
+        }
+        if (const auto* color = std::get_if<core::Color4d>(&constant->value)) {
+            return ParameterSample(*color);
+        }
+        // A String or any other constant kind has no numeric projection; its own reader
+        // (constantStringValue()) serves it.
+        return std::nullopt;
+    }
+    // An animated source is sampled at the CURRENT session time; a driven one has no value this
+    // layer may read, exactly as every write path already refuses one.
+    return sampleParameterValue(*parameter, currentTime_);
+}
+
+namespace {
+
+template <typename Value>
+[[nodiscard]] std::optional<Value> typedSample(const std::optional<ParameterSample>& sample) {
+    if (!sample.has_value()) {
+        return std::nullopt;
+    }
+    const auto* value = std::get_if<Value>(&*sample);
+    return value == nullptr ? std::nullopt : std::optional<Value>(*value);
+}
+
+} // namespace
+
+std::optional<double> CompositionSession::effectiveScalarValue(const std::string_view role) const {
+    return typedSample<double>(effectiveParameterValue(parameterForSelection(role)));
+}
+
+std::optional<document::Vec2d>
+CompositionSession::effectiveVec2Value(const std::string_view role) const {
+    return typedSample<document::Vec2d>(effectiveParameterValue(parameterForSelection(role)));
+}
+
+std::optional<core::Color4d>
+CompositionSession::effectiveColorValue(const std::string_view role) const {
+    return typedSample<core::Color4d>(effectiveParameterValue(parameterForSelection(role)));
+}
+
+std::optional<double>
+CompositionSession::effectiveScalarValue(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    return typedSample<double>(effectiveParameterValue(
+        current == nullptr ? nullptr : current->parameters().find(parameterId)));
+}
+
+std::optional<document::Vec2d>
+CompositionSession::effectiveVec2Value(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    return typedSample<document::Vec2d>(effectiveParameterValue(
+        current == nullptr ? nullptr : current->parameters().find(parameterId)));
+}
+
+std::optional<core::Color4d>
+CompositionSession::effectiveColorValue(const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    return typedSample<core::Color4d>(effectiveParameterValue(
+        current == nullptr ? nullptr : current->parameters().find(parameterId)));
+}
+
+std::optional<document::KeyframeId>
+CompositionSession::keyframeAtExactTime(const document::ParameterRecord& parameter,
+                                        const core::RationalTime time) const {
+    const auto* current = composition();
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    const auto* record = current == nullptr || source == nullptr
+                             ? nullptr
+                             : current->animationCurves().find(source->curveId);
+    if (record == nullptr) {
+        return std::nullopt;
+    }
+    return std::visit(
+        [time](const auto& curve) -> std::optional<document::KeyframeId> {
+            for (const auto& key : curve.keyframes) {
+                if (key.time == time) {
+                    return key.id;
+                }
+            }
+            return std::nullopt;
+        },
+        *record);
+}
+
+std::size_t CompositionSession::keyframeCount(const document::AnimationCurveId curveId) const {
+    const auto* current = composition();
+    const auto* record = current == nullptr ? nullptr : current->animationCurves().find(curveId);
+    if (record == nullptr) {
+        return 0;
+    }
+    return std::visit([](const auto& curve) { return curve.keyframes.size(); }, *record);
+}
+
+KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_view role) const {
+    return diamondStateFor(parameterForSelection(role));
+}
+
+KeyframeDiamondState CompositionSession::keyframeDiamondStateForParameter(
+    const document::ParameterId parameterId) const {
+    const auto* current = composition();
+    return diamondStateFor(current == nullptr ? nullptr : current->parameters().find(parameterId));
+}
+
+KeyframeDiamondState
+CompositionSession::diamondStateFor(const document::ParameterRecord* parameter) const {
+    if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey)) {
+        return KeyframeDiamondState::Unsupported;
+    }
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source)) {
+        return KeyframeDiamondState::Constant;
+    }
+    if (!std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
+        // A driven parameter is not something this gesture can key, and painting it as "animated"
+        // would promise a click that does nothing.
+        return KeyframeDiamondState::Unsupported;
+    }
+    return keyframeAtExactTime(*parameter, currentTime_).has_value()
+               ? KeyframeDiamondState::AnimatedWithKey
+               : KeyframeDiamondState::AnimatedWithoutKey;
+}
+
+bool CompositionSession::toggleKeyframe(const std::string_view role) {
+    return toggleKeyframeFor(parameterForSelection(role));
+}
+
+bool CompositionSession::toggleKeyframeForParameter(const document::ParameterId parameterId) {
+    const auto* current = composition();
+    return toggleKeyframeFor(current == nullptr ? nullptr
+                                                : current->parameters().find(parameterId));
+}
+
+bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* parameter) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
+        return false;
+    }
+    if (!document::isAnimatableSchemaKey(parameter->schemaKey)) {
+        reportUnavailable(QStringLiteral("This parameter cannot be animated"));
+        return false;
+    }
+    const auto parameterId = parameter->id;
+    const auto label = keyframeCommandLabel(parameter->schemaKey);
+
+    // --- constant -> animated, with one key at the current value and time ----------------------
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        commands::Transaction transaction(label.addKey.toStdString(), snapshot_.revision());
+        transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameterId,
+                                                                   currentTime_);
+        // Parameter-keyed, not curve-keyed: the curve this writes into does not exist until the
+        // operation above runs against the same draft. Both operations land in ONE transaction, so
+        // the whole gesture is one undo step (docs/architecture/animation-and-time.md).
+        const bool queued = std::visit(
+            [&](const auto& value) {
+                using Value = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Value, double> ||
+                              std::is_same_v<Value, document::Vec2d> ||
+                              std::is_same_v<Value, core::Color4d>) {
+                    transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
+                        compositionId_, parameterId, currentTime_, value);
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            constant->value);
+        if (!queued) {
+            reportUnavailable(QStringLiteral("The parameter value does not match its schema"));
+            return false;
+        }
+        return execute(std::move(transaction));
+    }
+
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr) {
+        reportUnavailable(
+            QStringLiteral("Disconnect the driven parameter before keying its value"));
+        return false;
+    }
+    const auto curveId = source->curveId;
+    const auto existing = keyframeAtExactTime(*parameter, currentTime_);
+
+    // --- animated, no key here -> insert one at the exactly sampled value ----------------------
+    if (!existing.has_value()) {
+        const auto sample = sampleParameterValue(*parameter, currentTime_);
+        if (!sample.has_value()) {
+            reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
+            return false;
+        }
+        commands::Transaction transaction(label.addKey.toStdString(), snapshot_.revision());
+        std::visit(
+            [&](const auto& value) {
+                transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, curveId,
+                                                                 currentTime_, value);
+            },
+            *sample);
+        return execute(std::move(transaction));
+    }
+
+    // --- animated, key here -> delete it; the LAST key converts back to a constant -------------
+    commands::Transaction transaction(label.removeKey.toStdString(), snapshot_.revision());
+    if (keyframeCount(curveId) > 1) {
+        transaction.emplace<commands::DeleteKeyframe>(compositionId_, curveId, *existing);
+        return execute(std::move(transaction));
+    }
+    // The curve's final key IS the parameter's whole animation, so removing it is the
+    // animation-to-constant transition, holding exactly the value that key carried.
+    const auto sample = sampleParameterValue(*parameter, currentTime_);
+    if (!sample.has_value()) {
+        reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
+        return false;
+    }
+    std::visit(
+        [&](const auto& value) {
+            transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_, parameterId,
+                                                                      value);
+        },
+        *sample);
+    return execute(std::move(transaction));
+}
+
+std::optional<document::KeyframeInterpolation>
+CompositionSession::selectedKeyframeInterpolation() const {
+    const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
+    const auto* current = composition();
+    const auto* record = keySelection == nullptr || current == nullptr
+                             ? nullptr
+                             : current->animationCurves().find(keySelection->curveId);
+    if (record == nullptr) {
+        return std::nullopt;
+    }
+    const auto keyframeId = keySelection->keyframeId;
+    return std::visit(
+        [keyframeId](const auto& curve) -> std::optional<document::KeyframeInterpolation> {
+            for (const auto& key : curve.keyframes) {
+                if (key.id == keyframeId) {
+                    return key.outgoingInterpolation;
+                }
+            }
+            return std::nullopt;
+        },
+        *record);
+}
+
+bool CompositionSession::selectedKeyframeIsFinal() const {
+    const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
+    const auto* current = composition();
+    const auto* record = keySelection == nullptr || current == nullptr
+                             ? nullptr
+                             : current->animationCurves().find(keySelection->curveId);
+    if (record == nullptr) {
+        return false;
+    }
+    const auto keyframeId = keySelection->keyframeId;
+    return std::visit(
+        [keyframeId](const auto& curve) {
+            return !curve.keyframes.empty() && curve.keyframes.back().id == keyframeId;
+        },
+        *record);
+}
+
+bool CompositionSession::setSelectedKeyframeInterpolation(
+    const document::KeyframeInterpolation interpolation) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
+    if (keySelection == nullptr) {
+        return false;
+    }
+    commands::Transaction transaction("Set Keyframe Interpolation", snapshot_.revision());
+    transaction.emplace<commands::SetKeyframeInterpolation>(
+        compositionId_, keySelection->curveId, keySelection->keyframeId, interpolation);
+    return execute(std::move(transaction));
 }
 
 std::optional<document::LayerId>

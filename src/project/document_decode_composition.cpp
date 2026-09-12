@@ -58,6 +58,8 @@ using detail::matchOrderedMembers;
 
 using document::AnimationCurveId;
 using document::AnimationCurveRecord;
+using document::Color4AnimationCurve;
+using document::Color4Keyframe;
 using document::EdgeId;
 using document::EdgeRecord;
 using document::InputPortRef;
@@ -396,6 +398,16 @@ using document::Vec2Keyframe;
         out = KeyframeInterpolation::Linear;
         return true;
     }
+    // Gated on the minor that DECLARES it, exactly as the composition's own member count is
+    // (document_decode.cpp's decodeComposition): a file claiming 1.2 carrying a 1.3 token is a
+    // malformed 1.2 file, not data to accept silently. A real older file never reaches here with
+    // this token -- the migration ladder rewrites the version before trusted decode -- and an
+    // OLDER build reading a 1.3 file preserves the unknown token read-only through
+    // failUnknownDiscriminator()'s own route.
+    if (text == "ease-in-out" && state.documentMinor >= 3) {
+        out = KeyframeInterpolation::EaseInOut;
+        return true;
+    }
     state.fail(DocumentDecodeError::InvalidInterpolation, path);
     return false;
 }
@@ -507,6 +519,68 @@ using document::Vec2Keyframe;
     return true;
 }
 
+[[nodiscard]] bool decodeColor4Keyframe(const JsonValue& node, DecodeState& state,
+                                        const std::string& path, Color4Keyframe& out) {
+    static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
+                                                          "outgoingInterpolation"};
+    std::vector<const JsonValue*> members;
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
+        return false;
+    }
+
+    document::KeyframeId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
+        return false;
+    }
+
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
+    core::RationalTime time;
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
+            return false;
+        }
+    }
+
+    const auto valuePath = joinPath(path, "value");
+    static constexpr std::array<std::string_view, 4> valueKeys{"red", "green", "blue", "alpha"};
+    std::vector<const JsonValue*> valueMembers;
+    core::Color4d value;
+    {
+        const AttachmentScope valueScope(state, "value");
+        if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "red"), value.red) ||
+            !decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "green"),
+                                 value.green) ||
+            !decodeFloat64Member(*valueMembers[2], state, joinPath(valuePath, "blue"),
+                                 value.blue) ||
+            !decodeFloat64Member(*valueMembers[3], state, joinPath(valuePath, "alpha"),
+                                 value.alpha)) {
+            return false;
+        }
+    }
+
+    KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
+    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
+                             interpolation)) {
+        return false;
+    }
+
+    out.id = id;
+    out.time = time;
+    out.value = value;
+    out.outgoingInterpolation = interpolation;
+    return true;
+}
+
 // Shared keyframe-array shape: non-empty, strictly increasing exact rational time, and a
 // canonical Linear final interpolation (docs/architecture/project-format.md, "Animation").
 template <typename Keyframe, typename DecodeOne>
@@ -594,6 +668,22 @@ template <typename Keyframe, typename DecodeOne>
         curve.id = id;
         if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
                                  decodeVec2Keyframe)) {
+            return false;
+        }
+        out = std::move(curve);
+        return true;
+    }
+    // Same minor gate as the ease-in-out token above: the colour curve kind arrives in 1.3.
+    if (kindText == "color4" && state.documentMinor >= 3) {
+        static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        Color4AnimationCurve curve;
+        curve.id = id;
+        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
+                                 decodeColor4Keyframe)) {
             return false;
         }
         out = std::move(curve);

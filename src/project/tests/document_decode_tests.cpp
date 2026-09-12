@@ -92,7 +92,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":2})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":3})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -225,7 +225,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":3})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":4})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -761,12 +761,12 @@ void testAcceptsSchemaVersionFutureMinorWithoutUnknownMembers(Expectations& expe
     const auto decoded = decodeText(json);
     expectations.expect(decoded.outcome() == bloom::project::DocumentDecodeOutcome::Decoded &&
                             static_cast<bool>(decoded) && decoded.value() != nullptr,
-                        "document schemaVersion 1.3 with no unknown members decodes");
+                        "document schemaVersion 1.4 with no unknown members decodes");
     expectations.expect(decoded.classification() ==
                             bloom::project::DocumentClassification::EditableWithRoundTrip,
-                        "document schemaVersion 1.3 classifies EditableWithRoundTrip");
+                        "document schemaVersion 1.4 classifies EditableWithRoundTrip");
     expectations.expect(decoded.roundTrip() != nullptr && decoded.roundTrip()->empty(),
-                        "document schemaVersion 1.3 with no unknown members has an empty "
+                        "document schemaVersion 1.4 with no unknown members has an empty "
                         "RoundTripState");
 }
 
@@ -1660,10 +1660,10 @@ void testAcceptsFutureMinorWithUnknownMembersEverywhere(Expectations& expectatio
     const auto decoded = decodeText(everywhereUnknownsDocument(kFutureSchemaVersion));
     expectations.expect(decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                             static_cast<bool>(decoded) && decoded.value() != nullptr,
-                        "a 1.3 document with unknown trailing members everywhere still decodes");
+                        "a 1.4 document with unknown trailing members everywhere still decodes");
     expectations.expect(
         decoded.classification() == DocumentClassification::EditableWithRoundTrip,
-        "a 1.3 document with unknown trailing members classifies EditableWithRoundTrip");
+        "a 1.4 document with unknown trailing members classifies EditableWithRoundTrip");
     if (decoded.roundTrip() == nullptr) {
         expectations.expect(false, "RoundTripState is present for the everywhere-unknowns fixture");
         return;
@@ -1850,7 +1850,7 @@ void testRejectsUnknownMemberBeforeOrBetweenKnownMembersInFutureMinor(Expectatio
         expectDecodeFailure(expectations, documentWithCompositionFutureMinor(composition),
                             DocumentDecodeError::UnknownMember, "/project/compositions/0/aaa",
                             "an unknown member before every known composition member is "
-                            "rejected in a 1.3 document");
+                            "rejected in a 1.4 document");
     }
     // between two known root members (project, then idAllocation)
     {
@@ -1867,7 +1867,7 @@ void testRejectsUnknownMemberBeforeOrBetweenKnownMembersInFutureMinor(Expectatio
             R"("extensions":[]})";
         expectDecodeFailure(expectations, json, DocumentDecodeError::UnknownMember, "/unknownMid",
                             "an unknown member between two known root members is rejected in a "
-                            "1.3 document");
+                            "1.4 document");
     }
 }
 
@@ -1884,7 +1884,7 @@ void testRejectsUnsortedTrailingUnknownMembers(Expectations& expectations) {
     expectDecodeFailure(expectations, documentWithCompositionFutureMinor(composition),
                         DocumentDecodeError::UnsortedUnknownMember, "/project/compositions/0/zzzA",
                         "two trailing unknown composition members out of ascending key order "
-                        "are rejected in a 1.3 document");
+                        "are rejected in a 1.4 document");
 }
 
 // A context-variable array element has no member in the contract's fixed collection identity
@@ -1898,7 +1898,7 @@ void testRejectsContextVariableTrailingMemberEvenAtFutureMinor(Expectations& exp
                         DocumentDecodeError::UnknownMember,
                         "/project/colorSettings/ocioConfig/contextVariables/0/extra",
                         "a trailing unknown member on a context-variable entry is rejected even "
-                        "in a 1.3 document, because context variables have no declared identity");
+                        "in a 1.4 document, because context variables have no declared identity");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1918,7 +1918,7 @@ void testUnknownOcioLocatorKindIsPreservedReadOnlyAtFutureMinor(Expectations& ex
     expectPreservedReadOnly(expectations, documentWithColorSettingsFutureMinor(colorSettings),
                             RoundTripPreservationReason::UnknownDiscriminatorKind,
                             "/project/colorSettings/ocioConfig/locator/kind",
-                            "an unrecognized OCIO locator kind in a 1.3 document is "
+                            "an unrecognized OCIO locator kind in a 1.4 document is "
                             "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1932,7 +1932,7 @@ void testUnknownParameterSourceKindIsPreservedReadOnlyAtFutureMinor(Expectations
             compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/parameters/0/source/kind",
-        "the deferred 'driver-binding' parameter source kind in a 1.3 document is "
+        "the deferred 'driver-binding' parameter source kind in a 1.4 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1946,7 +1946,7 @@ void testUnknownConstantValueKindIsPreservedReadOnlyAtFutureMinor(Expectations& 
             compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/parameters/0/source/value/kind",
-        "an unrecognized constant value kind in a 1.3 document is PreservedReadOnlyRequired "
+        "an unrecognized constant value kind in a 1.4 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1958,7 +1958,7 @@ void testUnknownAnimationCurveKindIsPreservedReadOnlyAtFutureMinor(Expectations&
             compositionWithInterior("[]", curves, std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/animationCurves/0/kind",
-        "an unrecognized animation curve kind in a 1.3 document is PreservedReadOnlyRequired "
+        "an unrecognized animation curve kind in a 1.4 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1977,7 +1977,7 @@ void testUnknownEdgeDestinationKindIsPreservedReadOnlyAtFutureMinor(Expectations
         documentWithCompositionFutureMinor(compositionWithInterior("[]", "[]", graph)),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/graph/edges/0/destination/kind",
-        "an unrecognized edge destination kind in a 1.3 document is PreservedReadOnlyRequired "
+        "an unrecognized edge destination kind in a 1.4 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1990,7 +1990,7 @@ void testUnknownReferencePolicyKindIsPreservedReadOnlyAtFutureMinor(Expectations
     expectPreservedReadOnly(
         expectations, documentWithExtensions(kFutureSchemaVersion, extensionRecordJson, "1"),
         RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/referencePolicy/kind",
-        "an unrecognized extension reference-policy kind in a 1.3 document is "
+        "an unrecognized extension reference-policy kind in a 1.4 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -2003,7 +2003,7 @@ void testUnknownExtensionSubjectKindIsPreservedReadOnlyAtFutureMinor(Expectation
     expectPreservedReadOnly(
         expectations, documentWithExtensions(kFutureSchemaVersion, extensionRecordJson, "1"),
         RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/subject/kind",
-        "an unrecognized extension subject target kind in a 1.3 document is "
+        "an unrecognized extension subject target kind in a 1.4 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -2034,7 +2034,7 @@ void testUnknownNumberNonCanonicalSpellingIsPreservedReadOnlyAtFutureMinor(
                             RoundTripPreservationReason::UnknownNumberOutOfSubset,
                             "/project/compositions/0/zzzOddNumber",
                             "an unknown trailing member number with a non-canonical exponent "
-                            "spelling in a 1.3 document is PreservedReadOnlyRequired rather than "
+                            "spelling in a 1.4 document is PreservedReadOnlyRequired rather than "
                             "a hard error");
 }
 

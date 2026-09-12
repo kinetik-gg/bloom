@@ -111,9 +111,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // reproducing EVERY previously checked-in golden set byte for byte when fed its own version
 // numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
-    "9d89e179035a3f6a516ab1b43a01c7ad7a81fb40cc5619e3e71d0a39a42863e2";
+    "2875eeba68fc4bc030fbd727e84001ba1943b46ff30b4ded8e1c9a679c2770db";
 constexpr std::string_view kExpectedPngDigest =
-    "309e366e48fa2ae193a608ad2a24e2379e0c9532d8f92b020205cfd38605193e";
+    "06d66a210e9f7db1e7e7d262947810f8141624c23abe350de317e4a375093158";
 
 class Expectations final {
   public:
@@ -156,7 +156,7 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, kColorParameterId, colorValue});
+    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, {kColorParameterId, colorValue}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kLayerNodeId, kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{

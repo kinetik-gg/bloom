@@ -80,11 +80,11 @@ inline constexpr double kDefaultRotationDegrees = 0.0;
 inline constexpr std::int64_t kDefaultBlendModeValue =
     core::blendModeStoredValue(core::kDefaultBlendMode);
 
-// The animatable schema set, split by the curve value kind each member requires. These three
-// predicates are the single authority every layer asks -- document validation, the animation
-// commands, and the snapshot compiler's override gate -- so the set cannot be widened in one place
-// and stay narrow in another. A schema key that satisfies neither predicate is constant-only, which
-// is every source parameter (solid colour, text content/size/colour) and every unregistered key.
+// The animatable schema set, split by the curve value kind each member requires. These predicates
+// are the single authority every layer asks -- document validation, the animation commands, and the
+// snapshot compiler's override gate -- so the set cannot be widened in one place and stay narrow in
+// another. A schema key that satisfies none of them is constant-only, which after task S5 is
+// exactly the text CONTENT schema (a String has no interpolation) and every unregistered key.
 [[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
            schemaKey == kScaleParameterSchemaKey;
@@ -92,7 +92,20 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 
 [[nodiscard]] constexpr bool
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey;
+    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey ||
+           schemaKey == kTextSizeParameterSchemaKey;
+}
+
+// The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
+// Both author straight RGBA in kSolidColorEncoding, so one curve kind serves both.
+[[nodiscard]] constexpr bool
+isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kSolidColorParameterSchemaKey || schemaKey == kTextColorParameterSchemaKey;
+}
+
+[[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return isVec2AnimatableSchemaKey(schemaKey) || isScalarAnimatableSchemaKey(schemaKey) ||
+           isColor4AnimatableSchemaKey(schemaKey);
 }
 
 // Whether a scalar value under this schema is confined to [0, 1]. Opacity is the only one: rotation
@@ -100,6 +113,28 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey;
+}
+
+// Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-
+// SizePixels]. Same reasoning as the unit domain above: the bound belongs to the schema, not to
+// "scalar" as a class, and task S5 made text size animatable so a KEY has to satisfy it too.
+[[nodiscard]] constexpr bool hasTextSizeDomainSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kTextSizeParameterSchemaKey;
+}
+
+// The ONE scalar-domain gate every layer asks (document validation, the animation commands, the
+// evaluator's per-key check, the session's write paths), so a constant and a keyframe under the
+// same schema can never be admitted on different terms. `value` must already be finite; finiteness
+// is checked separately by each caller because the diagnostic it produces differs.
+[[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
+                                                        const double value) noexcept {
+    if (hasUnitDomainSchemaKey(schemaKey)) {
+        return value >= 0.0 && value <= 1.0;
+    }
+    if (hasTextSizeDomainSchemaKey(schemaKey)) {
+        return value > 0.0 && value <= kMaximumTextSizePixels;
+    }
+    return true;
 }
 
 using ParameterValue =

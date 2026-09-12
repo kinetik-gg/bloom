@@ -243,7 +243,7 @@ plan(const std::uint32_t width = 2, const std::uint32_t height = 2,
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, kColorParameterId, {}});
+    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, {kColorParameterId, {}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -315,8 +315,8 @@ shellPlan(const std::uint32_t width, const std::uint32_t height) {
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kInputNodeId, kColorParameterId, {0.0, 0.0, 0.0, 0.0}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kInputNodeId, {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{

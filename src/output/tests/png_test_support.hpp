@@ -147,8 +147,8 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kInputNodeId, kColorParameterId, {0.0, 0.0, 0.0, 0.0}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kInputNodeId, {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{kShellPositionParameterId, document::Vec2d{0.5, 0.5}},
@@ -181,7 +181,7 @@ identityPlan(const std::uint32_t width, const std::uint32_t height) {
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, kColorParameterId, {}});
+    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, {kColorParameterId, {}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -246,7 +246,11 @@ frameIdentity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& com
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .provider = runtime::EvaluationProvider::CpuReference,
             .evaluatorSemanticsVersion = 1,
-            .animationSamplingSemanticsVersion = 1,
+            // Read from the live constant, not spelled as 1: the identity preparer cross-checks
+            // this against the PLAN's own animation-sampling version, and the shell plan above is
+            // built with the plan definition's defaults. Task S5 moved that number to 2, and a
+            // literal here would have to be chased on every future bump.
+            .animationSamplingSemanticsVersion = runtime::kAnimationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = 1};
 }
 

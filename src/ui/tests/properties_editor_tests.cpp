@@ -143,7 +143,9 @@ animateParameter(document::Document& document, commands::CommandStack& stack,
 // A row's keyframe indicator paints IconId::Keyframe tinted either Color::Keyframe (animated) or
 // a dimmed Color::Muted (static) -- resolve which one is actually on-screen by grabbing the
 // indicator and comparing its dominant non-transparent pixel against both candidate tints.
-[[nodiscard]] bool indicatorLooksAnimated(QLabel& indicator) {
+// Task S5, item 0: the row's indicator is a clickable ui::KeyframeDiamond now rather than a QLabel.
+// objectName "propertiesKeyframeIndicator" is unchanged, so only the looked-up TYPE moved here.
+[[nodiscard]] bool indicatorLooksAnimated(QWidget& indicator) {
     const QImage image = indicator.grab().toImage();
     const QColor gold = ui::kit::color(ui::kit::Color::Keyframe);
     for (int y = 0; y < image.height(); ++y) {
@@ -255,8 +257,10 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
     if (opacityRow == nullptr || positionRow == nullptr) {
         return;
     }
-    auto* opacityIndicator = opacityRow->findChild<QLabel*>("propertiesKeyframeIndicator");
-    auto* positionIndicator = positionRow->findChild<QLabel*>("propertiesKeyframeIndicator");
+    auto* opacityIndicator =
+        opacityRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
+    auto* positionIndicator =
+        positionRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
     expectations.expect(opacityIndicator != nullptr && positionIndicator != nullptr,
                         "both rows carry a keyframe indicator");
     if (opacityIndicator == nullptr || positionIndicator == nullptr) {
@@ -633,11 +637,11 @@ void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations)
     }
     // Each row is [label, indicator, value]; a paired X/Y row wraps its two fields in a group, so
     // the row is one level further up than it is for the single rotation field.
-    const auto indicatorOf = [](QWidget* field, const bool paired) -> QLabel* {
+    const auto indicatorOf = [](QWidget* field, const bool paired) -> ui::KeyframeDiamond* {
         auto* row = paired ? field->parentWidget()->parentWidget() : field->parentWidget();
         return row == nullptr ? nullptr
-                              : row->findChild<QLabel*>("propertiesKeyframeIndicator",
-                                                        Qt::FindDirectChildrenOnly);
+                              : row->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator",
+                                                                     Qt::FindDirectChildrenOnly);
     };
     auto* anchorIndicator = indicatorOf(anchorX, true);
     auto* scaleIndicator = indicatorOf(scaleX, true);
@@ -652,10 +656,12 @@ void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations)
                             !indicatorLooksAnimated(*anchorIndicator) &&
                             !indicatorLooksAnimated(*rotationIndicator),
                         "only the animated transform parameter's own indicator reads as animated");
-    // An animated scale has no constant to show, so its own editors disable while its
-    // still-constant siblings stay editable -- the per-parameter source is what drives each row.
-    expectations.expect(!scaleX->isEnabled() && rotation->isEnabled() && anchorX->isEnabled(),
-                        "animating one transform parameter leaves its siblings constant-editable");
+    // Task S5, item 0 inverted this: an animated row stays EDITABLE and shows the curve's exactly
+    // sampled value at the current time, because typing into it at a time with no key is how AE
+    // inserts one (CompositionSession::effectiveVec2Value() + the existing SetKeyframeAtTime write
+    // path). Before this task the field was disabled, which made that gesture unreachable.
+    expectations.expect(scaleX->isEnabled() && rotation->isEnabled() && anchorX->isEnabled(),
+                        "an animated transform row stays editable so editing it can insert a key");
 }
 
 void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
