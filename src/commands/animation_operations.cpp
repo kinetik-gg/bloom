@@ -83,9 +83,9 @@ template <typename Curve>
 template <typename Curve>
 [[nodiscard]] bool curveSchemaMatches(const document::ParameterRecord& owner) noexcept {
     if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-        return owner.schemaKey == document::kOpacityParameterSchemaKey;
+        return document::isScalarAnimatableSchemaKey(owner.schemaKey);
     } else {
-        return owner.schemaKey == document::kPositionParameterSchemaKey;
+        return document::isVec2AnimatableSchemaKey(owner.schemaKey);
     }
 }
 
@@ -98,7 +98,10 @@ template <typename Curve, typename Value>
         return false;
     }
     if constexpr (std::is_same_v<Value, double>) {
-        return value >= 0.0 && value <= 1.0;
+        // The unit domain is opacity's, not every scalar curve's: a rotation key measures degrees
+        // and is accepted anywhere on the real line.
+        return !document::hasUnitDomainSchemaKey(owner->schemaKey) ||
+               (value >= 0.0 && value <= 1.0);
     }
     return true;
 }
@@ -247,19 +250,27 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
                                          "Parameter must have a constant source before animation");
     }
 
+    // Which curve kind a parameter gets is decided entirely by the shared schema predicates: the
+    // Vec2d transform values (position, anchor, scale) seed a Vec2 curve, the scalar ones
+    // (rotation, opacity) seed a scalar curve, and anything else is refused as unsupported. The
+    // seeded key is always the parameter's existing constant, so turning a parameter into an
+    // animation never changes the picture at the initial time.
     std::variant<double, document::Vec2d> initialValue;
-    if (parameter->schemaKey == document::kOpacityParameterSchemaKey) {
+    if (document::isScalarAnimatableSchemaKey(parameter->schemaKey)) {
         const auto* value = std::get_if<double>(&constant->value);
-        if (value == nullptr || !std::isfinite(*value) || *value < 0.0 || *value > 1.0) {
+        const bool withinDomain = value != nullptr && std::isfinite(*value) &&
+                                  (!document::hasUnitDomainSchemaKey(parameter->schemaKey) ||
+                                   (*value >= 0.0 && *value <= 1.0));
+        if (!withinDomain) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Opacity constant is invalid");
+                                             "Scalar constant is invalid for its schema");
         }
         initialValue = *value;
-    } else if (parameter->schemaKey == document::kPositionParameterSchemaKey) {
+    } else if (document::isVec2AnimatableSchemaKey(parameter->schemaKey)) {
         const auto* value = std::get_if<document::Vec2d>(&constant->value);
         if (value == nullptr || !finiteValue(*value)) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Position constant is invalid");
+                                             "Vec2 constant is invalid for its schema");
         }
         initialValue = *value;
     } else {
@@ -405,16 +416,18 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
 
     document::ParameterValue constantValue;
     if (const auto* scalar = std::get_if<double>(&value_)) {
-        if (parameter->schemaKey != document::kOpacityParameterSchemaKey ||
+        if (!document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
             composition->animationCurves().findScalar(source->curveId) == nullptr ||
-            !std::isfinite(*scalar) || *scalar < 0.0 || *scalar > 1.0) {
+            !std::isfinite(*scalar) ||
+            (document::hasUnitDomainSchemaKey(parameter->schemaKey) &&
+             (*scalar < 0.0 || *scalar > 1.0))) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Constant value does not match scalar animation");
         }
         constantValue = *scalar;
     } else {
         const auto vector = std::get<document::Vec2d>(value_);
-        if (parameter->schemaKey != document::kPositionParameterSchemaKey ||
+        if (!document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
             composition->animationCurves().findVec2(source->curveId) == nullptr ||
             !finiteValue(vector)) {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,

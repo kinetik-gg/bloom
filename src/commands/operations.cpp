@@ -49,6 +49,9 @@ struct StructuredLayerIds {
     document::LayerSlotId slotId;
     std::vector<document::ParameterId> sourceParameterIds;
     document::ParameterId positionParameterId;
+    document::ParameterId anchorParameterId;
+    document::ParameterId scaleParameterId;
+    document::ParameterId rotationParameterId;
     document::ParameterId opacityParameterId;
 };
 
@@ -65,15 +68,19 @@ struct StructuredLayerOutputNames {
     std::string_view sourceNode;
     std::string_view layerOutputNode;
     std::string_view positionParameter;
+    std::string_view anchorParameter;
+    std::string_view scaleParameter;
+    std::string_view rotationParameter;
     std::string_view opacityParameter;
     std::string_view sourceToLayerEdge;
     std::string_view layerToStackEdge;
 };
 
-// Allocation ORDER is unchanged from the single-source-parameter version for every id a solid layer
-// already published, so an existing expectation about which ids a solid branch receives still
-// holds; a source with more than one parameter simply takes more consecutive parameter ids at the
-// same point in the sequence.
+// Allocation ORDER matches the registered Layer Output parameter order -- position, anchor, scale,
+// rotation, opacity -- so the ids a layer publishes read in the same sequence the properties grid
+// shows. The transform breadth slice (task S4) inserted anchor/scale/rotation between position and
+// opacity, which does shift the opacity id of a newly created layer; nothing persisted depends on a
+// particular id value, and the operation still publishes every id by NAME rather than by position.
 [[nodiscard]] std::optional<StructuredLayerIds>
 allocateStructuredLayerIds(document::IdAllocator& allocator,
                            const std::size_t sourceParameterCount) {
@@ -95,11 +102,16 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
         sourceParameterIds.push_back(*sourceParameterId);
     }
     const auto positionParameterId = allocator.allocateParameter();
+    const auto anchorParameterId = allocator.allocateParameter();
+    const auto scaleParameterId = allocator.allocateParameter();
+    const auto rotationParameterId = allocator.allocateParameter();
     const auto opacityParameterId = allocator.allocateParameter();
     if (!sourceNodeId.has_value() || !layerOutputNodeId.has_value() ||
         !sourceToLayerEdgeId.has_value() || !layerToStackEdgeId.has_value() ||
         !layerId.has_value() || !slotId.has_value() || !sourceParametersAllocated ||
-        !positionParameterId.has_value() || !opacityParameterId.has_value()) {
+        !positionParameterId.has_value() || !anchorParameterId.has_value() ||
+        !scaleParameterId.has_value() || !rotationParameterId.has_value() ||
+        !opacityParameterId.has_value()) {
         return std::nullopt;
     }
     return StructuredLayerIds{*sourceNodeId,
@@ -110,6 +122,9 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
                               *slotId,
                               std::move(sourceParameterIds),
                               *positionParameterId,
+                              *anchorParameterId,
+                              *scaleParameterId,
+                              *rotationParameterId,
                               *opacityParameterId};
 }
 
@@ -136,9 +151,21 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
         }
         sourceBindings.push_back({std::string(sourceParameter.role), parameterId});
     }
+    // The three transform breadth parameters are always created at their schema defaults -- the
+    // identity transform -- so "add a layer" means exactly what it meant before task S4 and the
+    // caller needs no new arguments. Anchor, scale, and rotation are authored afterwards like any
+    // other parameter, through SetParameterConstant.
     if (!parameters.insert({ids->positionParameterId,
                             std::string(document::kPositionParameterSchemaKey),
                             document::ConstantValueSource{position}}) ||
+        !parameters.insert({ids->anchorParameterId,
+                            std::string(document::kAnchorParameterSchemaKey),
+                            document::ConstantValueSource{document::kDefaultAnchor}}) ||
+        !parameters.insert({ids->scaleParameterId, std::string(document::kScaleParameterSchemaKey),
+                            document::ConstantValueSource{document::kDefaultScale}}) ||
+        !parameters.insert({ids->rotationParameterId,
+                            std::string(document::kRotationParameterSchemaKey),
+                            document::ConstantValueSource{document::kDefaultRotationDegrees}}) ||
         !parameters.insert({ids->opacityParameterId,
                             std::string(document::kOpacityParameterSchemaKey),
                             document::ConstantValueSource{opacity}})) {
@@ -158,6 +185,9 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
         std::string(document::kLayerOutputNodeType),
         {
             {std::string(document::kPositionParameterRole), ids->positionParameterId},
+            {std::string(document::kAnchorParameterRole), ids->anchorParameterId},
+            {std::string(document::kScaleParameterRole), ids->scaleParameterId},
+            {std::string(document::kRotationParameterRole), ids->rotationParameterId},
             {std::string(document::kOpacityParameterRole), ids->opacityParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
@@ -199,6 +229,9 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
         {std::string(outputNames.sourceNode), DurableObjectId{ids->sourceNodeId}},
         {std::string(outputNames.layerOutputNode), DurableObjectId{ids->layerOutputNodeId}},
         {std::string(outputNames.positionParameter), DurableObjectId{ids->positionParameterId}},
+        {std::string(outputNames.anchorParameter), DurableObjectId{ids->anchorParameterId}},
+        {std::string(outputNames.scaleParameter), DurableObjectId{ids->scaleParameterId}},
+        {std::string(outputNames.rotationParameter), DurableObjectId{ids->rotationParameterId}},
         {std::string(outputNames.opacityParameter), DurableObjectId{ids->opacityParameterId}},
         {std::string(outputNames.sourceToLayerEdge), DurableObjectId{ids->sourceToLayerEdgeId}},
         {std::string(outputNames.layerToStackEdge), DurableObjectId{ids->layerToStackEdgeId}},
@@ -247,8 +280,9 @@ OperationResult AddSolidLayer::apply(document::Draft& draft) const {
         position_, opacity_,
         {kAddSolidLayerLayerOutput, kAddSolidLayerSlotOutput, kAddSolidLayerSolidNodeOutput,
          kAddSolidLayerLayerOutputNodeOutput, kAddSolidLayerPositionParameterOutput,
-         kAddSolidLayerOpacityParameterOutput, kAddSolidLayerSolidToLayerEdgeOutput,
-         kAddSolidLayerLayerToStackEdgeOutput});
+         kAddSolidLayerAnchorParameterOutput, kAddSolidLayerScaleParameterOutput,
+         kAddSolidLayerRotationParameterOutput, kAddSolidLayerOpacityParameterOutput,
+         kAddSolidLayerSolidToLayerEdgeOutput, kAddSolidLayerLayerToStackEdgeOutput});
 }
 
 std::string_view AddTextLayer::typeId() const noexcept { return "bloom.layer.add-text"; }
@@ -306,8 +340,9 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
         position_, opacity_,
         {kAddTextLayerLayerOutput, kAddTextLayerSlotOutput, kAddTextLayerTextNodeOutput,
          kAddTextLayerLayerOutputNodeOutput, kAddTextLayerPositionParameterOutput,
-         kAddTextLayerOpacityParameterOutput, kAddTextLayerTextToLayerEdgeOutput,
-         kAddTextLayerLayerToStackEdgeOutput});
+         kAddTextLayerAnchorParameterOutput, kAddTextLayerScaleParameterOutput,
+         kAddTextLayerRotationParameterOutput, kAddTextLayerOpacityParameterOutput,
+         kAddTextLayerTextToLayerEdgeOutput, kAddTextLayerLayerToStackEdgeOutput});
 }
 
 std::string_view SetProjectName::typeId() const noexcept { return "bloom.project.set-name"; }
