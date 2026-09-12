@@ -136,7 +136,11 @@ struct MigrationStepDescriptor final {
 // production table so the registration mechanism (a std::span<const MigrationStepDescriptor>
 // parameter on migrateDocumentDom(), never a compiled-in global) has exactly one production
 // caller, matching its real future shape once a schema bump adds the first real step.
-inline constexpr std::array<MigrationStepDescriptor, 0> kProductionDocumentMigrationSteps{};
+[[nodiscard]] MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
+                                                         std::pmr::memory_resource* resource,
+                                                         std::pmr::vector<char>& output);
+inline constexpr std::array kProductionDocumentMigrationSteps{
+    MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

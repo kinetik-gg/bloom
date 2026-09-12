@@ -35,7 +35,8 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The initial container version and document schema are both `1.0`. Version objects always contain
+The container version remains `1.0`; the current document schema is `1.1`.
+The original document `1.0` artifact is retained for migration fixtures. Version objects always contain
 JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
@@ -923,3 +924,19 @@ Acquisition, lock, offline build, provenance, and release evidence follow
 [libzip 1.11.4]: https://libzip.org/documentation/
 [zlib 1.3.2]: https://github.com/madler/zlib/releases/tag/v1.3.2
 [yyjson 0.12.0]: https://github.com/ibireme/yyjson/releases/tag/0.12.0
+
+
+## Node Layout In Document 1.1
+
+`document-1.1.schema.json` adds a required `nodeLayout` member after `graph` in each composition.
+It is an array sorted by numeric `nodeId`; each record has exactly `nodeId`, `position` (`x`, `y`),
+`width`, `collapsed`, and `muted`, in that order. Position and width are finite Float64 values;
+width is positive. The booleans default to false. Unknown-node records survive with document
+warning diagnostics. Layout identity never advances node allocation watermarks. Future-minor
+additive members on layout records and their positions use normal round-trip preservation.
+
+The production `1.0` → `1.1` DOM migration preserves all existing fields and numeric spellings,
+changes only the document schema version, and appends the original four-column default layout
+in stored node order. It charges the operation budget and reparses before trusted decode. Current
+writes emit at least minor 1; old files are never rewritten by Open. Color-setting, OCIO, node,
+container, and extension schema versions remain independent and unchanged.

@@ -379,7 +379,7 @@ void testEndToEndSaveAs(Expectations& expectations) {
     if (!decodedSnapshot) {
         return;
     }
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &decodedSnapshot.snapshot(),
                                             .colorSettings = &colorSettings};
     const auto oracleEntries = buildOracleEntries(expectations, manifest, documentInput);
@@ -1021,7 +1021,7 @@ void testBudgetExhaustionPassThrough(Expectations& expectations) {
         return;
     }
 
-    const CanonicalManifestV1 probeManifest{.documentSchemaVersion = {1, 0},
+    const CanonicalManifestV1 probeManifest{.documentSchemaVersion = {1, 1},
                                             .requirements = fixture->requirements};
     const CanonicalDocumentV1 probeDocument{.snapshot = &decodedSnapshot.snapshot(),
                                             .colorSettings = &fixture->colorSettings};

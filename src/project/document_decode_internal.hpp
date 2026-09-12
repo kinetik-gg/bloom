@@ -218,6 +218,9 @@ decodeCompositionInterior(const JsonValue& parametersNode, const JsonValue& anim
                           std::vector<document::ParameterRecord>& parameters,
                           std::vector<document::AnimationCurveRecord>& curves, DecodedGraph& graph);
 
+[[nodiscard]] bool decodeNodeLayout(const JsonValue& node, DecodeState& state,
+                                    const std::string& path, document::NodeLayout& out);
+
 } // namespace bloom::project::detail
 
 #endif // BLOOM_PROJECT_DOCUMENT_DECODE_INTERNAL_HPP

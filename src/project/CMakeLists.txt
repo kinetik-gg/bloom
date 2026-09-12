@@ -17,6 +17,8 @@ target_sources(
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_migration.cpp
+        document_layout_migration.cpp
+        document_decode_layout.cpp
         document_reconstruct.cpp
         manifest_decode.cpp
         manifest_requirements.cpp
@@ -318,6 +320,11 @@ if(BUILD_TESTING)
         COMMAND bloom_project_save_archive_test
         LABELS unit project persistence security
     )
+
+    add_executable(bloom_project_node_layout_test tests/node_layout_persistence_tests.cpp)
+    target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_node_layout_test)
+    bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
 
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)
     target_include_directories(

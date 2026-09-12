@@ -163,7 +163,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 0\n"
+    "    \"minor\": 1\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -185,8 +185,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "        },\n"
     "        \"expectedRevision\": {\n"
     "          \"algorithm\": \"sha256\",\n"
-    "          \"digest\": "
-    "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n"
+    "          \"digest\": \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n"
     "        },\n"
     "        \"portability\": \"builtin\",\n"
     "        \"contextVariables\": []\n"
@@ -252,7 +251,29 @@ constexpr std::string_view kMinimalDocumentGolden =
     "            \"nodeId\": \"2\",\n"
     "            \"port\": \"image\"\n"
     "          }\n"
-    "        }\n"
+    "        },\n"
+    "        \"nodeLayout\": [\n"
+    "          {\n"
+    "            \"nodeId\": \"1\",\n"
+    "            \"position\": {\n"
+    "              \"x\": 544.0,\n"
+    "              \"y\": 32.0\n"
+    "            },\n"
+    "            \"width\": 128.0,\n"
+    "            \"collapsed\": false,\n"
+    "            \"muted\": false\n"
+    "          },\n"
+    "          {\n"
+    "            \"nodeId\": \"2\",\n"
+    "            \"position\": {\n"
+    "              \"x\": 800.0,\n"
+    "              \"y\": 32.0\n"
+    "            },\n"
+    "            \"width\": 128.0,\n"
+    "            \"collapsed\": false,\n"
+    "            \"muted\": false\n"
+    "          }\n"
+    "        ]\n"
     "      }\n"
     "    ]\n"
     "  },\n"
@@ -312,7 +333,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 0\n"
+        "    \"minor\": 1\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -524,7 +545,49 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "            \"nodeId\": \"4\",\n"
         "            \"port\": \"image\"\n"
         "          }\n"
-        "        }\n"
+        "        },\n"
+        "        \"nodeLayout\": [\n"
+        "          {\n"
+        "            \"nodeId\": \"1\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 544.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"2\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 32.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"3\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 288.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"4\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 800.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          }\n"
+        "        ]\n"
         "      }\n"
         "    ]\n"
         "  },\n"
@@ -673,7 +736,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 0\n"
+        "    \"minor\": 1\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -762,7 +825,29 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "            \"nodeId\": \"2\",\n"
         "            \"port\": \"image\"\n"
         "          }\n"
-        "        }\n"
+        "        },\n"
+        "        \"nodeLayout\": [\n"
+        "          {\n"
+        "            \"nodeId\": \"1\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 544.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"2\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 800.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          }\n"
+        "        ]\n"
         "      }\n"
         "    ]\n"
         "  },\n"
@@ -1207,8 +1292,8 @@ void testPlainWriteExplicitDefaultsUnchanged(Expectations& expectations) {
 // Version parameterization: schemaMinor alone (no overlay) changes only the root schemaVersion.
 void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1222,7 +1307,7 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "schemaMinor=1 with no overlay sizes exactly with the golden");
@@ -1236,8 +1321,8 @@ void testSchemaMinorParameterization(Expectations& expectations) {
 // The document root itself is an attachment point (its schema path is the empty path).
 void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1258,7 +1343,7 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a root-attached retained member sizes exactly with the golden");
@@ -1271,8 +1356,8 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
 // A singleton schema-path attachment point nested one level in (project).
 void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello\"\n  },\n  \"idAllocation\"");
 
@@ -1293,7 +1378,7 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a project-attached retained member sizes exactly with the golden");
@@ -1309,8 +1394,8 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
 // canonical (byte equality proves no re-derivation/renormalization happened).
 void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1332,20 +1417,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                    "          }\n"
                    "        },\n"
                    "        \"parameters\"");
-    requireReplace(expected,
-                   "          }\n"
-                   "        }\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"",
-                   "          }\n"
-                   "        },\n"
-                   "        \"zzzComp\": -7\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"");
+    requireReplace(expected, "        ]\n      }\n    ]\n  },\n  \"idAllocation\"",
+                   "        ],\n        \"zzzComp\": -7\n      }\n    ]\n  },\n  \"idAllocation\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1383,7 +1456,7 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "composition- and format-attached retained members size exactly with the "
@@ -1398,8 +1471,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
 // A collection-element attachment point nested two levels in (a graph node).
 void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1433,7 +1506,7 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a node-attached retained member sizes exactly with the golden");
@@ -1447,8 +1520,8 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
 // Composition/Node.
 void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1482,7 +1555,7 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "an edge-attached retained member sizes exactly with the golden");
@@ -1496,8 +1569,8 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
 // carrying a retained array of booleans.
 void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
     requireReplace(expected,
                    "      \"extensionRecord\": \"0\"\n"
                    "    }\n"
@@ -1540,7 +1613,7 @@ void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "idAllocation- and highestIssued-attached retained members size exactly "
@@ -1576,7 +1649,7 @@ void testOverlayLeftoverEntryIsTypedError(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(!size.hasValue() &&
                             size.error() == CanonicalDocumentError::RoundTripStateMismatch,
@@ -1618,7 +1691,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 2};
     const auto size = bloom::project::canonicalDocumentSize(request);
     if (!size.hasValue()) {
         expectations.expect(false, "the overlay capacity fixture preflights successfully");
@@ -1759,8 +1832,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 1\n  },\n  \"project\"",
+                   "\"minor\": 2\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"
@@ -1808,26 +1881,9 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                    "        },\n"
                    "        \"parameters\"");
 
-    requireReplace(original,
-                   "          \"compositionOutput\": {\n"
-                   "            \"nodeId\": \"3\",\n"
-                   "            \"port\": \"image\"\n"
-                   "          }\n"
-                   "        }\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"",
-                   "          \"compositionOutput\": {\n"
-                   "            \"nodeId\": \"3\",\n"
-                   "            \"port\": \"image\"\n"
-                   "          }\n"
-                   "        },\n"
-                   "        \"zzzComp\": true\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"");
+    requireReplace(
+        original, "        ]\n      }\n    ]\n  },\n  \"idAllocation\"",
+        "        ],\n        \"zzzComp\": true\n      }\n    ]\n  },\n  \"idAllocation\"");
 
     requireReplace(original, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello world\"\n  },\n  \"idAllocation\"");
@@ -1884,7 +1940,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 1};
+                                             .schemaMinor = 2};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "

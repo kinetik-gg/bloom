@@ -62,7 +62,8 @@ SavePublicationResult executeSessionSaveMiddle(
     const std::atomic_bool* const cancellationFlag,
     project::ProjectIoOperationMemory operation) noexcept {
     const project::CanonicalManifestV1 manifest{
-        .documentSchemaVersion = {1, input.capturedInput.schemaMinor()},
+        .documentSchemaVersion = {1, std::max(input.capturedInput.schemaMinor(),
+                                              project::kCanonicalDocumentSchemaVersionV1.minor)},
         .requirements = input.capturedInput.retainedRequirements(),
     };
     const project::CanonicalDocumentV1 documentInput{

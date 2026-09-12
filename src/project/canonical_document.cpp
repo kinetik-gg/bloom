@@ -1122,6 +1122,36 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
+[[nodiscard]] bool emitNodeLayout(EmitState& state, const Composition& composition) noexcept {
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("nodeLayout")) || !state.ok(writer.beginArray()))
+        return false;
+    const PathScope layoutScope(state, "nodeLayout");
+    for (const auto& [id, record] : composition.nodeLayout()) {
+        const auto idText = bloom::project::formatCanonicalUInt64(id.value());
+        const PathScope recordScope(state, RoundTripCollectionKind::NodeLayout, idText.view());
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "nodeId", id.value()) ||
+            !state.ok(writer.memberName("position")) || !state.ok(writer.beginObject()))
+            return false;
+        {
+            const PathScope positionScope(state, "position");
+            if (!state.ok(writer.memberName("x")) ||
+                !state.ok(writer.float64Value(record.position.x)) ||
+                !state.ok(writer.memberName("y")) ||
+                !state.ok(writer.float64Value(record.position.y)) || !emitRetainedTrailing(state))
+                return false;
+        }
+        if (!state.ok(writer.endObject()) || !state.ok(writer.memberName("width")) ||
+            !state.ok(writer.float64Value(record.width)) ||
+            !state.ok(writer.memberName("collapsed")) ||
+            !state.ok(writer.booleanValue(record.collapsed)) ||
+            !state.ok(writer.memberName("muted")) || !state.ok(writer.booleanValue(record.muted)) ||
+            !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitComposition(EmitState& state, const Composition& composition,
                                    const std::size_t compositionIndex) noexcept {
     auto& writer = state.writer;
@@ -1196,7 +1226,7 @@ emitInterpolation(EmitState& state,
     if (!emitAnimationCurves(state, composition, compositionIndex)) {
         return false;
     }
-    if (!emitGraph(state, composition, compositionIndex)) {
+    if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition)) {
         return false;
     }
     if (!emitRetainedTrailing(state)) {
@@ -1530,7 +1560,11 @@ emitInterpolation(EmitState& state,
     // emitVersion's own comment). {1, schemaMinor} lets an overlay rewrite of a {1, minor > 0}
     // document reproduce the exact minor it was opened with; a plain write leaves schemaMinor at
     // its default 0.
-    if (!emitVersion(state, SchemaVersion{kV1SchemaVersion.major, state.schemaMinor})) {
+    if (!emitVersion(
+            state,
+            SchemaVersion{kV1SchemaVersion.major,
+                          std::max(state.schemaMinor,
+                                   bloom::project::kCanonicalDocumentSchemaVersionV1.minor)})) {
         return false;
     }
 
@@ -1715,7 +1749,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         walk.fail(CanonicalDocumentError::InvalidProcessColorSpaceId);
         return walk;
     }
-    if (settings.schemaVersion != kV1SchemaVersion ||
+    if (settings.schemaVersion != bloom::document::kColorSettingsSchemaVersionV1 ||
         settings.ocioConfig.schemaVersion != kOcioConfigReferenceSchemaVersionV1) {
         walk.fail(CanonicalDocumentError::InvalidColorSettings);
         return walk;

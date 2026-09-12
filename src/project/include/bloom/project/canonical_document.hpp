@@ -24,7 +24,7 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 0};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 1};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
@@ -68,7 +68,7 @@ struct CanonicalDocumentV1 final {
     // The document schema minor to emit at the document root ({1, schemaMinor}). Defaults to 0
     // (the only schema `1.0` writes before RT2). An overlay rewrite of a {1, minor > 0} document
     // must pass that same minor back so the emitted schemaVersion matches what was opened.
-    std::uint32_t schemaMinor = 0;
+    std::uint32_t schemaMinor = kCanonicalDocumentSchemaVersionV1.minor;
 };
 
 struct CanonicalDocumentLimits final {

@@ -39,6 +39,7 @@ namespace bloom::project {
 // provider/capability pairs are a manifest-level identity outside document.json and are not a
 // member of this enum.
 enum class RoundTripCollectionKind : std::uint8_t {
+    NodeLayout,
     Composition,
     Parameter,
     AnimationCurve,

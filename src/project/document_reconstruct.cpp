@@ -129,6 +129,8 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
             return ReconstructDocumentResult::failure(*rejection);
         }
 
+        composition.nodeLayout() = std::move(decodedComposition.nodeLayout);
+
         if (!project.addComposition(std::move(composition))) {
             return ReconstructDocumentResult::failure({.stage = ReconstructionStage::CompositionAdd,
                                                        .compositionId = compositionId,

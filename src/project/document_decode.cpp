@@ -578,15 +578,16 @@ using document::SchemaVersion;
 // document_decode_composition.cpp.
 [[nodiscard]] bool decodeComposition(const JsonValue& node, DecodeState& state,
                                      const std::string& path, DecodedComposition& out) {
-    static constexpr std::array<std::string_view, 7> kKeys{
-        "id", "name", "duration", "format", "parameters", "animationCurves", "graph"};
+    static constexpr std::array<std::string_view, 8> kKeys{
+        "id", "name", "duration", "format", "parameters", "animationCurves", "graph", "nodeLayout"};
+    const auto keys = std::span(kKeys).first(state.documentMinor == 0 ? 7U : 8U);
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
     // shape's own trailing unknown members cannot be attached immediately; capture them here and
     // attach once `id` and its AttachmentScope below exist.
     std::vector<RetainedJsonMember> trailing;
-    if (!matchOrderedMembers(node, kKeys, true, state, path, members, trailing)) {
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
         return false;
     }
 
@@ -619,10 +620,18 @@ using document::SchemaVersion;
         }
     }
 
-    return detail::decodeCompositionInterior(
-        *members[4], *members[5], *members[6], state, joinPath(path, "parameters"),
-        joinPath(path, "animationCurves"), joinPath(path, "graph"), out.parameters,
-        out.animationCurves, out.graph);
+    if (!detail::decodeCompositionInterior(
+            *members[4], *members[5], *members[6], state, joinPath(path, "parameters"),
+            joinPath(path, "animationCurves"), joinPath(path, "graph"), out.parameters,
+            out.animationCurves, out.graph))
+        return false;
+    if (state.documentMinor == 0) {
+        out.nodeLayout = document::defaultNodeLayout(out.graph.nodes);
+        return true;
+    }
+    const AttachmentScope layoutScope(state, "nodeLayout");
+    return detail::decodeNodeLayout(*members[7], state, joinPath(path, "nodeLayout"),
+                                    out.nodeLayout);
 }
 
 [[nodiscard]] bool decodeLocator(const JsonValue& node, DecodeState& state, const std::string& path,
@@ -1448,9 +1457,10 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
                                              "/schemaVersion");
     }
 
-    const bool isExactSchemaV1_0 = schemaVersion.minor == kCanonicalDocumentSchemaVersionV1.minor;
+    const bool isKnownSchema = schemaVersion.minor <= kCanonicalDocumentSchemaVersionV1.minor;
+    state.documentMinor = schemaVersion.minor;
     RoundTripState roundTrip;
-    if (!isExactSchemaV1_0) {
+    if (!isKnownSchema) {
         state.documentMinor = schemaVersion.minor;
         state.roundTrip = &roundTrip;
     }
@@ -1481,7 +1491,7 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
         return finishDecodeFailure(state);
     }
 
-    if (isExactSchemaV1_0) {
+    if (isKnownSchema) {
         return DocumentDecodeResult::success(std::move(envelope));
     }
     return DocumentDecodeResult::successWithRoundTrip(std::move(envelope), std::move(roundTrip));

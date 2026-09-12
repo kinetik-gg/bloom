@@ -8,6 +8,7 @@
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/node_layout.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -130,6 +131,7 @@ struct DecodedComposition final {
     std::vector<document::ParameterRecord> parameters;
     std::vector<document::AnimationCurveRecord> animationCurves;
     DecodedGraph graph;
+    document::NodeLayout nodeLayout;
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };
