@@ -10,7 +10,9 @@
 #include <QCoreApplication>
 #include <QFont>
 #include <QIcon>
+#include <QImage>
 #include <QMenu>
+#include <QPixmap>
 #include <QPoint>
 #include <QSignalSpy>
 #include <QSize>
@@ -18,6 +20,7 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -45,6 +48,30 @@ class Expectations final {
 
 using namespace bloom::ui;
 
+// FORMAL AMENDMENT 1 (task C1): a minimal test double for an editor that offers EditorArea a
+// footer -- exercises the generic EditorFooterProvider seam without needing ViewerEditor's real
+// CompositionSession/CompositionPreviewController wiring (that pin belongs in
+// viewer_editor_tests.cpp, which already has that fixture machinery).
+class FakeFooterProvidingEditor final : public QWidget, public EditorFooterProvider {
+  public:
+    explicit FakeFooterProvidingEditor(QWidget* parent) : QWidget(parent) {}
+
+    QWidget* takeFooterWidget() override {
+        if (footerTaken_) {
+            return nullptr;
+        }
+        footerTaken_ = true;
+        auto* footer = new QWidget();
+        // EditorArea overwrites objectName to "editorFooter" once it takes this widget, so
+        // identity is checked with a dynamic property instead (survives the rename).
+        footer->setProperty("fakeFooterMarker", true);
+        return footer;
+    }
+
+  private:
+    bool footerTaken_ = false;
+};
+
 EditorRegistry makeRegistry() {
     EditorRegistry registry;
     (void)registry.registerEditor(
@@ -66,6 +93,14 @@ EditorRegistry makeRealIdRegistry() {
     addTrivial("bloom.timeline", "Timeline");
     addTrivial("bloom.media", "Media");
     addTrivial("bloom.properties", "Properties");
+    return registry;
+}
+
+EditorRegistry makeFooterProvidingRegistry() {
+    EditorRegistry registry;
+    (void)registry.registerEditor(
+        {"bloom.footerProbe", "Footer Probe",
+         [](QWidget* parent) -> QWidget* { return new FakeFooterProvidingEditor(parent); }});
     return registry;
 }
 
@@ -339,6 +374,77 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
                         "the switcher field is ControlRoomy (32) tall");
 }
 
+// FORMAL AMENDMENT 1 (task C1, after the first report; owner: "an empty reserved strip on every
+// panel is NOT wanted"). An editor that implements EditorFooterProvider and offers a real footer
+// widget gets one hosted under objectName "editorFooter", holding exactly the widget it handed
+// back.
+void testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(Expectations& expectations) {
+    const EditorRegistry registry = makeFooterProvidingRegistry();
+    EditorArea area(registry, "bloom.footerProbe", QString{});
+    auto* footer = area.findChild<QWidget*>(QStringLiteral("editorFooter"));
+    expectations.expect(footer != nullptr,
+                        "the footer-providing editor's footer is hosted under objectName "
+                        "\"editorFooter\"");
+    if (footer == nullptr) {
+        return;
+    }
+    expectations.expect(
+        footer->property("fakeFooterMarker").toBool(),
+        "the hosted footer really is the exact widget the provider handed back, not a copy or a "
+        "wrapper");
+}
+
+// FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/media,
+// none of which implement EditorFooterProvider) has no "editorFooter" child at all -- not an
+// empty reserved strip, per the amendment's correction of this task's first report.
+void testAFooterLessEditorHasNoEditorFooterChildAtAll(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    expectations.expect(area.findChild<QWidget*>(QStringLiteral("editorFooter")) == nullptr,
+                        "an editor that never implements EditorFooterProvider gets no footer row "
+                        "at all");
+}
+
+// task C1, item C5 (owner: "cut rounded corners because the background is not clipped by the
+// panel"): an offscreen grab of a real EditorArea -- header, content, and footer all painting
+// their own full-bleed Surface/Background rectangles -- still shows exactly the window Background
+// color at all four corners, never a header/footer/content square corner bleeding past the
+// Radius::Panel curve.
+void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    area.resize(240, 160);
+    QCoreApplication::processEvents();
+
+    const QImage image = area.grab().toImage();
+    expectations.expect(!image.isNull(), "the panel renders offscreen");
+    if (image.isNull()) {
+        return;
+    }
+
+    const QColor background = kit::color(kit::Color::Background);
+    const qreal dpr = image.devicePixelRatio();
+    const int w = image.width();
+    const int h = image.height();
+    const int last = static_cast<int>(std::lround(dpr)) - 1;
+    const std::array<QPoint, 4> corners = {
+        QPoint(0, 0),
+        QPoint(w - 1 - last, 0),
+        QPoint(0, h - 1 - last),
+        QPoint(w - 1 - last, h - 1 - last),
+    };
+    // Background (#111111) and Surface (#141414, the header/footer's own fill) differ by only 3
+    // per channel, so this checks exact equality rather than a tolerant "near" match -- a loose
+    // tolerance would pass even if a header/footer/content corner bled straight through.
+    for (const auto& corner : corners) {
+        expectations.expect(image.pixelColor(corner) == background,
+                            "the panel corner at (" + std::to_string(corner.x()) + ", " +
+                                std::to_string(corner.y()) +
+                                ") shows the window background, not a header/footer/content "
+                                "corner bleeding past the rounded curve");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -355,5 +461,8 @@ int main(int argc, char** argv) {
     testThePanelSwitcherPinsTheIconMapping(expectations);
     testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(expectations);
     testHeaderProportionsMatchTheDesignCrops(expectations);
+    testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(expectations);
+    testAFooterLessEditorHasNoEditorFooterChildAtAll(expectations);
+    testTheFourCornersAreClippedToWindowBackground(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

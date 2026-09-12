@@ -23,6 +23,15 @@ class FramelessEdgeResizer final : public QObject {
   public:
     FramelessEdgeResizer(QMainWindow& window, int marginPx, QObject* parent = nullptr);
 
+    // Test-only direct access to the protected eventFilter() override below (task C1, item C1:
+    // this class is `final`, and its own real call site -- main_window.cpp's
+    // qApp->installEventFilter(edgeResizer_) -- never calls it directly either; Qt's own
+    // application-wide filter dispatch does). The same *ForTest() escape hatch
+    // viewer_editor.cpp's viewTransformForTest()/statusBarRect() already use, rather than a
+    // synthetic QCoreApplication::sendEvent() round trip whose return value does not actually
+    // reflect whether this one filter claimed the event.
+    bool eventFilterForTest(QObject* watched, QEvent* event) { return eventFilter(watched, event); }
+
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 

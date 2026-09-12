@@ -83,10 +83,6 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("radius.ScrollBarThumb"), radiusPx(Radius::Full, px(Size::ScrollBar))},
         {QLatin1StringView("radius.ScrollBarThumbHover"),
          radiusPx(Radius::Full, px(Size::ScrollBarHover))},
-        // The workspace-switcher tab's checked pill (task U2, issue #118, decision 2): Radius::Full
-        // against the menu bar's own Control-height row, the same "pill against its own extent"
-        // technique the scrollbar thumb above uses.
-        {QLatin1StringView("radius.WorkspaceTabPill"), radiusPx(Radius::Full, px(Size::Control))},
         {QLatin1StringView("border.Hairline"), static_cast<int>(kHairlineWidth)},
         {QLatin1StringView("border.Window"), static_cast<int>(kWindowBorderWidth)},
     });
@@ -173,21 +169,22 @@ QMainWindow, QMenuBar {
 }
 QMenuBar {
     border-bottom: {border.Hairline}px solid {color.Border};
-    padding: {space.XXS}px {space.XS}px;
+    /* task C1, item C3 (owner: "menus properly padded, not reaching the top edge"): the bar's own
+       Spacing::S (8px) top/bottom padding is what keeps the row's items off the client area's top
+       edge; symmetric top/bottom padding is also what centers the items vertically in the row. */
+    padding: {space.S}px {space.XS}px;
 }
 QMenuBar::item {
-    padding: {space.XXS}px {space.S}px;
+    /* Spacing::MenuItemX (10px) horizontal item padding, per item, per C3. Vertical padding stays
+       at the item's own resting XXS: the bar's own padding above already supplies the 8px of
+       vertical breathing room the owner asked for. */
+    padding: {space.XXS}px {space.MenuItemX}px;
     border-radius: {radius.Small}px;
     background: transparent;
 }
 QMenuBar::item:selected {
     background: {color.Accent};
     color: {color.Foreground};
-}
-QMenuBar::item:checked {
-    background: {color.SurfaceRaised};
-    color: {color.Accent};
-    border-radius: {radius.WorkspaceTabPill}px;
 }
 QMenuBar::item:disabled {
     color: {color.DisabledInk};

@@ -120,11 +120,16 @@ channel -- a border-color change there could not carry focus at all.
 | `MenuItemY` | `6` |
 | `MenuItemX` | `10` |
 
-`Gutter` is the visible `Background` gap between panels. Panels float on the window; they do not
-share edges. `PanelHeader` is the panel header's own vertical padding -- deliberately off the
-base-4 scale, not rounded to a nearby step. `MenuItemY` and `MenuItemX` are a menu row's own
-padding, off the base scale for the same reason: a menu row is denser vertically and roomier
-horizontally than the scale offers.
+`Gutter` is the visible `Background` gap between panels, AND (task C1, item C4) the window's own
+inner padding: the central area that hosts panels insets itself from the window's edge by the same
+`Gutter` on all four sides, so a panel never touches the window border either. Panels float on the
+window; they do not share edges. `PanelHeader` is the panel header's own vertical padding --
+deliberately off the base-4 scale, not rounded to a nearby step. `MenuItemY` and `MenuItemX` are a
+menu row's own padding, off the base scale for the same reason: a menu row is denser vertically and
+roomier horizontally than the scale offers. `MenuItemY` sizes a `QMenu` popup's own rows
+(`kit::AltUnderlineProxyStyle`, owned by the kit foundation); the menu BAR's own row (task C1, item
+C3) instead gets its vertical breathing room from `Spacing::S` padding around the whole bar, with
+`MenuItemX` alone governing each bar item's own horizontal padding.
 
 ### Size
 
@@ -136,11 +141,17 @@ horizontally than the scale offers.
 | `IconSmall` | `12` | Dense chrome |
 | `IconMedium` | `16` | Default |
 | `IconLarge` | `20` | Prominent actions |
-| `TitleBar` | `34` | The application title bar |
+| `TitleBar` | `34` | `kit::TitleBar`'s own row height. Compiled and tested, but currently unused: task C1 moved Bloom to native (OS) window chrome only, so `MainWindow` never constructs `kit::TitleBar` today -- the token and the widget both stay ready for a possible future custom-chrome/CSD return |
 | `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
 | `EditorHeader` | `48` | An editor panel's header row |
 | `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
+
+An editor panel's footer strip (task C1, item C5) is not a distinct token: it reuses `Control`
+(`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
+the header's own `Border` hairline, just on its top edge, and is empty by default -- see this
+task's report for why an editor's own existing bottom bar (the viewer's status readout, the
+timeline's transport) is not moved into it yet.
 
 ### Elevation
 
