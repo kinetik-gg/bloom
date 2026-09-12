@@ -113,6 +113,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
+    QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* splitLeftRightAction_ = nullptr;
