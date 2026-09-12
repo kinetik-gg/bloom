@@ -208,7 +208,8 @@ target_sources(
     bloom_ui
     PRIVATE
         application_shutdown_coordinator.cpp
-        composition_editors.cpp
+        composition_authoring.cpp
+        composition_editor_support.cpp
         composition_preview_controller.cpp
         composition_preview_pipeline.cpp
         composition_session.cpp
@@ -219,12 +220,15 @@ target_sources(
         jobs_editor.cpp
         licenses_window.cpp
         main_window.cpp
+        media_editor.cpp
         node_editor.cpp
         playback_controller.cpp
         project_host.cpp
+        properties_editor.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
+        timeline_editor.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
         viewer_editor.cpp
@@ -235,6 +239,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/ui/application_shutdown_coordinator.hpp
+            include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
@@ -246,13 +251,16 @@ target_sources(
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/licenses_window.hpp
             include/bloom/ui/main_window.hpp
+            include/bloom/ui/media_editor.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/project_host.hpp
+            include/bloom/ui/properties_editor.hpp
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/third_party_license_catalog.hpp
+            include/bloom/ui/timeline_editor.hpp
             include/bloom/ui/timeline_frame_math.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/viewer_editor.hpp
