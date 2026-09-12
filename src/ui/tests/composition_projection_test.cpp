@@ -420,14 +420,12 @@ parameterForRole(const bloom::document::Composition& composition,
         (void)require(false, "HDR solid layer has one exact direct source node");
         return false;
     }
-    // Task P3 (owner review 2026-09-12) gave the RGBA row a deliberately simple 0-1 editable
-    // range (the color picker is a later slice) -- the DOCUMENT value stays exactly unclipped
-    // (proven below via session.constantColorValue()), but the display cells now clamp negative
-    // and HDR channels to their range, which is a real, disclosed narrowing of the panel's former
-    // "preserves negative and HDR RGB without clipping" guarantee. See this task's raw report.
-    if (!require(solidColorRed->value() == 0.0 && solidColorGreen->value() == 1.0 &&
+    // FORMAL AMENDMENT 1 (2026-09-12): the RGBA cells are unbounded, exactly like the read-only
+    // label they replaced -- restores the original "preserves negative and HDR RGB without
+    // clipping" pin, now read through the editable cells instead of a QLabel's text.
+    if (!require(solidColorRed->value() == -0.25 && solidColorGreen->value() == 1.5 &&
                      solidColorBlue->value() == 0.125 && solidColorAlpha->value() == 0.8,
-                 "Properties clamps negative and HDR RGB to the editable cells' 0-1 range") ||
+                 "Properties preserves negative and HDR RGB without clipping") ||
         !require(session.undo(), "adding the HDR solid is undoable") ||
         !require(session.composition()->graph().layerStack().entries().size() == 2 &&
                      std::holds_alternative<std::monostate>(session.selection().primary),

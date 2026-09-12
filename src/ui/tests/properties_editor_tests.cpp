@@ -186,9 +186,14 @@ void testSelectionShowsGroupedRowsWithValuesAndUnits(Expectations& expectations)
     expectations.expect(red->unit().isEmpty() && green->unit().isEmpty() &&
                             blue->unit().isEmpty() && alpha->unit().isEmpty(),
                         "RGBA cells carry no unit suffix");
-    expectations.expect(red->decimals() == 3 && red->singleStep() == 0.01 &&
-                            red->minimum() == 0.0 && red->maximum() == 1.0,
-                        "RGBA cells show 3 decimals, scrub in 0.01 steps, and clamp to 0-1");
+    expectations.expect(red->decimals() == 3 && red->singleStep() == 0.01,
+                        "RGBA cells show 3 decimals and scrub in 0.01 steps");
+    // FORMAL AMENDMENT 1 (2026-09-12): the RGBA cells are unbounded -- negative and HDR channels
+    // are never clipped, exactly like the read-only label they replaced. A solid's default palette
+    // color is well within [0, 1], so this only pins that the range was not narrowed to it; the
+    // no-clipping guarantee itself is pinned by testRgbaCellsNeverClipNegativeOrHdrChannels below.
+    expectations.expect(red->minimum() < 0.0 && red->maximum() > 1.0,
+                        "RGBA cells are not range-clamped to 0-1");
     expectations.expect(
         red->label() == QStringLiteral("R") && green->label() == QStringLiteral("G") &&
             blue->label() == QStringLiteral("B") && alpha->label() == QStringLiteral("A"),
@@ -443,6 +448,48 @@ void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
                         "undo restores the exact pre-edit color");
 }
 
+// FORMAL AMENDMENT 1 (2026-09-12, after the first report): the 0-1 clamp in the first pass of P3
+// was the package author's error -- the document contract allows negative and HDR channels, and
+// the former read-only label promised no clipping. The RGBA cells are unbounded and must restore
+// that exact guarantee: display the exact stored value for a negative/HDR channel, with no
+// clipping.
+void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
+    auto newProject = document::makeNewProject("HDR Color Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    constexpr core::Color4d hdrColor{-0.25, 1.5, 0.125, 0.8};
+    expectations.expect(session.addSolidLayer(QStringLiteral("HDR"), hdrColor),
+                        "a negative/HDR solid can be added for the clipping check");
+
+    ui::PropertiesEditor properties(session);
+    auto* red = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* green = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* blue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    auto* alpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
+    expectations.expect(red != nullptr && green != nullptr && blue != nullptr && alpha != nullptr,
+                        "the RGBA cells resolve for the negative/HDR check");
+    if (red == nullptr || green == nullptr || blue == nullptr || alpha == nullptr) {
+        return;
+    }
+    expectations.expect(red->value() == -0.25 && green->value() == 1.5 && blue->value() == 0.125 &&
+                            alpha->value() == 0.8,
+                        "the RGBA cells display the exact negative and HDR channel values with no "
+                        "clipping");
+
+    // Editing an unrelated channel must not clip the OTHER channels' already-HDR/negative values
+    // either -- commitSolidColor() reads all four live cell values on every emission.
+    alpha->setValue(0.9);
+    const auto edited = session.constantColorValue(
+        session.parameterForSelection(document::kSolidColorParameterRole)->id);
+    expectations.expect(edited.has_value() && edited->red == -0.25 && edited->green == 1.5 &&
+                            edited->blue == 0.125 && edited->alpha == 0.9,
+                        "committing one channel keeps the other channels' exact negative/HDR "
+                        "values, unclipped, in the document");
+}
+
 // Task P3: a scrub gesture (press, travel past the drag threshold, release) on an RGBA cell
 // changes its value and commits that value into the document, exactly like a Position scrub.
 void testScrubOnRgbaCellChangesValue(Expectations& expectations) {
@@ -551,6 +598,7 @@ int main(int argc, char** argv) {
     testNoSelectionShowsDocumentProperties(expectations);
     testSelectionSwapUpdatesRows(expectations);
     testRgbaCellsEditThroughCommandWithUndo(expectations);
+    testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
     if (expectations.failures() > 0) {

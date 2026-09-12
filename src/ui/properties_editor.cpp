@@ -297,17 +297,27 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     // solid... simple input fields are not being implemented yet and that sucks"): four
     // kit::KValueField cells, one per channel, in place of the former read-only solidColorValue_
     // label. Straight scene-linear authoring values are the schema (document::
-    // kSolidColorParameterSchemaKey), but the editable range here is deliberately the simple 0-1
-    // slice the owner asked for -- HDR/negative authoring and the color picker are explicitly a
-    // later slice (non-goal: "no color picker"). See this task's raw report for the disclosure
-    // this narrows: a solid authored elsewhere with an out-of-range channel now displays and, if
-    // touched at all, commits its clamped value through these cells.
+    // kSolidColorParameterSchemaKey), and per FORMAL AMENDMENT 1 (2026-09-12) these cells are
+    // UNBOUNDED, exactly like the read-only label they replace: they never clip negative or HDR
+    // channels, display the exact stored value, and commit exactly what was typed or scrubbed.
+    //
+    // kit::KValueField has no true "no limit" range -- setRange() always clamps in commitValue()
+    // -- and this task cannot edit the kit (no kit changes). A literal +-infinity range clamps
+    // nothing either, but it wrecks sizeHint(): KValueField sizes its cell from
+    // QString::number(max(|minimum|, |maximum|), 'f', decimals), and Qt's own formatter special-
+    // cases +-infinity to the 3-4 character strings "inf"/"-inf" rather than a wide number,
+    // producing a cell too narrow for any real value. The finite extremes
+    // (std::numeric_limits<double>::lowest()/max()) are worse: that same call produces a
+    // 300+ character string. -1'000'000/1'000'000 is exactly Position's own existing "unbounded in
+    // practice" bound two rows up in this same panel: no realistic scene-linear authoring value
+    // (this task's own test fixtures included) reaches it, so nothing is ever actually clipped,
+    // while sizeHint() stays sane.
     solidColorRed_ = new kit::KValueField(solidColorPanel_);
     solidColorGreen_ = new kit::KValueField(solidColorPanel_);
     solidColorBlue_ = new kit::KValueField(solidColorPanel_);
     solidColorAlpha_ = new kit::KValueField(solidColorPanel_);
     for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
-        field->setRange(0.0, 1.0);
+        field->setRange(-1'000'000.0, 1'000'000.0);
         field->setDecimals(3);
         field->setSingleStep(0.01);
     }
@@ -514,9 +524,7 @@ void PropertiesEditor::configureSolidColor() {
         solidColorAlpha_->setValue(value->alpha);
     }
     // Mirrors Position/Opacity's own tooltip shape exactly (parameterSourceDescription() for a
-    // resolvable parameter): the former "negative and HDR RGB are not clipped" wording described
-    // the now-removed read-only label and no longer holds for these editable, range-clamped cells
-    // -- see this task's raw report.
+    // resolvable parameter).
     const QString colorTip = parameterSourceDescription(*parameter);
     for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
         field->setToolTip(colorTip);
