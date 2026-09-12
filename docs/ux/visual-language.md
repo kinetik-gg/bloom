@@ -75,7 +75,7 @@ state recipes below step along exactly this ladder and nothing else.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `Small` | `3` | Controls, chips, item rows, and dropdown-list popups |
+| `Small` | `3` | Controls, chips, and a dropdown popup's own frame -- the frame rounds, never the rows inside it |
 | `Medium` | `6` | Menus and cards |
 | `Panel` | `4` | Panel bodies and their rounded-corner mask -- its own step, not a reuse of `Small` |
 | `Large` | `12` | Dialogs |
@@ -179,7 +179,7 @@ read oversized in dense chrome once the family changed.
 | State | Recipe |
 | --- | --- |
 | Hover | One surface step up, plus `BorderHover`. At the top of the ladder the step clamps and the border change carries the state alone |
-| Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill |
+| Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; the frame's own rounded corners clip the bar, so only the frame is ever rounded |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
 | Selected | An `Accent` fill, or a 2px inset accent edge where a fill would hide content |
 | Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline |
