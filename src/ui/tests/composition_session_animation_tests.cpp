@@ -369,6 +369,47 @@ void testSelectedKeyframeInterpolation() {
             "and the command layer refuses a non-Linear final interpolation");
 }
 
+// Task S5, item 0: the PARAMETER-keyed half of the gesture, which is what a node card's diamond
+// calls. A card paints and keys its OWN node's parameter whether or not that node is selected, and
+// clicking it must not move the selection -- otherwise clicking a key on one card would silently
+// retarget the properties panel.
+void testParameterKeyedGestureNeedsNoSelection() {
+    auto newProject = document::makeNewProject("Canvas Gesture", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.clearSelection();
+    require(std::holds_alternative<std::monostate>(session.selection().primary),
+            "the canvas fixture starts with nothing selected");
+
+    // With no selection at all, the role-keyed reader has nothing to resolve -- and the
+    // parameter-keyed one still answers, because it needs only the parameter.
+    require(session.keyframeDiamondState(document::kOpacityParameterRole) ==
+                ui::KeyframeDiamondState::Unsupported,
+            "the role-keyed diamond state is Unsupported with no selection");
+    require(session.keyframeDiamondStateForParameter(ids.opacity) ==
+                ui::KeyframeDiamondState::Constant,
+            "while the parameter-keyed one reports the parameter's own state");
+
+    require(session.setCurrentTime(time(3, 1)), "the session moves to frame 3");
+    require(session.toggleKeyframeForParameter(ids.opacity),
+            "and the parameter-keyed gesture converts it to an animation with no selection at all");
+    require(std::holds_alternative<std::monostate>(session.selection().primary),
+            "keying a parameter never changes the selection");
+    require(session.keyframeDiamondStateForParameter(ids.opacity) ==
+                ui::KeyframeDiamondState::AnimatedWithKey,
+            "the key landed at the session time");
+    require(session.effectiveScalarValue(ids.opacity).has_value(),
+            "and the parameter-keyed value reader answers for an animated parameter too");
+
+    // An invalid parameter is refused rather than silently doing nothing to something else.
+    require(!session.toggleKeyframeForParameter(document::ParameterId::fromRaw(999999)),
+            "an unknown parameter refuses the gesture");
+}
+
 // --- Task S5, item 3c: per-frame evaluation over a 10-frame animated composition -----------------
 //
 // The point of the whole slice: a key at frame 0 and a key at frame 9 must sample to a DIFFERENT,
@@ -443,6 +484,7 @@ int main(int argc, char** argv) {
     testKeyframeGestureCreatesAndRemovesAnimation();
     testKeyframeGestureReachesEveryAnimatableSchema();
     testSelectedKeyframeInterpolation();
+    testParameterKeyedGestureNeedsNoSelection();
     testSteppingEveryFrameSamplesItsOwnExactValue();
     return 0;
 }
