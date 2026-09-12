@@ -35,11 +35,12 @@ const BundledFontStatus& bundledFontStatus();
 
 // The family list a type role should ask for, best match first, ending in the platform fallback.
 //
-// Static TTFs name their heavier weights as separate families -- the Medium face registers as
-// "Plus Jakarta Sans Medium", not as "Plus Jakarta Sans" at weight 500 -- so a role that wants a
-// non-Regular weight has to name that face explicitly or silently get Regular. Listing the exact
-// face first and the base family second gets the right glyphs whether or not Qt's font engine
-// merges the typographic family on a given platform.
+// Whether a role has to name a face explicitly depends on how the upstream family is cut. The
+// bundled interface faces (DejaVu Sans Book/Bold/Oblique) all declare the one family name
+// "DejaVu Sans" and differ by style, so an interface role names that family and QFont's own weight
+// carries the choice of face. The bundled monospaced faces do NOT: the Geist Mono Medium file
+// registers as its own family "Geist Mono Medium", so the value role names that face first and the
+// base family second, or it silently gets Regular.
 [[nodiscard]] QStringList fontFamiliesForRole(TypeRole role);
 
 } // namespace bloom::ui::kit

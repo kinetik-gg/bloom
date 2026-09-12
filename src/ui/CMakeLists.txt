@@ -183,18 +183,18 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
 
 
 # The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix. The
-# shipped weight set is deliberately minimal (visual-language.md): Regular/Medium/SemiBold for the
-# interface family and Regular/Medium for the monospaced one -- a weight ships when a component
-# uses it, not before.
+# shipped set is deliberately minimal (visual-language.md): Book/Bold/Oblique for the interface
+# family -- one family, three styles, unlike the per-weight families the previous interface face
+# shipped -- and Regular/Medium for the monospaced one.
 qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
+        kit/third_party/dejavu-sans/DejaVuSans-Bold.ttf
+        kit/third_party/dejavu-sans/DejaVuSans-Oblique.ttf
+        kit/third_party/dejavu-sans/DejaVuSans.ttf
         kit/third_party/geist-mono/GeistMono-Medium.ttf
         kit/third_party/geist-mono/GeistMono-Regular.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-Medium.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-Regular.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-SemiBold.ttf
 )
 
 # Generates the "Open Source Licenses..." embedded catalog (task U2, issue #118, decision 3) BEFORE

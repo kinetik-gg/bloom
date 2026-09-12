@@ -17,9 +17,9 @@ family must not introduce a JavaScript runtime or unrelated web build pipeline.
   packages or the complete catalog.
 - Reserve a separately compiled Qt resource pack for a future workflow that genuinely needs the
   complete catalog.
-- Adopt Plus Jakarta Sans as Bloom's primary interface typeface.
+- Adopt DejaVu Sans as Bloom's primary interface typeface.
 - Adopt Geist Mono as Bloom's monospaced interface typeface.
-- Vendor pinned native font assets and their SIL Open Font License 1.1 texts.
+- Vendor pinned native font assets and their upstream license texts.
 - Centralize icon and typography access behind semantic UI roles in `src/ui`.
 - Keep accessible names, labels, scale behavior, and safe platform fallbacks independent of the
   chosen glyph or font asset.

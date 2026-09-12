@@ -34,7 +34,7 @@ same check rather than assuming the highest number is the newest.
 ## Vendored files
 
 Only the Geist Mono family is vendored. The archive also carries Geist (sans) and Geist Pixel;
-Bloom's interface sans is Plus Jakarta Sans, so those are not vendored.
+Bloom's interface sans is DejaVu Sans, so those are not vendored.
 
 | Path | SHA-256 | Registers as |
 | --- | --- | --- |

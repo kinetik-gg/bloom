@@ -140,18 +140,25 @@ never the only thing separating a surface from what is behind it.
 
 | Role | Family | Size | Weight | Use |
 | --- | --- | --- | --- | --- |
-| `Ui` | Plus Jakarta Sans | `12.5` | 500 | The default interface text |
-| `UiSmall` | Plus Jakarta Sans | `11` | 500 | Panel headers: uppercase, `+0.07em` tracking |
+| `Ui` | DejaVu Sans | `12` | 500 | The default interface text |
+| `UiSmall` | DejaVu Sans | `10.5` | 500 | Panel headers: uppercase, `+0.07em` tracking |
 | `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
-| `Title` | Plus Jakarta Sans | `13` | 600 | Dialog and section titles |
+| `Title` | DejaVu Sans | `13` | 600 | Dialog and section titles |
 
 Sizes are in design pixels. `Value` is monospaced so a column of numbers stays aligned and a
 changing digit does not reflow the text beside it.
 
 Static faces are shipped rather than the upstream variable fonts (see Font Packaging And Loading
-below). A static face names its heavier weights as separate families -- the Medium face registers
-as `Plus Jakarta Sans Medium`, not as `Plus Jakarta Sans` at weight 500 -- so a role asks for the
-exact face first and the base family second, and the platform family last.
+below). How a role asks for a face depends on how the upstream family is cut. The interface family's
+three faces all declare the one family name `DejaVu Sans` and differ by style (`Book` / `Bold` /
+`Oblique`), so an interface role names that family and the role's own weight picks the face: `Ui`
+and `UiSmall` at 500 resolve to Book, `Title` at 600 resolves to Bold. The monospaced family is cut
+the other way -- its Medium face registers as its own family `Geist Mono Medium` -- so the `Value`
+role asks for that exact face first, the base family second, and the platform family last.
+
+`Ui` and `UiSmall` are `12` and `10.5` rather than the `12.5` and `11` they were under the previous
+interface face: DejaVu Sans renders visibly larger at an equal pixel size, and the earlier numbers
+read oversized in dense chrome once the family changed.
 
 ### State
 
@@ -225,10 +232,10 @@ Official sources:
 
 ## Typography
 
-Plus Jakarta Sans is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
+DejaVu Sans is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
 typeface.
 
-Use Plus Jakarta Sans for:
+Use DejaVu Sans for:
 
 - menus, editor headers, controls, labels, dialogs, properties, and timeline text
 - headings and ordinary artist-facing documentation rendered inside the application
@@ -247,7 +254,7 @@ layout should carry hierarchy in the normal interface.
 
 - Vendor native font assets from pinned upstream releases; do not use a Git submodule, install them
   through npm, or fetch them from a network while configuring, building, or launching Bloom.
-- Retain each upstream SIL Open Font License 1.1 file and record the exact version or commit.
+- Retain each upstream license file and record the exact version or commit.
 - Prefer upstream variable TTF assets when they behave consistently through the supported Qt
   version on all three platforms. Keep a tested static-font fallback if variable-font behavior or
   packaging differs.
@@ -261,21 +268,21 @@ layout should carry hierarchy in the normal interface.
   application font control. Bloom does not introduce platform-specific menu or window chrome solely
   to force typography.
 
-Initial interface weights are Regular, Medium, and SemiBold for Plus Jakarta Sans, and Regular and
-Medium for Geist Mono. Additional weights or italics should enter the shipped set only when an
-implemented component uses them.
+Initial interface faces are Book, Bold, and Oblique for DejaVu Sans, and Regular and Medium for
+Geist Mono. Book carries the `Ui`/`UiSmall` roles and Bold carries `Title`; the Oblique face is
+shipped with the family but no implemented component asks for an italic role yet.
 
-The shipped set is the static TTFs, not the upstream variable fonts: the weight set above is
-exactly five faces, those five are what implemented components use, and a static face resolves the
-same way on every supported Qt platform without depending on the platform font engine's
-named-instance handling. The vendored assets, their pinned releases, their archive digests, and a
-digest for every file are recorded in `src/ui/kit/third_party/plus-jakarta-sans/provenance.md` and
+The shipped set is the static TTFs, not an upstream variable font: it is exactly five faces, and a
+static face resolves the same way on every supported Qt platform without depending on the platform
+font engine's named-instance handling. The vendored assets, their pinned releases, their archive
+digests, and a digest for every file are recorded in
+`src/ui/kit/third_party/dejavu-sans/provenance.md` and
 `src/ui/kit/third_party/geist-mono/provenance.md`, and inventoried in the repository's
 `THIRD_PARTY_NOTICES.md`.
 
 Official sources:
 
-- [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans)
+- [DejaVu fonts](https://github.com/dejavu-fonts/dejavu-fonts)
 - [Geist and Geist Mono](https://github.com/vercel/geist-font)
 
 ## Ownership Boundary

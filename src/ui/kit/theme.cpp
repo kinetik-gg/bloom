@@ -454,7 +454,7 @@ void installKinetikTheme(QApplication& application) {
         QApplication::setStyle(style);
     }
     // Bundled faces are registered before the application font is set, so the very first widget
-    // already renders in Plus Jakarta Sans rather than flashing the platform family. A face that
+    // already renders in DejaVu Sans rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
