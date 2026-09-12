@@ -8,6 +8,7 @@ target_sources(
         operations.cpp
         node_operations.cpp
         node_duplication.cpp
+        node_group_operations.cpp
         node_layout_operations.cpp
         result.cpp
         transaction.cpp

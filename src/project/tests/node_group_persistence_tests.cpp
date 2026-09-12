@@ -53,8 +53,8 @@ document::ColorSettings neutralColorSettings() {
 }
 
 // A project whose one composition carries two groups: one over both live nodes with a deliberately
-// non-default padding, and one empty-named-but-valid second group over nothing, which is exactly
-// what an UngroupNodes undo can leave behind and therefore has to survive a save.
+// non-default padding, and one with no members at all -- which no command produces, but which the
+// model permits and the format therefore has to carry without inventing or dropping anything.
 struct Authored final {
     std::unique_ptr<document::Document> document;
     document::CompositionId compositionId;

@@ -92,6 +92,8 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         (void)composition->graph().eraseNode(id);
         composition->nodeLayout().erase(id);
     }
+    // A removed node leaves its frame, and a frame with nothing left in it goes with it.
+    (void)detail::detachFromNodeGroups(*composition, nodes_);
     detail::eraseOrphanedParameters(*composition, candidates);
     return OperationResult::applied();
 }
@@ -213,6 +215,7 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         candidates.insert(binding.parameterId);
     (void)graph.eraseNode(nodeId_);
     composition->nodeLayout().erase(nodeId_);
+    (void)detail::detachFromNodeGroups(*composition, {nodeId_});
     for (const auto& edge : consumers) {
         if (!graph.addEdge(edge, registry_))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,

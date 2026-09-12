@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
 
@@ -49,6 +50,31 @@ inline document::NodeLayoutRecord layoutFor(const document::Composition& composi
         return record->second;
     return document::defaultNodeLayout(composition.graph().nodes()).at(id);
 }
+// Takes `nodes` out of whatever groups hold them -- all of them, or every one but `except` -- and
+// removes any group left with no members. Shared by every command that can empty a group: grouping
+// nodes away from an older frame, setting a frame's membership, moving a card out of one, and
+// removing or dissolving a node. One place decides what an emptied frame becomes.
+inline bool detachFromNodeGroups(document::Composition& composition,
+                                 const std::set<document::NodeId>& nodes,
+                                 const std::optional<document::NodeGroupId> except = std::nullopt) {
+    bool changed = false;
+    for (auto group = composition.nodeGroups().begin(); group != composition.nodeGroups().end();) {
+        if (except && group->first == *except) {
+            ++group;
+            continue;
+        }
+        for (const auto id : nodes)
+            changed = group->second.members.erase(id) > 0 || changed;
+        if (group->second.members.empty()) {
+            group = composition.nodeGroups().erase(group);
+            changed = true;
+        } else {
+            ++group;
+        }
+    }
+    return changed;
+}
+
 inline std::optional<OperationResult> validateGraph(
     const document::Composition& composition,
     const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {

@@ -5,6 +5,7 @@
 #include <bloom/document/node_layout.hpp>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -16,6 +17,13 @@ namespace bloom::commands {
                                          const Operation& operation);
 
 inline constexpr std::string_view kAddNodeOutput = "node";
+inline constexpr std::string_view kGroupNodesOutput = "nodeGroup";
+inline constexpr std::string_view kDefaultNodeGroupName = "Group";
+
+// Where a moved node ends up: a group id to land in, or nullopt to leave whatever group it was in.
+// A drag that crosses a group frame's boundary carries this alongside its positions so the move and
+// the membership change are ONE transaction, and therefore one undo.
+using NodeGroupMembershipDelta = std::map<document::NodeId, std::optional<document::NodeGroupId>>;
 
 class AddNode final : public Operation {
   public:
@@ -124,14 +132,76 @@ class DissolveNode final : public Operation {
 class MoveNodes final : public Operation {
   public:
     MoveNodes(document::CompositionId compositionId,
-              std::map<document::NodeId, document::Vec2d> positions)
-        : compositionId_(compositionId), positions_(std::move(positions)) {}
+              std::map<document::NodeId, document::Vec2d> positions,
+              NodeGroupMembershipDelta membership = {})
+        : compositionId_(compositionId), positions_(std::move(positions)),
+          membership_(std::move(membership)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
   private:
     document::CompositionId compositionId_;
     std::map<document::NodeId, document::Vec2d> positions_;
+    NodeGroupMembershipDelta membership_;
+};
+
+// Node groups (layout, never semantics -- see bloom/document/node_layout.hpp). Each of these is one
+// transaction and one undo entry like every other node command, and each removes any group it
+// leaves with no members at all: an empty frame is not something an artist asked for, and keeping
+// one would leave a nameplate floating over nothing.
+
+class GroupNodes final : public Operation {
+  public:
+    GroupNodes(document::CompositionId compositionId, std::set<document::NodeId> nodes,
+               std::string name = std::string(kDefaultNodeGroupName))
+        : compositionId_(compositionId), nodes_(std::move(nodes)), name_(std::move(name)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    std::set<document::NodeId> nodes_;
+    std::string name_;
+};
+
+class UngroupNodes final : public Operation {
+  public:
+    UngroupNodes(document::CompositionId compositionId, document::NodeGroupId groupId)
+        : compositionId_(compositionId), groupId_(groupId) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeGroupId groupId_;
+};
+
+class RenameGroup final : public Operation {
+  public:
+    RenameGroup(document::CompositionId compositionId, document::NodeGroupId groupId,
+                std::string name)
+        : compositionId_(compositionId), groupId_(groupId), name_(std::move(name)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeGroupId groupId_;
+    std::string name_;
+};
+
+class SetGroupMembers final : public Operation {
+  public:
+    SetGroupMembers(document::CompositionId compositionId, document::NodeGroupId groupId,
+                    std::set<document::NodeId> members)
+        : compositionId_(compositionId), groupId_(groupId), members_(std::move(members)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeGroupId groupId_;
+    std::set<document::NodeId> members_;
 };
 
 class SetNodeCollapsed final : public Operation {

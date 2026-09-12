@@ -22,6 +22,7 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
         const auto* b = right.project().findComposition(a.id());
         if (!b || a.name() != b->name() || a.duration() != b->duration() ||
             a.format() != b->format() || a.nodeLayout() != b->nodeLayout() ||
+            a.nodeGroups() != b->nodeGroups() ||
             !std::ranges::equal(a.parameters().records(), b->parameters().records()) ||
             !std::ranges::equal(a.animationCurves().records(), b->animationCurves().records()) ||
             !std::ranges::equal(a.graph().nodes(), b->graph().nodes()) ||
@@ -475,6 +476,106 @@ void testDuplicationOwnershipEdges(TestContext& test) {
                            std::set<NodeId>{kSecondLayerNodeId}, Vec2d{});
 }
 
+// Node groups: one transaction each, undo/redo pinned by exercise() above, and the one rule that
+// spans them all -- a node belongs to exactly one group, and a frame emptied by any of these goes.
+void testNodeGroups(TestContext& test) {
+    Fixture fixture;
+    const auto composition = [&fixture] {
+        return fixture.document.snapshot().project().findComposition(kCompositionId);
+    };
+    const auto groups = [&fixture]() -> const NodeGroups& {
+        return fixture.document.snapshot().project().findComposition(kCompositionId)->nodeGroups();
+    };
+
+    const auto created = exercise<GroupNodes>(
+        test, fixture, std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId});
+    const auto first = created.outputId<NodeGroupId>(kGroupNodesOutput);
+    test.expect(first.has_value(), "GroupNodes reports the group it created");
+    if (!first)
+        return;
+    test.expect(groups().size() == 1 &&
+                    groups().at(*first).members ==
+                        std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId} &&
+                    groups().at(*first).name == kDefaultNodeGroupName,
+                "a new group holds exactly the nodes it was given, under the default name");
+    test.expect(groups().at(*first).padding.x == kDefaultNodeGroupPadding &&
+                    groups().at(*first).padding.y == kDefaultNodeGroupPadding,
+                "a new group takes the frozen default padding");
+
+    // A second group over one of the first group's members takes it away from the first.
+    const auto second = exercise<GroupNodes>(test, fixture, std::set<NodeId>{kSecondLayerNodeId},
+                                             std::string("Lighting"))
+                            .outputId<NodeGroupId>(kGroupNodesOutput);
+    test.expect(second.has_value(), "a second group is created");
+    if (!second)
+        return;
+    test.expect(groups().size() == 2 &&
+                    groups().at(*first).members == std::set<NodeId>{kFirstLayerNodeId} &&
+                    groups().at(*second).members == std::set<NodeId>{kSecondLayerNodeId},
+                "members leave their previous group");
+
+    // Renaming: one applies, an identical name is a no-op that writes nothing, and an empty name is
+    // refused exactly as a layer name is.
+    (void)exercise<RenameGroup>(test, fixture, *second, std::string("Key Light"));
+    test.expect(groups().at(*second).name == "Key Light", "RenameGroup renames in place");
+    const auto before = fixture.document.snapshot();
+    const auto unchanged = apply<RenameGroup>(fixture, *second, std::string("Key Light"));
+    test.expect(!unchanged.changed() && fixture.document.snapshot().revision() == before.revision(),
+                "renaming a group to its own name changes nothing");
+    refuse<RenameGroup>(test, fixture, OperationIssueCode::InvalidValue, *second, std::string{});
+    refuse<GroupNodes>(test, fixture, OperationIssueCode::InvalidValue,
+                       std::set<NodeId>{kFirstLayerNodeId}, std::string{});
+    refuse<GroupNodes>(test, fixture, OperationIssueCode::InvalidValue, std::set<NodeId>{});
+    refuse<GroupNodes>(test, fixture, OperationIssueCode::InvalidTarget,
+                       std::set<NodeId>{NodeId::fromRaw(9999)});
+    refuse<RenameGroup>(test, fixture, OperationIssueCode::InvalidTarget,
+                        NodeGroupId::fromRaw(9999), std::string("Nowhere"));
+    refuse<UngroupNodes>(test, fixture, OperationIssueCode::InvalidTarget,
+                         NodeGroupId::fromRaw(9999));
+
+    // Membership by command: the second frame takes both nodes, which empties the first one.
+    (void)exercise<SetGroupMembers>(test, fixture, *second,
+                                    std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId});
+    test.expect(groups().size() == 1 && !groups().contains(*first) &&
+                    groups().at(*second).members ==
+                        std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId},
+                "a group emptied by another group's membership change is removed");
+    refuse<SetGroupMembers>(test, fixture, OperationIssueCode::InvalidTarget, *second,
+                            std::set<NodeId>{NodeId::fromRaw(9999)});
+
+    // A move that carries a membership delta is one transaction: exercise() proves the single undo.
+    (void)exercise<MoveNodes>(test, fixture,
+                              std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{111, 222}}},
+                              NodeGroupMembershipDelta{{kFirstLayerNodeId, std::nullopt}});
+    test.expect(composition()->nodeLayout().at(kFirstLayerNodeId).position == Vec2d{111, 222} &&
+                    groups().at(*second).members == std::set<NodeId>{kSecondLayerNodeId},
+                "a drag out of a frame moves the card and drops its membership together");
+    (void)exercise<MoveNodes>(test, fixture,
+                              std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{5, 6}}},
+                              NodeGroupMembershipDelta{{kFirstLayerNodeId, *second}});
+    test.expect(groups().at(*second).members ==
+                    std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId},
+                "a drop inside a frame adds the card in the same transaction");
+    refuse<MoveNodes>(test, fixture, OperationIssueCode::InvalidTarget,
+                      std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{1, 1}}},
+                      NodeGroupMembershipDelta{{kFirstLayerNodeId, NodeGroupId::fromRaw(9999)}});
+
+    // Ungrouping keeps every node and every layout record; only the frame goes.
+    const auto layoutBefore = composition()->nodeLayout();
+    (void)exercise<UngroupNodes>(test, fixture, *second);
+    test.expect(groups().empty() && composition()->nodeLayout() == layoutBefore &&
+                    composition()->graph().findNode(kFirstLayerNodeId) != nullptr,
+                "ungrouping removes only the frame");
+
+    // Removing a node empties the frame that held it, and the frame goes with it.
+    const auto solid = addSource(fixture);
+    const auto lone = apply<GroupNodes>(fixture, std::set<NodeId>{solid})
+                          .outputId<NodeGroupId>(kGroupNodesOutput);
+    test.expect(lone.has_value() && groups().size() == 1, "a one-node group exists");
+    (void)exercise<RemoveNodes>(test, fixture, std::set<NodeId>{solid});
+    test.expect(groups().empty(), "removing a group's last node removes the group");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -487,6 +588,7 @@ int main() {
         bloom::commands::test::testRemoveAndDissolve(test);
         bloom::commands::test::testDeepDuplication(test);
         bloom::commands::test::testDuplicationOwnershipEdges(test);
+        bloom::commands::test::testNodeGroups(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

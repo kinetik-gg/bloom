@@ -15,6 +15,12 @@ OperationResult MoveNodes::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Node position must be finite");
     }
+    for (const auto& [id, group] : membership_) {
+        if (!composition->graph().findNode(id))
+            return detail::invalidTarget();
+        if (group && !composition->nodeGroups().contains(*group))
+            return detail::invalidTarget();
+    }
     bool changed = false;
     for (const auto& [id, position] : positions_) {
         auto record = detail::layoutFor(*composition, id);
@@ -23,6 +29,25 @@ OperationResult MoveNodes::apply(document::Draft& draft) const {
         record.position = position;
         composition->nodeLayout()[id] = record;
         changed = true;
+    }
+    // Membership after position, in this same operation and therefore this same transaction: a drag
+    // that ends inside or outside a frame is one gesture and one undo, never a move the artist can
+    // undo away from the grouping it caused.
+    for (const auto& [id, group] : membership_) {
+        const auto* current = document::findNodeGroupOf(composition->nodeGroups(), id);
+        if (current && group && current->id == *group)
+            continue;
+        if (!current && !group)
+            continue;
+        changed = detail::detachFromNodeGroups(*composition, {id}, group) || changed;
+        if (group) {
+            const auto landing = composition->nodeGroups().find(*group);
+            // detachFromNodeGroups() never prunes `group` itself, so the landing frame is still
+            // here; the guard is a truthful refusal rather than an assumption if that ever changes.
+            if (landing == composition->nodeGroups().end())
+                return detail::invalidTarget();
+            changed = landing->second.members.insert(id).second || changed;
+        }
     }
     return changed ? OperationResult::applied() : OperationResult::noChange();
 }
