@@ -164,7 +164,9 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         }
     }
 
+    rebuildGroups(*composition);
     rebuildEdges(*composition);
+    updateGroupGeometry();
     const QRectF bounds = itemsBoundingRect();
     setSceneRect(bounds.isEmpty() ? QRectF(-kNodeSceneMargin, -kNodeSceneMargin,
                                            kNodeSceneMargin * 2.0, kNodeSceneMargin * 2.0)
@@ -179,6 +181,75 @@ QGraphicsItem* NodeGraphicsScene::findNodeItem(const document::NodeId nodeId) co
                item->data(kNodeStableIdRole).toULongLong() == nodeId.value();
     });
     return found == matching.end() ? nullptr : *found;
+}
+
+QGraphicsItem* NodeGraphicsScene::findNodeGroupItem(const document::NodeGroupId groupId) const {
+    const auto matching = items();
+    const auto found = std::ranges::find_if(matching, [groupId](const auto* item) {
+        return item->data(kNodeItemKindRole).toString() == QStringLiteral("node-group") &&
+               item->data(kNodeStableIdRole).toULongLong() == groupId.value();
+    });
+    return found == matching.end() ? nullptr : *found;
+}
+
+// Frames are reconciled by their stable NodeGroupId exactly as cards are, because an inline title
+// edit in flight has to survive the snapshot change its own rename produced.
+void NodeGraphicsScene::rebuildGroups(const document::Composition& composition) {
+    std::map<std::uint64_t, NodeGroupItem*> existing;
+    for (auto* item : items())
+        if (auto* group = dynamic_cast<NodeGroupItem*>(item))
+            existing.emplace(group->id().value(), group);
+    for (const auto& [id, record] : composition.nodeGroups()) {
+        const auto found = existing.find(id.value());
+        auto* item = found == existing.end() ? nullptr : found->second;
+        if (item == nullptr) {
+            item = new NodeGroupItem(id, session_);
+            addItem(item);
+        }
+        item->refresh(record);
+        item->setAuthoringEnabled(canSubmit());
+    }
+    for (const auto& [id, item] : existing) {
+        if (composition.nodeGroups().contains(document::NodeGroupId::fromRaw(id)))
+            continue;
+        removeItem(item);
+        // deleteLater(), not delete: a frame can be dropped from inside its own title editor's
+        // signal emission -- the rename that ungrouped it -- and unwinding through a freed widget
+        // is not something a projection may risk.
+        item->deleteLater();
+    }
+}
+
+// The frame is the bounding rectangle of its member cards plus the record's own padding, with room
+// for the title strip above. A member the gesture in flight is dragging OUT is excluded, so the
+// frame holds still and the artist can see where the card is landing; a gesture that carries the
+// whole frame excludes nothing and the frame travels with its members.
+void NodeGraphicsScene::updateGroupGeometry() {
+    const bool frameDrag = interaction_->movedGroup.has_value();
+    for (auto* item : items()) {
+        auto* group = dynamic_cast<NodeGroupItem*>(item);
+        if (group == nullptr)
+            continue;
+        std::optional<QRectF> settled;
+        std::optional<QRectF> every;
+        for (const auto id : group->members()) {
+            const auto* card = dynamic_cast<NodeItem*>(findNodeItem(id));
+            if (card == nullptr)
+                continue;
+            const QRectF rect = card->mapRectToScene(card->cardRect());
+            every = every ? every->united(rect) : rect;
+            if (!frameDrag && interaction_->positions.contains(id))
+                continue;
+            settled = settled ? settled->united(rect) : rect;
+        }
+        const auto bounds = settled ? settled : every;
+        group->setVisible(bounds.has_value());
+        if (!bounds)
+            continue;
+        const auto padding = group->padding();
+        group->setFrameRect(
+            bounds->adjusted(-padding.x, -padding.y - kGroupTitleHeight, padding.x, padding.y));
+    }
 }
 
 QWidget* NodeGraphicsScene::nodeFieldForTest(const document::NodeId nodeId,

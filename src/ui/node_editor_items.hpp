@@ -38,6 +38,7 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QSizeF>
 #include <QStyleOptionGraphicsItem>
 #include <QVariant>
 #include <QWheelEvent>
@@ -48,6 +49,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -73,8 +75,14 @@ inline constexpr qreal kStackSlotPitch = kit::px(kit::Spacing::M);
 inline constexpr qreal kSocketHitSlop = 16.0 - kSocketDiameter / 2.0;
 inline constexpr qreal kNodeSceneMargin = kit::px(kit::Spacing::XXL) * 2;
 inline constexpr qreal kSelectionEdgeWidth = 2.0;
+// A group frame's own title strip, and how faintly its body reads against the canvas: a frame is
+// background, so its fill is the raised surface at low opacity rather than a second opaque plate.
+inline constexpr qreal kGroupTitleHeight = kit::px(kit::Size::PanelHeader);
+inline constexpr qreal kGroupFillOpacity = 0.35;
+inline constexpr auto kGroupRadius = kit::Radius::Panel;
 class NodeEdgeItem;
 class NodeItem;
+class NodeGroupItem;
 QString displayTypeName(std::string_view typeId);
 // The artist-facing name of a node TYPE (task S1, item 7). Four built-ins are named rather than
 // spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
@@ -99,6 +107,7 @@ kit::KValueField* makeCardField(const QString& objectName, const QString& access
                                 double minimum, double maximum, int decimals, const QString& unit);
 NodeItem* nodeItemAncestor(QGraphicsItem* item);
 NodeItem* firstNodeItem(const QList<QGraphicsItem*>& items);
+NodeGroupItem* groupItemAncestor(QGraphicsItem* item);
 QString socketKindName(document::SocketValueKind kind);
 QPainterPath linkPath(QPointF start, QPointF end);
 
@@ -697,6 +706,50 @@ class NodeItem final : public QGraphicsObject {
     QString colorRowLabel_;
     QGraphicsDropShadowEffect* dragShadow_ = nullptr;
     std::vector<NodeEdgeItem*> edges_;
+};
+
+// One node group, painted BEHIND its members: the bounding rectangle of the member cards plus the
+// record's own padding, a hairline Border, a faint SurfaceRaised fill and Radius::Panel, with an
+// inline-editable title strip along its top.
+//
+// The frame owns no geometry of its own. Its rectangle is recomputed from the live member cards --
+// including mid-drag, which is what makes it follow its members instead of lagging a snapshot
+// behind. While a member is being dragged OUT of it, the dragged cards are excluded from that
+// computation, so the frame holds still and the artist can see whether the card is landing inside
+// it; a gesture that drags every member at once excludes nothing, and the frame travels with them.
+class NodeGroupItem final : public QGraphicsObject {
+  public:
+    NodeGroupItem(document::NodeGroupId id, CompositionSession* session);
+
+    [[nodiscard]] document::NodeGroupId id() const noexcept { return id_; }
+    [[nodiscard]] const std::set<document::NodeId>& members() const noexcept { return members_; }
+    [[nodiscard]] const QString& title() const noexcept { return title_; }
+
+    // Reconciles the frame against its record. Geometry follows separately, through setFrameRect().
+    void refresh(const document::NodeGroupRecord& record);
+    // `rect` is in scene coordinates; the item moves to its top-left and keeps a local origin.
+    void setFrameRect(QRectF rect);
+    [[nodiscard]] QRectF frameRect() const { return {pos(), size_}; }
+    [[nodiscard]] QRectF titleRect() const { return {0.0, 0.0, size_.width(), kGroupTitleHeight}; }
+    [[nodiscard]] document::Vec2d padding() const noexcept { return padding_; }
+
+    void startRename();
+    void setAuthoringEnabled(bool enabled);
+
+    [[nodiscard]] QRectF boundingRect() const override { return {QPointF{}, size_}; }
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override;
+
+  private:
+    void retireRenameProxy();
+
+    document::NodeGroupId id_;
+    CompositionSession* session_ = nullptr;
+    QString title_;
+    std::set<document::NodeId> members_;
+    document::Vec2d padding_{};
+    QSizeF size_;
+    QGraphicsProxyWidget* renameProxy_ = nullptr;
+    bool authoringEnabled_ = false;
 };
 
 class NodeEdgeItem final : public QGraphicsPathItem {

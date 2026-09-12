@@ -316,6 +316,15 @@ NodeItem* nodeItemAncestor(QGraphicsItem* item) {
     return nullptr;
 }
 
+NodeGroupItem* groupItemAncestor(QGraphicsItem* item) {
+    for (auto* candidate = item; candidate != nullptr; candidate = candidate->parentItem()) {
+        if (auto* group = dynamic_cast<NodeGroupItem*>(candidate)) {
+            return group;
+        }
+    }
+    return nullptr;
+}
+
 NodeItem* firstNodeItem(const QList<QGraphicsItem*>& items) {
     for (auto* item : items) {
         if (auto* node = nodeItemAncestor(item)) {
@@ -668,5 +677,129 @@ void SocketItem::setAuthoringEnabled(const bool enabled) {
     setCursor(enabled && draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
     setToolTip(enabled ? description_
                        : description_ + QStringLiteral("\nNode command submission is unavailable"));
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+NodeGroupItem::NodeGroupItem(const document::NodeGroupId id, CompositionSession* session)
+    : id_(id), session_(session) {
+    setData(kNodeItemKindRole, QStringLiteral("node-group"));
+    setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
+    setAcceptHoverEvents(true);
+    // Behind its members AND behind their links: a frame is the ground they sit on, not a pane over
+    // them. Cards rest at 0 and links at -1.
+    setZValue(-2);
+}
+
+void NodeGroupItem::refresh(const document::NodeGroupRecord& record) {
+    title_ = QString::fromStdString(record.name);
+    members_ = record.members;
+    padding_ = record.padding;
+    setToolTip(QStringLiteral("%1\nNode group %2").arg(title_).arg(id_.value()));
+    update();
+}
+
+void NodeGroupItem::setFrameRect(const QRectF rect) {
+    setPos(rect.topLeft());
+    if (size_ == rect.size())
+        return;
+    prepareGeometryChange();
+    size_ = rect.size();
+    if (renameProxy_ != nullptr && renameProxy_->widget() != nullptr)
+        renameProxy_->widget()->resize(
+            static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
+            static_cast<int>(kGroupTitleHeight));
+    update();
+}
+
+void NodeGroupItem::setAuthoringEnabled(const bool enabled) {
+    authoringEnabled_ = enabled;
+    setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+}
+
+void NodeGroupItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+    const QRectF bounds = boundingRect();
+    if (bounds.isEmpty())
+        return;
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setOpacity(kGroupFillOpacity);
+    kit::fillRoundedSurface(*painter, bounds, kit::color(kit::Color::SurfaceRaised), QColor(),
+                            kGroupRadius);
+    painter->setOpacity(1.0);
+    // The border keeps full opacity: the fill is what recedes, while the hairline is what says
+    // where the frame actually ends -- which is the line a drop is judged against.
+    const auto radius = static_cast<qreal>(
+        kit::radiusPx(kGroupRadius, static_cast<int>(std::min(bounds.width(), bounds.height()))));
+    painter->setBrush(Qt::NoBrush);
+    kit::applyHairlinePen(*painter, kit::color(kit::Color::Border));
+    painter->drawRoundedRect(bounds, radius, radius);
+    if (renameProxy_ != nullptr && renameProxy_->isVisible())
+        return;
+    painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    painter->setPen(kit::color(kit::Color::Muted));
+    painter->drawText(
+        titleRect().adjusted(kCardPadding, 0.0, -kCardPadding, 0.0),
+        static_cast<int>(Qt::AlignVCenter | Qt::AlignLeft),
+        QFontMetricsF(painter->font())
+            .elidedText(title_, Qt::ElideRight, std::max(0.0, bounds.width() - 2 * kCardPadding)));
+}
+
+void NodeGroupItem::retireRenameProxy() {
+    auto* retired = renameProxy_;
+    if (retired == nullptr)
+        return;
+    renameProxy_ = nullptr;
+    retired->hide();
+    retired->setParentItem(nullptr);
+    if (scene() != nullptr)
+        scene()->removeItem(retired);
+    retired->deleteLater();
+    update();
+}
+
+// The same inline-editor shape a layer card's rename uses, over the frame's own title strip: commit
+// on editingFinished (which is what Enter in the field means), cancel on Escape, and one
+// RenameGroup transaction for the commit.
+void NodeGroupItem::startRename() {
+    auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
+    if (session_ == nullptr || session_->composition() == nullptr || graphScene == nullptr ||
+        !graphScene->canSubmit())
+        return;
+    if (renameProxy_ != nullptr) {
+        renameProxy_->show();
+        renameProxy_->widget()->setFocus();
+        return;
+    }
+    auto* field = new QLineEdit(title_);
+    field->setObjectName(QStringLiteral("nodeGroupRenameEditor"));
+    field->setAccessibleName(tr("Node group name"));
+    field->setFont(kit::font(kit::TypeRole::UiSmall));
+    field->resize(static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
+                  static_cast<int>(kGroupTitleHeight));
+    field->setAttribute(Qt::WA_TranslucentBackground, true);
+    field->setAttribute(Qt::WA_NoSystemBackground, true);
+    field->setAutoFillBackground(false);
+    renameProxy_ = new QGraphicsProxyWidget(this);
+    renameProxy_->setWidget(field);
+    renameProxy_->setPos(kCardPadding, 0);
+    renameProxy_->setZValue(5);
+    const auto revision = session_->snapshot().revision();
+    const auto composition = session_->compositionId();
+    connect(field, &QLineEdit::editingFinished, this,
+            [this, field, graphScene, revision, composition] {
+                if (renameProxy_ == nullptr || !renameProxy_->isVisible())
+                    return;
+                const auto name = field->text().toStdString();
+                retireRenameProxy();
+                commands::Transaction transaction("Rename Node Group", revision);
+                transaction.emplace<commands::RenameGroup>(composition, id_, name);
+                (void)graphScene->submit(std::move(transaction));
+            });
+    auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
+    cancel->setContext(Qt::WidgetShortcut);
+    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
+    field->setFocus(Qt::OtherFocusReason);
+    field->selectAll();
+    update();
 }
 } // namespace bloom::ui::node_editor

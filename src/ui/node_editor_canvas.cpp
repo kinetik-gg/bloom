@@ -220,9 +220,8 @@ void NodeGraphicsView::mouseReleaseEvent(QMouseEvent* event) {
 namespace {
 // The canvas's own keys (task S1, item 8; docs/ux/interaction-model.md is the list). Adobe-first:
 // Delete/Backspace remove, Ctrl+D duplicates, Ctrl+A selects all, Ctrl+0 fits and Ctrl+1 is actual
-// size, Tab opens Add, Enter renames, Space holds to pan. Mute, collapse and dissolve are
-// context-menu commands and bind no key at all; Ctrl+G and Ctrl+Shift+G are reserved for groups and
-// deliberately unbound.
+// size, Tab opens Add, Enter renames, Space holds to pan, Ctrl+G groups and Ctrl+Shift+G ungroups.
+// Mute, collapse and dissolve are context-menu commands and bind no key at all.
 bool canvasShortcut(const QKeyEvent& event) {
     const auto modifiers = event.modifiers();
     const int key = event.key();
@@ -230,8 +229,11 @@ bool canvasShortcut(const QKeyEvent& event) {
         return key == Qt::Key_Space || key == Qt::Key_Home || key == Qt::Key_Delete ||
                key == Qt::Key_Backspace || key == Qt::Key_Escape || key == Qt::Key_Return ||
                key == Qt::Key_Enter || key == Qt::Key_Tab;
+    if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier))
+        return key == Qt::Key_G;
     return modifiers == Qt::ControlModifier &&
-           (key == Qt::Key_A || key == Qt::Key_D || key == Qt::Key_0 || key == Qt::Key_1);
+           (key == Qt::Key_A || key == Qt::Key_D || key == Qt::Key_G || key == Qt::Key_0 ||
+            key == Qt::Key_1);
 }
 bool fieldFocused(const QGraphicsScene* scene) {
     return scene && dynamic_cast<QGraphicsProxyWidget*>(scene->focusItem()) != nullptr;

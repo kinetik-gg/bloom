@@ -578,6 +578,14 @@ target_link_libraries(bloom_node_card_test PRIVATE bloom_ui bloom_project Qt6::T
 bloom_enable_warnings(bloom_node_card_test)
 bloom_add_test(NAME bloom.ui.node-card COMMAND bloom_node_card_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Task S2 (issue #132): node group frames -- geometry, frame drag, membership by drop, inline title
+# rename, and the two menus. Its own executable for the same reason node_card_tests.cpp is.
+add_executable(bloom_node_group_test node_group_tests.cpp)
+target_include_directories(bloom_node_group_test PRIVATE ..)
+target_link_libraries(bloom_node_group_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_group_test)
+bloom_add_test(NAME bloom.ui.node-groups COMMAND bloom_node_group_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_production_wiring_test node_production_wiring_tests.cpp)
 target_include_directories(bloom_node_production_wiring_test PRIVATE ..)
 target_link_libraries(bloom_node_production_wiring_test PRIVATE bloom_ui bloom_project Qt6::Test)

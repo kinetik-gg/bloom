@@ -7,6 +7,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include <QGraphicsScene>
@@ -89,6 +90,11 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // rebuilt outright each time.
     void setProjection(const document::Snapshot& snapshot, document::CompositionId compositionId);
     [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const;
+    [[nodiscard]] QGraphicsItem* findNodeGroupItem(document::NodeGroupId groupId) const;
+    // Recomputes every group frame from the live member cards. Called by the projection and by
+    // every move in flight, which is what makes a frame follow its members rather than a saved
+    // rectangle.
+    void updateGroupGeometry();
 
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent: an in-node kit
     // field lives inside a QGraphicsProxyWidget, so it is not a QWidget child of the view and
@@ -110,6 +116,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
 
   private:
     void rebuildEdges(const document::Composition& composition);
+    void rebuildGroups(const document::Composition& composition);
 
     CompositionSession* session_ = nullptr;
     Submit submit_;
@@ -213,7 +220,9 @@ class NodeGraphEditor final : public QWidget {
     // Test/diagnostic surface only: the exact menu a right-click builds, parented to this widget
     // and never shown. Lets a test enumerate what the canvas offers -- and, just as importantly,
     // what it honestly does not.
-    [[nodiscard]] QMenu* contextMenuForTest(bool nodeMenu = false);
+    // `group` asks for the menu a right-click on that group's own frame offers.
+    [[nodiscard]] QMenu* contextMenuForTest(bool nodeMenu = false,
+                                            std::optional<document::NodeGroupId> group = {});
     void openAddSearch(QPointF scenePosition, QPoint screenPosition,
                        std::optional<document::InputPortRef> input = {},
                        std::optional<document::OutputPortRef> output = {});
@@ -223,7 +232,8 @@ class NodeGraphEditor final : public QWidget {
     void updateSelection();
     void sceneSelectionChanged();
     void showContextMenu(const QPoint& viewportPosition);
-    [[nodiscard]] QMenu* buildContextMenu(QWidget* parent, bool nodeMenu = false);
+    [[nodiscard]] QMenu* buildContextMenu(QWidget* parent, bool nodeMenu = false,
+                                          std::optional<document::NodeGroupId> group = {});
     void handleCanvasKey(int key, Qt::KeyboardModifiers modifiers);
     // The node commands, each named for what it does (task S1, item 8). The keyboard and the
     // context menu call these; neither synthesizes a key press at the other, so a command can exist
@@ -235,6 +245,10 @@ class NodeGraphEditor final : public QWidget {
     // `muted` selects which layout flag is toggled: true for mute, false for collapse.
     void toggleSelectedMuted(bool muted);
     void renameSelectedLayer();
+    // Ctrl+G / Ctrl+Shift+G, and the same two commands the context menu reaches. Ungrouping with no
+    // explicit frame removes every frame the selection sits in.
+    void groupSelectedNodes();
+    void ungroupSelection(std::optional<document::NodeGroupId> group = {});
     void addNode(const QString& type);
     void showStatus(const QString& message);
 

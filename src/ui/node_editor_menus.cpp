@@ -40,11 +40,18 @@ void NodeGraphEditor::handleCanvasKey(const int key, const Qt::KeyboardModifiers
         scene_->cancelGesture();
         return;
     }
+    if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier)) {
+        if (key == Qt::Key_G)
+            ungroupSelection();
+        return;
+    }
     if (modifiers == Qt::ControlModifier) {
         if (key == Qt::Key_A)
             scene_->selectAllNodes();
         else if (key == Qt::Key_D)
             duplicateSelectedNodes();
+        else if (key == Qt::Key_G)
+            groupSelectedNodes();
         return;
     }
     if (modifiers != Qt::NoModifier)
@@ -163,7 +170,48 @@ void NodeGraphEditor::renameSelectedLayer() {
     showStatus(tr("Only a layer node can be renamed"));
 }
 
-QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
+void NodeGraphEditor::groupSelectedNodes() {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
+        return;
+    commands::Transaction transaction("Group Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::GroupNodes>(session_.compositionId(), nodes,
+                                              std::string(commands::kDefaultNodeGroupName));
+    (void)scene_->submit(std::move(transaction));
+}
+
+void NodeGraphEditor::ungroupSelection(const std::optional<document::NodeGroupId> group) {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (!session_.composition())
+        return;
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    std::set<document::NodeGroupId> targets;
+    if (group) {
+        targets.insert(*group);
+    } else {
+        // No frame was named, so the selection says which frames to take apart -- the frames its
+        // own nodes are sitting in.
+        for (const auto id : session_.selectedNodes())
+            if (const auto* owner =
+                    document::findNodeGroupOf(session_.composition()->nodeGroups(), id))
+                targets.insert(owner->id);
+    }
+    if (targets.empty()) {
+        showStatus(tr("Select a grouped node first"));
+        return;
+    }
+    commands::Transaction transaction("Ungroup Nodes", session_.snapshot().revision());
+    for (const auto id : targets)
+        transaction.emplace<commands::UngroupNodes>(session_.compositionId(), id);
+    (void)scene_->submit(std::move(transaction));
+}
+
+QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
+                                         const std::optional<document::NodeGroupId> group) {
     addRevision_ = session_.snapshot().revision();
     auto* menu = new QMenu(parent);
     menu->setObjectName(nodeMenu ? QStringLiteral("nodeContextMenu")
@@ -175,6 +223,18 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
         connect(item, &QAction::triggered, this, callback);
         return item;
     };
+    if (group) {
+        if (!scene_->canSubmit() || !session_.composition() ||
+            !session_.composition()->nodeGroups().contains(*group))
+            return menu;
+        action(tr("Ungroup"), QStringLiteral("nodeUngroupAction"),
+               [this, id = *group] { ungroupSelection(id); });
+        action(tr("Rename"), QStringLiteral("nodeGroupRenameAction"), [this, id = *group] {
+            if (auto* frame = dynamic_cast<NodeGroupItem*>(scene_->findNodeGroupItem(id)))
+                frame->startRename();
+        });
+        return menu;
+    }
     if (nodeMenu) {
         const auto nodes = session_.selectedNodes();
         if (nodes.empty() || !scene_->canSubmit() || !session_.composition())
@@ -214,6 +274,16 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
                            });
             }
         }
+        if (accepts(commands::GroupNodes(composition, nodes,
+                                         std::string(commands::kDefaultNodeGroupName))))
+            action(tr("Group"), QStringLiteral("nodeGroupAction"),
+                   [this] { groupSelectedNodes(); });
+        if (std::ranges::any_of(nodes, [&](const auto id) {
+                return document::findNodeGroupOf(session_.composition()->nodeGroups(), id) !=
+                       nullptr;
+            }))
+            action(tr("Ungroup"), QStringLiteral("nodeUngroupAction"),
+                   [this] { ungroupSelection(); });
         if (accepts(commands::RemoveNodes(composition, nodes)))
             action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
                    [this] { removeSelectedNodes(); });
@@ -255,8 +325,9 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
     return menu;
 }
 
-QMenu* NodeGraphEditor::contextMenuForTest(const bool nodeMenu) {
-    return buildContextMenu(this, nodeMenu);
+QMenu* NodeGraphEditor::contextMenuForTest(const bool nodeMenu,
+                                           const std::optional<document::NodeGroupId> group) {
+    return buildContextMenu(this, nodeMenu, group);
 }
 void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     auto* card = nodeItemAncestor(view_->itemAt(viewportPosition));
@@ -266,7 +337,16 @@ void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     addInput_.reset();
     addOutput_.reset();
     addRevision_ = session_.snapshot().revision();
-    const QPointer<QMenu> menu = buildContextMenu(view_, card != nullptr && scene_->canSubmit());
+    // A right-click that is not on a card but is inside a frame is about that frame.
+    std::optional<document::NodeGroupId> group;
+    if (card == nullptr)
+        for (auto* item : view_->items(viewportPosition))
+            if (auto* frame = groupItemAncestor(item); frame != nullptr && frame->isVisible()) {
+                group = frame->id();
+                break;
+            }
+    const QPointer<QMenu> menu =
+        buildContextMenu(view_, card != nullptr && scene_->canSubmit(), group);
     // Nonblocking popup: selecting Duplicate must let the canvas receive the following move.
     menu->setAttribute(Qt::WA_DeleteOnClose);
     menu->popup(view_->viewport()->mapToGlobal(viewportPosition));

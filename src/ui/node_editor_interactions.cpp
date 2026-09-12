@@ -25,6 +25,27 @@ NodeItem* cardAt(QGraphicsScene& scene, const QPointF point) {
             return card;
     return nullptr;
 }
+// The innermost frame under `point`: with nested frames the smallest one wins, so a drop has
+// exactly one answer instead of depending on scene item order.
+NodeGroupItem* groupAt(QGraphicsScene& scene, const QPointF point) {
+    NodeGroupItem* innermost = nullptr;
+    for (auto* item : scene.items(point)) {
+        auto* group = groupItemAncestor(item);
+        if (group == nullptr || !group->isVisible())
+            continue;
+        const auto area = group->frameRect().width() * group->frameRect().height();
+        if (innermost == nullptr ||
+            area < innermost->frameRect().width() * innermost->frameRect().height())
+            innermost = group;
+    }
+    return innermost;
+}
+// Which frame a dropped card's CENTER lands in, by the same innermost rule. Membership is judged on
+// the center rather than on any overlap, so one card has one landing.
+std::optional<document::NodeGroupId> groupForDrop(QGraphicsScene& scene, const QPointF center) {
+    auto* group = groupAt(scene, center);
+    return group == nullptr ? std::nullopt : std::optional(group->id());
+}
 bool fieldAt(QGraphicsScene& scene, const QPointF point) {
     for (auto* item : scene.items(point))
         for (auto* parent = item; parent; parent = parent->parentItem())
@@ -131,9 +152,12 @@ void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
 NodeGraphicsScene::~NodeGraphicsScene() { cancelGesture(); }
 void NodeGraphicsScene::setSubmit(Submit submit) {
     submit_ = std::move(submit);
-    for (auto* item : items())
+    for (auto* item : items()) {
         if (auto* card = dynamic_cast<NodeItem*>(item))
             card->setAuthoringEnabled(canSubmit());
+        else if (auto* group = dynamic_cast<NodeGroupItem*>(item))
+            group->setAuthoringEnabled(canSubmit());
+    }
 }
 commands::CommandResult NodeGraphicsScene::submit(commands::Transaction&& transaction) {
     if (submit_)
@@ -165,6 +189,7 @@ void NodeGraphicsScene::cancelGesture() {
         if (dynamic_cast<NodeEdgeItem*>(item))
             item->show();
     gesture = {};
+    updateGroupGeometry();
 }
 void NodeGraphicsScene::selectAllNodes() {
     if (!session_ || !session_->composition())
@@ -289,6 +314,29 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         }
         return;
     }
+    if (auto* frame = groupAt(*this, event->scenePos());
+        frame != nullptr && !fieldAt(*this, event->scenePos())) {
+        // Clicking a frame selects what it frames. The frame itself is not a document selection:
+        // CompositionSession owns one selection truth and it is made of NodeIds.
+        std::set<document::NodeId> members;
+        for (const auto id : frame->members())
+            if (findNodeItem(id) != nullptr)
+                members.insert(id);
+        if (!members.empty())
+            session_->selectNodes(members, *members.begin());
+        event->accept();
+        if (!submit_ || members.empty())
+            return;
+        cancelGesture();
+        gesture.mode = NodeInteraction::Mode::Move;
+        gesture.movedGroup = frame->id();
+        gesture.revision = session_->snapshot().revision();
+        gesture.origin = event->scenePos();
+        for (const auto id : members)
+            if (auto* item = findNodeItem(id))
+                gesture.positions.emplace(id, item->pos());
+        return;
+    }
     cancelGesture();
     gesture.mode = NodeInteraction::Mode::Box;
     gesture.origin = event->scenePos();
@@ -312,6 +360,12 @@ void NodeGraphicsScene::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
             event->accept();
             return;
         }
+        if (auto* frame = groupAt(*this, event->scenePos())) {
+            cancelGesture();
+            frame->startRename();
+            event->accept();
+            return;
+        }
     }
     QGraphicsScene::mouseDoubleClickEvent(event);
 }
@@ -332,6 +386,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
                 card->setPos(position + delta);
             }
         previewInsertion(*this, gesture, *session_->composition(), event->scenePos());
+        updateGroupGeometry();
         break;
     case NodeInteraction::Mode::Resize:
         if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(gesture.resized)))
@@ -396,8 +451,26 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         for (const auto& [id, original] : gesture.positions)
             if (auto* card = findNodeItem(id); card && card->pos() != original)
                 moved.emplace(id, document::Vec2d{card->pos().x(), card->pos().y()});
-        if (!moved.empty())
-            transaction.emplace<commands::MoveNodes>(compositionId, moved);
+        // Where each dragged card landed relative to the frames that held still during the drag. A
+        // frame drag carries every member at once and changes no membership, so it asks nothing.
+        commands::NodeGroupMembershipDelta membership;
+        if (!gesture.movedGroup) {
+            const auto& groups = session_->composition()->nodeGroups();
+            for (const auto& [id, original] : gesture.positions) {
+                const auto* card = dynamic_cast<NodeItem*>(findNodeItem(id));
+                if (card == nullptr)
+                    continue;
+                const auto landing =
+                    groupForDrop(*this, card->mapToScene(card->cardRect().center()));
+                const auto* current = document::findNodeGroupOf(groups, id);
+                const auto currentId =
+                    current == nullptr ? std::nullopt : std::optional(current->id);
+                if (landing != currentId)
+                    membership.emplace(id, landing);
+            }
+        }
+        if (!moved.empty() || !membership.empty())
+            transaction.emplace<commands::MoveNodes>(compositionId, moved, membership);
         if (gesture.insertEdge && !moved.empty()) {
             auto* card = dynamic_cast<NodeItem*>(findNodeItem(moved.begin()->first));
             const auto [input, output] = insertionSockets(*card, *session_->composition());
