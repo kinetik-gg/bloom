@@ -581,7 +581,7 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
     const auto* current = composition();
     const auto* position = current == nullptr ? nullptr : current->parameters().find(parameterId);
     if (position == nullptr) {
-        reportUnavailable(QStringLiteral("The selected object does not expose a position"));
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
     }
 
@@ -589,7 +589,7 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
     if (const auto* constantSource =
             std::get_if<document::ConstantValueSource>(&position->source)) {
         if (std::get_if<document::Vec2d>(&constantSource->value) == nullptr) {
-            reportUnavailable(QStringLiteral("The position value does not match its schema"));
+            reportUnavailable(QStringLiteral("The parameter value does not match its schema"));
             return false;
         }
         transaction.emplace<commands::SetParameterSource>(compositionId_, position->id,
@@ -600,10 +600,45 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
                                                          time, value);
     } else {
         reportUnavailable(
-            QStringLiteral("Disconnect the driven position before editing its value"));
+            QStringLiteral("Disconnect the driven parameter before editing its value"));
         return false;
     }
     return execute(std::move(transaction));
+}
+
+bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, const double x,
+                                                   const double y, const QString& commandLabel) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* parameter = parameterForSelection(role);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
+        return false;
+    }
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        reportUnavailable(QStringLiteral("The parameter value must be finite"));
+        return false;
+    }
+    // Deliberately the same write path position uses -- one transaction carrying either a constant
+    // rewrite or a keyframe at the session time -- so every Vec2d transform row is one undo step
+    // and behaves identically whether it is static or animated.
+    return executePositionCommand(parameter->id, currentTime_, document::Vec2d{x, y}, commandLabel);
+}
+
+bool CompositionSession::setSelectedAnchor(const double x, const double y) {
+    return setSelectionVec2Parameter(document::kAnchorParameterRole, x, y,
+                                     QStringLiteral("Set Anchor"));
+}
+
+bool CompositionSession::setSelectedScale(const double x, const double y) {
+    return setSelectionVec2Parameter(document::kScaleParameterRole, x, y,
+                                     QStringLiteral("Set Scale"));
+}
+
+bool CompositionSession::setSelectedRotation(const double degrees) {
+    // No domain clamp: rotation is authored in degrees and may wind past a full turn in either
+    // direction. Only finiteness is required, which setSelectionScalarParameter already enforces.
+    return setSelectionScalarParameter(document::kRotationParameterRole, degrees,
+                                       QStringLiteral("Set Rotation"));
 }
 
 bool CompositionSession::setSelectedOpacity(const double opacity) {

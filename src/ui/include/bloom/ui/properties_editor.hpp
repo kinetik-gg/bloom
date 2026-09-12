@@ -23,6 +23,9 @@ class PropertiesEditor final : public QWidget {
   private:
     void rebuild();
     void configurePosition();
+    void configureAnchor();
+    void configureScale();
+    void configureRotation();
     void configureOpacity();
     void configureSolidColor();
     // Task S3: the Text Source group (content, size, color). Shown exactly when the selection
@@ -46,6 +49,14 @@ class PropertiesEditor final : public QWidget {
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;
     QLabel* positionKeyframe_ = nullptr;
+    kit::KValueField* anchorX_ = nullptr;
+    kit::KValueField* anchorY_ = nullptr;
+    QLabel* anchorKeyframe_ = nullptr;
+    kit::KValueField* scaleX_ = nullptr;
+    kit::KValueField* scaleY_ = nullptr;
+    QLabel* scaleKeyframe_ = nullptr;
+    kit::KValueField* rotation_ = nullptr;
+    QLabel* rotationKeyframe_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     QLabel* opacityKeyframe_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;

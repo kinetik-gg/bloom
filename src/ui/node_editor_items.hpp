@@ -266,6 +266,30 @@ class NodeItem final : public QGraphicsObject {
         (void)session_->setSelectedOpacity(opacity_->value() / 100.0);
     }
 
+    // The rest of the Layer Output transform, each through exactly the session method
+    // PropertiesEditor's matching row calls, so the two surfaces cannot drift. Scale is authored as
+    // a percentage on the card exactly as it is in the panel.
+    void commitAnchor() {
+        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || !selectSelf()) {
+            return;
+        }
+        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value());
+    }
+
+    void commitScale() {
+        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || !selectSelf()) {
+            return;
+        }
+        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
+    }
+
+    void commitRotation() {
+        if (refreshing_ || rotation_ == nullptr || !selectSelf()) {
+            return;
+        }
+        (void)session_->setSelectedRotation(rotation_->value());
+    }
+
     // Task S3's three text writes, each through exactly the session method PropertiesEditor's own
     // Text Source row calls, so the two surfaces cannot drift.
     void commitTextContent() {
@@ -352,6 +376,11 @@ class NodeItem final : public QGraphicsObject {
         readOnlyRows_.clear();
         positionX_ = nullptr;
         positionY_ = nullptr;
+        anchorX_ = nullptr;
+        anchorY_ = nullptr;
+        scaleX_ = nullptr;
+        scaleY_ = nullptr;
+        rotation_ = nullptr;
         opacity_ = nullptr;
         colorChip_ = nullptr;
         textContent_ = nullptr;
@@ -375,6 +404,38 @@ class NodeItem final : public QGraphicsObject {
                         [this] { commitPosition(); });
                 valueRows_.push_back({QStringLiteral("X"), positionX_});
                 valueRows_.push_back({QStringLiteral("Y"), positionY_});
+            } else if (role == document::kAnchorParameterRole) {
+                // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
+                anchorX_ = makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
+                                         -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
+                anchorY_ = makeCardField(QStringLiteral("nodeAnchorYEditor"), tr("Anchor Y"),
+                                         -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
+                addProxy(anchorX_);
+                addProxy(anchorY_);
+                connect(anchorX_, &kit::KValueField::valueChanged, this,
+                        [this] { commitAnchor(); });
+                connect(anchorY_, &kit::KValueField::valueChanged, this,
+                        [this] { commitAnchor(); });
+                valueRows_.push_back({tr("Anchor X"), anchorX_});
+                valueRows_.push_back({tr("Anchor Y"), anchorY_});
+            } else if (role == document::kScaleParameterRole) {
+                scaleX_ = makeCardField(QStringLiteral("nodeScaleXEditor"), tr("Scale X"),
+                                        -100'000.0, 100'000.0, 2, QStringLiteral("%"));
+                scaleY_ = makeCardField(QStringLiteral("nodeScaleYEditor"), tr("Scale Y"),
+                                        -100'000.0, 100'000.0, 2, QStringLiteral("%"));
+                addProxy(scaleX_);
+                addProxy(scaleY_);
+                connect(scaleX_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
+                connect(scaleY_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
+                valueRows_.push_back({tr("Scale X"), scaleX_});
+                valueRows_.push_back({tr("Scale Y"), scaleY_});
+            } else if (role == document::kRotationParameterRole) {
+                rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
+                                          -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
+                addProxy(rotation_);
+                connect(rotation_, &kit::KValueField::valueChanged, this,
+                        [this] { commitRotation(); });
+                valueRows_.push_back({tr("Rotation"), rotation_});
             } else if (role == document::kOpacityParameterRole) {
                 opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"), 0.0,
                                          100.0, 1, QStringLiteral("%"));
@@ -446,6 +507,56 @@ class NodeItem final : public QGraphicsObject {
             }
         }
 
+        if (anchorX_ != nullptr && anchorY_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kAnchorParameterRole);
+            const auto value = parameter == nullptr || session_ == nullptr
+                                   ? std::nullopt
+                                   : session_->constantVec2Value(parameter->id);
+            const QString tip = describe(parameter, tr("Anchor is not exposed by this node"));
+            for (auto* field : {anchorX_, anchorY_}) {
+                field->setEnabled(value.has_value());
+                field->setToolTip(tip);
+            }
+            if (value.has_value()) {
+                const QSignalBlocker blockX(anchorX_);
+                const QSignalBlocker blockY(anchorY_);
+                anchorX_->setValue(value->x);
+                anchorY_->setValue(value->y);
+            }
+        }
+
+        if (scaleX_ != nullptr && scaleY_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kScaleParameterRole);
+            const auto value = parameter == nullptr || session_ == nullptr
+                                   ? std::nullopt
+                                   : session_->constantVec2Value(parameter->id);
+            const QString tip = describe(parameter, tr("Scale is not exposed by this node"));
+            for (auto* field : {scaleX_, scaleY_}) {
+                field->setEnabled(value.has_value());
+                field->setToolTip(tip);
+            }
+            // Stored as a unitless factor, shown as a percentage, exactly as in the properties
+            // grid.
+            const QSignalBlocker blockX(scaleX_);
+            const QSignalBlocker blockY(scaleY_);
+            scaleX_->setValue(value.has_value() ? value->x * 100.0 : 100.0);
+            scaleY_->setValue(value.has_value() ? value->y * 100.0 : 100.0);
+        }
+
+        if (rotation_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kRotationParameterRole);
+            const auto value = parameter == nullptr || session_ == nullptr
+                                   ? std::nullopt
+                                   : session_->constantValue(parameter->id);
+            rotation_->setEnabled(value.has_value());
+            rotation_->setToolTip(describe(parameter, tr("Rotation is not exposed by this node")));
+            const QSignalBlocker blocker(rotation_);
+            rotation_->setValue(value.value_or(document::kDefaultRotationDegrees));
+        }
+
         if (opacity_ != nullptr) {
             const auto* parameter =
                 parameterForRole(node, composition, document::kOpacityParameterRole);
@@ -512,6 +623,9 @@ class NodeItem final : public QGraphicsObject {
         std::size_t readOnlyIndex = 0;
         for (const auto& binding : node.parameters) {
             if (binding.role == document::kPositionParameterRole ||
+                binding.role == document::kAnchorParameterRole ||
+                binding.role == document::kScaleParameterRole ||
+                binding.role == document::kRotationParameterRole ||
                 binding.role == document::kOpacityParameterRole ||
                 binding.role == document::kSolidColorParameterRole ||
                 binding.role == document::kTextParameterRole ||
@@ -609,10 +723,18 @@ class NodeItem final : public QGraphicsObject {
                 // Future parameter sockets must match the row role; today's schema has only
                 // Image transport and therefore cannot drive numeric/color kit fields.
                 linked = linked ||
-                         (socket->name == QStringLiteral("position") &&
+                         (socket->name == QString::fromUtf8(document::kPositionParameterRole) &&
                           (widget == positionX_ || widget == positionY_)) ||
-                         (socket->name == QStringLiteral("opacity") && widget == opacity_) ||
-                         (socket->name == QStringLiteral("color") && widget == colorChip_);
+                         (socket->name == QString::fromUtf8(document::kAnchorParameterRole) &&
+                          (widget == anchorX_ || widget == anchorY_)) ||
+                         (socket->name == QString::fromUtf8(document::kScaleParameterRole) &&
+                          (widget == scaleX_ || widget == scaleY_)) ||
+                         (socket->name == QString::fromUtf8(document::kRotationParameterRole) &&
+                          widget == rotation_) ||
+                         (socket->name == QString::fromUtf8(document::kOpacityParameterRole) &&
+                          widget == opacity_) ||
+                         (socket->name == QString::fromUtf8(document::kSolidColorParameterRole) &&
+                          widget == colorChip_);
             }
             proxy->setVisible(!layout_.collapsed && !linked);
             proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
@@ -668,6 +790,11 @@ class NodeItem final : public QGraphicsObject {
     std::vector<std::pair<QString, QString>> readOnlyRows_;
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;
+    kit::KValueField* anchorX_ = nullptr;
+    kit::KValueField* anchorY_ = nullptr;
+    kit::KValueField* scaleX_ = nullptr;
+    kit::KValueField* scaleY_ = nullptr;
+    kit::KValueField* rotation_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     kit::KColorChip* colorChip_ = nullptr;
     QLineEdit* textContent_ = nullptr;

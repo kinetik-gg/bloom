@@ -154,6 +154,9 @@ struct LayerIds final {
     bloom::document::LayerId layer;
     bloom::document::ParameterId position;
     bloom::document::ParameterId opacity;
+    bloom::document::ParameterId anchor;
+    bloom::document::ParameterId scale;
+    bloom::document::ParameterId rotation;
 };
 
 [[nodiscard]] LayerIds addSolidLayer(bloom::document::Document& document,
@@ -169,10 +172,17 @@ struct LayerIds final {
         result.outputId<document::ParameterId>(commands::kAddSolidLayerPositionParameterOutput);
     const auto opacity =
         result.outputId<document::ParameterId>(commands::kAddSolidLayerOpacityParameterOutput);
-    if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value())) {
+    const auto anchor =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerAnchorParameterOutput);
+    const auto scale =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerScaleParameterOutput);
+    const auto rotation =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerRotationParameterOutput);
+    if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value() &&
+          anchor.has_value() && scale.has_value() && rotation.has_value())) {
         std::abort();
     }
-    return {*layer, *position, *opacity};
+    return {*layer, *position, *opacity, *anchor, *scale, *rotation};
 }
 
 [[nodiscard]] bloom::document::AnimationCurveId
@@ -318,6 +328,30 @@ void testKeyframeRowsAppearOnePerAnimatedParameter(Expectations& expectations) {
     session.clearSelection();
     expectations.expect(panel.findChildren<QWidget*>().empty() && !panel.isVisible(),
                         "rows are removed and the panel hides once nothing is selected");
+}
+
+// Task S4: the keyframe lanes are enumerated from the boundary node's own animated bindings, so the
+// three transform breadth parameters get lanes for free the moment they can carry a curve. That is
+// exactly the property worth pinning -- the timeline must not carry a second, narrower list of
+// which parameters are animatable.
+void testKeyframeRowsCoverEveryAnimatableTransformParameter(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Transform Keyframe Rows Test", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    const auto ids = addSolidLayer(document, commands, compositionId);
+    (void)animateParameter(document, commands, compositionId, ids.position, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.anchor, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.scale, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.rotation, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.opacity, time(0));
+
+    ui::CompositionSession session(document, commands, compositionId);
+    ui::TimelineKeyframePanel panel(session);
+    session.selectLayer(ids.layer);
+    expectations.expect(panel.findChildren<QWidget*>().size() == 5 && panel.isVisible(),
+                        "all five animatable Layer Output parameters get their own keyframe lane");
 }
 
 // Selection unification (issue #84, decision 1): a keyframe click no longer sets TimelineEditor-
@@ -1083,6 +1117,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testRulerScrubLandsOnExactFrameTimesIncludingATie(expectations);
     testKeyframeRowsAppearOnePerAnimatedParameter(expectations);
+    testKeyframeRowsCoverEveryAnimatableTransformParameter(expectations);
     testKeyframeClickSelectsByIdAndOneTruthSelectionSwap(expectations);
     testDeleteGestureRemovesKeyAndRefusesTheLastOne(expectations);
     testDragMoveGestureSnapsCommitsUndoesAndRefuses(expectations);

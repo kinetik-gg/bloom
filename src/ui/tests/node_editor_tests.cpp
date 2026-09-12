@@ -584,6 +584,96 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
                         "and one undo step reverts it");
 }
 
+// Task S4: the same in-card authoring loop for the three transform breadth parameters. What is
+// pinned is that each is a live field on the card (not a read-only row), that it writes the
+// canonical parameter through the session's own command, and that it is one undo step with the same
+// label the properties panel produces.
+void testInNodeTransformFieldsCommitThroughThePropertiesPath(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Node Transform Edit Test"));
+    const auto layerId = addSolid(fixture.session);
+    if (!layerId.has_value()) {
+        expectations.expect(false, "the fixture can add a solid layer");
+        return;
+    }
+    const auto boundaryNodeId = fixture.session.boundaryNodeForLayer(*layerId);
+    if (!boundaryNodeId.has_value()) {
+        expectations.expect(false, "the solid layer resolves its boundary node");
+        return;
+    }
+    const auto field = [&](const QString& objectName) {
+        return qobject_cast<ui::kit::KValueField*>(
+            fixture.scene()->nodeFieldForTest(*boundaryNodeId, objectName));
+    };
+    auto* anchorX = field(QStringLiteral("nodeAnchorXEditor"));
+    auto* anchorY = field(QStringLiteral("nodeAnchorYEditor"));
+    auto* scaleX = field(QStringLiteral("nodeScaleXEditor"));
+    auto* scaleY = field(QStringLiteral("nodeScaleYEditor"));
+    auto* rotation = field(QStringLiteral("nodeRotationEditor"));
+    expectations.expect(anchorX != nullptr && anchorY != nullptr && scaleX != nullptr &&
+                            scaleY != nullptr && rotation != nullptr,
+                        "the layer boundary card carries live fields for anchor, scale, and "
+                        "rotation");
+    if (anchorX == nullptr || anchorY == nullptr || scaleX == nullptr || scaleY == nullptr ||
+        rotation == nullptr) {
+        return;
+    }
+    expectations.expect(anchorX->isEnabled() && scaleX->isEnabled() && rotation->isEnabled() &&
+                            scaleX->value() == 100.0 && rotation->value() == 0.0 &&
+                            anchorX->value() == 0.0,
+                        "the card shows the identity transform and every row is editable");
+
+    const auto parameterId = [&](const std::string_view role) {
+        const auto* parameter = parameterForRole(fixture.session, *boundaryNodeId, role);
+        return parameter == nullptr ? document::ParameterId{} : parameter->id;
+    };
+    const auto anchorId = parameterId(document::kAnchorParameterRole);
+    const auto scaleId = parameterId(document::kScaleParameterRole);
+    const auto rotationId = parameterId(document::kRotationParameterRole);
+    expectations.expect(anchorId.isValid() && scaleId.isValid() && rotationId.isValid(),
+                        "the boundary node binds anchor, scale, and rotation");
+    if (!anchorId.isValid() || !scaleId.isValid() || !rotationId.isValid()) {
+        return;
+    }
+
+    int snapshotSignals = 0;
+    QObject::connect(&fixture.session, &ui::CompositionSession::snapshotChanged, &fixture.session,
+                     [&snapshotSignals] { ++snapshotSignals; });
+
+    anchorX->setValue(-12.0);
+    expectations.expect(snapshotSignals == 1 &&
+                            fixture.session.constantVec2Value(anchorId) ==
+                                document::Vec2d{-12.0, 0.0} &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Anchor"),
+                        "an in-card anchor edit is one \"Set Anchor\" command on the canonical "
+                        "parameter");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(anchorId) == document::kDefaultAnchor,
+                        "and one undo step reverts it");
+
+    scaleY->setValue(25.0);
+    expectations.expect(fixture.session.constantVec2Value(scaleId) == document::Vec2d{1.0, 0.25} &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Scale"),
+                        "an in-card scale edit stores a unitless factor from its percentage");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(scaleId) == document::kDefaultScale,
+                        "and one undo step reverts it");
+
+    rotation->setValue(-135.0);
+    const auto storedRotation = fixture.session.constantValue(rotationId);
+    expectations.expect(storedRotation.has_value() && *storedRotation == -135.0 &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Rotation"),
+                        "an in-card rotation edit stores the authored degrees exactly, sign "
+                        "included");
+    expectations.expect(fixture.session.undo() && fixture.session.constantValue(rotationId) ==
+                                                      document::kDefaultRotationDegrees,
+                        "and one undo step reverts it");
+
+    // The cards are reconciled in place across all three edits, so the fields keep their identity.
+    expectations.expect(field(QStringLiteral("nodeScaleXEditor")) == scaleX &&
+                            field(QStringLiteral("nodeRotationEditor")) == rotation,
+                        "the card is reconciled in place, so the transform fields keep identity");
+}
+
 void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expectations) {
     GraphFixture fixture(makeProject("Node Color Chip Test"));
     const auto layerId = addSolid(fixture.session);
@@ -644,6 +734,7 @@ int runAll() {
     testContextMenuOffersOnlyRealCommands(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
+    testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

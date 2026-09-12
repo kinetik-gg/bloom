@@ -84,6 +84,9 @@ struct LayerIds final {
     document::ParameterId position;
     document::ParameterId opacity;
     document::ParameterId color;
+    document::ParameterId anchor;
+    document::ParameterId scale;
+    document::ParameterId rotation;
 };
 
 // Mirrors composition_session_animation_tests.cpp's addSolidLayer() fixture exactly (same
@@ -102,12 +105,18 @@ struct LayerIds final {
         result.outputId<document::ParameterId>(commands::kAddSolidLayerOpacityParameterOutput);
     const auto color =
         result.outputId<document::ParameterId>(commands::kAddSolidLayerColorParameterOutput);
+    const auto anchor =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerAnchorParameterOutput);
+    const auto scale =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerScaleParameterOutput);
+    const auto rotation =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerRotationParameterOutput);
     if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value() &&
-          color.has_value())) {
+          color.has_value() && anchor.has_value() && scale.has_value() && rotation.has_value())) {
         std::cerr << "properties editor test: solid layer command must expose its stable IDs\n";
         std::exit(1);
     }
-    return {*layer, *position, *opacity, *color};
+    return {*layer, *position, *opacity, *color, *anchor, *scale, *rotation};
 }
 
 // Mirrors composition_session_animation_tests.cpp's animateParameter() fixture exactly.
@@ -457,6 +466,130 @@ void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
 // the former read-only label promised no clipping. The RGBA cells are unbounded and must restore
 // that exact guarantee: display the exact stored value for a negative/HDR channel, with no
 // clipping.
+// Task S4: the Transform group's three new rows. What is pinned here is the full authoring loop --
+// the row shows the stored value in its authored unit, an edit commits through a command, and undo
+// restores the exact prior value -- for each of the three, plus the unit conversions (scale as a
+// percentage of a unitless factor) and the fact that rotation is NOT clamped to one turn.
+void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Transform Rows Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* anchorX = properties.findChild<ui::kit::KValueField*>("anchorXEditor");
+    auto* anchorY = properties.findChild<ui::kit::KValueField*>("anchorYEditor");
+    auto* scaleX = properties.findChild<ui::kit::KValueField*>("scaleXEditor");
+    auto* scaleY = properties.findChild<ui::kit::KValueField*>("scaleYEditor");
+    auto* rotation = properties.findChild<ui::kit::KValueField*>("rotationEditor");
+    expectations.expect(anchorX != nullptr && anchorY != nullptr && scaleX != nullptr &&
+                            scaleY != nullptr && rotation != nullptr,
+                        "the Transform group exposes Anchor X/Y, Scale X/Y, and Rotation rows");
+    if (anchorX == nullptr || anchorY == nullptr || scaleX == nullptr || scaleY == nullptr ||
+        rotation == nullptr) {
+        return;
+    }
+
+    // A new layer starts at the identity transform, which reads as a centre anchor, 100% on both
+    // axes, and zero degrees.
+    expectations.expect(anchorX->value() == 0.0 && anchorY->value() == 0.0 &&
+                            scaleX->value() == 100.0 && scaleY->value() == 100.0 &&
+                            rotation->value() == 0.0,
+                        "a new layer's transform rows read as the identity transform");
+    expectations.expect(anchorX->unit() == QStringLiteral("px") &&
+                            scaleX->unit() == QStringLiteral("%") &&
+                            rotation->unit() == QString::fromUtf8("\u00b0"),
+                        "the transform rows carry pixel, percent, and degree units");
+    expectations.expect(rotation->singleStep() == 1.0 && scaleX->singleStep() == 1.0,
+                        "rotation scrubs in whole degrees and scale in whole percent");
+
+    const auto revisionBefore = document.snapshot().revision();
+    anchorX->setValue(-24.0);
+    const auto anchorValue = session.constantVec2Value(ids.anchor);
+    expectations.expect(anchorValue.has_value() && anchorValue->x == -24.0 && anchorValue->y == 0.0,
+                        "editing Anchor X commits through a command and leaves Y alone");
+
+    scaleY->setValue(50.0);
+    const auto scaleValue = session.constantVec2Value(ids.scale);
+    expectations.expect(scaleValue.has_value() && scaleValue->x == 1.0 && scaleValue->y == 0.5,
+                        "a scale row authored as a percentage stores a unitless factor");
+
+    // 450 degrees is a legitimate authored value: the row must not fold or clamp it, because a
+    // rotation curve has to be able to wind past a full turn.
+    rotation->setValue(450.0);
+    const auto rotationValue = session.constantValue(ids.rotation);
+    expectations.expect(rotationValue.has_value() && *rotationValue == 450.0,
+                        "a rotation past a full turn is stored exactly as authored");
+
+    expectations.expect(document.snapshot().revision() != revisionBefore && session.canUndo(),
+                        "each transform edit is one undoable command");
+    expectations.expect(session.undo() && session.undo() && session.undo(),
+                        "all three transform edits undo");
+    const auto restoredAnchor = session.constantVec2Value(ids.anchor);
+    const auto restoredScale = session.constantVec2Value(ids.scale);
+    const auto restoredRotation = session.constantValue(ids.rotation);
+    expectations.expect(
+        restoredAnchor.has_value() && *restoredAnchor == document::kDefaultAnchor &&
+            restoredScale.has_value() && *restoredScale == document::kDefaultScale &&
+            restoredRotation.has_value() && *restoredRotation == document::kDefaultRotationDegrees,
+        "undo restores the exact identity transform");
+}
+
+// Every Transform row carries its own keyframe indicator, and each must light up for its own
+// parameter only -- the three new rows are animatable exactly as position and opacity are.
+void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Transform Keyframe Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    static_cast<void>(animateParameter(document, stack, compositionId, ids.scale));
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    properties.resize(420, 600);
+    properties.show();
+
+    auto* anchorX = properties.findChild<ui::kit::KValueField*>("anchorXEditor");
+    auto* scaleX = properties.findChild<ui::kit::KValueField*>("scaleXEditor");
+    auto* rotation = properties.findChild<ui::kit::KValueField*>("rotationEditor");
+    expectations.expect(anchorX != nullptr && scaleX != nullptr && rotation != nullptr,
+                        "the three transform rows resolve for the indicator check");
+    if (anchorX == nullptr || scaleX == nullptr || rotation == nullptr) {
+        return;
+    }
+    // Each row is [label, indicator, value]; a paired X/Y row wraps its two fields in a group, so
+    // the row is one level further up than it is for the single rotation field.
+    const auto indicatorOf = [](QWidget* field, const bool paired) -> QLabel* {
+        auto* row = paired ? field->parentWidget()->parentWidget() : field->parentWidget();
+        return row == nullptr ? nullptr
+                              : row->findChild<QLabel*>("propertiesKeyframeIndicator",
+                                                        Qt::FindDirectChildrenOnly);
+    };
+    auto* anchorIndicator = indicatorOf(anchorX, true);
+    auto* scaleIndicator = indicatorOf(scaleX, true);
+    auto* rotationIndicator = indicatorOf(rotation, false);
+    expectations.expect(anchorIndicator != nullptr && scaleIndicator != nullptr &&
+                            rotationIndicator != nullptr,
+                        "every transform row carries its own keyframe indicator");
+    if (anchorIndicator == nullptr || scaleIndicator == nullptr || rotationIndicator == nullptr) {
+        return;
+    }
+    expectations.expect(indicatorLooksAnimated(*scaleIndicator) &&
+                            !indicatorLooksAnimated(*anchorIndicator) &&
+                            !indicatorLooksAnimated(*rotationIndicator),
+                        "only the animated transform parameter's own indicator reads as animated");
+    // An animated scale has no constant to show, so its own editors disable while its
+    // still-constant siblings stay editable -- the per-parameter source is what drives each row.
+    expectations.expect(!scaleX->isEnabled() && rotation->isEnabled() && anchorX->isEnabled(),
+                        "animating one transform parameter leaves its siblings constant-editable");
+}
+
 void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
     auto newProject = document::makeNewProject("HDR Color Test", "Main", time(10));
     const auto compositionId = newProject.initialCompositionId;
@@ -705,6 +838,8 @@ int main(int argc, char** argv) {
     testNoSelectionShowsDocumentProperties(expectations);
     testSelectionSwapUpdatesRows(expectations);
     testRgbaCellsEditThroughCommandWithUndo(expectations);
+    testTransformRowsEditThroughCommandsWithUndo(expectations);
+    testTransformRowsShowTheirOwnKeyframeIndicators(expectations);
     testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);

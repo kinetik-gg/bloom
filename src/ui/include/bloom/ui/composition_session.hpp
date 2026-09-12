@@ -173,6 +173,13 @@ class CompositionSession final : public QObject {
                                     double size = document::kDefaultTextSizePixels,
                                     core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0});
     [[nodiscard]] bool setSelectedPosition(double x, double y);
+    // The rest of the Layer Output transform. Anchor and scale are authored exactly as position is
+    // (full-resolution composition pixels for the anchor, a unitless factor for the scale),
+    // rotation in degrees clockwise on screen, and each is one undoable command that writes a
+    // constant or a keyframe at the session time depending on the parameter's source.
+    [[nodiscard]] bool setSelectedAnchor(double x, double y);
+    [[nodiscard]] bool setSelectedScale(double x, double y);
+    [[nodiscard]] bool setSelectedRotation(double degrees);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
     // Task P3 (issue #120 follow-up, owner review 2026-09-12): the properties panel's editable
     // RGBA cells write through this, exactly mirroring setSelectedOpacity()'s shape -- resolve the
@@ -306,6 +313,8 @@ class CompositionSession final : public QObject {
     parameterForNode(const document::NodeRecord& node, std::string_view role) const noexcept;
     [[nodiscard]] bool setSelectionScalarParameter(std::string_view role, double value,
                                                    const QString& commandLabel);
+    [[nodiscard]] bool setSelectionVec2Parameter(std::string_view role, double x, double y,
+                                                 const QString& commandLabel);
     // The one command-selection decision for writing a Color4d-valued parameter, shared by
     // setSelectedSolidColor() and setSelectedTextColor(). A driven source is refused exactly as the
     // scalar helper refuses one; there is no animated branch, because no command in the surface can
