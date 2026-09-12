@@ -84,11 +84,13 @@ void testLayoutSelectionAndSockets() {
     QGraphicsSceneHoverEvent hover(QEvent::GraphicsSceneHoverEnter);
     f.scene()->sendEvent(socket, &hover);
     expect(socket->data(kNodeHoveredRole).toBool(), "socket hover grows its painted state");
-    const std::array mapping{kit::Color::DataImage, kit::Color::DataSequence, kit::Color::Muted,
-                             kit::Color::DataComposition, kit::Color::DataAudio};
+    // Task S1, item 6: the socket palette is its own, not the Data* palette's.
+    const std::array mapping{kit::Color::SocketImage, kit::Color::SocketColor,
+                             kit::Color::SocketScalar, kit::Color::SocketVector,
+                             kit::Color::SocketString};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
-               "all socket palette mappings match N1");
+               "all socket palette mappings use the socket roles");
     expect(f.edit<commands::SetNodeMuted>(b, true).changed(), "mute fixture");
     auto* field = f.scene()->nodeFieldForTest(b, QStringLiteral("nodePositionXEditor"));
     expect(field && field->graphicsProxyWidget()->isVisible() &&

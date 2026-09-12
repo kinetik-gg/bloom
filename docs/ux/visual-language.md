@@ -336,18 +336,33 @@ licensing, substitution, and missing-dependency workflow.
 
 ### Node socket kinds
 
-| Socket kind | Palette token |
-| --- | --- |
-| Image | `DataImage` |
-| Color | `DataSequence` |
-| Scalar | `Muted` |
-| Vector2 | `DataComposition` |
-| String | `DataAudio` |
+Sockets and the links leaving them identify a *transport* kind, which is a different question from
+what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
+Six separated hues, none of them `Accent` or `AccentHover`:
 
-Color uses the existing red `DataSequence`, not `DataClip`; the non-Image choices avoid
-`Accent` and `AccentHover`. Socket labels must still identify the kind. Kit-owner gap:
-`DataImage` and `AccentHover` already share `#3AA5F0`; this pre-existing collision remains
-unchanged pending the kit owner's palette decision.
+| Socket kind | Palette token | Value | Hue |
+| --- | --- | --- | --- |
+| Image | `SocketImage` | `#2FC8A0` | teal |
+| Color | `SocketColor` | `#F2713C` | vermilion |
+| Scalar | `SocketScalar` | `#8FD44A` | yellow-green |
+| (reserved) Integer | `SocketInteger` | `#4AC8D4` | cyan |
+| Vector2 | `SocketVector` | `#C87AF0` | violet |
+| String | `SocketString` | `#F0C93C` | gold |
+
+`SocketInteger` has no `SocketValueKind` behind it yet; it is declared so the palette is complete
+rather than grown a hue at a time once an integer transport exists.
+
+The same token inks the socket and every link leaving it. Socket labels must still identify the kind:
+color is never the only carrier.
+
+This retires the collision the previous mapping carried -- `DataImage` and `AccentHover` are both
+`#3AA5F0`, so an Image socket was indistinguishable from a hovered accent surface. `DataImage` and
+`AccentHover` still share that value; nothing in the node editor reads it any more.
+
+While a link drag is in flight every socket states whether the link could land on it: a compatible
+socket brightens toward `Foreground` by the filled-hover blend, an incompatible one fades to the
+disabled ink, and the socket the drag started from keeps its resting ink because it is the thing in
+the artist's hand rather than a target. Releasing ends the drag and restores every resting ink.
 
 ### Node editor interaction states
 
@@ -355,14 +370,14 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
-| Port socket | 8px circle in its schema kind's palette token; inputs left, outputs right; one expanded row per port |
+| Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
 | Selected node | 2px inset Accent outline, painted above the card/header surfaces |
 | Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |
 | Muted node | Body and in-node controls at 50% opacity; normal header and existing Phosphor `Hidden`/eye-slash badge, without strikethrough |
 | Collapsed node | Header-only `Radius::Full` pill; sockets distributed along the header edges; parameter controls hidden |
 | Link | Schema kind ink, widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink and 2px stroke |
-| Incompatible drag | Error link ink; release publishes nothing |
+| Incompatible drag | Error link ink; release publishes nothing. Compatible sockets brighten and incompatible ones dim for the duration of the drag |
 | Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
 | Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
 | Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field. Results are grouped under `UiSmall`/`Faint` section headings that are neither selectable nor choosable; the list is exactly as tall as its rows and headings. A refused result is a disabled row carrying its reason in its tooltip alone -- never in its label. The popup rounds once, at the shared dropdown surface: the list's own mask rounds only the edges it shares with that surface, so the edge beneath the filter field stays square |

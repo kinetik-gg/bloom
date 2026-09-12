@@ -356,12 +356,18 @@ void testConnectorTypingIsPinnedPerSocketKind(Expectations& expectations) {
     // in a document::CanonicalGraph can carry today (see socketColorToken()'s comment in
     // node_editor.hpp). Pinning the mapping here is what makes adding a second kind a deliberate
     // decision rather than an accident: socketColorToken()'s switch stops being exhaustive.
+    //
+    // Task S1, item 6 moved this off the Data* palette: a socket identifies a TRANSPORT kind, not
+    // what an item in a project is, and Image had been resolving to exactly AccentHover's blue.
     expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Image) ==
-                            ui::kit::Color::DataImage,
-                        "an Image socket takes the data palette's own Image token");
+                            ui::kit::Color::SocketImage,
+                        "an Image socket takes the socket palette's own Image token");
     expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) ==
-                            ui::kit::color(ui::kit::Color::DataImage),
+                            ui::kit::color(ui::kit::Color::SocketImage),
                         "and resolves to exactly that token's color, not a look-alike");
+    expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) !=
+                            ui::kit::color(ui::kit::Color::AccentHover),
+                        "which is no longer the hovered-accent blue it used to collide with");
 }
 
 void testEveryProjectedEdgeIsAPathItemBetweenTwoCards(Expectations& expectations) {

@@ -108,6 +108,44 @@ void testCardMinimumWidthIsItsContent() {
     f.drag({edge, card->pos().y() + 10}, {card->pos().x() - 400, card->pos().y() + 10});
     expect(card->cardWidth() == minimum, "a resize drag cannot take the card below its content");
 }
+// Item 6. A socket and the link leaving it take the socket palette, and a link drag in flight says
+// where it could land: compatible sockets brighten, incompatible ones fade.
+void testSocketsBrightenAndDimDuringALinkDrag() {
+    Fixture f;
+    const auto source = f.add(document::kSolidSourceNodeType, {100, 100});
+    const auto target = f.add(document::kLayerOutputNodeType, {600, 100});
+    auto* output = f.socket(source, false);
+    auto* input = f.socket(target, true);
+    auto* targetOutput = f.socket(target, false);
+    expect(output != nullptr && input != nullptr && targetOutput != nullptr,
+           "drag fixture sockets");
+    if (output == nullptr || input == nullptr || targetOutput == nullptr)
+        return;
+
+    const QColor resting = kit::color(kit::Color::SocketImage);
+    expect(output->paintedInk() == resting,
+           "at rest a socket paints exactly its transport kind's token");
+    expect(output->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
+               input->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle,
+           "and no drag is in flight");
+
+    f.press(output->scenePos());
+    expect(input->dragAffinity() == node_editor::SocketItem::DragAffinity::Compatible &&
+               input->paintedInk() == kit::hoverFillFor(resting),
+           "a socket the dragged link could land on brightens toward Foreground");
+    expect(targetOutput->dragAffinity() == node_editor::SocketItem::DragAffinity::Incompatible &&
+               targetOutput->paintedInk() == kit::withOpacity(resting, kit::kDisabledOpacity),
+           "one it could not fades to the disabled ink");
+    expect(output->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
+               output->paintedInk() == resting,
+           "and the socket in the artist's hand keeps its resting ink -- it is not a target");
+
+    f.release(input->scenePos());
+    expect(output->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
+               input->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
+               input->paintedInk() == resting,
+           "ending the drag puts every socket back to its resting ink");
+}
 } // namespace bloom::ui::test
 
 int main(int argc, char** argv) {
@@ -115,6 +153,7 @@ int main(int argc, char** argv) {
     try {
         bloom::ui::test::testHostedFieldsAreFullWidthAndUnscaled();
         bloom::ui::test::testCardMinimumWidthIsItsContent();
+        bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

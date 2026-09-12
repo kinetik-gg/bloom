@@ -107,6 +107,17 @@ class SocketItem final : public QGraphicsItem {
         return !structural_ && kind == document::SocketValueKind::Image;
     }
     void setAuthoringEnabled(bool enabled);
+
+    // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
+    // brightens toward Foreground and an incompatible one fades to the disabled ink, so a drag
+    // names its own landing sites instead of leaving the artist to aim and find out.
+    enum class DragAffinity : std::uint8_t { Idle, Compatible, Incompatible };
+    void setDragAffinity(DragAffinity affinity);
+    [[nodiscard]] DragAffinity dragAffinity() const noexcept { return affinity_; }
+    // The ink this socket paints right now, affinity included. Exposed so a test can state the
+    // brighten/dim rule in the same terms the painter applies it.
+    [[nodiscard]] QColor paintedInk() const;
+
     QString name;
     document::SocketValueKind kind;
     std::optional<document::InputPortRef> input;
@@ -120,6 +131,7 @@ class SocketItem final : public QGraphicsItem {
     QString description_;
     bool structural_;
     bool hovered_ = false;
+    DragAffinity affinity_ = DragAffinity::Idle;
 };
 
 class NodeItem final : public QGraphicsObject {

@@ -56,6 +56,17 @@ enum class Color : std::uint8_t {
     DataComposition,
     DataImage,
     DataAudio,
+    // task S1, item 6: the socket palette. A node socket and the link leaving it identify a
+    // TRANSPORT kind, which is a different question from what an item in a project is, so they take
+    // their own roles rather than borrowing the Data* ones -- where Image had been reading in
+    // exactly AccentHover's blue and could not be told apart from a hovered accent surface. Six
+    // distinct hues, none of them Accent or AccentHover.
+    SocketImage,
+    SocketColor,
+    SocketScalar,
+    SocketInteger,
+    SocketVector,
+    SocketString,
 };
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =

@@ -8,17 +8,17 @@ namespace bloom::ui {
 kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     switch (kind) {
     case runtime::SocketValueKind::Image:
-        return kit::Color::DataImage;
+        return kit::Color::SocketImage;
     case runtime::SocketValueKind::Color:
-        return kit::Color::DataSequence;
+        return kit::Color::SocketColor;
     case runtime::SocketValueKind::Scalar:
-        return kit::Color::Muted;
+        return kit::Color::SocketScalar;
     case runtime::SocketValueKind::Vector2:
-        return kit::Color::DataComposition;
+        return kit::Color::SocketVector;
     case runtime::SocketValueKind::String:
-        return kit::Color::DataAudio;
+        return kit::Color::SocketString;
     }
-    return kit::Color::DataImage;
+    return kit::Color::SocketImage;
 }
 
 namespace node_editor {
@@ -347,10 +347,30 @@ QPainterPath SocketItem::shape() const {
     return hit;
 }
 
+QColor SocketItem::paintedInk() const {
+    const QColor base = kit::color(socketColorToken(kind));
+    switch (affinity_) {
+    case DragAffinity::Compatible:
+        return kit::hoverFillFor(base);
+    case DragAffinity::Incompatible:
+        return kit::withOpacity(base, kit::kDisabledOpacity);
+    case DragAffinity::Idle:
+        break;
+    }
+    return base;
+}
+
+void SocketItem::setDragAffinity(const DragAffinity affinity) {
+    if (affinity_ == affinity)
+        return;
+    affinity_ = affinity;
+    update();
+}
+
 void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setPen(QPen(kit::color(kit::Color::Surface), kit::kHairlineWidth));
-    painter->setBrush(kit::color(socketColorToken(kind)));
+    painter->setBrush(paintedInk());
     const qreal radius = hovered_ ? 6.0 : kSocketDiameter / 2;
     painter->drawEllipse(QPointF(), radius, radius);
 }

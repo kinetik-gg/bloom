@@ -21,6 +21,9 @@ struct NodeInteraction final {
     std::optional<document::InputPortRef> input;
     std::optional<document::OutputPortRef> output;
     std::optional<document::InputPortRef> pickedInput;
+    // The transport kind the link being dragged carries (task S1, item 6): what every other
+    // socket's compatibility is judged against, and what inks the preview wire.
+    document::SocketValueKind linkKind = document::SocketValueKind::Image;
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;

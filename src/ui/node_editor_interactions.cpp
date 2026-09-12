@@ -61,6 +61,33 @@ std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
         return {};
     return {input, output};
 }
+// Tells every socket on the canvas whether the link now being dragged could land on it (task S1,
+// item 6). The socket the drag STARTED from keeps its resting ink: it is the thing in the artist's
+// hand, not a candidate to aim at.
+void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
+                      const SocketItem* origin) {
+    const bool fromOutput = gesture.output.has_value();
+    for (auto* item : scene.items()) {
+        auto* socket = dynamic_cast<SocketItem*>(item);
+        if (socket == nullptr)
+            continue;
+        if (socket == origin) {
+            socket->setDragAffinity(SocketItem::DragAffinity::Idle);
+            continue;
+        }
+        const bool opposite = fromOutput ? socket->input.has_value() : socket->output.has_value();
+        const bool compatible = socket->draggable() && opposite && socket->kind == gesture.linkKind;
+        socket->setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
+                                           : SocketItem::DragAffinity::Incompatible);
+    }
+}
+
+void clearLinkAffinity(QGraphicsScene& scene) {
+    for (auto* item : scene.items())
+        if (auto* socket = dynamic_cast<SocketItem*>(item))
+            socket->setDragAffinity(SocketItem::DragAffinity::Idle);
+}
+
 void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
                       const document::Composition& composition, const QPointF cursor) {
     if (gesture.insertEdge)
@@ -104,6 +131,7 @@ bool NodeGraphicsScene::gestureActive() const {
 }
 void NodeGraphicsScene::cancelGesture() {
     auto& gesture = *interaction_;
+    clearLinkAffinity(*this);
     if (gesture.insertEdge)
         gesture.insertEdge->emphasize(false);
     delete gesture.line;
@@ -206,9 +234,11 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
                         link->hide();
             }
         }
-        gesture.line = addPath({}, QPen(kit::color(socketColorToken(socket->kind)), 2));
+        gesture.linkKind = socket->kind;
+        gesture.line = addPath({}, QPen(kit::color(socketColorToken(gesture.linkKind)), 2));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("link-preview"));
+        markLinkAffinity(*this, gesture, socket);
         return;
     }
     if (auto* card = cardAt(*this, event->scenePos())) {
@@ -298,8 +328,8 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         const bool incompatible =
             target && (!target->draggable() || (gesture.output && !target->input) ||
                        (gesture.input && !target->output));
-        gesture.line->setPen(
-            QPen(kit::color(incompatible ? kit::Color::Error : kit::Color::DataImage), 2));
+        gesture.line->setPen(QPen(
+            kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)), 2));
         gesture.line->setPath(gesture.output ? linkPath(gesture.origin, event->scenePos())
                                              : linkPath(event->scenePos(), gesture.origin));
         break;
