@@ -54,6 +54,15 @@ class KValueField final : public QWidget {
 
     [[nodiscard]] State visualState() const;
 
+    // The single border the cell paints, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction). The cell is borderless at rest, so a Border result is painted
+    // transparent -- see cellBorderColor().
+    [[nodiscard]] Color borderToken() const;
+
+    // borderToken() resolved to the color actually stroked: transparent at rest, because this cell
+    // reads as a field without an outline until the pointer or focus reaches it.
+    [[nodiscard]] QColor cellBorderColor() const;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 

@@ -28,6 +28,9 @@ add_executable(bloom_kit_color_swatches_test
 add_executable(bloom_kit_dropdown_test
     kit_dropdown_tests.cpp
 )
+add_executable(bloom_kit_focus_border_test
+    kit_focus_border_tests.cpp
+)
 add_executable(bloom_kit_fonts_test
     kit_fonts_tests.cpp
 )
@@ -149,6 +152,7 @@ target_link_libraries(bloom_kit_color_picker_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_color_sampler_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_color_swatches_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_focus_border_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
@@ -188,6 +192,7 @@ bloom_enable_warnings(bloom_kit_color_picker_test)
 bloom_enable_warnings(bloom_kit_color_sampler_test)
 bloom_enable_warnings(bloom_kit_color_swatches_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
+bloom_enable_warnings(bloom_kit_focus_border_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_panel_switcher_test)
 bloom_enable_warnings(bloom_kit_icons_test)
@@ -295,6 +300,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_dropdown
     COMMAND bloom_kit_dropdown_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_focus_border
+    COMMAND bloom_kit_focus_border_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

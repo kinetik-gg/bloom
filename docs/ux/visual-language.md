@@ -87,8 +87,22 @@ state recipes below step along exactly this ladder and nothing else.
 | Token | Value | Rule |
 | --- | --- | --- |
 | Hairline | `1` | Snapped to whole physical pixels at any device pixel ratio -- no blur at 125% or 150% |
-| Focus ring | `1.5`, `Accent` | Drawn **outside** the control's rectangle, in margin the control's size hint already reserves, so focus never shifts a layout |
+| Focus | `1`, `Accent` | The control's **own single** hairline turns `Accent`. There is no second outline outside it, and Qt's own focus rectangle is suppressed |
 | Window | `1`, `Border` | The application window's own edge |
+
+A control shows exactly one border, and its color is the whole state channel: `Border` at rest,
+`BorderHover` under the pointer, `Accent` while active -- focused, being edited, or holding an open
+popup. **Focus wins over hover**: a control that is both keeps `Accent`, so putting the pointer on
+the thing you are editing never takes the focus indication away. A control that is borderless at
+rest (a `KValueField` cell) paints its resting border transparent and gains the outline only on
+hover or focus. `kit::borderForInteraction()` is the one implementation;
+`src/ui/tests/kit_focus_border_tests.cpp` pins every control at all four points.
+
+The color widgets are the documented exception: `KColorChip`, `KColorSwatches`, `KColorPicker`, and
+`KRangeSelector` still draw an accent ring outside their own rectangle (`1.5`,
+`kit::drawFocusRing()`), because their focusable target is a color field or a swatch whose border
+color is the artist's data rather than a state channel, so a border-color change there could not
+carry focus at all.
 
 ### Spacing
 
@@ -168,7 +182,7 @@ read oversized in dense chrome once the family changed.
 | Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
 | Selected | An `Accent` fill, or a 2px inset accent edge where a fill would hide content |
-| Focus | The focus ring, always visible for keyboard focus, always drawn outside the control |
+| Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline |
 | Disabled | Ink at 40% opacity, and no hover response at all |
 
 A filled control that is not accent-colored -- a destructive action, for instance -- reproduces the

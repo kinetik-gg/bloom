@@ -22,4 +22,13 @@ int AltUnderlineProxyStyle::styleHint(const StyleHint hint, const QStyleOption* 
     return QProxyStyle::styleHint(hint, option, widget, returnData);
 }
 
+void AltUnderlineProxyStyle::drawPrimitive(const PrimitiveElement element,
+                                           const QStyleOption* option, QPainter* painter,
+                                           const QWidget* widget) const {
+    if (element == QStyle::PE_FrameFocusRect) {
+        return;
+    }
+    QProxyStyle::drawPrimitive(element, option, painter, widget);
+}
+
 } // namespace bloom::ui::kit

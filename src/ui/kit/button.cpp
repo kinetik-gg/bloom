@@ -126,6 +126,10 @@ State KButton::visualState() const {
     return State::Normal;
 }
 
+Color KButton::borderToken() const {
+    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+}
+
 QColor KButton::fillForState(const State state) const {
     const bool filled = variant_ == Variant::Primary || paintsAsDanger(state);
 
@@ -266,21 +270,21 @@ void KButton::paintEvent(QPaintEvent* event) {
     const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
 
     const QColor fill = fillForState(state);
-    QColor border = color(borderForState(state));
-    if (variant_ == Variant::Primary || paintsAsDanger(state)) {
-        border = fill;
-    } else if (variant_ == Variant::Danger &&
-               (state == State::Normal || state == State::Focused || state == State::Disabled)) {
-        border = inkForVisualState(state);
-    } else if (variant_ == Variant::Ghost && state == State::Normal) {
-        border = {};
+    const Color borderRole = borderToken();
+    QColor border = color(borderRole);
+    // Focus wins over every variant's own resting outline: when the kit rule says Accent, nothing
+    // below gets to replace it. That single border IS the focus affordance now -- no ring.
+    if (borderRole != Color::Accent) {
+        if (variant_ == Variant::Primary || paintsAsDanger(state)) {
+            border = fill;
+        } else if (variant_ == Variant::Danger &&
+                   (state == State::Normal || state == State::Disabled)) {
+            border = inkForVisualState(state);
+        } else if (variant_ == Variant::Ghost && borderRole == Color::Border) {
+            border = {};
+        }
     }
     fillRoundedSurface(painter, bounds, fill, border, Radius::Small);
-
-    if (state == State::Focused || (hasFocus() && state != State::Disabled)) {
-        // Always visible for keyboard focus, and always outside the control's own rectangle.
-        drawFocusRing(painter, bounds, Radius::Small);
-    }
 
     const QColor ink = inkForVisualState(state);
     QRectF content = bounds.adjusted(px(Spacing::M), 0.0, -px(Spacing::M), 0.0);

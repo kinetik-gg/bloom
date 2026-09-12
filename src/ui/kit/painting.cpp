@@ -106,6 +106,20 @@ Color borderForState(const State state) {
     return Color::Border;
 }
 
+Color borderForInteraction(const bool enabled, const bool active, const bool hovered) {
+    if (!enabled) {
+        return Color::Border;
+    }
+    // Focus wins: checked before hover, never after.
+    if (active) {
+        return Color::Accent;
+    }
+    if (hovered) {
+        return Color::BorderHover;
+    }
+    return Color::Border;
+}
+
 QColor inkForState(const Color resting, const State state) {
     switch (state) {
     case State::Hover:

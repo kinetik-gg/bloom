@@ -114,6 +114,17 @@ QRectF KValueField::stepDownRect() const {
             cell.height() / 2.0};
 }
 
+Color KValueField::borderToken() const {
+    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+}
+
+QColor KValueField::cellBorderColor() const {
+    const Color role = borderToken();
+    // Borderless at rest: the resting token resolves to nothing drawn at all, so the cell is a
+    // plain Field rectangle until hover or focus gives it its one border.
+    return role == Color::Border ? QColor(Qt::transparent) : color(role);
+}
+
 State KValueField::visualState() const {
     if (!isEnabled()) {
         return State::Disabled;
@@ -259,10 +270,7 @@ void KValueField::paintEvent(QPaintEvent* event) {
 
     const QRectF cell = cellRect();
     fillRoundedSurface(painter, cell, color(surfaceForState(Color::Field, state)),
-                       color(borderForState(state)), Radius::Small);
-    if (hasFocus() && state != State::Disabled) {
-        drawFocusRing(painter, cell, Radius::Small);
-    }
+                       cellBorderColor(), Radius::Small);
 
     // The value takes the monospaced role; the unit takes muted ink so it reads as a unit rather
     // than as part of the number.

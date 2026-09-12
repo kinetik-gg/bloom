@@ -3,6 +3,7 @@
 #include <QProxyStyle>
 #include <QString>
 
+class QPainter;
 class QStyleOption;
 class QWidget;
 
@@ -31,6 +32,15 @@ class AltUnderlineProxyStyle final : public QProxyStyle {
     [[nodiscard]] int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
                                 const QWidget* widget = nullptr,
                                 QStyleHintReturn* returnData = nullptr) const override;
+
+    // Task F1, item F2: Qt's own dotted focus rectangle is never drawn. Bloom's focus affordance is
+    // the control's single border turning Accent (kit::borderForInteraction), so letting the base
+    // style add PE_FrameFocusRect on top would be exactly the second outline that rule forbids --
+    // and on a kit widget, which paints its own border, it would read as a double ring. Suppressed
+    // here rather than per widget because the widgets that would receive it are Qt's own
+    // (QToolButton, QMenu, item views), which no kit paint method touches.
+    void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
+                       const QWidget* widget = nullptr) const override;
 };
 
 // The pure decision AltUnderlineProxyStyle::styleHint() applies for SH_UnderlineShortcut, factored

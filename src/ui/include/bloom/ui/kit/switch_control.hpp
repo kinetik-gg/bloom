@@ -27,6 +27,11 @@ class KSwitch final : public QAbstractButton {
 
     [[nodiscard]] State visualState() const;
 
+    // The single border this control paints, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction). An "on" switch is a filled accent track with no border of its
+    // own, so only the Accent result is painted there.
+    [[nodiscard]] Color borderToken() const;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
