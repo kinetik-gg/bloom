@@ -328,29 +328,29 @@ void testComposedGreenChain(Expectations& expectations) {
     graph.setCompositionOutput({NodeId::fromRaw(4), std::string(kCompositionOutputOutputPort)});
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
-    expectations.expect(composition.parameters().insert(
-                            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
-                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
-                                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(8), std::string(kAnchorParameterSchemaKey),
-                                 ConstantValueSource{kDefaultAnchor}}) &&
-                            composition.parameters().insert({ParameterId::fromRaw(9),
-                                                             std::string(kScaleParameterSchemaKey),
-                                                             ConstantValueSource{kDefaultScale}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
-                                 ConstantValueSource{kDefaultRotationDegrees}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(11),
-                                 std::string(kBlendModeParameterSchemaKey),
-                                 ConstantValueSource{kDefaultBlendModeValue}}),
-                        "composed green chain: fixture parameters insert");
+    expectations.expect(
+        composition.parameters().insert({ParameterId::fromRaw(7),
+                                         std::string(kSolidColorParameterSchemaKey),
+                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(5),
+                                             std::string(kPositionParameterSchemaKey),
+                                             ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(3),
+                                             std::string(kOpacityParameterSchemaKey),
+                                             AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(8),
+                                             std::string(kAnchorParameterSchemaKey),
+                                             ConstantValueSource{kDefaultAnchor}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(9),
+                                             std::string(kScaleParameterSchemaKey),
+                                             ConstantValueSource{kDefaultScale}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(10),
+                                             std::string(kRotationParameterSchemaKey),
+                                             ConstantValueSource{kDefaultRotationDegrees}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(11),
+                                             std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+        "composed green chain: fixture parameters insert");
 
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);

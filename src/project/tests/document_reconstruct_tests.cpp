@@ -285,29 +285,29 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
     graph.setCompositionOutput({NodeId::fromRaw(4), std::string(kCompositionOutputOutputPort)});
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
-    expectations.expect(composition.parameters().insert(
-                            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
-                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
-                                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(8), std::string(kAnchorParameterSchemaKey),
-                                 ConstantValueSource{kDefaultAnchor}}) &&
-                            composition.parameters().insert({ParameterId::fromRaw(9),
-                                                             std::string(kScaleParameterSchemaKey),
-                                                             ConstantValueSource{kDefaultScale}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(10), std::string(kRotationParameterSchemaKey),
-                                 ConstantValueSource{kDefaultRotationDegrees}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(11),
-                                 std::string(kBlendModeParameterSchemaKey),
-                                 ConstantValueSource{kDefaultBlendModeValue}}),
-                        "composed round trip: fixture parameters insert");
+    expectations.expect(
+        composition.parameters().insert({ParameterId::fromRaw(7),
+                                         std::string(kSolidColorParameterSchemaKey),
+                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(5),
+                                             std::string(kPositionParameterSchemaKey),
+                                             ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(3),
+                                             std::string(kOpacityParameterSchemaKey),
+                                             AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(8),
+                                             std::string(kAnchorParameterSchemaKey),
+                                             ConstantValueSource{kDefaultAnchor}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(9),
+                                             std::string(kScaleParameterSchemaKey),
+                                             ConstantValueSource{kDefaultScale}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(10),
+                                             std::string(kRotationParameterSchemaKey),
+                                             ConstantValueSource{kDefaultRotationDegrees}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(11),
+                                             std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+        "composed round trip: fixture parameters insert");
 
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);
@@ -842,14 +842,13 @@ void testVersionOneLayerOutputUpgradesOnReconstruct(Expectations& expectations) 
     const auto* scaleValue = constant(boundId("scale"));
     const auto* rotationValue = constant(boundId("rotation"));
     const auto* blendModeValue = constant(boundId("blendMode"));
-    expectations.expect(anchorValue != nullptr && *anchorValue == ParameterValue{kDefaultAnchor} &&
-                            scaleValue != nullptr && *scaleValue == ParameterValue{kDefaultScale} &&
-                            rotationValue != nullptr &&
-                            *rotationValue == ParameterValue{kDefaultRotationDegrees} &&
-                            blendModeValue != nullptr &&
-                            *blendModeValue == ParameterValue{kDefaultBlendModeValue},
-                        "the injected parameters carry the identity transform and Normal blending, "
-                        "so the upgraded document renders the version-1 picture");
+    expectations.expect(
+        anchorValue != nullptr && *anchorValue == ParameterValue{kDefaultAnchor} &&
+            scaleValue != nullptr && *scaleValue == ParameterValue{kDefaultScale} &&
+            rotationValue != nullptr && *rotationValue == ParameterValue{kDefaultRotationDegrees} &&
+            blendModeValue != nullptr && *blendModeValue == ParameterValue{kDefaultBlendModeValue},
+        "the injected parameters carry the identity transform and Normal blending, "
+        "so the upgraded document renders the version-1 picture");
     const auto* positionValue = constant(ParameterId::fromRaw(5));
     const auto* opacityValue = constant(ParameterId::fromRaw(3));
     expectations.expect(positionValue != nullptr &&
@@ -863,10 +862,10 @@ void testVersionOneLayerOutputUpgradesOnReconstruct(Expectations& expectations) 
                         "the persisted parameter high water rises to cover the injected ids");
 }
 
-// The second upgrade step, added by the blend-mode slice: a version-2 Layer Output already binds the
-// whole transform and needs only a blendMode. The injection rule is per-ROLE rather than per-version
-// step, so this must take exactly one new parameter -- not four -- and must leave every id the file
-// declared untouched.
+// The second upgrade step, added by the blend-mode slice: a version-2 Layer Output already binds
+// the whole transform and needs only a blendMode. The injection rule is per-ROLE rather than
+// per-version step, so this must take exactly one new parameter -- not four -- and must leave every
+// id the file declared untouched.
 void testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(Expectations& expectations) {
     using namespace bloom::document;
     auto envelope = minimalEnvelope();
@@ -929,8 +928,8 @@ void testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(Expectations& expe
     expectations.expect(node->schemaVersion == kLayerOutputNodeSchemaVersion &&
                             node->parameters.size() == 6,
                         "a version-2 node gains exactly one binding");
-    const auto binding = std::ranges::find(node->parameters, std::string_view("blendMode"),
-                                           &ParameterBinding::role);
+    const auto binding =
+        std::ranges::find(node->parameters, std::string_view("blendMode"), &ParameterBinding::role);
     expectations.expect(binding != node->parameters.end() &&
                             binding->parameterId == ParameterId::fromRaw(9),
                         "the injected blendMode takes the one id above the persisted high water");
@@ -940,8 +939,8 @@ void testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(Expectations& expe
     const auto* record = live->parameters().find(binding->parameterId);
     const auto* source =
         record == nullptr ? nullptr : std::get_if<ConstantValueSource>(&record->source);
-    expectations.expect(record != nullptr &&
-                            record->schemaKey == kBlendModeParameterSchemaKey && source != nullptr &&
+    expectations.expect(record != nullptr && record->schemaKey == kBlendModeParameterSchemaKey &&
+                            source != nullptr &&
                             source->value == ParameterValue{kDefaultBlendModeValue},
                         "an old file decodes with Normal blending");
     auto draft = reconstructed.value()->document->draft(snapshot);
@@ -991,7 +990,7 @@ int main() {
         testGraphStoreRejections(expectations);
         testProjectValidateRejection(expectations);
         testVersionOneLayerOutputUpgradesOnReconstruct(expectations);
-    testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(expectations);
+        testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(expectations);
         testDocumentConstructRejection(expectations);
         testWellFormedEnvelopeReconstructs(expectations);
         return expectations.failures() == 0 ? 0 : 1;

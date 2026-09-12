@@ -197,15 +197,15 @@ template <typename Value>
                 }
                 const std::array vec2Parameters{&layer.position, &layer.anchor, &layer.scale};
                 const std::array scalarParameters{&layer.rotation, &layer.opacity};
-                const auto identitiesValid =
-                    std::ranges::all_of(
-                        vec2Parameters,
-                        [](const auto* parameter) { return parameter->id.isValid(); }) &&
-                    std::ranges::all_of(scalarParameters,
-                                        [](const auto* parameter) {
-                                            return parameter->id.isValid();
-                                        }) &&
-                    layer.blendModeParameterId.isValid();
+                const auto identitiesValid = std::ranges::all_of(vec2Parameters,
+                                                                 [](const auto* parameter) {
+                                                                     return parameter->id.isValid();
+                                                                 }) &&
+                                             std::ranges::all_of(scalarParameters,
+                                                                 [](const auto* parameter) {
+                                                                     return parameter->id.isValid();
+                                                                 }) &&
+                                             layer.blendModeParameterId.isValid();
                 if (!identitiesValid) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
@@ -1196,10 +1196,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                 &plan->operations()[entry->input.value()]);
                             if (layerOutput == nullptr) {
-                                operationFailure = diagnostic(
-                                    EvaluationDiagnosticCode::InternalInvariant,
-                                    "Layer Stack entry does not name a Layer Output", {},
-                                    operationSubject);
+                                operationFailure =
+                                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                               "Layer Stack entry does not name a Layer Output", {},
+                                               operationSubject);
                                 return;
                             }
                             const auto blendMode = layerOutput->blendMode;
@@ -1271,9 +1271,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         destinationRow.value()->subspan(
                                             static_cast<std::size_t>(columnOffset),
                                             sourceWindow.extent().width()))) {
-                                    operationFailure = imageDiagnostic(
-                                        *rowStatus, operationSubject,
-                                        "Layer Stack blend could not be evaluated");
+                                    operationFailure =
+                                        imageDiagnostic(*rowStatus, operationSubject,
+                                                        "Layer Stack blend could not be evaluated");
                                     return;
                                 }
                                 reportRow();

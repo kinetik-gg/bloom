@@ -237,9 +237,9 @@ QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip
 }
 
 // Parent: one always-disabled KDropdown carrying its single honest value ("None"). No parenting
-// feature exists in the document model or the command vocabulary, so there is nothing else to offer,
-// and the tooltip says so rather than the control merely looking unresponsive. Compact control size
-// so a real dropdown fits the 32px row.
+// feature exists in the document model or the command vocabulary, so there is nothing else to
+// offer, and the tooltip says so rather than the control merely looking unresponsive. Compact
+// control size so a real dropdown fits the 32px row.
 //
 // Blending is no longer one of these: a layer's blend mode is a real Layer Output parameter with a
 // real command behind it, so that dropdown is built by makeBlendingDropdown() below instead.
@@ -271,7 +271,8 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 
 // Which row of a blending dropdown shows `mode`, found by stored value rather than by assuming the
 // fill order.
-[[nodiscard]] int blendingDropdownIndex(const kit::KDropdown& dropdown, const core::BlendMode mode) {
+[[nodiscard]] int blendingDropdownIndex(const kit::KDropdown& dropdown,
+                                        const core::BlendMode mode) {
     const auto stored = core::blendModeStoredValue(mode);
     for (int index = 0; index < dropdown.count(); ++index) {
         if (dropdown.itemData(index).value<std::int64_t>() == stored) {
@@ -331,9 +332,9 @@ class TimelineLayerRow final : public QWidget {
         parentDropdown_ = makeDisabledPlaceholderDropdown(
             TimelineEditor::tr("None"), TimelineEditor::tr("Layer parenting does not exist yet"),
             QStringLiteral("layerParentDropdown"), this);
-        // The connection is made once, for the life of the pooled row, and reads whichever layer the
-        // row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed on
-        // every scroll step, so capturing a layer id here would author the wrong layer.
+        // The connection is made once, for the life of the pooled row, and reads whichever layer
+        // the row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed
+        // on every scroll step, so capturing a layer id here would author the wrong layer.
         connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
             if (binding_ || !layerId_.has_value() || index < 0) {
                 return;
@@ -360,8 +361,7 @@ class TimelineLayerRow final : public QWidget {
         // nested change, and a row re-pointed during a scroll must author nothing at all.
         binding_ = true;
         const auto mode = session_->blendModeForLayer(entry.layerId);
-        const int row =
-            mode.has_value() ? blendingDropdownIndex(*blending_, *mode) : -1;
+        const int row = mode.has_value() ? blendingDropdownIndex(*blending_, *mode) : -1;
         blending_->setEnabled(mode.has_value());
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()

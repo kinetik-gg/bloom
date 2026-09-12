@@ -47,8 +47,8 @@
 
 #include <array>
 #include <chrono>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -634,7 +634,8 @@ void testBlendingRowAuthorsTheLayerItDraws(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Blending Commit Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("Top"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-    (void)fixture.session.addSolidLayer(QStringLiteral("Bottom"), core::Color4d{0.4, 0.3, 0.2, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("Bottom"),
+                                        core::Color4d{0.4, 0.3, 0.2, 1.0});
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;
@@ -670,8 +671,7 @@ void testBlendingRowAuthorsTheLayerItDraws(Expectations& expectations) {
     }
 
     rows[1]->setCurrentIndex(multiplyRow);
-    expectations.expect(fixture.session.blendModeForLayer(secondLayer) ==
-                            core::BlendMode::Multiply,
+    expectations.expect(fixture.session.blendModeForLayer(secondLayer) == core::BlendMode::Multiply,
                         "the second row authors the second layer, not the selected one");
     expectations.expect(fixture.session.blendModeForLayer(entries[0].layerId) ==
                             core::kDefaultBlendMode,
@@ -719,21 +719,20 @@ void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
     }
 
     expectations.expect(blending->isEnabled() &&
-                            blending->count() ==
-                                static_cast<int>(bloom::core::kBlendModes.size()),
+                            blending->count() == static_cast<int>(bloom::core::kBlendModes.size()),
                         "Blending is enabled and offers every implemented blend mode");
     bool vocabularyInOrder = blending->count() == static_cast<int>(core::kBlendModes.size());
     for (std::size_t index = 0; index < core::kBlendModes.size() && vocabularyInOrder; ++index) {
-        vocabularyInOrder =
-            blending->itemText(static_cast<int>(index)) ==
-                ui::blendModeDisplayName(core::kBlendModes[index]) &&
-            blending->itemData(static_cast<int>(index)).value<std::int64_t>() ==
-                core::blendModeStoredValue(core::kBlendModes[index]);
+        vocabularyInOrder = blending->itemText(static_cast<int>(index)) ==
+                                ui::blendModeDisplayName(core::kBlendModes[index]) &&
+                            blending->itemData(static_cast<int>(index)).value<std::int64_t>() ==
+                                core::blendModeStoredValue(core::kBlendModes[index]);
     }
     expectations.expect(vocabularyInOrder,
                         "each row carries its mode's shared display name and stored value, in "
                         "core::kBlendModes order");
-    expectations.expect(blending->currentText() == ui::blendModeDisplayName(core::kDefaultBlendMode),
+    expectations.expect(blending->currentText() ==
+                            ui::blendModeDisplayName(core::kDefaultBlendMode),
                         "a newly created layer's row starts at its authored Normal");
     expectations.expect(!blending->toolTip().isEmpty(), "Blending explains what it does");
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),

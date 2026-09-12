@@ -156,8 +156,8 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
         runtime::CompiledVec2Parameter{kShellScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kShellRotationParameterId,
                                          document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0},
-        kShellBlendModeParameterId, core::kDefaultBlendMode});
+        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}, kShellBlendModeParameterId,
+        core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

@@ -85,10 +85,10 @@ constexpr auto kAnchorCurve = document::AnimationCurveId::fromRaw(55);
 constexpr auto kScaleCurve = document::AnimationCurveId::fromRaw(56);
 constexpr auto kRotationCurve = document::AnimationCurveId::fromRaw(57);
 
-// The authored transform and blending a Layer Output carries. Defaulted to the identity -- no anchor
-// offset, unit scale, no rotation, Normal blending -- so a fixture that cares only about position or
-// opacity reads exactly as it did before the transform breadth slice, and a fixture that cares about
-// the transform or the blend mode names only the value it is exercising.
+// The authored transform and blending a Layer Output carries. Defaulted to the identity -- no
+// anchor offset, unit scale, no rotation, Normal blending -- so a fixture that cares only about
+// position or opacity reads exactly as it did before the transform breadth slice, and a fixture
+// that cares about the transform or the blend mode names only the value it is exercising.
 struct LayerTransformValues final {
     document::Vec2d position{2.0, 1.0};
     document::Vec2d anchor = document::kDefaultAnchor;
@@ -261,10 +261,10 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
         runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {.blendMode = bottomMode}));
-    operations.emplace_back(runtime::CompiledLayerStack{
-        kStackNode,
-        {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)},
-         {kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)}}});
+    operations.emplace_back(
+        runtime::CompiledLayerStack{kStackNode,
+                                    {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)},
+                                     {kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -768,8 +768,8 @@ void testStackOrderingOpacityAndDisplay(Expectations& expectations) {
 
 // The Merge stage reads each entry's OWN Layer Output blend mode. The expected pixels are the same
 // independently derived goldens src/render/tests/cpu_image_primitives_test.cpp pins for this exact
-// premultiplied pair, so this case proves the wiring -- that the mode reaches the fold, per layer --
-// rather than re-proving the arithmetic.
+// premultiplied pair, so this case proves the wiring -- that the mode reaches the fold, per layer
+// -- rather than re-proving the arithmetic.
 void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations) {
     using core::BlendMode;
     struct Case final {
@@ -803,9 +803,10 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
         const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
         render::Rgba32f storage = render::Rgba32f::transparent();
         const auto* composited = pixel(result, 1, 1, storage);
-        expectations.expect(result.status() == runtime::EvaluationStatus::Evaluated &&
-                                composited != nullptr && *composited == testCase.expected,
-                            "the Merge stage folds the top layer under its own blend mode, exactly");
+        expectations.expect(
+            result.status() == runtime::EvaluationStatus::Evaluated && composited != nullptr &&
+                *composited == testCase.expected,
+            "the Merge stage folds the top layer under its own blend mode, exactly");
     }
 
     // The mode is read per ENTRY, from the Layer Output that entry names -- not once for the stack
@@ -820,9 +821,9 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
     render::Rgba32f topStorage = render::Rgba32f::transparent();
     const auto* normalPixel =
         pixel(evaluator.evaluate(allNormal, requestFor(*allNormal), {}), 1, 1, normalStorage);
-    const auto* bottomPixel = pixel(
-        evaluator.evaluate(bottomDifference, requestFor(*bottomDifference), {}), 1, 1,
-        bottomStorage);
+    const auto* bottomPixel =
+        pixel(evaluator.evaluate(bottomDifference, requestFor(*bottomDifference), {}), 1, 1,
+              bottomStorage);
     const auto* topPixel =
         pixel(evaluator.evaluate(topDifference, requestFor(*topDifference), {}), 1, 1, topStorage);
     expectations.expect(normalPixel != nullptr && bottomPixel != nullptr && topPixel != nullptr &&

@@ -564,11 +564,10 @@ void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
     if (blending == nullptr) {
         return;
     }
-    expectations.expect(blending->isEnabled() &&
-                            blending->count() == static_cast<int>(core::kBlendModes.size()) &&
-                            blending->currentText() ==
-                                ui::blendModeDisplayName(core::kDefaultBlendMode),
-                        "a new layer's Blending row is enabled, offers every mode, and reads Normal");
+    expectations.expect(
+        blending->isEnabled() && blending->count() == static_cast<int>(core::kBlendModes.size()) &&
+            blending->currentText() == ui::blendModeDisplayName(core::kDefaultBlendMode),
+        "a new layer's Blending row is enabled, offers every mode, and reads Normal");
 
     const auto overlayRow = [blending] {
         const auto stored = core::blendModeStoredValue(core::BlendMode::Overlay);

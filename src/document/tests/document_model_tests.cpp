@@ -234,12 +234,12 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
         !composition.parameters().insert({rotationB,
                                           std::string(bloom::document::kRotationParameterSchemaKey),
                                           ConstantValueSource{kDefaultRotationDegrees}}) ||
-        !composition.parameters().insert({blendModeA,
-                                          std::string(bloom::document::kBlendModeParameterSchemaKey),
-                                          ConstantValueSource{kDefaultBlendModeValue}}) ||
-        !composition.parameters().insert({blendModeB,
-                                          std::string(bloom::document::kBlendModeParameterSchemaKey),
-                                          ConstantValueSource{kDefaultBlendModeValue}})) {
+        !composition.parameters().insert(
+            {blendModeA, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{kDefaultBlendModeValue}}) ||
+        !composition.parameters().insert(
+            {blendModeB, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{kDefaultBlendModeValue}})) {
         throw std::logic_error("Could not create parameters");
     }
 

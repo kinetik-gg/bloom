@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-13
 
 ## Purpose And Scope
 
@@ -197,14 +197,15 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 4
+## CPU Image Primitive Vocabulary Semantics Version 5
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `4`; the evaluator and process-frame cache
+composition evaluator. Their semantics version is `5`; the evaluator and process-frame cache
 identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
-rasterizer below; version 4 replaces the translate-only layer resample with the affine one described
-under "Layer Transform Resampling". One number covers them all, deliberately: neither the rasterizer
-nor the resampler carries a second semantics version that could drift out of the identity a published
+rasterizer below; version 4 replaced the translate-only layer resample with the affine one described
+under "Layer Transform Resampling"; version 5 added the per-mode blend kernel described under
+"Blending". One number covers them all, deliberately: neither the rasterizer, the resampler, nor the
+blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
 - Solid authoring colors are straight `Color4d` under the frozen authoring-encoding metadata
@@ -221,6 +222,9 @@ frame records.
 - Source-over consumes separate source and in-place destination rows. The first Layer Stack entry is
   topmost, so evaluation visits stack entries in reverse order and folds bottom-to-top. Process RGB
   is never clamped.
+- Blending takes the same two rows plus the layer's own blend mode, and is what the Layer Stack stage
+  actually calls; source-over remains the kernel the `Normal` mode delegates to, unchanged. See
+  "Blending" below.
 - The temporary unqualified reference display mapper robustly unpremultiplies, clips only at the
   display boundary, applies the `lin_rec709_scene` to sRGB transfer, and produces straight packed
   RGBA8. Checked-in inverse-transfer half-code thresholds make byte quantization independent of
@@ -285,6 +289,36 @@ kernel in the stage; the translate-only case is a path inside this one.
   full-resolution one. With unequal factors the conjugation keeps the proxy a faithfully squashed
   picture of the full-resolution frame, a rotated layer included, rather than pretending device
   pixels are square.
+
+### Blending
+
+The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output
+blend mode. The mode vocabulary, every formula, and the premultiplied compositing fold are owned by
+[`color-management.md`](color-management.md), "Blend modes"; what belongs here is the primitive's
+contract.
+
+- **Ordering and blending are separate.** The stack says which layer is above which and is still
+  visited in reverse so the first entry is topmost; the mode comes from the Layer Output the entry
+  names, so reordering two layers and re-blending one are independent edits.
+- **Alpha is source-over under every mode.** Only the colour combination varies, computed with exactly
+  the alpha expression the source-over kernel uses, so a mode never changes how much of the backdrop a
+  layer covers.
+- **`Normal` is bit-identical to version 4.** The kernel delegates to the retained source-over row for
+  that mode rather than re-deriving it, so a composition whose every layer is `Normal` produces the
+  same bits it did before blend modes existed. The semantics version still moves, because the same
+  plan value can now mean a different picture.
+- **`Add` needs no round trip.** Its separable function reduces the general fold to premultiplied
+  addition exactly; the other five non-`Normal` modes unpremultiply, apply the mode, and
+  re-premultiply, with Float64 intermediates and one Float32 rounding at the end.
+- **Alpha endpoints are exact.** An alpha-zero source is skipped and leaves the backdrop untouched; an
+  alpha-zero backdrop takes the source pixel through unchanged, which is what the fold collapses to
+  under every mode. Source-over's other shortcut -- an opaque source replacing the destination -- does
+  NOT generalise and is deliberately absent, because every mode but `Normal` still reads the
+  backdrop's colour at full source alpha.
+- **Nothing is clamped.** A negative or HDR channel survives the blend, and a non-finite or
+  finite-overflow result fails the row with a typed error rather than being clipped.
+- **The blend mode is a discrete authored value.** It carries no curve: the schema declares it
+  non-animatable, so the compiled plan holds a resolved enumerator rather than a parameter source.
 
 ### Text Rasterization Version 1
 
@@ -386,7 +420,7 @@ canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact
 operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
 The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `4`, CPU evaluator semantics version `4`, and reference display-mapper
+primitive semantics version `5`, CPU evaluator semantics version `5`, and reference display-mapper
 semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
 reference-linear naming; cache identity rejects the older semantic versions rather than treating
 the rename as metadata-only.

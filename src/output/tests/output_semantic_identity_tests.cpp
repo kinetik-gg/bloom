@@ -53,9 +53,9 @@ using namespace std::chrono_literals;
 // are frozen fields of the process-frame semantic identity these preimages embed, so every digest
 // below changed while every preimage LENGTH stayed the same. The values come from the same kind of
 // independent byte-oriented oracle that produced the originals -- a standalone script that packs
-// each frozen field itself with explicit big-endian integers and hashes the result, linking no Bloom
-// code -- and that oracle was validated by reproducing EVERY previously checked-in golden set byte
-// for byte when fed its own version numbers, the version-4 set this slice replaces included.
+// each frozen field itself with explicit big-endian integers and hashes the result, linking no
+// Bloom code -- and that oracle was validated by reproducing EVERY previously checked-in golden set
+// byte for byte when fed its own version numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedPngAnalysisDigest =
     "309e366e48fa2ae193a608ad2a24e2379e0c9532d8f92b020205cfd38605193e";
 constexpr std::string_view kExpectedPngOutputDigest =

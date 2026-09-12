@@ -182,13 +182,12 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
     const auto* scaleParameter = value.parameters().find(ids.scaleParameterId);
     const auto* rotationParameter = value.parameters().find(ids.rotationParameterId);
     const auto* blendModeParameter = value.parameters().find(ids.blendModeParameterId);
-    test.expect(anchorParameter != nullptr && *anchorParameter == expectedAnchorParameter &&
-                    scaleParameter != nullptr && *scaleParameter == expectedScaleParameter &&
-                    rotationParameter != nullptr &&
-                    *rotationParameter == expectedRotationParameter &&
-                    blendModeParameter != nullptr &&
-                    *blendModeParameter == expectedBlendModeParameter,
-                "a new solid layer starts at the identity transform and Normal blending");
+    test.expect(
+        anchorParameter != nullptr && *anchorParameter == expectedAnchorParameter &&
+            scaleParameter != nullptr && *scaleParameter == expectedScaleParameter &&
+            rotationParameter != nullptr && *rotationParameter == expectedRotationParameter &&
+            blendModeParameter != nullptr && *blendModeParameter == expectedBlendModeParameter,
+        "a new solid layer starts at the identity transform and Normal blending");
     test.expect(std::ranges::find(value.graph().edges(), expectedSolidToLayerEdge) !=
                     value.graph().edges().end(),
                 "solid source edge should preserve exact ports and identity");
@@ -248,16 +247,15 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
         !sizeParameterId || !colorParameterId || !positionParameterId || !anchorParameterId ||
-        !scaleParameterId || !rotationParameterId || !opacityParameterId ||
-        !blendModeParameterId || !textToLayerEdgeId || !layerToStackEdgeId) {
+        !scaleParameterId || !rotationParameterId || !opacityParameterId || !blendModeParameterId ||
+        !textToLayerEdgeId || !layerToStackEdgeId) {
         test.fail("text branch should return all fifteen durable IDs");
         return;
     }
-    const std::array textParameters{*contentParameterId,  *sizeParameterId,
-                                    *colorParameterId,    *positionParameterId,
-                                    *anchorParameterId,   *scaleParameterId,
-                                    *rotationParameterId, *opacityParameterId,
-                                    *blendModeParameterId};
+    const std::array textParameters{
+        *contentParameterId,  *sizeParameterId,    *colorParameterId,
+        *positionParameterId, *anchorParameterId,  *scaleParameterId,
+        *rotationParameterId, *opacityParameterId, *blendModeParameterId};
     test.expect(std::ranges::adjacent_find(textParameters) == textParameters.end(),
                 "every parameter in a text branch has its own identity");
 

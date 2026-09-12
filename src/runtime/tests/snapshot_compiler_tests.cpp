@@ -216,8 +216,8 @@ struct ProjectOptions final {
                 {kFirstOpacity, std::string(kOpacityParameterSchemaKey), ConstantValueSource{0.8}}),
             "first opacity must be accepted");
     // The identity transform and Normal blending: every fixture here is about topology, parameter
-    // sources, and diagnostics, so the three transform breadth parameters and the blend mode stay at
-    // their schema defaults unless a case deliberately rewrites one.
+    // sources, and diagnostics, so the three transform breadth parameters and the blend mode stay
+    // at their schema defaults unless a case deliberately rewrites one.
     const auto insertIdentityTransform = [&composition](const ParameterId anchor,
                                                         const ParameterId scale,
                                                         const ParameterId rotation,
@@ -250,8 +250,7 @@ struct ProjectOptions final {
                                                  std::string(kOpacityParameterSchemaKey),
                                                  ConstantValueSource{0.6}}),
                 "second opacity must be accepted");
-        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation,
-                                kSecondBlendMode);
+        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation, kSecondBlendMode);
     }
 
     Project project(kProjectId, "Project");
@@ -394,7 +393,8 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                         "Layer Output preserves typed input and static properties");
     // The blend mode lowers to a resolved enumerator plus its own parameter identity, never to a
     // curve index: the schema declares it non-animatable.
-    expectations.expect(firstLayer != nullptr && firstLayer->blendModeParameterId == kFirstBlendMode,
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendModeParameterId == kFirstBlendMode,
                         "Layer Output carries the blend mode's own parameter identity");
     expectations.expect(firstLayer != nullptr &&
                             firstLayer->blendMode == bloom::core::kDefaultBlendMode,
@@ -765,30 +765,27 @@ void testBlendModeLowersFromItsStoredInteger(Expectations& expectations) {
     require(composition != nullptr, "blend-mode fixture composition must exist");
     auto& parameters = composition->parameters();
     expectations.expect(
-        !parameters.setSource(kFirstBlendMode,
-                              document::ConstantValueSource{
-                                  bloom::core::blendModeStoredValue(
-                                      bloom::core::BlendMode::Difference) +
-                                  1}),
+        !parameters.setSource(
+            kFirstBlendMode,
+            document::ConstantValueSource{
+                bloom::core::blendModeStoredValue(bloom::core::BlendMode::Difference) + 1}),
         "an integer naming no implemented blend mode is refused by the document layer");
-    expectations.expect(!parameters.setSource(kFirstBlendMode,
-                                             document::ConstantValueSource{std::int64_t{-1}}),
-                        "a negative stored blend mode is refused by the document layer");
-    require(parameters.setSource(
-                kFirstBlendMode,
-                document::ConstantValueSource{
-                    bloom::core::blendModeStoredValue(bloom::core::BlendMode::Overlay)}),
+    expectations.expect(
+        !parameters.setSource(kFirstBlendMode, document::ConstantValueSource{std::int64_t{-1}}),
+        "a negative stored blend mode is refused by the document layer");
+    require(parameters.setSource(kFirstBlendMode,
+                                 document::ConstantValueSource{bloom::core::blendModeStoredValue(
+                                     bloom::core::BlendMode::Overlay)}),
             "an implemented blend mode must be publishable");
     require(project.validate().ok(), "blend-mode fixture must remain valid document truth");
 
     const auto result = compile(std::move(project), registry);
-    const auto* layer = result.plan == nullptr
-                            ? nullptr
-                            : std::get_if<runtime::CompiledLayerOutput>(
-                                  &result.plan->operations()[1]);
+    const auto* layer =
+        result.plan == nullptr
+            ? nullptr
+            : std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations()[1]);
     expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled &&
-                            layer != nullptr &&
-                            layer->blendMode == bloom::core::BlendMode::Overlay,
+                            layer != nullptr && layer->blendMode == bloom::core::BlendMode::Overlay,
                         "an authored blend mode lowers to its own enumerator");
 }
 

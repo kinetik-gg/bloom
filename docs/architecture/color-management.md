@@ -5,11 +5,13 @@ Status: accepted
 Implementation status: version 1 durable value validation, the domain-separated content revision
 primitives, the canonical display-processor identity, the built-in registry with concrete
 built-in resolution, and in-process Bloom Neutral CPU display processing (config parse, processor
-construction, and the checked alpha/pixel flow) are implemented and qualified on Linux. The
+construction, and the checked alpha/pixel flow) are implemented and qualified on Linux. The separable
+blend modes under "Blend modes" below are implemented in the CPU reference compositing kernel and
+qualified by per-mode goldens. The
 supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
 processor cache, and cross-platform qualification remain pending.
 
-Updated: 2026-08-31
+Updated: 2026-09-13
 
 ## Purpose
 
@@ -167,6 +169,78 @@ byte/content manifest so a saved expected revision is portable and auditable.
 Display, view, looks, exposure controls, and monitor selection are session or render-request state,
 not project authoring truth. A render preset may persist an explicit output transform intent, but it
 still resolves against the project's qualified config revision.
+
+## Blend modes
+
+A layer's blend mode says how its pixels combine with what is already beneath it in the Layer Stack.
+It is a Layer Output parameter, `bloom.layer.blend-mode`, stored as a small integer under one closed
+and durable mapping. `Normal` is `0`, so a document that carries no blend mode at all -- every Layer
+Output written before this contract -- decodes as `Normal` and renders exactly the picture it always
+did.
+
+| Stored | Mode | Separable blend function `B(Cb, Cs)` |
+| ---: | --- | --- |
+| `0` | Normal | `Cs` |
+| `1` | Add | `Cb + Cs` |
+| `2` | Multiply | `Cb * Cs` |
+| `3` | Screen | `Cb + Cs - Cb * Cs` |
+| `4` | Overlay | `2 * Cb * Cs` if `Cb <= 0.5`, else `1 - 2 * (1 - Cb) * (1 - Cs)` |
+| `5` | Darken | `min(Cb, Cs)` |
+| `6` | Lighten | `max(Cb, Cs)` |
+| `7` | Difference | `abs(Cb - Cs)` |
+
+Appending a mode is additive. Renumbering one, or reusing a retired number, is not: it would
+re-interpret every saved document, and would require a new schema key rather than a new number.
+
+`Cb` and `Cs` are UN-premultiplied backdrop and source channels. The process representation is
+premultiplied, so the kernel divides each pixel by its own alpha, applies `B` per channel, and
+re-premultiplies through one fold -- the W3C Compositing and Blending Level 1 general formula with
+source-over as the compositing operator:
+
+```text
+co = as * (1 - ab) * Cs  +  as * ab * B(Cb, Cs)  +  (1 - as) * ab * Cb
+ao = as + ab * (1 - as)
+```
+
+`co` is the premultiplied result channel; `as` and `ab` are source and backdrop alpha.
+
+**Alpha compositing is source-over for every mode.** Only the colour combination changes, so a blend
+mode never makes a layer cover more or less of what is beneath it than its own alpha says. The alpha
+expression above is evaluated with exactly the arithmetic the source-over kernel uses.
+
+Two modes are evaluated without the round trip, because substituting their own `B` into the fold
+reduces it exactly:
+
+- **Normal.** `B(Cb, Cs) = Cs` collapses the fold to `co = cs + (1 - as) * cb`, which is
+  source-over on premultiplied values. The implementation therefore calls the retained source-over
+  kernel for `Normal` rather than re-deriving it, which is what makes a `Normal` layer bit-identical
+  to every frame published before blend modes existed.
+- **Add.** `B(Cb, Cs) = Cb + Cs` cancels both alpha weightings and leaves `co = cs + cb`, premultiplied
+  addition. Dividing by alpha anyway would add two roundings to an exact answer.
+
+The remaining six take the division. Both alphas are strictly positive on that path: an alpha-zero
+source contributes nothing and is skipped, and an alpha-zero backdrop makes the fold collapse to the
+source pixel itself under every mode, so it is written through exactly.
+
+**Nothing is clamped**, at either end. The process contract forbids clamping before the declared
+display boundary, and that applies inside a blend: a negative or HDR channel goes into `B` and comes
+out of the fold unclipped. The unit references in `Screen` and `Overlay` are therefore not ceilings
+but the reference white of `lin_rec709_scene`: above it, those two formulas extrapolate rather than
+saturate, which is the honest reading of a scene-referred space that has no maximum. A non-finite
+result, or a finite-input overflow, fails the row with a typed error rather than being clamped into
+range.
+
+The vocabulary is deliberately the separable modes only. Each one combines the corresponding channels
+of two pixels and nothing else, so each has one closed formula over scene-linear values. A
+luminosity, saturation, hue, or colour mode would have to commit to a luminance model and a gamut the
+process space does not fix, and belongs with a qualified colorimetry decision rather than with this
+set.
+
+Blending happens in the process space, before any display transform. A blend mode is authoring truth
+and affects process results; it is not a display, view, or look choice, so it invalidates process
+cache results rather than only display ones. Qualification uses per-mode golden rows on a
+premultiplied fixture that includes partial alpha on both sides, an HDR channel above 1, and a
+negative channel, plus a bit-exactness pin of `Normal` against the retained source-over kernel.
 
 ## Hostile Configuration And Resource Limits
 

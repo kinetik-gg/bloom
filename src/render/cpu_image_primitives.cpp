@@ -244,9 +244,9 @@ struct ClampedSpan final {
 //
 // The function is TOTAL over the mode vocabulary, Normal and Add included, because those two really
 // are separable blend functions (Cs, and Cb + Cs) -- blendLinearRec709SceneRow() below reaches them
-// through exact shortcuts instead, but the shortcuts are specializations of this same algebra, not a
-// different rule. See docs/architecture/color-management.md, "Blend modes", for each formula and for
-// what the unit references in Screen and Overlay mean in a scene-referred space.
+// through exact shortcuts instead, but the shortcuts are specializations of this same algebra, not
+// a different rule. See docs/architecture/color-management.md, "Blend modes", for each formula and
+// for what the unit references in Screen and Overlay mean in a scene-referred space.
 //
 // Nothing is clamped. Screen's and Overlay's `1` is the reference white of lin_rec709_scene, not a
 // ceiling, so an HDR or negative channel extrapolates the formula rather than being clipped; the

@@ -32,6 +32,7 @@ namespace {
 
 using bloom::core::Color4d;
 using bloom::core::PixelAspectRatio;
+using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::fillSolidRow;
 using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
@@ -50,7 +51,6 @@ using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::Rgba32fImageView;
 using bloom::render::Rgba8;
 using bloom::render::solidPixelFromStraightLinearRec709Scene;
-using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::sourceOverLinearRec709SceneRow;
 using bloom::render::translateOpacityBilinearRow;
 using bloom::render::TranslationOpacity;
@@ -728,8 +728,7 @@ void testBlendModes(Expectations& expectations) {
     for (const auto& golden : goldens) {
         auto destination = blendDestination;
         const auto status = blendLinearRec709SceneRow(golden.mode, blendSource, destination);
-        expectations.expect(!status.has_value() &&
-                                std::ranges::equal(destination, golden.expected),
+        expectations.expect(!status.has_value() && std::ranges::equal(destination, golden.expected),
                             "a blend mode reproduces its documented formula exactly on "
                             "premultiplied alpha < 1 and HDR > 1 pixels");
     }
@@ -752,12 +751,11 @@ void testBlendModes(Expectations& expectations) {
         const bool ok =
             !blendLinearRec709SceneRow(mode, blendSource, modeDestination).has_value() &&
             !sourceOverLinearRec709SceneRow(blendSource, overDestination).has_value();
-        expectations.expect(
-            ok && std::ranges::equal(modeDestination, overDestination,
-                                     [](const Rgba32f left, const Rgba32f right) {
-                                         return left.alpha() == right.alpha();
-                                     }),
-            "every mode composites alpha as source-over");
+        expectations.expect(ok && std::ranges::equal(modeDestination, overDestination,
+                                                     [](const Rgba32f left, const Rgba32f right) {
+                                                         return left.alpha() == right.alpha();
+                                                     }),
+                            "every mode composites alpha as source-over");
     }
 
     // The two alpha endpoints, under a mode that is nowhere near source-over in colour.
@@ -773,24 +771,23 @@ void testBlendModes(Expectations& expectations) {
         "source exactly, under every mode");
 
     std::array<Rgba32f, 1> wrongSize{Rgba32f::transparent()};
-    expectations.expect(hasError(blendLinearRec709SceneRow(BlendMode::Screen, blendSource,
-                                                           wrongSize),
-                                 ImageErrorCode::InvalidStorageSize),
-                        "blending rejects unequal row sizes");
+    expectations.expect(
+        hasError(blendLinearRec709SceneRow(BlendMode::Screen, blendSource, wrongSize),
+                 ImageErrorCode::InvalidStorageSize),
+        "blending rejects unequal row sizes");
     auto aliased = blendDestination;
     expectations.expect(hasError(blendLinearRec709SceneRow(
-                                    BlendMode::Screen, std::span<const Rgba32f>(aliased), aliased),
-                                ImageErrorCode::InvalidParameter),
+                                     BlendMode::Screen, std::span<const Rgba32f>(aliased), aliased),
+                                 ImageErrorCode::InvalidParameter),
                         "blending rejects source storage that aliases its in-place destination");
 
     const auto maximum = std::numeric_limits<float>::max();
     const std::array overflowingSource{pixel(maximum, 0.0F, 0.0F, 1.0F)};
     std::array overflowingDestination{pixel(maximum, 0.0F, 0.0F, 1.0F)};
-    expectations.expect(
-        hasError(blendLinearRec709SceneRow(BlendMode::Add, overflowingSource,
-                                           overflowingDestination),
-                 ImageErrorCode::NonFiniteResult),
-        "blending reports finite-input RGB overflow without clamping");
+    expectations.expect(hasError(blendLinearRec709SceneRow(BlendMode::Add, overflowingSource,
+                                                           overflowingDestination),
+                                 ImageErrorCode::NonFiniteResult),
+                        "blending reports finite-input RGB overflow without clamping");
 }
 
 void testReferenceDisplayMapping(Expectations& expectations) {

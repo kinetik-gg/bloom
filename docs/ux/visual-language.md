@@ -334,6 +334,21 @@ selected by artists for composition content are project assets and follow a sepa
 licensing, substitution, and missing-dependency workflow.
 
 
+### Timeline layer row controls
+
+The layer-stack column's row carries two Compact `KDropdown`s, and they are deliberately not the same
+kind of thing:
+
+| Row control | Object name | State |
+| --- | --- | --- |
+| Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
+| Parent | `layerParentDropdown` | Disabled, carrying its single honest value "None", with a tooltip saying why: no parenting exists in the document model or the command vocabulary |
+
+A disabled placeholder always states its reason in its tooltip rather than merely looking
+unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
+the same order, as does a layer node card's (`nodeBlendModeDropdown`): one set of words, one order,
+one write path.
+
 ### Timeline layer kinds
 
 The timeline's clip bar carries its layer's kind as a data-type color. Kind is also named in text by
@@ -394,6 +409,7 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
 | Ordered multi-input | Merge's one stack port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, while the pill stays dimmed |
 | Card eyebrow | A layer card's `UiSmall`/`Faint` "Layer" line above its own name, because the name is the layer's |
+| In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Today's one instance is a layer's Blending. It carries no keyframe indicator, because the value is not animatable |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
 | Selected node | 2px inset Accent outline, painted above the card/header surfaces |
 | Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |
@@ -410,7 +426,8 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 retains `kDropdownPopup`, `kDropdownSurface` and `kDropdownList`. Node interaction additions are
 `nodeContextMenu`, `nodeAddSearchAction`, `nodeAddLayerOutputAction`, `nodeAddLayerStackAction`,
 `nodeAddCompositionOutputAction`, `nodeSelectAllAction`, `nodeDuplicateAction`, `nodeDissolveAction`,
-`nodeMuteAction`, `nodeCollapseAction`, `nodeRenameAction`, `nodeDeleteAction` and `nodeRenameEditor`.
+`nodeMuteAction`, `nodeCollapseAction`, `nodeRenameAction`, `nodeDeleteAction`, `nodeRenameEditor` and
+`nodeBlendModeDropdown`.
 Existing scene/view/editor, canvas/Add menu, Add Solid/Text, navigation action, color-chip and
 position-field object names are unchanged. The legacy named Add actions remain routable contracts
 when Add… replaces the visible submenu. The architecture's application-integration limit determines

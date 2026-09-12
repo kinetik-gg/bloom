@@ -699,14 +699,14 @@ std::optional<core::BlendMode>
 CompositionSession::blendModeForLayer(const document::LayerId layerId) const noexcept {
     const auto* current = composition();
     const auto boundaryNodeId = boundaryNodeForLayer(layerId);
-    const auto* node =
-        current == nullptr || !boundaryNodeId.has_value() ? nullptr
-                                                         : current->graph().findNode(*boundaryNodeId);
+    const auto* node = current == nullptr || !boundaryNodeId.has_value()
+                           ? nullptr
+                           : current->graph().findNode(*boundaryNodeId);
     const auto* parameter =
         node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
     const auto* constantSource =
         parameter == nullptr ? nullptr
-                            : std::get_if<document::ConstantValueSource>(&parameter->source);
+                             : std::get_if<document::ConstantValueSource>(&parameter->source);
     const auto* stored =
         constantSource == nullptr ? nullptr : std::get_if<std::int64_t>(&constantSource->value);
     return stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
@@ -717,9 +717,9 @@ bool CompositionSession::setLayerBlendMode(const document::LayerId layerId,
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     const auto boundaryNodeId = boundaryNodeForLayer(layerId);
-    const auto* node =
-        current == nullptr || !boundaryNodeId.has_value() ? nullptr
-                                                         : current->graph().findNode(*boundaryNodeId);
+    const auto* node = current == nullptr || !boundaryNodeId.has_value()
+                           ? nullptr
+                           : current->graph().findNode(*boundaryNodeId);
     const auto* parameter =
         node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
     if (parameter == nullptr) {
@@ -729,9 +729,10 @@ bool CompositionSession::setLayerBlendMode(const document::LayerId layerId,
     const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constantSource == nullptr || std::get_if<std::int64_t>(&constantSource->value) == nullptr) {
         // The blend-mode schema is constant-only -- CreateAnimationForParameter accepts only the
-        // animatable transform and opacity schemas, and SetKeyframeAtTime has no integer overload --
-        // so a non-constant source here is a pre-existing document inconsistency rather than
-        // anything this command created. Refused exactly as the colour path refuses a driven colour.
+        // animatable transform and opacity schemas, and SetKeyframeAtTime has no integer overload
+        // -- so a non-constant source here is a pre-existing document inconsistency rather than
+        // anything this command created. Refused exactly as the colour path refuses a driven
+        // colour.
         reportUnavailable(QStringLiteral("Disconnect the driven blend mode before editing it"));
         return false;
     }

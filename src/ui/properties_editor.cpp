@@ -28,13 +28,13 @@
 #include <QLineEdit>
 #include <QPalette>
 #include <QSignalBlocker>
-#include <QVariant>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -81,16 +81,15 @@ QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* la
 // OUTER label column, which names the whole parameter, is measured independently here.
 int propertyLabelColumnWidth() {
     static const std::array<QString, 18> kLabels{
-        PropertiesEditor::tr("Position"),     PropertiesEditor::tr("Anchor"),
-        PropertiesEditor::tr("Scale"),        PropertiesEditor::tr("Rotation"),
-        PropertiesEditor::tr("Opacity"),      PropertiesEditor::tr("Blending"),
-        PropertiesEditor::tr("RGBA"),
-        PropertiesEditor::tr("Alpha"),        PropertiesEditor::tr("Encoding"),
-        PropertiesEditor::tr("Name"),         PropertiesEditor::tr("Format"),
-        PropertiesEditor::tr("Frame Rate"),   PropertiesEditor::tr("Duration"),
-        PropertiesEditor::tr("Pixel Aspect"), PropertiesEditor::tr("Content"),
-        PropertiesEditor::tr("Size"),         PropertiesEditor::tr("Color"),
-        PropertiesEditor::tr("Font"),
+        PropertiesEditor::tr("Position"), PropertiesEditor::tr("Anchor"),
+        PropertiesEditor::tr("Scale"),    PropertiesEditor::tr("Rotation"),
+        PropertiesEditor::tr("Opacity"),  PropertiesEditor::tr("Blending"),
+        PropertiesEditor::tr("RGBA"),     PropertiesEditor::tr("Alpha"),
+        PropertiesEditor::tr("Encoding"), PropertiesEditor::tr("Name"),
+        PropertiesEditor::tr("Format"),   PropertiesEditor::tr("Frame Rate"),
+        PropertiesEditor::tr("Duration"), PropertiesEditor::tr("Pixel Aspect"),
+        PropertiesEditor::tr("Content"),  PropertiesEditor::tr("Size"),
+        PropertiesEditor::tr("Color"),    PropertiesEditor::tr("Font"),
     };
     const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
     int widest = 0;
@@ -386,10 +385,10 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                    opacityKeyframe_, opacity_);
 
     // Blending completes the Appearance group, in the registered parameter order. The items are
-    // core::kBlendModes in order, named by the one shared vocabulary, with the mode's stored integer
-    // as item data so the control never depends on the order it happened to be filled in -- exactly
-    // the timeline row's dropdown, because both author the same parameter through the same session
-    // method. No keyframe indicator: the schema is not animatable.
+    // core::kBlendModes in order, named by the one shared vocabulary, with the mode's stored
+    // integer as item data so the control never depends on the order it happened to be filled in --
+    // exactly the timeline row's dropdown, because both author the same parameter through the same
+    // session method. No keyframe indicator: the schema is not animatable.
     blendMode_ = new kit::KDropdown(selectionSection_);
     blendMode_->setObjectName("blendModeEditor");
     blendMode_->setAccessibleName(tr("Blending"));
@@ -762,13 +761,13 @@ void PropertiesEditor::configureOpacity() {
 }
 
 void PropertiesEditor::configureBlendMode() {
-    // The contextual layer, not a parameter lookup on the selection: the selection may be the layer,
-    // its Layer Output node, or one of its parameters, and all three mean the same layer's blending.
+    // The contextual layer, not a parameter lookup on the selection: the selection may be the
+    // layer, its Layer Output node, or one of its parameters, and all three mean the same layer's
+    // blending.
     const auto* direct = std::get_if<document::LayerId>(&session_.selection().primary);
     const auto layerId =
         direct != nullptr ? std::optional(*direct) : session_.selection().contextualLayer;
-    const auto mode =
-        layerId.has_value() ? session_.blendModeForLayer(*layerId) : std::nullopt;
+    const auto mode = layerId.has_value() ? session_.blendModeForLayer(*layerId) : std::nullopt;
     blendMode_->setEnabled(mode.has_value());
     const QSignalBlocker blocker(blendMode_);
     int row = 0;

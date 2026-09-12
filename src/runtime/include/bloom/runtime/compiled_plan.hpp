@@ -164,8 +164,8 @@ struct CompiledText {
 //
 // The blend mode is a resolved constant, like CompiledText's three values and for the same reason:
 // the schema declares it non-animatable and no command in the surface can put it on a curve. It
-// lives HERE, on the layer boundary that owns it, rather than on the stack entry that consumes it --
-// the stack entry is the ordering of layers, and the mode is a property of the layer.
+// lives HERE, on the layer boundary that owns it, rather than on the stack entry that consumes it
+// -- the stack entry is the ordering of layers, and the mode is a property of the layer.
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;

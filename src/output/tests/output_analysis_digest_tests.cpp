@@ -104,12 +104,12 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
 // primitive 3 -> 4), then again for the blend-mode slice (evaluator 4 -> 5, primitive 4 -> 5). Both
 // are frozen fields of the process-frame semantic identity these preimages embed, so every digest
-// below changed while every preimage LENGTH stayed the same -- neither slice added a frozen field or
-// reordered one. The values come from the same independent byte-oriented oracle that produced the
-// originals -- a standalone script that packs each frozen field itself with explicit big-endian
+// below changed while every preimage LENGTH stayed the same -- neither slice added a frozen field
+// or reordered one. The values come from the same independent byte-oriented oracle that produced
+// the originals -- a standalone script that packs each frozen field itself with explicit big-endian
 // integers and hashes the result, linking no Bloom code -- and that oracle was validated by
-// reproducing EVERY previously checked-in golden set byte for byte when fed its own version numbers,
-// the version-4 set this slice replaces included.
+// reproducing EVERY previously checked-in golden set byte for byte when fed its own version
+// numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
     "9d89e179035a3f6a516ab1b43a01c7ad7a81fb40cc5619e3e71d0a39a42863e2";
 constexpr std::string_view kExpectedPngDigest =

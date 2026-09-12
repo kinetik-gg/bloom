@@ -42,7 +42,7 @@ enum class BlendMode : std::uint8_t {
 // extremes, difference. One list, so the timeline dropdown, the Properties row, and the node card
 // cannot present three different orders of the same vocabulary.
 inline constexpr std::array<BlendMode, 8> kBlendModes{
-    BlendMode::Normal, BlendMode::Add,     BlendMode::Multiply, BlendMode::Screen,
+    BlendMode::Normal,  BlendMode::Add,    BlendMode::Multiply, BlendMode::Screen,
     BlendMode::Overlay, BlendMode::Darken, BlendMode::Lighten,  BlendMode::Difference,
 };
 

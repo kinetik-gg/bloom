@@ -75,8 +75,8 @@ inline constexpr Vec2d kDefaultAnchor{};
 inline constexpr Vec2d kDefaultScale{1.0, 1.0};
 inline constexpr double kDefaultRotationDegrees = 0.0;
 // The blend-mode default, in the same one place and for the same reason: Normal, stored as the
-// integer core::BlendMode's mapping gives it, so a newly authored layer and an upgraded version-1 or
-// version-2 Layer Output agree exactly.
+// integer core::BlendMode's mapping gives it, so a newly authored layer and an upgraded version-1
+// or version-2 Layer Output agree exactly.
 inline constexpr std::int64_t kDefaultBlendModeValue =
     core::blendModeStoredValue(core::kDefaultBlendMode);
 
