@@ -40,6 +40,11 @@ class Composition final {
     [[nodiscard]] const NodeLayout& nodeLayout() const noexcept { return nodeLayout_; }
     [[nodiscard]] NodeLayout& nodeLayout() noexcept { return nodeLayout_; }
 
+    // Node groups live beside the layout, not inside the graph: they frame cards and carry no
+    // evaluation meaning whatsoever (see node_layout.hpp).
+    [[nodiscard]] const NodeGroups& nodeGroups() const noexcept { return nodeGroups_; }
+    [[nodiscard]] NodeGroups& nodeGroups() noexcept { return nodeGroups_; }
+
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool setDuration(core::RationalTime duration) noexcept;
     void setFormat(CompositionFormat format) noexcept { format_ = format; }
@@ -55,6 +60,7 @@ class Composition final {
     AnimationCurveStore animationCurves_;
     CanonicalGraph graph_;
     NodeLayout nodeLayout_;
+    NodeGroups nodeGroups_;
 };
 
 class Project final {

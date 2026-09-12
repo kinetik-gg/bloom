@@ -89,10 +89,65 @@ void layoutRecords() {
     layout.at(NodeId::fromRaw(1)).width = std::numeric_limits<double>::infinity();
     expect(!validateNodeLayout(layout, graph).ok(), "infinite width refused");
 }
+void nodeGroupRecords() {
+    CanonicalGraph graph(NodeId::fromRaw(3));
+    const std::array types{"bloom.solid-source", "bloom.layer-output", "bloom.layer-stack",
+                           "bloom.composition-output", "bloom.text-source"};
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        expect(graph.addNode({NodeId::fromRaw(index + 1), types[index], {}, 1}), "group node");
+    }
+    NodeGroups groups;
+    const auto first = NodeGroupId::fromRaw(1);
+    groups[first] = {first, "Group", {NodeId::fromRaw(1), NodeId::fromRaw(2)}, {}};
+    expect(NodeGroupRecord{}.padding == Vec2d{kDefaultNodeGroupPadding, kDefaultNodeGroupPadding},
+           "a fresh record carries the frozen default padding");
+    expect(validateNodeGroups(groups, graph).ok(), "a group over live nodes validates");
+    expect(findNodeGroupOf(groups, NodeId::fromRaw(2)) == &groups.at(first), "member finds group");
+    expect(findNodeGroupOf(groups, NodeId::fromRaw(4)) == nullptr, "nonmember finds nothing");
+
+    groups.at(first).members.insert(NodeId::fromRaw(999));
+    const auto missing = validateNodeGroups(groups, graph);
+    expect(missing.ok() && missing.issues().size() == 1 &&
+               missing.issues().front().severity == ValidationSeverity::Warning,
+           "an unknown member is only a diagnostic");
+    groups.at(first).members.erase(NodeId::fromRaw(999));
+
+    const auto second = NodeGroupId::fromRaw(2);
+    groups[second] = {second, "Second", {NodeId::fromRaw(2)}, {}};
+    expect(!validateNodeGroups(groups, graph).ok(), "a node belongs to at most one group");
+    groups.at(second).members = {NodeId::fromRaw(4)};
+    expect(validateNodeGroups(groups, graph).ok(), "disjoint groups validate");
+
+    groups.at(second).name.clear();
+    expect(!validateNodeGroups(groups, graph).ok(), "an empty group name is refused");
+    groups.at(second).name = "Second";
+    groups.at(second).padding = {-1.0, 0.0};
+    expect(!validateNodeGroups(groups, graph).ok(), "negative padding is refused");
+    groups.at(second).padding = {std::numeric_limits<double>::quiet_NaN(), 0.0};
+    expect(!validateNodeGroups(groups, graph).ok(), "nonfinite padding is refused");
+    groups.at(second).padding = {};
+
+    // A group is layout, so the composition carries it beside nodeLayout and validates it there.
+    // The bare graph this fixture builds is not a wired composition, so the assertion is about
+    // which issues mention nodeGroups rather than about overall validity.
+    const auto groupIssues = [](const Composition& composition) {
+        const auto validation = composition.validate();
+        return std::ranges::count_if(validation.issues(), [](const auto& issue) {
+            return issue.path.find("nodeGroups") != std::string::npos;
+        });
+    };
+    Composition composition(CompositionId::fromRaw(1), "Main",
+                            bloom::core::RationalTime::fromInteger(1), std::move(graph));
+    composition.nodeGroups() = groups;
+    expect(groupIssues(composition) == 0, "composition validates its groups");
+    composition.nodeGroups().at(second).members.insert(NodeId::fromRaw(2));
+    expect(groupIssues(composition) == 1, "composition reports overlapping membership");
+}
 } // namespace
 
 int main() {
     socketKinds();
     layoutRecords();
+    nodeGroupRecords();
     return failures == 0 ? 0 : 1;
 }

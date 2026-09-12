@@ -71,6 +71,11 @@ template <typename Visitor>
                 return false;
             }
         }
+        for (const auto& [groupId, group] : composition.nodeGroups()) {
+            if (!visitor(groupId)) {
+                return false;
+            }
+        }
     }
     return true;
 }

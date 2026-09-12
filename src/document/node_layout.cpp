@@ -1,7 +1,10 @@
 #include <bloom/document/node_layout.hpp>
 
+#include <bloom/document/persisted_text.hpp>
+
 #include <array>
 #include <cmath>
+#include <map>
 #include <string>
 
 namespace bloom::document {
@@ -34,6 +37,14 @@ NodeLayout defaultNodeLayout(const std::span<const NodeRecord> nodes) {
     return layout;
 }
 
+const NodeGroupRecord* findNodeGroupOf(const NodeGroups& groups, const NodeId node) {
+    for (const auto& [id, group] : groups) {
+        if (group.members.contains(node))
+            return &group;
+    }
+    return nullptr;
+}
+
 ValidationResult validateNodeLayout(const NodeLayout& layout, const CanonicalGraph& graph) {
     ValidationResult result;
     for (const auto& [id, record] : layout) {
@@ -46,6 +57,44 @@ ValidationResult validateNodeLayout(const NodeLayout& layout, const CanonicalGra
             !std::isfinite(record.width) || record.width <= 0.0) {
             result.add(ValidationCode::InvalidValue, path,
                        "Node layout requires a finite position and positive finite width");
+        }
+    }
+    return result;
+}
+
+ValidationResult validateNodeGroups(const NodeGroups& groups, const CanonicalGraph& graph) {
+    ValidationResult result;
+    // Which group already claimed a node, so "a node is in at most one group" is reported against
+    // the second claimant rather than discovered twice.
+    std::map<NodeId, NodeGroupId> owners;
+    for (const auto& [id, group] : groups) {
+        const auto path = "nodeGroups[" + std::to_string(id.value()) + "]";
+        if (!id.isValid() || group.id != id) {
+            result.add(ValidationCode::InvalidId, path + ".id",
+                       "Node group ID must be nonzero and match its own key");
+        }
+        validateHumanFacingName(group.name, path + ".name", "Node group name", result);
+        if (!std::isfinite(group.padding.x) || !std::isfinite(group.padding.y) ||
+            group.padding.x < 0.0 || group.padding.y < 0.0) {
+            result.add(ValidationCode::InvalidValue, path + ".padding",
+                       "Node group padding requires finite nonnegative components");
+        }
+        for (const auto member : group.members) {
+            // A missing member is a warning, exactly as an unknown-node layout entry is: a group is
+            // presentation, and an unreadable module's node must not cost the artist the document.
+            if (graph.findNode(member) == nullptr) {
+                result.add(ValidationCode::MissingReference,
+                           path + ".members[" + std::to_string(member.value()) + "]",
+                           "Node group member references an unknown node",
+                           ValidationSeverity::Warning);
+            }
+            const auto [owner, inserted] = owners.try_emplace(member, id);
+            if (!inserted) {
+                result.add(ValidationCode::DuplicateId,
+                           path + ".members[" + std::to_string(member.value()) + "]",
+                           "Node is already a member of node group " +
+                               std::to_string(owner->second.value()));
+            }
         }
     }
     return result;
