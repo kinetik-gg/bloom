@@ -143,14 +143,15 @@ ColorChipState colorChipStateFor(const CompositionPreviewState& preview) {
 // true leading digits, never a rounded/binary64-approximated one (design decision 3: "no
 // floating-point accumulation... a subframe time must display honestly").
 //
-// This is a DELIBERATE, documented duplicate of composition_editors.cpp's anonymous-namespace
-// formatExactSeconds() (TimelineEditor::updateTimeReadout()'s own helper): task U3's fence
-// forbids touching composition_editors.cpp (properties/timeline lane), and that function is
-// neither exported nor movable without editing the fenced file it lives in. Per this task's own
-// decision 3 ("reimplement the documented truncation rule and say so" when the timeline's
-// formatting function cannot be reused/moved), the truncation RULE is reproduced verbatim from
-// composition_editors.cpp; the frame-INDEX math below still goes through the shared, unfenced
-// bloom::ui::nearestFrameIndexForTime() (timeline_frame_math.hpp) rather than being duplicated.
+// This is a DELIBERATE, documented duplicate of composition_editor_support.cpp's
+// anonymous-namespace formatExactSeconds() (TimelineEditor::updateTimeReadout()'s own helper):
+// task U3's fence forbids touching composition_editor_support.cpp (properties/timeline lane), and
+// that function is neither exported nor movable without editing the fenced file it lives in. Per
+// this task's own decision 3 ("reimplement the documented truncation rule and say so" when the
+// timeline's formatting function cannot be reused/moved), the truncation RULE is reproduced
+// verbatim from composition_editor_support.cpp; the frame-INDEX math below still goes through the
+// shared, unfenced bloom::ui::nearestFrameIndexForTime() (timeline_frame_math.hpp) rather than
+// being duplicated.
 // Reported to the supervisor as a cross-lane duplication to fold into one shared helper later.
 QString formatExactSecondsForViewer(const core::RationalTime time) {
     constexpr int kDecimalPlaces = 3;
@@ -171,8 +172,8 @@ QString formatExactSecondsForViewer(const core::RationalTime time) {
 }
 
 // "Frame %1 · %2" mirrors TimelineEditor::updateTimeReadout()'s exact display shape
-// (composition_editors.cpp) so the Viewer's readout and the Timeline's readout never disagree in
-// format, only in which fenced/unfenced pieces produce the two halves (see
+// (composition_editor_support.cpp) so the Viewer's readout and the Timeline's readout never
+// disagree in format, only in which fenced/unfenced pieces produce the two halves (see
 // formatExactSecondsForViewer()'s comment above).
 QString exactFrameAndTimecodeText(const CompositionSession& session) {
     const auto* composition = session.composition();
@@ -957,9 +958,10 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
 
 void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
     // Kit-styled via the application-wide QMenu stylesheet rule every other Bloom context/popup
-    // menu already picks up (e.g. TimelineEditor's "Add Layer" menu, composition_editors.cpp) --
-    // no per-menu styling code needed here. Honest, placeholder-free set only (decision 4): no
-    // RAM-preview/channel/quality slots, which do not exist yet.
+    // menu already picks up (e.g. TimelineEditor's "Add Layer" menu,
+    // composition_editor_support.cpp) -- no per-menu styling code needed here. Honest,
+    // placeholder-free set only (decision 4): no RAM-preview/channel/quality slots, which do not
+    // exist yet.
     QMenu menu(this);
     QAction* fitAction = menu.addAction(tr("Fit"));
     QAction* actualSizeAction = menu.addAction(tr("100%"));
