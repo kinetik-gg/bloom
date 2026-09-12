@@ -9,7 +9,13 @@
 
 namespace bloom::render {
 
-inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 2;
+// Bumped to 3 by the CPU text path (issue #130 follow-up, task S3): the primitive set now also
+// covers coverageSolidRow() below and the glyph coverage bloom/render/text_raster.hpp produces, so
+// a change in either one has to invalidate previously published frames. This is the one number
+// ProcessFrameIdentity carries for every CPU pixel primitive (imagePrimitiveSemanticsVersion); the
+// text rasterizer deliberately does not define a second version of its own, which could drift out
+// of that identity.
+inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 3;
 
 // Checked authored layer parameters. Translation remains Float64 pixel-center displacement;
 // opacity is deliberately rounded once to the Float32 process precision.
@@ -57,6 +63,20 @@ translateOpacityBilinearRow(Rgba32fImageView source, ImageWindow outputWindow, s
 // premultiplied pixels; process RGB is never clamped.
 [[nodiscard]] ImageStatus sourceOverLinearRec709SceneRow(std::span<const Rgba32f> source,
                                                          std::span<Rgba32f> destination) noexcept;
+
+// Writes one run of rasterized text as premultiplied lin_rec709_scene process pixels: output[i] is
+// `pixel` with every component scaled by coverage[i] / 255. `pixel` is the already-premultiplied
+// process pixel for the text color (solidPixelFromStraightLinearRec709Scene() of the authored
+// color), so scaling all four components by the coverage fraction is exactly premultiplied
+// compositing of color over nothing at partial coverage -- it needs no unpremultiply/repremultiply
+// round trip and cannot produce alpha above the color's own.
+//
+// Gamma: a coverage byte is a LINEAR area fraction (coverage / 255 exactly), not a gamma-encoded
+// intensity, so it is used directly as linear alpha with no transfer function applied. See
+// bloom/render/text_raster.hpp for the full rule. The spans must have equal length and must not
+// overlap; the caller clips the run to its output window before calling.
+[[nodiscard]] ImageStatus coverageSolidRow(std::span<const std::uint8_t> coverage, Rgba32f pixel,
+                                           std::span<Rgba32f> output) noexcept;
 
 // Maps premultiplied lin_rec709_scene process pixels to straight packed sRGB display pixels.
 // Pixels outside the process data window are transparent; display clipping happens only here.
