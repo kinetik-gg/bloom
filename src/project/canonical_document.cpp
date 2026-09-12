@@ -83,6 +83,9 @@ struct SortWindows final {
             } else if (const auto* vector =
                            std::get_if<bloom::document::Vec2AnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, vector->keyframes.size());
+            } else if (const auto* color =
+                           std::get_if<bloom::document::Color4AnimationCurve>(&record)) {
+                plan.window2 = maximumOf(plan.window2, color->keyframes.size());
             }
         }
     }
@@ -620,6 +623,8 @@ emitInterpolation(EmitState& state,
         return state.ok(state.writer.stringValue("hold"));
     case bloom::document::KeyframeInterpolation::Linear:
         return state.ok(state.writer.stringValue("linear"));
+    case bloom::document::KeyframeInterpolation::EaseInOut:
+        return state.ok(state.writer.stringValue("ease-in-out"));
     }
     return false;
 }
@@ -712,6 +717,68 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
+[[nodiscard]] bool emitColor4Keyframe(EmitState& state,
+                                      const bloom::document::Color4Keyframe& key) noexcept {
+    auto& writer = state.writer;
+    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
+    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "id", key.id.value())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("time"))) {
+        return false;
+    }
+    {
+        const PathScope timeScope(state, "time");
+        if (!emitRational(state, key.time.numerator(), key.time.denominator())) {
+            return false;
+        }
+    }
+    // Channel order is the authoring order core::Color4d declares and the constant colour value
+    // already writes (red, green, blue, alpha) -- the same member order, so a colour key and a
+    // colour constant read identically on the wire.
+    if (!state.ok(writer.memberName("value")) || !state.ok(writer.beginObject())) {
+        return false;
+    }
+    {
+        const PathScope valueScope(state, "value");
+        if (!state.ok(writer.memberName("red")) || !state.ok(writer.float64Value(key.value.red))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("green")) ||
+            !state.ok(writer.float64Value(key.value.green))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("blue")) ||
+            !state.ok(writer.float64Value(key.value.blue))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("alpha")) ||
+            !state.ok(writer.float64Value(key.value.alpha))) {
+            return false;
+        }
+        if (!emitRetainedTrailing(state)) {
+            return false;
+        }
+    }
+    if (!state.ok(writer.endObject())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("outgoingInterpolation"))) {
+        return false;
+    }
+    if (!emitInterpolation(state, key.outgoingInterpolation)) {
+        return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
 [[nodiscard]] bool emitAnimationCurves(EmitState& state, const Composition& composition,
                                        const std::size_t compositionIndex) noexcept {
     using namespace bloom::document;
@@ -783,6 +850,31 @@ emitInterpolation(EmitState& state,
             }
             for (const auto keyIndex : keyOrder) {
                 if (!emitVec2Keyframe(state, vector->keyframes[keyIndex])) {
+                    {
+                        state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                        compositionIndex);
+                        return false;
+                    }
+                }
+            }
+        } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("color4")) ||
+                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
+                return false;
+            }
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    color->keyframes,
+                    [](const bloom::document::Color4Keyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                {
+                    state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                    compositionIndex);
+                    return false;
+                }
+            }
+            for (const auto keyIndex : keyOrder) {
+                if (!emitColor4Keyframe(state, color->keyframes[keyIndex])) {
                     {
                         state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
                                         compositionIndex);

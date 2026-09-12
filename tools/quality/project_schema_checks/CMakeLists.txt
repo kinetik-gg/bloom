@@ -5,6 +5,7 @@ add_library(
     document_schema_graph_checks.cpp
     manifest_schema_checks.cpp
     node_group_schema_checks.cpp
+    animation_breadth_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp
     schema_check_helpers.hpp

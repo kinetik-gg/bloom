@@ -39,6 +39,7 @@ using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, st
 struct CompiledCurveTables final {
     std::vector<runtime::CompiledScalarCurve> scalar;
     std::vector<runtime::CompiledVec2Curve> vec2;
+    std::vector<runtime::CompiledColor4Curve> color4;
 };
 
 [[nodiscard]] DiagnosticKey diagnosticKey(const runtime::CompileDiagnostic& diagnostic) {
@@ -655,11 +656,13 @@ class CompilePass final {
                    "Only typed Layer Output transform and opacity overrides are accepted.");
             return;
         }
-        // The unit domain is opacity's alone; a rotation override is finite and otherwise free.
-        const bool unitDomain = document::hasUnitDomainSchemaKey(parameterDefinition->schemaKey);
+        // The scalar DOMAIN belongs to the schema, and the one gate is the shared
+        // document::isScalarWithinSchemaDomain() so an override and a keyframe are admitted on
+        // identical terms; a rotation override is finite and otherwise free.
         if ((vector != nullptr && (!std::isfinite(vector->x) || !std::isfinite(vector->y))) ||
             (scalar != nullptr &&
-             (!std::isfinite(*scalar) || (unitDomain && (*scalar < 0.0 || *scalar > 1.0))))) {
+             (!std::isfinite(*scalar) ||
+              !document::isScalarWithinSchemaDomain(parameterDefinition->schemaKey, *scalar)))) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override value is outside its schema domain",
                    "Every override must be finite, and opacity must also be within zero and one.");
@@ -797,6 +800,7 @@ class CompilePass final {
     std::unordered_map<document::NodeId, const runtime::NodeDefinition*> definitions_;
     std::unordered_map<document::AnimationCurveId, runtime::ScalarCurveIndex> scalarCurveIndices_;
     std::unordered_map<document::AnimationCurveId, runtime::Vec2CurveIndex> vec2CurveIndices_;
+    std::unordered_map<document::AnimationCurveId, runtime::Color4CurveIndex> color4CurveIndices_;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
     bool hasFailure_ = false;

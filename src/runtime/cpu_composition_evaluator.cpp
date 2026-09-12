@@ -171,13 +171,99 @@ template <typename Value>
     return !std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
+// Which domain an authored scalar field declares. A compiled plan names parameters by identity, not
+// by schema key, so the domain travels with the operand from its call site instead of being guessed
+// from the value kind. The values mirror document::hasUnitDomainSchemaKey()/
+// hasTextSizeDomainSchemaKey() exactly; keeping the plan side an enum rather than re-reading schema
+// keys is what lets the evaluator validate a plan that arrived from a retained frame with no
+// document in hand.
+enum class ScalarDomain : std::uint8_t {
+    Unbounded,
+    Unit,
+    TextSize,
+};
+
+[[nodiscard]] bool withinScalarDomain(const ScalarDomain domain, const double value) noexcept {
+    switch (domain) {
+    case ScalarDomain::Unbounded:
+        return true;
+    case ScalarDomain::Unit:
+        return value >= 0.0 && value <= 1.0;
+    case ScalarDomain::TextSize:
+        return value > 0.0 && value <= document::kMaximumTextSizePixels;
+    }
+    return false;
+}
+
+[[nodiscard]] const char* scalarDomainFailureSummary(const ScalarDomain domain) noexcept {
+    switch (domain) {
+    case ScalarDomain::Unbounded:
+        return "Scalar parameter is not finite";
+    case ScalarDomain::Unit:
+        return "Layer opacity is outside its unit domain";
+    case ScalarDomain::TextSize:
+        return "Text size is outside its domain";
+    }
+    return "Scalar parameter is outside its domain";
+}
+
+// The two in-range checks a curve-indexing operand needs, shared by every operation that carries
+// one rather than repeated per call site (a Solid's colour, a Text's size and colour, and --
+// through the Layer Output arm's own loops -- the five transform operands).
+[[nodiscard]] bool hasValidScalarCurveReference(const CompiledScalarParameter& parameter,
+                                                const CompiledCompositionPlan& plan,
+                                                const std::size_t index,
+                                                EvaluationDiagnostic& failure) {
+    if (!parameter.id.isValid()) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Operation has an invalid parameter identity", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        return false;
+    }
+    const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source);
+    if (curve != nullptr && curve->value() >= plan.scalarCurves().size()) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Scalar parameter references an invalid animation curve", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        failure.subject.parameterId = parameter.id;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool hasValidColorCurveReference(const CompiledColorParameter& parameter,
+                                               const CompiledCompositionPlan& plan,
+                                               const std::size_t index,
+                                               EvaluationDiagnostic& failure) {
+    if (!parameter.id.isValid()) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Operation has an invalid parameter identity", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        return false;
+    }
+    const auto* curve = std::get_if<Color4CurveIndex>(&parameter.source);
+    if (curve != nullptr && curve->value() >= plan.color4Curves().size()) {
+        failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                             "Color parameter references an invalid animation curve", {},
+                             subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+        failure.subject.parameterId = parameter.id;
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool hasExpectedInputKinds(const CompiledCompositionPlan& plan,
                                          const std::size_t index, EvaluationDiagnostic& failure) {
     const auto& operation = plan.operations()[index];
     return std::visit(
         Overloaded{
-            [](const CompiledSolid&) { return true; },
-            [](const CompiledText&) { return true; },
+            [&plan, index, &failure](const CompiledSolid& solid) {
+                return hasValidColorCurveReference(solid.color, plan, index, failure);
+            },
+            [&plan, index, &failure](const CompiledText& text) {
+                return hasValidScalarCurveReference(text.size, plan, index, failure) &&
+                       hasValidColorCurveReference(text.color, plan, index, failure);
+            },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
                 const auto sourcesAnImage = [&plan, index, &layer] {
                     if (layer.input.value() >= index) {
@@ -281,19 +367,23 @@ template <typename Curve>
            (curves.empty() || curves.front().id.isValid());
 }
 
+// Pairwise disjointness over two ALREADY-canonical (valid, strictly ascending) tables. Templated
+// over the two curve types so the three pairs the plan now has -- scalar/vec2, scalar/color4,
+// vec2/color4 -- share one merge rather than three copies of it.
+template <typename LeftCurve, typename RightCurve>
 [[nodiscard]] static bool
-hasDisjointCurveIds(const std::span<const CompiledScalarCurve> scalarCurves,
-                    const std::span<const CompiledVec2Curve> vec2Curves) noexcept {
-    auto scalar = scalarCurves.begin();
-    auto vec2 = vec2Curves.begin();
-    while (scalar != scalarCurves.end() && vec2 != vec2Curves.end()) {
-        if (scalar->id == vec2->id) {
+hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
+                    const std::span<const RightCurve> rightCurves) noexcept {
+    auto left = leftCurves.begin();
+    auto right = rightCurves.begin();
+    while (left != leftCurves.end() && right != rightCurves.end()) {
+        if (left->id == right->id) {
             return false;
         }
-        if (scalar->id < vec2->id) {
-            ++scalar;
+        if (left->id < right->id) {
+            ++left;
         } else {
-            ++vec2;
+            ++right;
         }
     }
     return true;
@@ -324,6 +414,26 @@ resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositi
     const auto& sample = resolved.vec2CurveValues[index];
     return ResolvedParameter<document::Vec2d>{sample.value, parameter.id,
                                               plan.vec2Curves()[index].id, sample.segmentStart};
+}
+
+[[nodiscard]] static std::optional<ResolvedParameter<core::Color4d>>
+resolveParameter(const CompiledColorParameter& parameter, const CompiledCompositionPlan& plan,
+                 const ResolvedEvaluation& resolved) noexcept {
+    if (const auto* constant = std::get_if<core::Color4d>(&parameter.source)) {
+        return ResolvedParameter<core::Color4d>{*constant, parameter.id, std::nullopt,
+                                                std::nullopt};
+    }
+    const auto* curve = std::get_if<Color4CurveIndex>(&parameter.source);
+    if (curve == nullptr) {
+        return std::nullopt;
+    }
+    const auto index = curve->value();
+    if (index >= resolved.color4CurveValues.size() || index >= plan.color4Curves().size()) {
+        return std::nullopt;
+    }
+    const auto& sample = resolved.color4CurveValues[index];
+    return ResolvedParameter<core::Color4d>{sample.value, parameter.id,
+                                            plan.color4Curves()[index].id, sample.segmentStart};
 }
 
 [[nodiscard]] static std::optional<ResolvedParameter<double>>
@@ -485,7 +595,10 @@ template <typename Value>
     }
 
     if (!hasCanonicalCurveIds(plan->scalarCurves()) || !hasCanonicalCurveIds(plan->vec2Curves()) ||
-        !hasDisjointCurveIds(plan->scalarCurves(), plan->vec2Curves())) {
+        !hasCanonicalCurveIds(plan->color4Curves()) ||
+        !hasDisjointCurveIds(plan->scalarCurves(), plan->vec2Curves()) ||
+        !hasDisjointCurveIds(plan->scalarCurves(), plan->color4Curves()) ||
+        !hasDisjointCurveIds(plan->vec2Curves(), plan->color4Curves())) {
         return PreflightOutcome::failure(diagnostic(
             EvaluationDiagnosticCode::InvalidPlan, "Animation curve tables are not canonical",
             "Curve identities must be valid, globally unique, and strictly ordered."));
@@ -493,16 +606,20 @@ template <typename Value>
 
     std::vector<std::uint8_t> scalarCurveReferences(plan->scalarCurves().size(), 0);
     std::vector<std::uint8_t> vec2CurveReferences(plan->vec2Curves().size(), 0);
+    std::vector<std::uint8_t> color4CurveReferences(plan->color4Curves().size(), 0);
     std::vector<document::ParameterId> scalarCurveOwners(plan->scalarCurves().size());
     std::vector<document::ParameterId> vec2CurveOwners(plan->vec2Curves().size());
-    // Which authored field each curve drives, and -- for scalars -- whether that field carries
-    // opacity's unit domain. A compiled plan names parameters by identity rather than by schema
-    // key, so the domain a key must satisfy travels with the curve rather than being guessed from
-    // the value kind: only opacity is confined to [0, 1], while a rotation key is any finite number
-    // of degrees.
+    std::vector<document::ParameterId> color4CurveOwners(plan->color4Curves().size());
+    // Which authored field each curve drives, and -- for scalars -- which DOMAIN that field
+    // declares. A compiled plan names parameters by identity rather than by schema key, so the
+    // domain a key must satisfy travels with the curve rather than being guessed from the value
+    // kind: opacity is confined to [0, 1], text size to (0, kMaximumTextSizePixels], and a rotation
+    // key is any finite number of degrees.
     std::vector<std::string_view> scalarCurveFields(plan->scalarCurves().size());
-    std::vector<bool> scalarCurveUnitDomain(plan->scalarCurves().size(), false);
+    std::vector<ScalarDomain> scalarCurveDomains(plan->scalarCurves().size(),
+                                                 ScalarDomain::Unbounded);
     std::vector<std::string_view> vec2CurveFields(plan->vec2Curves().size());
+    std::vector<std::string_view> color4CurveFields(plan->color4Curves().size());
     std::unordered_set<document::ParameterId> parameterIds;
     std::optional<EvaluationDiagnostic> parameterFailure;
     const auto registerParameter = [&](const document::ParameterId parameterId,
@@ -519,6 +636,118 @@ template <typename Value>
         }
         return true;
     };
+    // Registering one typed operand: claim its parameter identity, then either validate its
+    // constant against the schema domain the CALL SITE names or claim sole ownership of the curve
+    // it indexes and record that domain for the per-key pass below. Hoisted out of the Layer Output
+    // arm (where it used to live as two local lambdas) because task S5 gave a Solid a colour
+    // operand and a Text a size and colour operand: the claim rules must be one copy, not one per
+    // operation kind.
+    const auto registerScalar = [&](const CompiledScalarParameter& parameter,
+                                    const std::string_view field, const ScalarDomain domain,
+                                    const EvaluationSubject& operationSubject) {
+        if (!registerParameter(parameter.id, operationSubject)) {
+            return false;
+        }
+        if (const auto* constant = std::get_if<double>(&parameter.source)) {
+            if (!std::isfinite(*constant) || !withinScalarDomain(domain, *constant)) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure =
+                    diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                               scalarDomainFailureSummary(domain), {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
+        const auto curveIndex = std::get<ScalarCurveIndex>(parameter.source).value();
+        auto& references = scalarCurveReferences[curveIndex];
+        if (references != 0) {
+            auto subject = operationSubject;
+            subject.parameterId = parameter.id;
+            subject.animationCurveId = plan->scalarCurves()[curveIndex].id;
+            subject.field = std::string(field);
+            parameterFailure =
+                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                           "Animation curve has multiple parameter owners", {}, std::move(subject));
+            return false;
+        }
+        references = 1;
+        scalarCurveOwners[curveIndex] = parameter.id;
+        scalarCurveFields[curveIndex] = field;
+        scalarCurveDomains[curveIndex] = domain;
+        return true;
+    };
+    const auto registerVec2 = [&](const CompiledVec2Parameter& parameter,
+                                  const std::string_view field,
+                                  const EvaluationSubject& operationSubject) {
+        if (!registerParameter(parameter.id, operationSubject)) {
+            return false;
+        }
+        if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source)) {
+            if (!std::isfinite(constant->x) || !std::isfinite(constant->y)) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure =
+                    diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                               "Layer transform value is not finite", {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
+        const auto curveIndex = std::get<Vec2CurveIndex>(parameter.source).value();
+        auto& references = vec2CurveReferences[curveIndex];
+        if (references != 0) {
+            auto subject = operationSubject;
+            subject.parameterId = parameter.id;
+            subject.animationCurveId = plan->vec2Curves()[curveIndex].id;
+            subject.field = std::string(field);
+            parameterFailure =
+                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                           "Animation curve has multiple parameter owners", {}, std::move(subject));
+            return false;
+        }
+        references = 1;
+        vec2CurveOwners[curveIndex] = parameter.id;
+        vec2CurveFields[curveIndex] = field;
+        return true;
+    };
+    const auto registerColor = [&](const CompiledColorParameter& parameter,
+                                   const std::string_view field,
+                                   const EvaluationSubject& operationSubject) {
+        if (!registerParameter(parameter.id, operationSubject)) {
+            return false;
+        }
+        if (const auto* constant = std::get_if<core::Color4d>(&parameter.source)) {
+            if (!constant->isValid()) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure =
+                    diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                               "Color is not a valid authoring color", {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
+        const auto curveIndex = std::get<Color4CurveIndex>(parameter.source).value();
+        auto& references = color4CurveReferences[curveIndex];
+        if (references != 0) {
+            auto subject = operationSubject;
+            subject.parameterId = parameter.id;
+            subject.animationCurveId = plan->color4Curves()[curveIndex].id;
+            subject.field = std::string(field);
+            parameterFailure =
+                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                           "Animation curve has multiple parameter owners", {}, std::move(subject));
+            return false;
+        }
+        references = 1;
+        color4CurveOwners[curveIndex] = parameter.id;
+        color4CurveFields[curveIndex] = field;
+        return true;
+    };
     for (std::size_t index = 0; index < plan->operations().size() && !parameterFailure.has_value();
          ++index) {
         if (cancellation.isCancellationRequested()) {
@@ -526,132 +755,37 @@ template <typename Value>
         }
         const auto operationSubject =
             subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
-        std::visit(
-            Overloaded{
-                [&](const CompiledSolid& solid) {
-                    static_cast<void>(registerParameter(solid.colorParameterId, operationSubject));
-                },
-                [&](const CompiledText& text) {
-                    if (!registerParameter(text.contentParameterId, operationSubject) ||
-                        !registerParameter(text.sizeParameterId, operationSubject) ||
-                        !registerParameter(text.colorParameterId, operationSubject)) {
-                        return;
-                    }
-                    // Re-checked here rather than trusted from compilation: the evaluator validates
-                    // the plan it is handed, because a plan can also arrive from a retained frame
-                    // or a test fixture rather than straight from the compiler.
-                    if (!std::isfinite(text.size) || text.size <= 0.0 ||
-                        text.size > document::kMaximumTextSizePixels) {
-                        auto subject = operationSubject;
-                        subject.parameterId = text.sizeParameterId;
-                        subject.field = "size";
-                        parameterFailure =
-                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                       "Text size is outside its domain", {}, std::move(subject));
-                        return;
-                    }
-                    if (!text.color.isValid()) {
-                        auto subject = operationSubject;
-                        subject.parameterId = text.colorParameterId;
-                        subject.field = "color";
-                        parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                                      "Text color is not a valid authoring color",
-                                                      {}, std::move(subject));
-                    }
-                },
-                [&](const CompiledLayerOutput& layer) {
-                    // One rule applied five times. A Vec2d transform value is finite and otherwise
-                    // unbounded; a scalar one is finite and, for opacity only, within [0, 1]. Each
-                    // animated parameter claims sole ownership of its curve and records which field
-                    // and domain that curve belongs to, so a bad key is later reported against the
-                    // right parameter with the right message.
-                    const auto registerVec2 = [&](const CompiledVec2Parameter& parameter,
-                                                  const std::string_view field) {
-                        if (!registerParameter(parameter.id, operationSubject)) {
-                            return false;
-                        }
-                        if (const auto* constant =
-                                std::get_if<document::Vec2d>(&parameter.source)) {
-                            if (!std::isfinite(constant->x) || !std::isfinite(constant->y)) {
-                                auto subject = operationSubject;
-                                subject.parameterId = parameter.id;
-                                subject.field = std::string(field);
-                                parameterFailure = diagnostic(
-                                    EvaluationDiagnosticCode::InvalidParameter,
-                                    "Layer transform value is not finite", {}, std::move(subject));
-                                return false;
-                            }
-                            return true;
-                        }
-                        const auto curveIndex = std::get<Vec2CurveIndex>(parameter.source).value();
-                        auto& references = vec2CurveReferences[curveIndex];
-                        if (references != 0) {
-                            auto subject = operationSubject;
-                            subject.parameterId = parameter.id;
-                            subject.animationCurveId = plan->vec2Curves()[curveIndex].id;
-                            subject.field = std::string(field);
-                            parameterFailure =
-                                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                           "Animation curve has multiple parameter owners", {},
-                                           std::move(subject));
-                            return false;
-                        }
-                        references = 1;
-                        vec2CurveOwners[curveIndex] = parameter.id;
-                        vec2CurveFields[curveIndex] = field;
-                        return true;
-                    };
-                    const auto registerScalar = [&](const CompiledScalarParameter& parameter,
-                                                    const std::string_view field,
-                                                    const bool unitDomain) {
-                        if (!registerParameter(parameter.id, operationSubject)) {
-                            return false;
-                        }
-                        if (const auto* constant = std::get_if<double>(&parameter.source)) {
-                            if (!std::isfinite(*constant) ||
-                                (unitDomain && (*constant < 0.0 || *constant > 1.0))) {
-                                auto subject = operationSubject;
-                                subject.parameterId = parameter.id;
-                                subject.field = std::string(field);
-                                parameterFailure = diagnostic(
-                                    EvaluationDiagnosticCode::InvalidParameter,
-                                    unitDomain ? "Layer opacity is outside its unit domain"
-                                               : "Layer rotation is not finite",
-                                    {}, std::move(subject));
-                                return false;
-                            }
-                            return true;
-                        }
-                        const auto curveIndex =
-                            std::get<ScalarCurveIndex>(parameter.source).value();
-                        auto& references = scalarCurveReferences[curveIndex];
-                        if (references != 0) {
-                            auto subject = operationSubject;
-                            subject.parameterId = parameter.id;
-                            subject.animationCurveId = plan->scalarCurves()[curveIndex].id;
-                            subject.field = std::string(field);
-                            parameterFailure =
-                                diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                           "Animation curve has multiple parameter owners", {},
-                                           std::move(subject));
-                            return false;
-                        }
-                        references = 1;
-                        scalarCurveOwners[curveIndex] = parameter.id;
-                        scalarCurveFields[curveIndex] = field;
-                        scalarCurveUnitDomain[curveIndex] = unitDomain;
-                        return true;
-                    };
-                    static_cast<void>(registerVec2(layer.position, "position") &&
-                                      registerVec2(layer.anchor, "anchor") &&
-                                      registerVec2(layer.scale, "scale") &&
-                                      registerScalar(layer.rotation, "rotation", false) &&
-                                      registerScalar(layer.opacity, "opacity", true));
-                },
-                [](const CompiledLayerStack&) {},
-                [](const CompiledCompositionOutput&) {},
-            },
-            plan->operations()[index]);
+        std::visit(Overloaded{
+                       [&](const CompiledSolid& solid) {
+                           static_cast<void>(registerColor(solid.color, "color", operationSubject));
+                       },
+                       [&](const CompiledText& text) {
+                           // Every check is re-run here rather than trusted from compilation: the
+                           // evaluator validates the plan it is handed, because a plan can also
+                           // arrive from a retained frame or a test fixture rather than straight
+                           // from the compiler.
+                           static_cast<void>(
+                               registerParameter(text.contentParameterId, operationSubject) &&
+                               registerScalar(text.size, "size", ScalarDomain::TextSize,
+                                              operationSubject) &&
+                               registerColor(text.color, "color", operationSubject));
+                       },
+                       [&](const CompiledLayerOutput& layer) {
+                           // One rule applied five times, through exactly the helpers a Solid's and
+                           // a Text's own operands use.
+                           static_cast<void>(
+                               registerVec2(layer.position, "position", operationSubject) &&
+                               registerVec2(layer.anchor, "anchor", operationSubject) &&
+                               registerVec2(layer.scale, "scale", operationSubject) &&
+                               registerScalar(layer.rotation, "rotation", ScalarDomain::Unbounded,
+                                              operationSubject) &&
+                               registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
+                                              operationSubject));
+                       },
+                       [](const CompiledLayerStack&) {},
+                       [](const CompiledCompositionOutput&) {},
+                   },
+                   plan->operations()[index]);
     }
     if (parameterFailure.has_value()) {
         return PreflightOutcome::failure(std::move(*parameterFailure));
@@ -670,6 +804,16 @@ template <typename Value>
         if (vec2CurveReferences[index] == 0) {
             EvaluationSubject subject;
             subject.animationCurveId = plan->vec2Curves()[index].id;
+            subject.field = "animationCurve";
+            return PreflightOutcome::failure(diagnostic(
+                EvaluationDiagnosticCode::InvalidPlan,
+                "Compiled plan contains an unreferenced animation curve", {}, std::move(subject)));
+        }
+    }
+    for (std::size_t index = 0; index < color4CurveReferences.size(); ++index) {
+        if (color4CurveReferences[index] == 0) {
+            EvaluationSubject subject;
+            subject.animationCurveId = plan->color4Curves()[index].id;
             subject.field = "animationCurve";
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::InvalidPlan,
@@ -699,9 +843,8 @@ template <typename Value>
                     "Animation keyframe identity is not canonical",
                     "Keyframe identities must be valid and globally unique.", std::move(subject)));
             }
-            const bool unitDomain = scalarCurveUnitDomain[curveIndex];
-            if (!std::isfinite(keyframe.value) ||
-                (unitDomain && (keyframe.value < 0.0 || keyframe.value > 1.0))) {
+            const auto domain = scalarCurveDomains[curveIndex];
+            if (!std::isfinite(keyframe.value) || !withinScalarDomain(domain, keyframe.value)) {
                 EvaluationSubject subject;
                 subject.parameterId = scalarCurveOwners[curveIndex];
                 subject.animationCurveId = curve.id;
@@ -709,9 +852,7 @@ template <typename Value>
                 subject.field = std::string(scalarCurveFields[curveIndex]);
                 return PreflightOutcome::failure(
                     diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                               unitDomain ? "Animated opacity key is outside its unit domain"
-                                          : "Animated rotation key is not finite",
-                               {}, std::move(subject)));
+                               scalarDomainFailureSummary(domain), {}, std::move(subject)));
             }
         }
         const auto sample = sampleAnimationCurve(curve, request.time, cancellation);
@@ -766,6 +907,49 @@ template <typename Value>
         vec2CurveValues.push_back({*sample.value, *sample.segmentStart});
     }
 
+    std::vector<ResolvedCurveSample<core::Color4d>> color4CurveValues;
+    color4CurveValues.reserve(plan->color4Curves().size());
+    for (std::size_t curveIndex = 0; curveIndex < plan->color4Curves().size(); ++curveIndex) {
+        const auto& curve = plan->color4Curves()[curveIndex];
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        for (const auto& keyframe : curve.keyframes) {
+            if (cancellation.isCancellationRequested()) {
+                return PreflightOutcome::cancellation();
+            }
+            if (!keyframe.id.isValid() || !keyframeIds.insert(keyframe.id).second) {
+                EvaluationSubject subject;
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = "animationCurve.keyframes";
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidPlan,
+                    "Animation keyframe identity is not canonical",
+                    "Keyframe identities must be valid and globally unique.", std::move(subject)));
+            }
+            // The authoring-colour contract, exactly as a constant colour satisfies it.
+            if (!keyframe.value.isValid()) {
+                EvaluationSubject subject;
+                subject.parameterId = color4CurveOwners[curveIndex];
+                subject.animationCurveId = curve.id;
+                subject.keyframeId = keyframe.id;
+                subject.field = std::string(color4CurveFields[curveIndex]);
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidParameter,
+                    "Animated color key is not a valid authoring color", {}, std::move(subject)));
+            }
+        }
+        const auto sample = sampleAnimationCurve(curve, request.time, cancellation);
+        if (sample.error == AnimationSamplingError::Cancelled) {
+            return PreflightOutcome::cancellation();
+        }
+        if (!sample || !sample.value.has_value() || !sample.segmentStart.has_value()) {
+            return PreflightOutcome::failure(animationDiagnostic(sample.error, curve.id, sample));
+        }
+        color4CurveValues.push_back({*sample.value, *sample.segmentStart});
+    }
+
     const auto imageBytes = descriptorResult.value()->layout().pixelStorageBytes;
     auto remaining = consumers;
     std::size_t residentBytes = 0;
@@ -809,7 +993,8 @@ template <typename Value>
                            .imageBytes = imageBytes,
                            .remainingConsumers = std::move(consumers),
                            .scalarCurveValues = std::move(scalarCurveValues),
-                           .vec2CurveValues = std::move(vec2CurveValues)});
+                           .vec2CurveValues = std::move(vec2CurveValues),
+                           .color4CurveValues = std::move(color4CurveValues)});
 }
 
 [[nodiscard]] EvaluationResult unexpectedAllocationFailure() {
@@ -862,11 +1047,20 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::visit(
                 Overloaded{
                     [&](const CompiledSolid& solid) {
+                        const auto color = detail::resolveParameter(solid.color, *plan, resolved);
+                        if (!color.has_value()) {
+                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                          "Solid color could not be resolved", {},
+                                                          operationSubject);
+                            return;
+                        }
                         const auto pixel =
-                            render::solidPixelFromStraightLinearRec709Scene(solid.color);
+                            render::solidPixelFromStraightLinearRec709Scene(color->value);
                         if (!pixel) {
-                            operationFailure = imageDiagnostic(*pixel.error(), operationSubject,
-                                                               "Solid color is not evaluable");
+                            operationFailure = imageDiagnostic(
+                                *pixel.error(),
+                                detail::parameterSubject(operationSubject, *color, "color"),
+                                "Solid color is not evaluable");
                             return;
                         }
                         auto builder = render::Rgba32fImageBuilder::create(resolved.imageDescriptor,
@@ -918,11 +1112,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         // first line's ascender is flush with the top edge and its pen starts at
                         // the left edge. The layer transform then moves, turns, and scales the
                         // whole layer from there, which is why nothing here reads any of it.
+                        const auto size = detail::resolveParameter(text.size, *plan, resolved);
+                        const auto color = detail::resolveParameter(text.color, *plan, resolved);
+                        if (!size.has_value() || !color.has_value()) {
+                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                          "Text parameter could not be resolved",
+                                                          {}, operationSubject);
+                            return;
+                        }
                         const auto pixel =
-                            render::solidPixelFromStraightLinearRec709Scene(text.color);
+                            render::solidPixelFromStraightLinearRec709Scene(color->value);
                         if (!pixel) {
-                            operationFailure = imageDiagnostic(*pixel.error(), operationSubject,
-                                                               "Text color is not evaluable");
+                            operationFailure = imageDiagnostic(
+                                *pixel.error(),
+                                detail::parameterSubject(operationSubject, *color, "color"),
+                                "Text color is not evaluable");
                             return;
                         }
                         // Proxy evaluation scales the em size per axis by exactly the factors the
@@ -930,14 +1134,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         // picture of the same composition rather than full-size glyphs in a small
                         // frame.
                         const auto rasterParameters = render::TextRasterParameters::create(
-                            text.size * resolved.horizontalScale,
-                            text.size * resolved.verticalScale);
+                            size->value * resolved.horizontalScale,
+                            size->value * resolved.verticalScale);
                         if (!rasterParameters) {
-                            operationFailure =
-                                imageDiagnostic(*rasterParameters.error(), operationSubject,
-                                                "Text size is not rasterizable");
-                            operationFailure->subject.parameterId = text.sizeParameterId;
-                            operationFailure->subject.field = "size";
+                            operationFailure = imageDiagnostic(
+                                *rasterParameters.error(),
+                                detail::parameterSubject(operationSubject, *size, "size"),
+                                "Text size is not rasterizable");
                             return;
                         }
                         auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(

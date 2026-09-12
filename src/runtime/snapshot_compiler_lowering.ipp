@@ -108,10 +108,14 @@
                     scalarCurveIndices_.emplace(
                         curve.id, runtime::ScalarCurveIndex::fromRaw(tables.scalar.size()));
                     tables.scalar.push_back(runtime::compileAnimationCurve(curve));
-                } else {
+                } else if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>) {
                     vec2CurveIndices_.emplace(curve.id,
                                               runtime::Vec2CurveIndex::fromRaw(tables.vec2.size()));
                     tables.vec2.push_back(runtime::compileAnimationCurve(curve));
+                } else {
+                    color4CurveIndices_.emplace(
+                        curve.id, runtime::Color4CurveIndex::fromRaw(tables.color4.size()));
+                    tables.color4.push_back(runtime::compileAnimationCurve(curve));
                 }
             },
             record);
@@ -119,7 +123,8 @@
             return std::nullopt;
         }
     }
-    if (scalarCurveIndices_.size() + vec2CurveIndices_.size() != reachableCurveIds.size()) {
+    if (scalarCurveIndices_.size() + vec2CurveIndices_.size() + color4CurveIndices_.size() !=
+        reachableCurveIds.size()) {
         addTopologyFailure({}, "A reachable animation curve could not be lowered.");
         return std::nullopt;
     }
@@ -230,7 +235,7 @@ lower(const std::vector<document::NodeId>& order) {
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
             composition_->format(), std::move(operations), output->second,
             std::move(curveTables->scalar), std::move(curveTables->vec2),
-            runtime::kCompiledCompositionPlanSemanticsVersion,
+            std::move(curveTables->color4), runtime::kCompiledCompositionPlanSemanticsVersion,
             runtime::kAnimationSamplingSemanticsVersion});
 }
 
@@ -260,16 +265,15 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
 lowerSolid(const document::NodeRecord& node) {
     using namespace document;
     const auto* binding = findParameterBinding(node, kSolidColorParameterRole);
-    const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
-    const auto* constant =
-        parameter == nullptr ? nullptr : std::get_if<ConstantValueSource>(&parameter->source);
-    const auto* color =
-        constant == nullptr ? nullptr : std::get_if<core::Color4d>(&constant->value);
-    if (binding == nullptr || color == nullptr) {
+    // Task S5: a solid colour is a typed operand now, lowered through exactly the same
+    // constant-or-curve-index helper a transform operand uses, so an animated solid colour and an
+    // animated position are resolved by one rule rather than two.
+    const auto color = compiledColorParameter(binding);
+    if (binding == nullptr || !color.has_value()) {
         addTopologyFailure(node.id, "Validated solid color could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledSolid{node.id, binding->parameterId, *color};
+    return runtime::CompiledSolid{node.id, *color};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -279,17 +283,14 @@ lowerText(const document::NodeRecord& node) {
     const auto* sizeBinding = findParameterBinding(node, kTextSizeParameterRole);
     const auto* colorBinding = findParameterBinding(node, kTextColorParameterRole);
     const auto* content = parameterConstant<std::string>(contentBinding);
-    const auto* size = parameterConstant<double>(sizeBinding);
-    const auto* color = parameterConstant<core::Color4d>(colorBinding);
+    const auto size = compiledScalarParameter(sizeBinding);
+    const auto color = compiledColorParameter(colorBinding);
     if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
-        content == nullptr || size == nullptr || color == nullptr) {
+        content == nullptr || !size.has_value() || !color.has_value()) {
         addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledText{node.id,          contentBinding->parameterId,
-                                 *content,        sizeBinding->parameterId,
-                                 *size,           colorBinding->parameterId,
-                                 *color};
+    return runtime::CompiledText{node.id, contentBinding->parameterId, *content, *size, *color};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -437,6 +438,34 @@ compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept 
     return index == vec2CurveIndices_.end()
                ? std::nullopt
                : std::optional(runtime::CompiledVec2Parameter{parameter->id, index->second});
+}
+
+[[nodiscard]] std::optional<runtime::CompiledColorParameter>
+compiledColorParameter(const document::ParameterBinding* binding) const noexcept {
+    if (binding == nullptr) {
+        return std::nullopt;
+    }
+    const auto* parameter = findParameter(binding->parameterId);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    // Deliberately NO override branch: SnapshotParameterOverride::value is variant<double, Vec2d>,
+    // so no request can carry a colour override today (direct manipulation moves a position, not a
+    // colour). A colour alternative would be added there first, and this helper would grow the same
+    // branch its scalar/Vec2 siblings have -- inventing a dead one here would only claim a gesture
+    // that does not exist.
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const auto* value = std::get_if<core::Color4d>(&constant->value);
+        return value == nullptr
+                   ? std::nullopt
+                   : std::optional(runtime::CompiledColorParameter{parameter->id, *value});
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    const auto index =
+        source == nullptr ? color4CurveIndices_.end() : color4CurveIndices_.find(source->curveId);
+    return index == color4CurveIndices_.end()
+               ? std::nullopt
+               : std::optional(runtime::CompiledColorParameter{parameter->id, index->second});
 }
 
 [[nodiscard]] std::optional<runtime::OperationIndex> findInputOperation(
