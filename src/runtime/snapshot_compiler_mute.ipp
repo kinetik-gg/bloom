@@ -12,23 +12,26 @@
 [[nodiscard]] std::optional<document::InputPortRef>
 firstImageInput(const document::NodeRecord& node) const {
     const auto* definition = registry_.find(node.typeId, node.schemaVersion);
-    if (!definition || !hasImageOutput(*definition)) return std::nullopt;
+    if (!definition || !hasImageOutput(*definition))
+        return std::nullopt;
     for (const auto& input : definition->inputs) {
         if (input.valueKind == runtime::SocketValueKind::Image)
             return document::NodeInputRef{node.id, input.name};
     }
     const auto entries = composition_->graph().layerStack().entries();
     if (definition->layerSlotInput &&
-        definition->layerSlotInput->valueKind == runtime::SocketValueKind::Image && !entries.empty()) {
+        definition->layerSlotInput->valueKind == runtime::SocketValueKind::Image &&
+        !entries.empty()) {
         return document::LayerStackInputRef{node.id, entries.front().slotId,
-                                             definition->layerSlotInput->role};
+                                            definition->layerSlotInput->role};
     }
     return std::nullopt;
 }
 
 [[nodiscard]] bool mutedLayer(const document::LayerStackEntry& entry) const {
     for (const auto& boundary : composition_->graph().layerOutputs()) {
-        if (boundary.layerId == entry.layerId) return isMuted(boundary.nodeId);
+        if (boundary.layerId == entry.layerId)
+            return isMuted(boundary.nodeId);
     }
     return false;
 }
@@ -37,11 +40,13 @@ firstImageInput(const document::NodeRecord& node) const {
                                 const document::EdgeRecord& edge) const {
     if (isMuted(node.id)) {
         const auto input = firstImageInput(node);
-        if (!input || *input != edge.destination) return false;
+        if (!input || *input != edge.destination)
+            return false;
     }
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
         const auto* entry = composition_->graph().layerStack().find(slot->slotId);
-        if (entry && mutedLayer(*entry)) return false;
+        if (entry && mutedLayer(*entry))
+            return false;
     }
     return true;
 }

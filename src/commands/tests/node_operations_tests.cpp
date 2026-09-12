@@ -367,6 +367,66 @@ void testDeepDuplication(TestContext& test) {
                     CommandStatus::NoChange,
                 "empty duplication is a no-op");
 }
+void testDuplicationOwnershipEdges(TestContext& test) {
+    Fixture fixture;
+    if (!apply<CreateAnimationForParameter>(fixture, kFirstPositionId, core::RationalTime{})
+             .changed())
+        throw std::logic_error("vec2 animation fixture");
+    const auto original = fixture.document.snapshot();
+    const auto result = exercise<DuplicateNodes>(
+        test, fixture, std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId}, Vec2d{});
+    const auto copiedPosition =
+        result.outputId<ParameterId>("parameter." + std::to_string(kFirstPositionId.value()));
+    if (!copiedPosition)
+        throw std::logic_error("copied vec2 parameter");
+    const auto& comp = composition(fixture.document.snapshot());
+    const auto oldCurve = std::get<AnimationCurveSource>(
+                              composition(original).parameters().find(kFirstPositionId)->source)
+                              .curveId;
+    const auto newCurve =
+        std::get<AnimationCurveSource>(comp.parameters().find(*copiedPosition)->source).curveId;
+    const auto* oldKeys = comp.animationCurves().findVec2(oldCurve);
+    const auto* newKeys = comp.animationCurves().findVec2(newCurve);
+    test.expect(oldCurve != newCurve && oldKeys && newKeys &&
+                    oldKeys->keyframes.front().id != newKeys->keyframes.front().id &&
+                    oldKeys->keyframes.front().value == newKeys->keyframes.front().value,
+                "vec2 animation copies independently with fresh curve/key identities");
+    const auto firstCopy =
+        result.outputId<LayerId>("layer." + std::to_string(kFirstLayerId.value()));
+    const auto secondCopy =
+        result.outputId<LayerId>("layer." + std::to_string(kSecondLayerId.value()));
+    const auto entries = comp.graph().layerStack().entries();
+    test.expect(firstCopy && secondCopy && entries.size() == 4 &&
+                    entries[0].layerId == kFirstLayerId && entries[1].layerId == *firstCopy &&
+                    entries[2].layerId == kSecondLayerId && entries[3].layerId == *secondCopy,
+                "multiple copied layer slots each follow their own original");
+    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::InvalidValue,
+                           std::set<NodeId>{kFirstLayerNodeId, kLayerStackNodeId}, Vec2d{});
+    if (!apply<MoveNodes>(
+             fixture,
+             std::map<NodeId, Vec2d>{{kFirstLayerNodeId, {std::numeric_limits<double>::max(), 0}}})
+             .changed())
+        throw std::logic_error("position overflow fixture");
+    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::InvalidValue,
+                           std::set<NodeId>{kFirstLayerNodeId},
+                           Vec2d{std::numeric_limits<double>::max(), 0});
+
+    // Driver identity exists, but the document model has no driver record to clone.
+    auto before = fixture.document.snapshot();
+    auto draft = fixture.document.draft(before);
+    const auto driver = draft.ids().allocateDriverBinding();
+    if (!driver ||
+        !draft.project()
+             .findComposition(kCompositionId)
+             ->parameters()
+             .setSource(kSecondOpacityId, DriverBindingSource{*driver}) ||
+        !fixture.document.commit(before.revision(), std::move(draft)).committed())
+        throw std::logic_error("driver fixture");
+    fixture.stack.clear();
+    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::Unsupported,
+                           std::set<NodeId>{kSecondLayerNodeId}, Vec2d{});
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -377,6 +437,7 @@ int main() {
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);
         bloom::commands::test::testDeepDuplication(test);
+        bloom::commands::test::testDuplicationOwnershipEdges(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

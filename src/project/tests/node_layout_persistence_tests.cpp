@@ -7,6 +7,7 @@
 #include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/project/zip_container.hpp>
 
 #include <array>
 #include <iostream>
@@ -85,6 +86,78 @@ void migrationAndReopen() {
     expect(reopenedSnapshot.ids().highWater() == snapshot.ids().highWater(),
            "layout references never allocate semantic IDs");
 }
+void futureLayoutAttachments() {
+    auto baseline = openProjectArchive(legacyArchive(), {}, memory());
+    if (baseline.outcome() != OpenArchiveOutcome::Opened)
+        throw std::logic_error("layout future baseline");
+    auto current = std::move(baseline).takeOpened();
+    auto snapshot = current.document->snapshot();
+    auto saved = buildVerifiedSaveArchive(
+        CanonicalManifestV1{},
+        CanonicalDocumentV1{.snapshot = &snapshot, .colorSettings = &current.colorSettings}, {},
+        memory());
+    if (!saved)
+        throw std::logic_error("layout future archive");
+    auto entries = readZipContainer(saved.archive()->bytes(), {}, memory());
+    if (!entries)
+        throw std::logic_error("layout future entries");
+    const auto bytes = entries.document()->documentBytes();
+    std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const auto rootMinor = text.find("\"minor\": 1");
+    const auto layoutStart = text.find("\"nodeLayout\"");
+    if (rootMinor == std::string::npos || layoutStart == std::string::npos)
+        throw std::logic_error("layout future anchors");
+    text.replace(rootMinor, std::string_view("\"minor\": 1").size(), "\"minor\": 2");
+    const auto y = text.find("\"y\": 32.0", layoutStart);
+    if (y == std::string::npos)
+        throw std::logic_error("layout position anchor");
+    text.insert(y + std::string_view("\"y\": 32.0").size(), R"(, "zzzPosition":42)");
+    const auto muted = text.find("\"muted\": false", layoutStart);
+    if (muted == std::string::npos)
+        throw std::logic_error("layout record anchor");
+    text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}};
+    const auto size = canonicalManifestSize(manifest);
+    if (!size)
+        throw std::logic_error("future manifest size");
+    std::vector<char> encoded(*size.value());
+    if (!encodeCanonicalManifest(manifest, encoded))
+        throw std::logic_error("future manifest encode");
+    const auto archive = test::buildConformingArchive(
+        test::makeStoredEntry("manifest.json", test::toBytes({encoded.data(), encoded.size()})),
+        test::makeStoredEntry("document.json", test::toBytes(text)));
+    auto openedResult = openProjectArchive(archive, {}, memory());
+    expect(openedResult.outcome() == OpenArchiveOutcome::Opened,
+           "future layout and position members open editable");
+    if (openedResult.outcome() != OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(openedResult).takeOpened();
+    expect(opened.roundTrip && opened.schemaMinor == 2,
+           "future layout retains its schema and attachments");
+    if (!opened.roundTrip)
+        throw std::logic_error("layout round-trip state");
+    snapshot = opened.document->snapshot();
+    auto rewritten =
+        buildVerifiedSaveArchive(manifest,
+                                 CanonicalDocumentV1{.snapshot = &snapshot,
+                                                     .colorSettings = &opened.colorSettings,
+                                                     .roundTrip = &*opened.roundTrip,
+                                                     .schemaMinor = 2},
+                                 {}, memory());
+    expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
+    if (!rewritten)
+        return;
+    auto rewrittenEntries = readZipContainer(rewritten.archive()->bytes(), {}, memory());
+    if (!rewrittenEntries)
+        throw std::logic_error("rewritten layout entries");
+    const auto rewrittenBytes = rewrittenEntries.document()->documentBytes();
+    const std::string_view retained(reinterpret_cast<const char*>(rewrittenBytes.data()),
+                                    rewrittenBytes.size());
+    expect(retained.find("\"zzzPosition\": 42") != std::string_view::npos &&
+               retained.find("\"zzzLayout\": \"retained\"") != std::string_view::npos,
+           "unknown position and NodeId-keyed layout members survive reopen and save");
+}
+
 void migrationDeterminismAndBudget() {
     const auto bytes = test::toBytes(kNodeLayoutLegacyDocument);
     auto operation = memory();
@@ -111,6 +184,7 @@ int main() {
     try {
         migrationAndReopen();
         migrationDeterminismAndBudget();
+        futureLayoutAttachments();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";
         return 1;

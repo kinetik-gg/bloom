@@ -218,11 +218,11 @@ constexpr std::string_view kMinimalGraphJson =
 }
 
 // ---------------------------------------------------------------------------------------------
-// RT1 fixtures: schemaVersion {1, minor > current} documents (see docs/architecture/project-format.md,
-// "Versions, Migrations, And Preservation"). documentJson() above writes a caller-versioned
-// extensions-free skeleton; RT1's own fixtures additionally need a caller-chosen minor and,
-// sometimes, a non-empty extensions array, so this module adds its own skeleton builder rather
-// than complicating every existing R2/R3 call site above.
+// RT1 fixtures: schemaVersion {1, minor > current} documents (see
+// docs/architecture/project-format.md, "Versions, Migrations, And Preservation"). documentJson()
+// above writes a caller-versioned extensions-free skeleton; RT1's own fixtures additionally need a
+// caller-chosen minor and, sometimes, a non-empty extensions array, so this module adds its own
+// skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
 constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":2})";
