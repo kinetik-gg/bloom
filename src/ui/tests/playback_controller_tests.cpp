@@ -28,8 +28,6 @@
 #include <QLineEdit>
 #include <QTest>
 #include <QToolButton>
-#include <QTreeWidget>
-#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -847,15 +845,20 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
     finishFixture(fixture, expectations);
 }
 
-// Arrow-key conflict finding (this task's own investigation, verified with a standalone Qt harness
-// before writing composition_editors.cpp): layers_ (the QTreeWidget layer stack) already consumes
-// Left/Right/Home/End for its OWN keyboard navigation (Home/End jump to the first/last row), but --
-// unlike a text-entry widget -- does not claim the ShortcutOverride event for those keys, so a
-// same-key WindowShortcut action would otherwise silently swallow the tree's navigation the instant
-// it existed. The reconciliation rule implemented in composition_editors.cpp: widget-focus wins --
-// stepping is suppressed while the tree has focus, and the tree's native navigation runs completely
-// unchanged; step fires again once focus leaves the tree.
-void testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(Expectations& expectations) {
+// Arrow-key conflict finding (issue #108's own investigation, verified with a standalone Qt harness
+// before the reconciliation was written): the layer stack already consumes arrow/Home/End keys for its
+// OWN row navigation (Home/End jump to the first/last row), but -- unlike a text-entry widget -- does
+// not claim the ShortcutOverride event for those keys, so a same-key WindowShortcut action would
+// otherwise silently swallow that navigation the instant it existed. The reconciliation rule
+// implemented in timeline_editor.cpp: widget-focus wins -- stepping is suppressed while the stack has
+// focus, and the stack's own navigation runs completely unchanged; step fires again once focus leaves.
+//
+// ADAPTED for task T1 (enumerated in that task's report): the layer stack is no longer a QTreeWidget --
+// it is a painted row grid (bloom::ui::TimelineLayerStack, same "layerStackView" objectName, same
+// role) -- so the SAME assertions are made through its currentRow()/setCurrentRow()/rowCount() seam
+// instead of currentItem()/setCurrentItem()/topLevelItemCount(). Every behavioral claim below is
+// byte-identical to the pre-T1 version; only the primitive the claim is read off changed.
+void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step Tree Conflict", time(4)));
     expectations.expect(
@@ -876,43 +879,45 @@ void testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(Expectations& expe
     host.activateWindow();
     QCoreApplication::processEvents();
 
-    auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 3,
-                        "the layer stack tree has all three rows");
-    if (tree == nullptr || tree->topLevelItemCount() != 3) {
+    auto* stack = editor->layerStackForTest();
+    expectations.expect(stack != nullptr && stack->rowCount() == 3,
+                        "the layer stack has all three rows");
+    if (stack == nullptr || stack->rowCount() != 3) {
         finishFixture(fixture, expectations);
         return;
     }
+    expectations.expect(editor->findChild<QWidget*>("layerStackView") == stack,
+                        "and it is still the widget the layerStackView objectName names");
 
     editor->setFocus();
     QCoreApplication::processEvents();
     QTest::keyClick(editor, Qt::Key_Right);
     QCoreApplication::processEvents();
     expectations.expect(fixture.session.currentTime() == time(1, 25),
-                        "stepping works normally before the tree has focus");
+                        "stepping works normally before the stack has focus");
 
-    tree->setFocus(Qt::OtherFocusReason);
-    tree->setCurrentItem(tree->topLevelItem(1));
+    stack->setFocus(Qt::OtherFocusReason);
+    stack->setCurrentRow(1);
     QCoreApplication::processEvents();
-    expectations.expect(QApplication::focusWidget() == tree, "the tree genuinely holds focus");
+    expectations.expect(QApplication::focusWidget() == stack, "the stack genuinely holds focus");
 
-    QTest::keyClick(tree, Qt::Key_Home);
+    QTest::keyClick(stack, Qt::Key_Home);
     QCoreApplication::processEvents();
-    expectations.expect(tree->currentItem() == tree->topLevelItem(0),
-                        "the tree's OWN Home navigation (jump to the first row) still runs "
+    expectations.expect(stack->currentRow() == 0,
+                        "the stack's OWN Home navigation (jump to the first row) still runs "
                         "unchanged while it has focus");
     expectations.expect(
         fixture.session.currentTime() == time(1, 25),
-        "the step-to-start action is suppressed while the tree has focus -- session "
+        "the step-to-start action is suppressed while the stack has focus -- session "
         "time is untouched");
 
-    QTest::keyClick(tree, Qt::Key_End);
+    QTest::keyClick(stack, Qt::Key_End);
     QCoreApplication::processEvents();
-    expectations.expect(tree->currentItem() == tree->topLevelItem(2),
-                        "the tree's OWN End navigation (jump to the last row) still runs unchanged "
+    expectations.expect(stack->currentRow() == 2,
+                        "the stack's OWN End navigation (jump to the last row) still runs unchanged "
                         "while it has focus");
     expectations.expect(fixture.session.currentTime() == time(1, 25),
-                        "the step-to-end action is suppressed while the tree has focus -- session "
+                        "the step-to-end action is suppressed while the stack has focus -- session "
                         "time is still untouched");
 
     editor->setFocus(Qt::OtherFocusReason);
@@ -920,7 +925,7 @@ void testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(Expectations& expe
     QTest::keyClick(editor, Qt::Key_Home);
     QCoreApplication::processEvents();
     expectations.expect(fixture.session.currentTime() == time(0),
-                        "stepping resumes once focus leaves the tree");
+                        "stepping resumes once focus leaves the stack");
 
     finishFixture(fixture, expectations);
 }
@@ -993,7 +998,7 @@ int main(int argc, char** argv) {
     testStepFromSubframeTimeUsesNearestIndexTieRule(expectations);
     testStepDuringPlaybackPausesThenSteps(expectations);
     testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(expectations);
-    testArrowKeysOnLayerTreeStillNavigateAndStepIsSuppressed(expectations);
+    testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(expectations);
     testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
