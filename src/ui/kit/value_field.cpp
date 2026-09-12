@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/theme.hpp>
 
 #include <QApplication>
 #include <QEnterEvent>
@@ -24,6 +25,17 @@ namespace {
 // The width the label column claims before the cell begins.
 constexpr int kLabelColumnWidth = 72;
 
+// The cell's own horizontal padding: the inset the painted value AND the inline editor both use, so
+// the number sits at one x whichever of the two is drawing it.
+constexpr int kCellPaddingX = px(Spacing::S);
+
+// QLineEdit lays its text out inside its content rectangle inset by a further fixed two logical
+// pixels per side (QLineEditPrivate::horizontalMargin), which Qt exposes through neither a public
+// accessor nor a style hint. The cell's padding is therefore handed to the editor as TEXT margins
+// reduced by exactly that much, which is what makes the glyphs land on the painter's own x --
+// kit_value_field_tests.cpp pins that off a real render rather than off this arithmetic.
+constexpr int kLineEditTextMargin = 2;
+
 } // namespace
 
 KValueField::KValueField(QWidget* parent) : QWidget(parent) {
@@ -44,12 +56,37 @@ KValueField::KValueField(QWidget* parent) : QWidget(parent) {
     editor_->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
     editor_->setFont(kit::font(TypeRole::Value));
     editor_->setCursor(Qt::IBeamCursor);
+    // The editor contributes NO background of its own: the cell this widget paints is the only
+    // fill, and the Accent hairline on that cell is the only border. Base is what the style fills a
+    // line edit's panel with; Window is what Qt fills a widget's rectangle with whenever the widget
+    // is painted as a root -- which is exactly what happens to it inside a QGraphicsProxyWidget on
+    // a node card, and what previously left an opaque plate over the cell the moment editing began.
     QPalette editorPalette = editor_->palette();
     editorPalette.setColor(QPalette::Base, Qt::transparent);
+    editorPalette.setColor(QPalette::Window, Qt::transparent);
     editorPalette.setColor(QPalette::Text, color(Color::Foreground));
     editorPalette.setColor(QPalette::Highlight, color(Color::Accent));
     editorPalette.setColor(QPalette::HighlightedText, color(Color::Foreground));
     editor_->setPalette(editorPalette);
+    editor_->setAttribute(Qt::WA_NoSystemBackground, true);
+    editor_->setAutoFillBackground(false);
+    // A palette alone is not enough: the application installs a global stylesheet, and the moment
+    // one exists QStyleSheetStyle -- not Fusion -- draws PE_PanelLineEdit, with a panel of its own
+    // that ignores this widget's palette and lands an opaque plate over the cell. The one way to
+    // reach that painter is a rule, so the editor carries the smallest possible one: no box, no
+    // background, the cell's padding expressed as zero (it travels in the text margins instead),
+    // and the selection colors the palette above already names.
+    editor_->setStyleSheet(expandTokens(QStringLiteral(R"(
+QLineEdit#kValueFieldEditor {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+    color: {color.Foreground};
+    selection-background-color: {color.Accent};
+    selection-color: {color.Foreground};
+}
+)")));
     editor_->hide();
     editor_->installEventFilter(this);
 }
@@ -63,6 +100,11 @@ QString KValueField::label() const { return label_; }
 
 void KValueField::setUnit(const QString& unit) {
     unit_ = unit;
+    if (editing_) {
+        // The unit's column is reserved inside the editor's own text margins, so changing it while
+        // the editor is up has to re-derive them or the number would land on a stale x.
+        layOutEditor();
+    }
     updateGeometry();
     update();
 }
@@ -139,8 +181,17 @@ QRectF KValueField::labelRect() const {
 
 QRectF KValueField::cellRect() const {
     const qreal left = label_.isEmpty() ? 0.0 : kLabelColumnWidth + px(Spacing::S);
-    return QRectF(left, 0.0, std::max(0.0, width() - left), static_cast<qreal>(height()))
-        .adjusted(0.0, kFocusRingWidth, 0.0, -kFocusRingWidth);
+    // The whole remaining width and the WHOLE height. This cell reserves no focus-ring strip: its
+    // focus affordance is its own single border (kit::borderForInteraction), stroked on the cell's
+    // own edge, so a margin outside that edge would be reserved for something nothing draws. An
+    // earlier revision reserved kFocusRingWidth top and bottom, and hosted inside a
+    // QGraphicsProxyWidget on a node card that unpainted strip read as a darker band above and
+    // below every field.
+    return {left, 0.0, std::max(0.0, width() - left), static_cast<qreal>(height())};
+}
+
+QRectF KValueField::cellTextRect() const {
+    return cellRect().adjusted(kCellPaddingX, 0.0, -kCellPaddingX, 0.0);
 }
 
 Color KValueField::borderToken() const {
@@ -178,15 +229,25 @@ QSize KValueField::sizeHint() const {
         cellWidth += valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
     }
     const int labelWidth = label_.isEmpty() ? 0 : kLabelColumnWidth + px(Spacing::S);
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {labelWidth + cellWidth, px(Size::Control) + ringMargin};
+    // Exactly the control height -- no ring margin, for the same reason cellRect() reserves none.
+    return {labelWidth + cellWidth, px(Size::Control)};
 }
 
 QSize KValueField::minimumSizeHint() const { return sizeHint(); }
 
 void KValueField::layOutEditor() {
-    const QRectF cell = cellRect();
-    editor_->setGeometry(cell.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0).toRect());
+    // The editor IS the cell: exactly its rectangle, so the Field fill and the one Accent hairline
+    // this widget paints stay the cell's own outline rather than being joined by a second, smaller
+    // rectangle with its own background and corners. The cell's padding reaches the editor as text
+    // margins instead of as geometry, and the unit's column is reserved on the right because the
+    // unit keeps being painted while editing -- together that is what holds the number's x fixed
+    // across entering and leaving edit.
+    editor_->setGeometry(cellRect().toRect());
+    const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
+    const int unitColumn =
+        unit_.isEmpty() ? 0 : valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
+    editor_->setTextMargins(kCellPaddingX - kLineEditTextMargin, 0,
+                            kCellPaddingX + unitColumn - kLineEditTextMargin, 0);
 }
 
 void KValueField::beginEdit() {
@@ -430,23 +491,24 @@ void KValueField::paintEvent(QPaintEvent* event) {
     const QRectF cell = cellRect();
     fillRoundedSurface(painter, cell, color(surfaceForState(Color::Field, state)),
                        cellBorderColor(), Radius::Small);
-    if (editing_) {
-        // The line edit draws the text while it is up; the cell behind it is the whole of this
-        // widget's own contribution.
-        return;
-    }
 
     // The value takes the monospaced role; the unit takes muted ink so it reads as a unit rather
     // than as part of the number.
     painter.setFont(kit::font(TypeRole::Value));
     const QFontMetrics valueMetrics(painter.font());
-    const QRectF text = cell.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0);
+    const QRectF text = cellTextRect();
     QRectF unitRect;
     if (!unit_.isEmpty()) {
         const auto unitWidth = static_cast<qreal>(valueMetrics.horizontalAdvance(unit_));
         unitRect = QRectF(text.right() - unitWidth, text.top(), unitWidth, text.height());
         painter.setPen(inkForState(Color::Muted, state));
         painter.drawText(unitRect, Qt::AlignVCenter | Qt::AlignRight, unit_);
+    }
+    if (editing_) {
+        // The line edit draws the NUMBER while it is up; the cell, its one border and the unit stay
+        // this widget's own. The unit deliberately keeps being painted -- a unit that vanished on
+        // entering edit would both lose information and move the number it labels.
+        return;
     }
     painter.setPen(inkForState(Color::Foreground, state));
     const qreal valueRight = unit_.isEmpty() ? text.right() : unitRect.left() - px(Spacing::XS);

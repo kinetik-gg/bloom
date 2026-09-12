@@ -59,7 +59,14 @@ class KValueField final : public QWidget {
     [[nodiscard]] QString displayedValue() const;
 
     [[nodiscard]] QRectF labelRect() const;
+    // The cell is the WHOLE height of the control and the whole width left of the label column: it
+    // reserves no focus-ring strip, because its focus affordance is its own single border drawn on
+    // that very edge.
     [[nodiscard]] QRectF cellRect() const;
+    // Where the number's glyphs live: the cell inset by its own horizontal padding. The painter and
+    // the inline editor resolve the number's x through this one rectangle, which is why entering
+    // edit does not move the value.
+    [[nodiscard]] QRectF cellTextRect() const;
 
     // What one pixel of horizontal drag is worth, as a multiple of singleStep(): 1 normally, 10
     // with Shift, a tenth with Ctrl. Shift wins when both are held.
