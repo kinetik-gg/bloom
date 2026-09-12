@@ -292,10 +292,6 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         if (!selection.contains(card->id()))
             selection = {card->id()};
         session_->selectNodes(selection, card->id());
-        if (fieldAt(*this, event->scenePos())) {
-            QGraphicsScene::mousePressEvent(event);
-            return;
-        }
         event->accept();
         if (!submit_)
             return;
@@ -314,8 +310,13 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         }
         return;
     }
-    if (auto* frame = groupAt(*this, event->scenePos());
-        frame != nullptr && !fieldAt(*this, event->scenePos())) {
+    if (auto* frame = groupAt(*this, event->scenePos()); frame != nullptr) {
+        // The frame's own title editor keeps its clicks, exactly as an in-card field does: without
+        // this the press would fall through to a box selection and take the caret with it.
+        if (fieldAt(*this, event->scenePos())) {
+            QGraphicsScene::mousePressEvent(event);
+            return;
+        }
         // Clicking a frame selects what it frames. The frame itself is not a document selection:
         // CompositionSession owns one selection truth and it is made of NodeIds.
         std::set<document::NodeId> members;

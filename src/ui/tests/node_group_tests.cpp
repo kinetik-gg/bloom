@@ -198,6 +198,20 @@ void testTheTitleIsRenamedInline() {
     if (editor == nullptr)
         return;
     expect(editor->text() == QStringLiteral("Group"), "the editor starts from the current name");
+    // A press inside the open editor belongs to the editor, not to the canvas: the frame's body is
+    // a drag grip and a box selection would otherwise start under the caret.
+    f.session.selectNodes({a}, a);
+    f.press(title);
+    const auto liveEditor = [&] {
+        for (auto* child : item->childItems())
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child))
+                if (proxy->isVisible() && qobject_cast<QLineEdit*>(proxy->widget()) != nullptr)
+                    return true;
+        return false;
+    };
+    expect(liveEditor() && !f.scene()->gestureActive(),
+           "a press inside the open title editor starts no canvas gesture and keeps the editor");
+    f.release(title);
     const auto before = f.stack.size();
     editor->setText(QStringLiteral("Key Light"));
     Q_EMIT editor->editingFinished();
