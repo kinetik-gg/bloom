@@ -96,9 +96,21 @@ CompiledVec2Parameter   = { ParameterId, Vec2d   | Vec2CurveIndex }
 ```
 
 An immutable plan owns separate scalar and `Vec2d` curve tables ordered by `AnimationCurveId` and
-contains only reachable curves. Layer Output operations reference the compiled position and opacity
-operands; Solid color remains constant. Indices are strong types so the wrong table cannot be
-addressed accidentally.
+contains only reachable curves. Layer Output operations reference all five compiled transform
+operands -- position, anchor, and scale from the `Vec2d` table, rotation and opacity from the scalar
+one; Solid and Text source parameters remain constant. Indices are strong types so the wrong table
+cannot be addressed accidentally.
+
+Which parameters may be animated, and with which curve kind, is one set of schema-key predicates in
+`bloom/document/parameter.hpp` that document validation, the animation commands, and the snapshot
+compiler's override gate all ask. A schema that satisfies neither predicate is constant-only, so an
+unknown key can never silently opt into animation, and the set cannot be widened in one layer and
+stay narrow in another.
+
+Value DOMAINS belong to the schema, not to the curve kind. Only `bloom.layer.opacity` confines its
+keys to `[0, 1]`; `bloom.transform.rotation` keys are any finite number of degrees, because a rotation
+curve has to be able to wind past a full turn in either direction. The same split applies to
+interactive parameter overrides.
 
 The evaluator validates and samples each referenced curve once at request preflight, before any
 row kernel runs. Image evaluation consumes the resulting typed constants. Sampling never allocates

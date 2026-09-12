@@ -67,10 +67,57 @@ associative. Independent upstream sources may evaluate concurrently before the o
 There is no parallel `Composition::layers` collection that mirrors the stack and no persistent
 generated chain of Merge nodes that must be synchronized with it.
 
-The precise ownership of standard transform, time mapping, opacity, blend, and enable parameters
-between the Layer Output boundary and its stable stack entry remains an implementation detail for
-the document spike. Each property must still have exactly one owning `ParameterId` and one
-evaluation meaning.
+The precise ownership of time mapping, blend, and enable parameters between the Layer Output
+boundary and its stable stack entry remains an implementation detail for the document spike. Each
+property must still have exactly one owning `ParameterId` and one evaluation meaning.
+
+### Layer Transform
+
+The Layer Output boundary owns the layer's complete placement, as five parameters in this authoring
+order, all five animatable:
+
+| Role | Schema key | Type | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `position` | `bloom.transform.position` | Vec2d | composition centre, written at creation | Where the layer centre sits, in composition pixels |
+| `anchor` | `bloom.transform.anchor` | Vec2d | `{0, 0}` | The pivot, in full-resolution layer pixels measured from the layer centre |
+| `scale` | `bloom.transform.scale` | Vec2d | `{1, 1}` | Per-axis unitless factor |
+| `rotation` | `bloom.transform.rotation` | Float64 | `0` | Degrees, clockwise on screen |
+| `opacity` | `bloom.layer.opacity` | Float64 | `1` | Unit-interval coverage multiplier |
+
+The geometric model, with `p` a point of the layer and `q` the composition point it lands on, both
+measured from the layer centre:
+
+```
+q = translation + anchor + R(rotation) * S(scale) * (p - anchor)
+```
+
+`translation` is `position` minus the composition-format centre, so a `position` of the format centre
+leaves the layer unmoved. The anchor is the one point scale and rotation leave alone; translation
+then carries the whole layer. Rotation is clockwise because Bloom's y axis points down, and is
+defined in composition pixels — a non-square pixel aspect is not divided out, which is the
+convention every timeline compositor uses.
+
+Anchor is measured from the layer centre rather than from a corner for two reasons that are both
+contract, not convenience. First, the schema default has to be a constant, and `{0, 0}` is the only
+composition-independent spelling of "the layer centre"; a corner-relative default would have to know
+the composition format, which can also change later and would silently move every anchor with it.
+Second, `position` already measures the layer from its centre, so the two Vec2d rows share an origin.
+
+The centre the anchor is measured from is the centre of the layer's pixel AREA. Pixel centres have
+integer coordinates, so a `w`-wide layer occupies `[-0.5, w - 0.5]` and its centre is `(w - 1) / 2`.
+That half-pixel is what makes a quarter turn map pixel centres exactly onto pixel centres.
+
+Validation is per schema rather than per value kind: `position`, `anchor`, and `scale` are finite and
+otherwise unbounded, `rotation` is finite and unbounded, and only `opacity` carries a `[0, 1]`
+domain. A negative scale factor mirrors its axis; a scale factor of exactly zero collapses the layer,
+which evaluation renders as an empty layer rather than refusing (see
+[`evaluation-primitives.md`](evaluation-primitives.md), "Layer Transform Resampling"). A rotation may
+wind past a full turn in either direction, because a rotation curve has to be able to.
+
+`kLayerOutputNodeSchemaVersion` is `2`. A version-1 node — every Layer Output written before this
+change — is upgraded on open rather than refused: Project I/O injects the three new parameters at
+their defaults, which together are the identity transform, so an upgraded document renders exactly
+the version-1 picture. See [`project-format.md`](project-format.md), "Node Schema Upgrades".
 
 ## Parameters And Properties
 
@@ -194,8 +241,8 @@ The first document/runtime slice should prove:
    output.
 2. Derive timeline rows from the stack and reorder them by changing only stack order.
 3. Synchronize primary and contextual selection across viewer, timeline, nodes, and Properties.
-4. Edit position and opacity through Properties, Nodes, and viewer manipulation against the same
-   parameter IDs.
+4. Edit the layer transform -- position, anchor, scale, rotation -- and opacity through Properties,
+   Nodes, and viewer manipulation against the same parameter IDs.
 5. Convert opacity explicitly from a literal to a driven value and undo to the exact prior value and
    topology.
 6. Save and reopen stable IDs, order, parameter source, animation, and graph connectivity.

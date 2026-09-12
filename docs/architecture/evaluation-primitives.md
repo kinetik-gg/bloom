@@ -197,13 +197,15 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 3
+## CPU Image Primitive Vocabulary Semantics Version 4
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `3`; the evaluator and process-frame cache
-identity record that version explicitly. Version 3 adds the text coverage kernel and the glyph
-rasterizer below. One number covers both, deliberately: the rasterizer does not carry a second
-semantics version that could drift out of the identity a published frame records.
+composition evaluator. Their semantics version is `4`; the evaluator and process-frame cache
+identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
+rasterizer below; version 4 replaces the translate-only layer resample with the affine one described
+under "Layer Transform Resampling". One number covers them all, deliberately: neither the rasterizer
+nor the resampler carries a second semantics version that could drift out of the identity a published
+frame records.
 
 - Solid authoring colors are straight `Color4d` under the frozen authoring-encoding metadata
   `bloom.reference.linear-srgb`. That metadata remains distinct from the process-image identity.
@@ -212,9 +214,10 @@ semantics version that could drift out of the identity a published frame records
   instead of relabelling its numbers. The conversion validates the authored value, multiplies RGB
   by alpha in Float64, then performs one checked Float32 conversion. Alpha that is authored as zero
   or rounds to Float32 zero produces exact transparent black.
-- Translation and opacity are validated once per operation. Bilinear sampling gathers
+- The layer transform and opacity are validated once per operation. Bilinear sampling gathers
   premultiplied pixels, uses transparent taps outside the source data window, preserves exact
-  integer/zero/one endpoints, and applies opacity to all four sampled components.
+  integer/zero/one endpoints, and applies opacity to all four sampled components. See "Layer
+  Transform Resampling" below.
 - Source-over consumes separate source and in-place destination rows. The first Layer Stack entry is
   topmost, so evaluation visits stack entries in reverse order and folds bottom-to-top. Process RGB
   is never clamped.
@@ -239,6 +242,49 @@ semantics version that could drift out of the identity a published frame records
   glyph rasterizer is the one text-path exception: it allocates its coverage bitmap, so it checks the
   bitmap's byte count against the caller's budget from the computed extent BEFORE allocating anything
   and before drawing any glyph.
+
+### Layer Transform Resampling
+
+One inverse-mapped affine bilinear resample serves the whole Layer Output stage: translation composed
+with rotation composed with scale, all turning about the authored anchor (the authoring model is in
+[`layer-graph-model.md`](layer-graph-model.md), "Layer Transform"). There is no separate translate-only
+kernel in the stage; the translate-only case is a path inside this one.
+
+- **Inverse mapping.** Each output pixel centre maps back to one source coordinate through the
+  precomputed inverse 2x2 matrix and pivot. Nothing per-pixel computes trigonometry, divides, or
+  branches on an authored value.
+- **Quarter turns are exact.** A rotation that is an exact multiple of 90 degrees resolves to exact
+  `0` and `±1` cosine and sine instead of `std::cos`/`std::sin` of a rounded radian value, so a
+  quarter turn maps pixel centres onto pixel centres and interpolates nothing. The reduction modulo
+  360 is exact, so an authored 450 or -90 is as exact as a 90 or 270.
+- **Translate-only is bit-identical to version 3.** Unit scale on both axes together with a rotation
+  that reduces to exactly zero resolves to a path that computes the pre-version-4 arithmetic and
+  nothing else — the anchor is not added and subtracted, because doing so would perturb the last bit
+  of a subpixel translation. The former translate-only primitive is retained in `bloom_render`,
+  unchanged and uncalled by the stage, solely as the reference a test pins that path against; a copy
+  in the test tree could drift apart from the shared interpolation and sampling helpers and prove
+  nothing.
+- **Premultiplied edges.** Taps outside the source data window are exact transparent black, and the
+  process representation is premultiplied, so interpolating towards that transparent black is already
+  the correct edge falloff: no unpremultiply/repremultiply round trip is involved and no edge pixel
+  can carry colour above its own alpha.
+- **Bounds.** A layer's output data window is its transformed bounds clipped to the composition, and
+  its display window stays the composition's. The transformed bounds are the integer bounding box of
+  the forward image of the bilinear support box (the source data window grown by one pixel on every
+  side), so they may include a pixel the resample then writes as transparent but can never exclude
+  one it would write as opaque. A scaled-down, rotated, or moved layer therefore allocates and
+  resamples only the pixels it can reach. The Layer Stack composites each entry over the rows and
+  columns that entry's own data window occupies.
+- **Empty layers.** A layer whose transformed bounds miss the composition entirely, and a layer
+  collapsed by a scale factor of exactly zero, publish no image at all. The Layer Stack treats an
+  absent entry image as a layer that contributes nothing, which is exactly what compositing an empty
+  layer means — not an evaluation failure.
+- **Proxy.** A proxy frame is the same picture at a smaller extent, so the full-resolution transform
+  is conjugated by the per-axis proxy factor rather than re-authored. With equal horizontal and
+  vertical factors — every proportional proxy extent — the device transform is exactly the
+  full-resolution one. With unequal factors the conjugation keeps the proxy a faithfully squashed
+  picture of the full-resolution frame, a rotated layer included, rather than pretending device
+  pixels are square.
 
 ### Text Rasterization Version 1
 
@@ -340,7 +386,7 @@ canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact
 operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
 The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `2`, CPU evaluator semantics version `2`, and reference display-mapper
+primitive semantics version `4`, CPU evaluator semantics version `4`, and reference display-mapper
 semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
 reference-linear naming; cache identity rejects the older semantic versions rather than treating
 the rename as metadata-only.
