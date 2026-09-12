@@ -1,5 +1,7 @@
 #include <bloom/runtime/animation_sampling.hpp>
 
+#include <bloom/core/color.hpp>
+
 #include <cfenv>
 #include <cmath>
 #include <cstdint>
@@ -59,6 +61,110 @@ class RoundingModeGuard final {
               runtime::CompiledKeyframeInterpolation::Hold},
              {document::KeyframeId::fromRaw(12), time(2), 10.0,
               runtime::CompiledKeyframeInterpolation::Linear}}};
+}
+
+// --- Task S5, item 2: the EaseInOut segment -----------------------------------------------------
+//
+// EaseInOut is a cubic Bezier with FIXED symmetric handles at (1/3, 0) and (2/3, 1). Those x
+// handles make the Bezier's x component exactly the identity in its own parameter, so the eased
+// factor is the closed-form 3t^2 - 2t^3 of the EXACT rational interval factor t -- no root finding,
+// no iteration. At the interval's exact thirds that gives values this test pins as rationals,
+// derived here by hand rather than read off the implementation:
+//
+//   t = 1/3 -> 3(1/9) - 2(1/27) =  9/27 - 2/27 =  7/27
+//   t = 2/3 -> 3(4/9) - 2(8/27) = 36/27 - 16/27 = 20/27
+//
+// Over a 0 -> 1 segment those ARE the sampled values, so the test states the contract in the
+// smallest terms that can hold it.
+[[nodiscard]] runtime::CompiledScalarCurve easedUnitCurve() {
+    return {document::AnimationCurveId::fromRaw(7),
+            {{document::KeyframeId::fromRaw(70), time(0), 0.0,
+              runtime::CompiledKeyframeInterpolation::EaseInOut},
+             {document::KeyframeId::fromRaw(71), time(1), 1.0,
+              runtime::CompiledKeyframeInterpolation::Linear}}};
+}
+
+void testEaseInOutAtExactThirds(Expectations& expectations) {
+    const auto curve = easedUnitCurve();
+    const auto atStart = runtime::sampleAnimationCurve(curve, time(0));
+    const auto atFirstThird = runtime::sampleAnimationCurve(curve, time(1, 3));
+    const auto atMidpoint = runtime::sampleAnimationCurve(curve, time(1, 2));
+    const auto atSecondThird = runtime::sampleAnimationCurve(curve, time(2, 3));
+    const auto atEnd = runtime::sampleAnimationCurve(curve, time(1));
+
+    expectations.expect(atStart && atStart.value == 0.0 && atEnd && atEnd.value == 1.0,
+                        "an eased segment still reproduces its endpoints exactly");
+    expectations.expect(atFirstThird && atFirstThird.value == 7.0 / 27.0,
+                        "at the interval's first exact third an eased segment is exactly 7/27");
+    expectations.expect(atSecondThird && atSecondThird.value == 20.0 / 27.0,
+                        "at the second exact third it is exactly 20/27");
+    expectations.expect(atMidpoint && atMidpoint.value == 0.5,
+                        "and the symmetric handles put the exact midpoint at exactly one half");
+    // The whole point of an ease: slower than linear near the start, faster in the middle.
+    expectations.expect(atFirstThird && atFirstThird.value < 1.0 / 3.0,
+                        "an eased segment lags a linear one over its first third");
+    expectations.expect(atSecondThird && atSecondThird.value > 2.0 / 3.0,
+                        "and leads it over its last third");
+
+    // Hold still wins over Ease: the left key's mode alone decides the segment.
+    const runtime::CompiledScalarCurve held{document::AnimationCurveId::fromRaw(8),
+                                            {{document::KeyframeId::fromRaw(80), time(0), 0.0,
+                                              runtime::CompiledKeyframeInterpolation::Hold},
+                                             {document::KeyframeId::fromRaw(81), time(1), 1.0,
+                                              runtime::CompiledKeyframeInterpolation::Linear}}};
+    const auto heldMid = runtime::sampleAnimationCurve(held, time(1, 2));
+    expectations.expect(heldMid && heldMid.value == 0.0,
+                        "a Hold segment is unaffected by the eased path");
+
+    // A final key may not carry anything but Linear; an eased one is refused rather than
+    // normalized.
+    const runtime::CompiledScalarCurve easedFinal{
+        document::AnimationCurveId::fromRaw(9),
+        {{document::KeyframeId::fromRaw(90), time(0), 0.0,
+          runtime::CompiledKeyframeInterpolation::Linear},
+         {document::KeyframeId::fromRaw(91), time(1), 1.0,
+          runtime::CompiledKeyframeInterpolation::EaseInOut}}};
+    const auto refused = runtime::sampleAnimationCurve(easedFinal, time(1, 2));
+    expectations.expect(!refused && refused.error ==
+                                        runtime::AnimationSamplingError::UnsupportedInterpolation,
+                        "a non-canonical final interpolation is refused, eased or not");
+}
+
+// --- Task S5, item 1: the Color4 curve ----------------------------------------------------------
+void testColor4Sampling(Expectations& expectations) {
+    const runtime::CompiledColor4Curve curve{
+        document::AnimationCurveId::fromRaw(11),
+        {{document::KeyframeId::fromRaw(110), time(0), core::Color4d{0.0, 0.25, 1.0, 0.0},
+          runtime::CompiledKeyframeInterpolation::Linear},
+         {document::KeyframeId::fromRaw(111), time(1), core::Color4d{1.0, 0.75, -1.0, 1.0},
+          runtime::CompiledKeyframeInterpolation::EaseInOut},
+         {document::KeyframeId::fromRaw(112), time(2), core::Color4d{2.0, 0.75, -1.0, 1.0},
+          runtime::CompiledKeyframeInterpolation::Linear}}};
+
+    const auto atFirst = runtime::sampleAnimationCurve(curve, time(0));
+    expectations.expect(atFirst && atFirst.value == core::Color4d{0.0, 0.25, 1.0, 0.0},
+                        "a colour curve returns its first key bit-for-bit at and before it");
+
+    // Every channel takes the SAME shared factor, including a negative one and an HDR one.
+    const auto halfway = runtime::sampleAnimationCurve(curve, time(1, 2));
+    expectations.expect(halfway && halfway.value == core::Color4d{0.5, 0.5, 0.0, 0.5},
+                        "one shared factor mixes all four channels, negative and HDR included");
+
+    // The eased segment applies to a colour exactly as it does to a scalar, and a channel that does
+    // not change between the two keys stays exactly where it was.
+    const auto eased = runtime::sampleAnimationCurve(curve, time(4, 3));
+    expectations.expect(eased && eased.value == core::Color4d{1.0 + (7.0 / 27.0), 0.75, -1.0, 1.0},
+                        "an eased colour segment uses the same 7/27 factor at its first third");
+
+    // The authoring-colour domain: alpha outside [0, 1] is not a representable authoring colour, so
+    // the whole curve is invalid rather than silently clamped.
+    const runtime::CompiledColor4Curve invalid{
+        document::AnimationCurveId::fromRaw(12),
+        {{document::KeyframeId::fromRaw(120), time(0), core::Color4d{0.0, 0.0, 0.0, 2.0},
+          runtime::CompiledKeyframeInterpolation::Linear}}};
+    const auto refused = runtime::sampleAnimationCurve(invalid, time(0));
+    expectations.expect(!refused && refused.error == runtime::AnimationSamplingError::InvalidCurve,
+                        "a colour key whose alpha leaves the unit interval invalidates the curve");
 }
 
 void testSampling(Expectations& expectations) {
@@ -139,6 +245,8 @@ int main() {
                         "animation sampling semantics are explicitly versioned");
     testSampling(expectations);
     testVec2AndExtremeTime(expectations);
+    testEaseInOutAtExactThirds(expectations);
+    testColor4Sampling(expectations);
     testValidationAndEnvironment(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

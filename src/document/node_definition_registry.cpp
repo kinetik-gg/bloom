@@ -94,7 +94,8 @@ template <typename Definition>
         return definition.inputs.empty() && hasImageOutput(definition, kSolidSourceOutputPort) &&
                definition.parameters.size() == 1 &&
                hasParameter(definition, 0, kSolidColorParameterRole, kSolidColorParameterSchemaKey,
-                            ParameterValueKind::Color4d) &&
+                            ParameterValueKind::Color4d,
+                            isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
@@ -105,11 +106,14 @@ template <typename Definition>
                definition.inputs.empty() && hasImageOutput(definition, kTextSourceOutputPort) &&
                definition.parameters.size() == 3 &&
                hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
-                            ParameterValueKind::String) &&
+                            ParameterValueKind::String,
+                            isAnimatableSchemaKey(kTextParameterSchemaKey)) &&
                hasParameter(definition, 1, kTextSizeParameterRole, kTextSizeParameterSchemaKey,
-                            ParameterValueKind::Float64) &&
+                            ParameterValueKind::Float64,
+                            isAnimatableSchemaKey(kTextSizeParameterSchemaKey)) &&
                hasParameter(definition, 2, kTextColorParameterRole, kTextColorParameterSchemaKey,
-                            ParameterValueKind::Color4d) &&
+                            ParameterValueKind::Color4d,
+                            isAnimatableSchemaKey(kTextColorParameterSchemaKey)) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
         // Parameter ORDER is the authoring order the properties grid, the node card, and the
@@ -170,8 +174,12 @@ template <typename Definition>
             NodeLoweringKind::Solid,
             {},
             {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
+            // Task S5, item 1: supportsAnimation is true now. It is NOT a second opinion about what
+            // is animatable -- the shape check below asserts it agrees with
+            // document::isColor4AnimatableSchemaKey(), so the schema predicates stay the single
+            // authority and a registered definition cannot drift from them.
             {{std::string(kSolidColorParameterRole), std::string(kSolidColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, false, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Sources};
@@ -229,12 +237,15 @@ template <typename Definition>
             NodeLoweringKind::Text,
             {},
             {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
+            // Content stays constant-only (a String has no interpolation); size and colour became
+            // animatable in task S5, which the shape check below cross-checks against the schema
+            // predicates rather than restating.
             {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
               ParameterValueKind::String, true, false, std::string{}},
              {std::string(kTextSizeParameterRole), std::string(kTextSizeParameterSchemaKey),
-              ParameterValueKind::Float64, true, false, kDefaultTextSizePixels},
+              ParameterValueKind::Float64, true, true, kDefaultTextSizePixels},
              {std::string(kTextColorParameterRole), std::string(kTextColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, false, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Sources};

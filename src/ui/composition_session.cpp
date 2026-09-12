@@ -738,26 +738,27 @@ bool CompositionSession::setSelectionColorParameter(const std::string_view role,
         reportUnavailable(QStringLiteral("The selected object does not expose a color"));
         return false;
     }
-    const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
-    if (constantSource == nullptr) {
-        // Position/Opacity's driven-parameter refusal, mirrored here for a driven color source.
-        // Reached defensively rather than in practice: today nothing in the command surface can
-        // put a solid color parameter into an AnimationCurveSource
-        // (CreateAnimationForParameter rejects every schema but the animatable transform and
-        // opacity ones, and SetKeyframeAtTime has no Color4d overload to write one even if it
-        // existed), so an
-        // AnimationCurveSource here would itself be a pre-existing document inconsistency, not
-        // something this command created.
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    if (const auto* constantSource =
+            std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        if (std::get_if<core::Color4d>(&constantSource->value) == nullptr) {
+            reportUnavailable(QStringLiteral("The color value does not match its schema"));
+            return false;
+        }
+        transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                          document::ConstantValueSource{color});
+    } else if (const auto* animationSource =
+                   std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        // Task S5, item 1: a colour parameter can be animated now, so editing one writes a key at
+        // the session time through exactly the branch position and opacity already take. Before
+        // this task no command could put a colour on a curve at all, and this method refused every
+        // non-constant source on that basis.
+        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
+                                                         currentTime_, color);
+    } else {
         reportUnavailable(QStringLiteral("Disconnect the driven color before editing its value"));
         return false;
     }
-    if (std::get_if<core::Color4d>(&constantSource->value) == nullptr) {
-        reportUnavailable(QStringLiteral("The color value does not match its schema"));
-        return false;
-    }
-    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
-    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
-                                                      document::ConstantValueSource{color});
     return execute(std::move(transaction));
 }
 

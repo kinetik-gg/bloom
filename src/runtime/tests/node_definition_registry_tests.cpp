@@ -39,9 +39,12 @@ class Expectations final {
             runtime::NodeLoweringKind::Solid,
             {},
             {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+            // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
+            // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
+            // solid colour is animatable now -- so a custom Solid must declare it too.
             {{std::string(document::kSolidColorParameterRole),
               std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true}},
+              runtime::ParameterValueKind::Color4d, true, true}},
             std::nullopt};
 }
 
@@ -157,17 +160,31 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
-    // assertion now covers all five rather than the original pair -- the property it pins is
-    // unchanged (animation support is declared per parameter, and a source parameter declares
-    // none).
-    expectations.expect(layer != nullptr && layer->parameters.size() == 5 &&
-                            std::ranges::all_of(layer->parameters,
-                                                [](const auto& parameter) {
-                                                    return parameter.supportsAnimation;
-                                                }) &&
-                            solid != nullptr && !solid->parameters.front().supportsAnimation &&
-                            text != nullptr && !text->parameters.front().supportsAnimation,
-                        "animation support is an explicit per-parameter evaluator capability");
+    // ADAPTED (task S5): a source parameter no longer declares "no animation" as a class. Animation
+    // support is still an explicit per-parameter capability, but what it must EQUAL is the shared
+    // schema predicate -- so a registered definition can never be a second opinion about what is
+    // animatable. Solid colour and text size/colour now declare it; text content, a String, does
+    // not.
+    expectations.expect(
+        layer != nullptr && layer->parameters.size() == 5 &&
+            std::ranges::all_of(
+                layer->parameters,
+                [](const auto& parameter) { return parameter.supportsAnimation; }) &&
+            solid != nullptr && solid->parameters.front().supportsAnimation && text != nullptr &&
+            text->parameters.size() == 3 && !text->parameters[0].supportsAnimation &&
+            text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
+        "animation support is an explicit per-parameter evaluator capability");
+    const auto declarationMatchesSchema = [](const auto& definition) {
+        return std::ranges::all_of(definition->parameters, [](const auto& parameter) {
+            return parameter.supportsAnimation ==
+                   document::isAnimatableSchemaKey(parameter.schemaKey);
+        });
+    };
+    expectations.expect(layer != nullptr && solid != nullptr && text != nullptr &&
+                            declarationMatchesSchema(layer) && declarationMatchesSchema(solid) &&
+                            declarationMatchesSchema(text),
+                        "and it agrees with the shared schema predicates for every registered "
+                        "parameter, so the two can never drift");
     expectations.expect(
         layer != nullptr && layer->parameters.size() == 5 &&
             layer->parameters[0].role == document::kPositionParameterRole &&

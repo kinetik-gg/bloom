@@ -82,6 +82,8 @@ constexpr auto kRotationB = document::ParameterId::fromRaw(56);
 constexpr auto kAnchorCurve = document::AnimationCurveId::fromRaw(55);
 constexpr auto kScaleCurve = document::AnimationCurveId::fromRaw(56);
 constexpr auto kRotationCurve = document::AnimationCurveId::fromRaw(57);
+constexpr auto kColorCurve = document::AnimationCurveId::fromRaw(58);
+constexpr auto kTextSizeCurve = document::AnimationCurveId::fromRaw(59);
 
 // The authored transform a Layer Output carries. Defaulted to the identity -- no anchor offset,
 // unit scale, no rotation -- so a fixture that cares only about position or opacity reads exactly
@@ -553,6 +555,108 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
     expectations.expect(wideResult.status() == runtime::EvaluationStatus::Evaluated,
                         "a rotation key outside the unit interval is accepted, unlike an opacity "
                         "key");
+}
+
+// Task S5, item 1: a SOURCE parameter animates too. A solid's colour is a typed operand now, so the
+// evaluator samples it at the request time and the pixels follow -- which is the whole reason
+// colour animation exists. Before this task a solid's colour was a resolved constant in the plan
+// and no request time could change it.
+void testAnimatedSolidColorChangesPixelsOverTime(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto definition = oneSolidPlan()->copyDefinition();
+    std::get<runtime::CompiledSolid>(definition.operations.front()).color.source =
+        runtime::Color4CurveIndex::fromRaw(0);
+    // Black at t = 0, white at t = 1, with an EASED departure so the midpoint is not the linear
+    // one.
+    definition.color4Curves.push_back(
+        {kColorCurve,
+         {{document::KeyframeId::fromRaw(200), core::RationalTime::fromInteger(0),
+           core::Color4d{0.0, 0.0, 0.0, 1.0}, runtime::CompiledKeyframeInterpolation::EaseInOut},
+          {document::KeyframeId::fromRaw(201), core::RationalTime::fromInteger(1),
+           core::Color4d{1.0, 1.0, 1.0, 1.0}, runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto plan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+
+    const auto channelAt = [&](const std::int64_t numerator, const std::int64_t denominator) {
+        auto request = requestFor(*plan);
+        const auto time = core::RationalTime::create(numerator, denominator);
+        if (!time.has_value()) {
+            throw std::logic_error("animated colour fixture time must be valid");
+        }
+        request.time = *time;
+        const auto result = evaluator.evaluate(plan, request, {});
+        render::Rgba32f storage = render::Rgba32f::transparent();
+        const auto* sampled = pixel(result, 0, 0, storage);
+        if (result.status() != runtime::EvaluationStatus::Evaluated || sampled == nullptr) {
+            throw std::logic_error("animated colour fixture must evaluate");
+        }
+        return sampled->red();
+    };
+
+    const float atStart = channelAt(0, 1);
+    const float atFirstThird = channelAt(1, 3);
+    const float atMidpoint = channelAt(1, 2);
+    const float atEnd = channelAt(1, 1);
+    expectations.expect(atStart == 0.0F && atEnd == 1.0F,
+                        "an animated solid reproduces its colour keys exactly at their own times");
+    expectations.expect(atFirstThird > 0.0F && atFirstThird < atMidpoint && atMidpoint < atEnd,
+                        "and the frames between them carry distinct, increasing colour values -- "
+                        "the request time really reaches the pixels");
+    // The eased factor at the exact first third is 7/27, applied to a 0 -> 1 ramp.
+    expectations.expect(atFirstThird == static_cast<float>(7.0 / 27.0),
+                        "an eased colour segment lands on the exact eased factor, not the linear "
+                        "one");
+    expectations.expect(atMidpoint == 0.5F,
+                        "and the symmetric handles put the exact midpoint at exactly one half");
+}
+
+// Task S5, item 1: a text layer's SIZE animates, which changes how much of the frame the glyph
+// covers -- an animated scalar on a source parameter, not a transform one.
+void testAnimatedTextSizeChangesCoverage(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto definition = oneTextPlan()->copyDefinition();
+    std::get<runtime::CompiledText>(definition.operations.front()).size.source =
+        runtime::ScalarCurveIndex::fromRaw(definition.scalarCurves.size());
+    definition.scalarCurves.push_back(
+        {kTextSizeCurve,
+         {{document::KeyframeId::fromRaw(210), core::RationalTime::fromInteger(0), 4.0,
+           runtime::CompiledKeyframeInterpolation::Linear},
+          {document::KeyframeId::fromRaw(211), core::RationalTime::fromInteger(1), 20.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto plan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+
+    const auto coveredAt = [&](const std::int64_t numerator, const std::int64_t denominator) {
+        auto request = requestFor(*plan);
+        const auto time = core::RationalTime::create(numerator, denominator);
+        if (!time.has_value()) {
+            throw std::logic_error("animated text size fixture time must be valid");
+        }
+        request.time = *time;
+        const auto result = evaluator.evaluate(plan, request, {});
+        if (result.status() != runtime::EvaluationStatus::Evaluated || result.frame() == nullptr) {
+            throw std::logic_error("animated text size fixture must evaluate");
+        }
+        const auto window = result.frame()->processImage().descriptor()->dataWindow();
+        std::size_t covered = 0;
+        for (std::int64_t y = window.originY(); y < window.originY() + window.extent().height();
+             ++y) {
+            for (std::int64_t x = window.originX(); x < window.originX() + window.extent().width();
+                 ++x) {
+                render::Rgba32f storage = render::Rgba32f::transparent();
+                const auto* sampled = pixel(result, x, y, storage);
+                covered += (sampled != nullptr && sampled->alpha() > 0.0F) ? 1U : 0U;
+            }
+        }
+        return covered;
+    };
+
+    const auto small = coveredAt(0, 1);
+    const auto large = coveredAt(1, 1);
+    expectations.expect(
+        small > 0 && large > small,
+        "an animated text size covers strictly more of the frame at the larger key, "
+        "so the size curve really reaches the rasterizer");
 }
 
 void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) {
@@ -1324,6 +1428,8 @@ int main() {
         testAbsoluteCenterAndFractionalTranslation(expectations);
         testLayerTransformShapesTheFrame(expectations);
         testEveryTransformParameterAnimates(expectations);
+        testAnimatedSolidColorChangesPixelsOverTime(expectations);
+        testAnimatedTextSizeChangesCoverage(expectations);
         testAnimatedParametersAreSampledOncePerRequest(expectations);
         testClippingAndOpacityEndpoints(expectations);
         testStackOrderingOpacityAndDisplay(expectations);

@@ -157,6 +157,9 @@ struct LayerIds final {
     bloom::document::ParameterId anchor;
     bloom::document::ParameterId scale;
     bloom::document::ParameterId rotation;
+    // Task S5: the solid SOURCE node's colour parameter, which is animatable now and therefore
+    // earns its own keyframe lane even though it does not live on the Layer Output boundary.
+    bloom::document::ParameterId color;
 };
 
 [[nodiscard]] LayerIds addSolidLayer(bloom::document::Document& document,
@@ -178,11 +181,13 @@ struct LayerIds final {
         result.outputId<document::ParameterId>(commands::kAddSolidLayerScaleParameterOutput);
     const auto rotation =
         result.outputId<document::ParameterId>(commands::kAddSolidLayerRotationParameterOutput);
+    const auto color =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerColorParameterOutput);
     if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value() &&
-          anchor.has_value() && scale.has_value() && rotation.has_value())) {
+          anchor.has_value() && scale.has_value() && rotation.has_value() && color.has_value())) {
         std::abort();
     }
-    return {*layer, *position, *opacity, *anchor, *scale, *rotation};
+    return {*layer, *position, *opacity, *anchor, *scale, *rotation, *color};
 }
 
 [[nodiscard]] bloom::document::AnimationCurveId
@@ -352,6 +357,41 @@ void testKeyframeRowsCoverEveryAnimatableTransformParameter(Expectations& expect
     session.selectLayer(ids.layer);
     expectations.expect(panel.findChildren<QWidget*>().size() == 5 && panel.isVisible(),
                         "all five animatable Layer Output parameters get their own keyframe lane");
+}
+
+// Task S5, item 1: the lanes enumerate BOTH of the layer's nodes -- the Layer Output boundary and
+// the source node feeding it -- so a key on a solid's COLOUR curve appears where a transform key
+// already does. A lane set that only walked the boundary would silently hide every key the new
+// colour diamonds create.
+void testKeyframeRowsCoverTheLayerSourceNodeToo(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Source Keyframe Rows Test", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    const auto ids = addSolidLayer(document, commands, compositionId);
+    // ONLY the source node's colour is animated here -- nothing on the Layer Output boundary. A
+    // lane set that walked only the boundary would find nothing at all.
+    (void)animateParameter(document, commands, compositionId, ids.color, time(0));
+
+    ui::CompositionSession session(document, commands, compositionId);
+    ui::TimelineKeyframePanel panel(session);
+    session.selectLayer(ids.layer);
+    expectations.expect(panel.findChildren<QWidget*>().size() == 1 && panel.isVisible(),
+                        "an animated colour on the layer's SOURCE node gets its own keyframe lane, "
+                        "even though nothing on the boundary node is animated");
+
+    // And the two nodes' lanes coexist: six in total once all five boundary parameters animate too.
+    (void)animateParameter(document, commands, compositionId, ids.position, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.anchor, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.scale, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.rotation, time(0));
+    (void)animateParameter(document, commands, compositionId, ids.opacity, time(0));
+    ui::CompositionSession later(document, commands, compositionId);
+    ui::TimelineKeyframePanel laterPanel(later);
+    later.selectLayer(ids.layer);
+    expectations.expect(laterPanel.findChildren<QWidget*>().size() == 6,
+                        "the boundary's five lanes and the source's one coexist");
 }
 
 // Selection unification (issue #84, decision 1): a keyframe click no longer sets TimelineEditor-
@@ -1118,6 +1158,7 @@ int main(int argc, char** argv) {
     testRulerScrubLandsOnExactFrameTimesIncludingATie(expectations);
     testKeyframeRowsAppearOnePerAnimatedParameter(expectations);
     testKeyframeRowsCoverEveryAnimatableTransformParameter(expectations);
+    testKeyframeRowsCoverTheLayerSourceNodeToo(expectations);
     testKeyframeClickSelectsByIdAndOneTruthSelectionSwap(expectations);
     testDeleteGestureRemovesKeyAndRefusesTheLastOne(expectations);
     testDragMoveGestureSnapsCommitsUndoesAndRefuses(expectations);
