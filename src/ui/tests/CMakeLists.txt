@@ -557,3 +557,8 @@ bloom_add_test(
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(bloom_ui_multi_selection_test composition_session_multi_selection_tests.cpp)
+target_link_libraries(bloom_ui_multi_selection_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_multi_selection_test)
+bloom_add_test(NAME bloom.ui.multi-selection COMMAND bloom_ui_multi_selection_test LABELS unit ui)

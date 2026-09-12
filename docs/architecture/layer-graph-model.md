@@ -202,7 +202,7 @@ The first document/runtime slice should prove:
 7. Compile one immutable snapshot and render the same result through the canonical evaluation path.
 
 Full effects, masks, mattes, parenting, folders and groups, nested compositions, arbitrary
-graph-to-layer conversion, and multi-selection editing remain deferred. Their contracts are
+graph-to-layer conversion and multi-selection editor gestures remain deferred. Their contracts are
 reserved here so the first proof does not create incompatible shortcuts.
 
 
@@ -237,3 +237,60 @@ participation; other graph consumers can still receive its bypassed input. A mut
 only its first stable slot, and a muted composition endpoint passes through its input (empty
 when disconnected). Unused branches and bypassed parameter sources are not evaluated. The CPU
 evaluator primitives are unchanged.
+
+## Node Authoring Commands
+
+`AddNode(typeId, layoutPosition)` creates one node at a finite position and independent parameter
+records from the frozen registry's latest definition defaults. Even source and Layer Output types
+stay graph-only: this command never creates a layer boundary or slot. `AddSolidLayer` remains the
+structured layer constructor; `AddTextLayer` refuses until rendering is available.
+
+`RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
+layout records, and parameters that no surviving node references. Orphaned owned animation curves
+are removed too. Removing a Layer Output also removes its boundary and stable stack slot, without
+removing shared upstream nodes. Stack and composition-output nodes cannot be removed.
+
+`DuplicateNodes(set<NodeId>, offset)` allocates new node and parameter IDs, deeply copies owned
+curves and keyframes, copies all layout fields with a finite offset, and copies only edges between
+the selected nodes. Selected layer boundaries gain a new LayerId, `<name> copy`, and a new slot
+immediately after the original, with its required boundary-to-slot edge. Results expose
+`node.<oldId>`, `parameter.<oldId>`, `curve.<oldId>`, `layer.<oldId>`, and `slot.<oldId>` mappings.
+Driver bindings have no copyable records in the current model, so duplication of driven parameters
+is refused. The single canonical stack cannot be cloned together with its slot-addressed edges;
+that topology is rejected by graph validation.
+
+`RenameLayer(LayerId, name)` changes the boundary's valid, nonempty UTF-8 human-facing name while
+preserving every graph and stack identity. An identical name is a no-op.
+
+`ConnectPorts(OutputPortRef, InputPortRef)` requires existing registered sockets of equal kind.
+It replaces the existing edge at that input, retaining its EdgeId, or allocates one new edge.
+The entire proposed graph is validated before publication; same-time cycles are refused with
+`GraphCycle`. A slot's content must still come from its matching Layer Output boundary.
+
+`DisconnectInput(InputPortRef)` removes the edge at an existing input; an unconnected input is a
+no-op. Disconnecting a mandatory stack-slot boundary edge is refused because it would violate the
+canonical stack invariant; removing the boundary uses `RemoveNodes` instead.
+
+`DissolveNode(NodeId)` requires a registered first Image input/output pair and a connected input.
+It removes the node and reconnects the input source to every consumer of the first Image output,
+keeping those consumer edge IDs. Other incident edges, layout, and orphaned parameters are removed.
+Protected stack/output nodes and participating Layer Outputs cannot be dissolved while preserving
+the required boundary/slot topology; those requests are refused explicitly.
+
+`MoveNodes(map<NodeId, Vec2d>)` validates every node and finite position before changing the layout
+map. `SetNodeCollapsed`, `SetNodeMuted`, and `SetNodeWidth` change one layout field; width must be
+positive and finite. Identical values and empty sets are no-ops. Only mute affects evaluation.
+
+Each command runs through one ordinary transaction and one history entry. Refusals discard all
+draft mutations and allocations. Undo and redo restore pinned record values, IDs, edges, parameter
+sources, layout, and order rather than rerunning commands. Revisions always advance on publication;
+allocator high-water marks never decrease. ProjectSession retains its conservative dirty contract:
+undoing or redoing saved content is still a new dirty revision until a savepoint is accepted.
+
+`CompositionSession` owns a NodeId selection set alongside the unchanged tagged primary and layer
+context. `selectNodes(set, primary)` requires an existing primary in the set; toggling in a node
+makes it primary, and toggling out the primary chooses the lowest remaining NodeId. Single-node
+selection replaces the set; layer selection keeps its LayerId primary and selects its boundary.
+Parameter/keyframe selection keeps its existing tagged semantics and clears the node set.
+Publication prunes missing nodes, clear and rebind clear the set, and selection never creates a
+document revision or history entry. Editor gestures and command wiring remain a separate phase.

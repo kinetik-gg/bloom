@@ -16,6 +16,7 @@
 #include <QString>
 
 #include <optional>
+#include <set>
 #include <string_view>
 #include <variant>
 
@@ -132,6 +133,11 @@ class CompositionSession final : public QObject {
     void clearSelection();
     void selectLayer(document::LayerId layerId);
     void selectNode(document::NodeId nodeId);
+    [[nodiscard]] const std::set<document::NodeId>& selectedNodes() const noexcept {
+        return selectedNodes_;
+    }
+    void selectNodes(std::set<document::NodeId> nodes, document::NodeId primary);
+    void toggleNodeSelection(document::NodeId nodeId);
     void selectParameter(document::ParameterId parameterId);
     // Selecting a keyframe REPLACES the primary selection like every other select* method (one
     // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key
@@ -328,6 +334,7 @@ class CompositionSession final : public QObject {
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
+    std::set<document::NodeId> selectedNodes_;
     std::optional<PositionInteraction> positionInteraction_;
 };
 

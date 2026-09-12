@@ -598,3 +598,14 @@ composition root. Parallel speed comes from stable boundaries, not conflict-heav
 - a stable public native plug-in ABI
 
 These are deliberate deferrals, not permission for the current boundaries to make them impossible.
+
+
+## Node Model And Authoring Foundation
+
+| Slice | Implemented scope | Remaining editor scope |
+| --- | --- | --- |
+| N1 + N2 | Durable schema-1.1 node layout and migration; five socket kinds; honest text refusal; compiler mute; atomic node, wire, layer-name and layout commands; session selection sets | Node editor authoring gestures, multi-selection presentation and command wiring |
+
+The contracts and current topology refusals are owned by
+[`layer-graph-model.md`](architecture/layer-graph-model.md). CPU primitives remain unchanged;
+portable text rasterization and driver-record cloning remain unavailable.

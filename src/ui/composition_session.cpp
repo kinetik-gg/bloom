@@ -95,6 +95,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     compositionId_ = compositionId;
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
+    selectedNodes_.clear();
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
     positionInteraction_.reset();
@@ -142,6 +143,7 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     currentTime_ = core::RationalTime::fromInteger(0);
     const bool hadSelection = selection_.primary.index() != 0;
     selection_ = {};
+    selectedNodes_.clear();
     emit compositionChanged();
     if (timeChanged) {
         emit currentTimeChanged();
@@ -164,10 +166,11 @@ bool CompositionSession::setCurrentTime(const core::RationalTime time) {
 
 void CompositionSession::clearSelection() {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (selection_ == CompositionSelection{}) {
+    if (selection_ == CompositionSelection{} && selectedNodes_.empty()) {
         return;
     }
     selection_ = {};
+    selectedNodes_.clear();
     emit selectionChanged();
 }
 
@@ -179,23 +182,65 @@ void CompositionSession::selectLayer(const document::LayerId layerId) {
         return;
     }
     CompositionSelection next{.primary = layerId, .contextualLayer = layerId};
-    if (selection_ != next) {
+    const std::set<document::NodeId> nextNodes{*boundary};
+    if (selection_ != next || selectedNodes_ != nextNodes) {
         selection_ = next;
+        selectedNodes_ = nextNodes;
         emit selectionChanged();
     }
 }
 
 void CompositionSession::selectNode(const document::NodeId nodeId) {
+    selectNodes({nodeId}, nodeId);
+}
+
+void CompositionSession::selectNodes(std::set<document::NodeId> nodes,
+                                     const document::NodeId primary) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (nodes.empty() && !primary.isValid()) {
+        clearSelection();
+        return;
+    }
+    const auto* current = composition();
+    if (!current || !nodes.contains(primary) || std::ranges::any_of(nodes, [&](const auto id) {
+            return current->graph().findNode(id) == nullptr;
+        })) {
+        reportUnavailable(
+            QStringLiteral("Node selection requires existing nodes and a primary in the set"));
+        return;
+    }
+    CompositionSelection next{.primary = primary, .contextualLayer = layerForNode(primary)};
+    if (selection_ == next && selectedNodes_ == nodes)
+        return;
+    selection_ = next;
+    selectedNodes_ = std::move(nodes);
+    emit selectionChanged();
+}
+
+void CompositionSession::toggleNodeSelection(const document::NodeId nodeId) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
-    if (current == nullptr || current->graph().findNode(nodeId) == nullptr) {
+    if (!current || !current->graph().findNode(nodeId)) {
         reportUnavailable(QStringLiteral("The selected node is no longer available"));
         return;
     }
-    CompositionSelection next{.primary = nodeId, .contextualLayer = layerForNode(nodeId)};
-    if (selection_ != next) {
-        selection_ = next;
+    auto nodes = selectedNodes_;
+    if (!nodes.erase(nodeId)) {
+        nodes.insert(nodeId);
+        selectNodes(std::move(nodes), nodeId);
+        return;
+    }
+    if (nodes.empty()) {
+        clearSelection();
+        return;
+    }
+    const auto* primaryNode = selectedNode();
+    if (primaryNode && nodes.contains(primaryNode->id)) {
+        selectedNodes_ = std::move(nodes);
         emit selectionChanged();
+    } else {
+        const auto primary = *nodes.begin();
+        selectNodes(std::move(nodes), primary);
     }
 }
 
@@ -209,8 +254,9 @@ void CompositionSession::selectParameter(const document::ParameterId parameterId
 
     CompositionSelection next{.primary = parameterId,
                               .contextualLayer = contextualLayerForParameter(parameterId)};
-    if (selection_ != next) {
+    if (selection_ != next || !selectedNodes_.empty()) {
         selection_ = next;
+        selectedNodes_.clear();
         emit selectionChanged();
     }
 }
@@ -228,8 +274,9 @@ void CompositionSession::selectKeyframe(const document::AnimationCurveId curveId
     const auto contextualLayer =
         parameterId.has_value() ? contextualLayerForParameter(*parameterId) : std::nullopt;
     CompositionSelection next{.primary = target, .contextualLayer = contextualLayer};
-    if (selection_ != next) {
+    if (selection_ != next || !selectedNodes_.empty()) {
         selection_ = next;
+        selectedNodes_.clear();
         emit selectionChanged();
     }
 }
@@ -1011,11 +1058,26 @@ CompositionSession::contextualLayerForParameter(const document::ParameterId para
 }
 
 void CompositionSession::normalizeSelection() {
-    if (selectionExists(selection_)) {
-        return;
+    const auto before = selectedNodes_;
+    const auto oldSelection = selection_;
+    const auto* current = composition();
+    std::erase_if(selectedNodes_,
+                  [&](const auto id) { return !current || !current->graph().findNode(id); });
+    if (!selectionExists(selection_)) {
+        if (std::holds_alternative<document::NodeId>(selection_.primary) &&
+            !selectedNodes_.empty()) {
+            const auto primary = *selectedNodes_.begin();
+            selection_ = {.primary = primary, .contextualLayer = layerForNode(primary)};
+        } else {
+            selection_ = {};
+            selectedNodes_.clear();
+        }
+    } else if (const auto* nodeId = std::get_if<document::NodeId>(&selection_.primary)) {
+        selectedNodes_.insert(*nodeId);
+        selection_.contextualLayer = layerForNode(*nodeId);
     }
-    selection_ = {};
-    emit selectionChanged();
+    if (before != selectedNodes_ || oldSelection != selection_)
+        emit selectionChanged();
 }
 
 void CompositionSession::reportUnavailable(const QString& message) {
