@@ -352,22 +352,27 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                        "Animation curve may be owned by only one parameter");
         }
 
-        if (parameter.schemaKey == kPositionParameterSchemaKey) {
+        // Animatability and curve kind both come from the shared schema predicates in
+        // bloom/document/parameter.hpp, so this validation and the animation commands cannot
+        // disagree about which parameters may be animated.
+        if (isVec2AnimatableSchemaKey(parameter.schemaKey)) {
             if (isScalar(*curve)) {
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "Position parameter requires a Vec2 animation curve");
+                           "This transform parameter requires a Vec2 animation curve");
             }
-        } else if (parameter.schemaKey == kOpacityParameterSchemaKey) {
+        } else if (isScalarAnimatableSchemaKey(parameter.schemaKey)) {
             if (!isScalar(*curve)) {
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "Opacity parameter requires a scalar animation curve");
+                           "This scalar parameter requires a scalar animation curve");
             }
         } else {
             result.add(ValidationCode::InvalidValue, parameterPath + ".source",
-                       "This parameter schema does not support animation in schema version 1");
+                       "This parameter schema does not support animation");
         }
 
-        if (parameter.schemaKey == kOpacityParameterSchemaKey) {
+        // The unit domain belongs to OPACITY, not to scalar curves in general: a rotation curve
+        // measures degrees and must be free to wind past a full turn in either direction.
+        if (hasUnitDomainSchemaKey(parameter.schemaKey)) {
             if (const auto* scalar = std::get_if<ScalarAnimationCurve>(curve)) {
                 for (const auto& keyframe : scalar->keyframes) {
                     if (keyframe.value < 0.0 || keyframe.value > 1.0) {

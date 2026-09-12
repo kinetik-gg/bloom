@@ -39,6 +39,12 @@ constexpr std::array kTextSourceBindings{
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,
                              bloom::document::kPositionParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kAnchorParameterRole,
+                             bloom::document::kAnchorParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kScaleParameterRole,
+                             bloom::document::kScaleParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kRotationParameterRole,
+                             bloom::document::kRotationParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kOpacityParameterRole,
                              bloom::document::kOpacityParameterSchemaKey},
 };

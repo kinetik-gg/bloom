@@ -110,13 +110,23 @@ template <typename Definition>
                             ParameterValueKind::Color4d) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
+        // Parameter ORDER is the authoring order the properties grid, the node card, and the
+        // timeline all read: where the layer sits, the point it turns about, how big it is, how far
+        // round it is turned, then how much of it shows through. Opacity stays last because it is
+        // the only one of the five that is not part of the geometric transform.
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasImageInput(definition, kLayerOutputContentInputPort) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
-               definition.parameters.size() == 2 &&
+               definition.parameters.size() == 5 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
-               hasParameter(definition, 1, kOpacityParameterRole, kOpacityParameterSchemaKey,
+               hasParameter(definition, 1, kAnchorParameterRole, kAnchorParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 2, kScaleParameterRole, kScaleParameterSchemaKey,
+                            ParameterValueKind::Vec2d, true) &&
+               hasParameter(definition, 3, kRotationParameterRole, kRotationParameterSchemaKey,
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 4, kOpacityParameterRole, kOpacityParameterSchemaKey,
                             ParameterValueKind::Float64, true) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
@@ -169,6 +179,12 @@ template <typename Definition>
             {{std::string(kLayerOutputOutputPort), SocketValueKind::Image}},
             {{std::string(kPositionParameterRole), std::string(kPositionParameterSchemaKey),
               ParameterValueKind::Vec2d, true, true, Vec2d{}},
+             {std::string(kAnchorParameterRole), std::string(kAnchorParameterSchemaKey),
+              ParameterValueKind::Vec2d, true, true, kDefaultAnchor},
+             {std::string(kScaleParameterRole), std::string(kScaleParameterSchemaKey),
+              ParameterValueKind::Vec2d, true, true, kDefaultScale},
+             {std::string(kRotationParameterRole), std::string(kRotationParameterSchemaKey),
+              ParameterValueKind::Float64, true, true, kDefaultRotationDegrees},
              {std::string(kOpacityParameterRole), std::string(kOpacityParameterSchemaKey),
               ParameterValueKind::Float64, true, true, 1.0}},
             std::nullopt};

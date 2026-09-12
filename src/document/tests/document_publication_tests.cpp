@@ -97,6 +97,9 @@ struct SingleLayerCompositionIds final {
     EdgeId stackEdge;
     EdgeId outputEdge;
     ParameterId positionParameter;
+    ParameterId anchorParameter;
+    ParameterId scaleParameter;
+    ParameterId rotationParameter;
     ParameterId opacityParameter;
     LayerId layer;
     LayerSlotId slot;
@@ -115,6 +118,9 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         id<EdgeId>(base + 1),
         id<EdgeId>(base + 2),
         id<ParameterId>(base),
+        id<ParameterId>(base + 2),
+        id<ParameterId>(base + 3),
+        id<ParameterId>(base + 4),
         id<ParameterId>(base + 1),
         id<LayerId>(base),
         id<LayerSlotId>(base),
@@ -129,6 +135,9 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         std::string(bloom::document::kLayerOutputNodeType),
         {
             {std::string(bloom::document::kPositionParameterRole), ids.positionParameter},
+            {std::string(bloom::document::kAnchorParameterRole), ids.anchorParameter},
+            {std::string(bloom::document::kScaleParameterRole), ids.scaleParameter},
+            {std::string(bloom::document::kRotationParameterRole), ids.rotationParameter},
             {std::string(bloom::document::kOpacityParameterRole), ids.opacityParameter},
         },
         bloom::document::kLayerOutputNodeSchemaVersion,
@@ -175,6 +184,15 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         composition.parameters().insert({ids.positionParameter,
                                          std::string(bloom::document::kPositionParameterSchemaKey),
                                          ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        composition.parameters().insert({ids.anchorParameter,
+                                         std::string(bloom::document::kAnchorParameterSchemaKey),
+                                         ConstantValueSource{bloom::document::kDefaultAnchor}}) &&
+        composition.parameters().insert({ids.scaleParameter,
+                                         std::string(bloom::document::kScaleParameterSchemaKey),
+                                         ConstantValueSource{bloom::document::kDefaultScale}}) &&
+        composition.parameters().insert(
+            {ids.rotationParameter, std::string(bloom::document::kRotationParameterSchemaKey),
+             ConstantValueSource{bloom::document::kDefaultRotationDegrees}}) &&
         composition.parameters().insert({ids.opacityParameter,
                                          std::string(bloom::document::kOpacityParameterSchemaKey),
                                          ConstantValueSource{1.0}});
@@ -549,6 +567,9 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
     constexpr auto opacityId = id<ParameterId>(45);
     constexpr auto animationParameterId = id<ParameterId>(46);
     constexpr auto driverParameterId = id<ParameterId>(47);
+    constexpr auto anchorId = id<ParameterId>(48);
+    constexpr auto scaleId = id<ParameterId>(49);
+    constexpr auto rotationId = id<ParameterId>(50);
     constexpr auto sourceNodeId = id<NodeId>(100);
     constexpr auto layerOutputNodeId = id<NodeId>(101);
     constexpr auto layerId = id<LayerId>(100);
@@ -564,6 +585,9 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
             std::string(bloom::document::kLayerOutputNodeType),
             {
                 {std::string(bloom::document::kPositionParameterRole), positionId},
+                {std::string(bloom::document::kAnchorParameterRole), anchorId},
+                {std::string(bloom::document::kScaleParameterRole), scaleId},
+                {std::string(bloom::document::kRotationParameterRole), rotationId},
                 {std::string(bloom::document::kOpacityParameterRole), opacityId},
             },
             bloom::document::kLayerOutputNodeSchemaVersion,
@@ -576,6 +600,15 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                composition->parameters().insert(
                    {positionId, std::string(bloom::document::kPositionParameterSchemaKey),
                     ConstantValueSource{Vec2d{10.0, 20.0}}}) &&
+               composition->parameters().insert(
+                   {anchorId, std::string(bloom::document::kAnchorParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultAnchor}}) &&
+               composition->parameters().insert(
+                   {scaleId, std::string(bloom::document::kScaleParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultScale}}) &&
+               composition->parameters().insert(
+                   {rotationId, std::string(bloom::document::kRotationParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultRotationDegrees}}) &&
                composition->parameters().insert(
                    {opacityId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     ConstantValueSource{0.5}}) &&
@@ -640,7 +673,7 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                             next.ids().allocateEdge() == id<EdgeId>(201) &&
                             next.ids().allocateLayer() == id<LayerId>(101) &&
                             next.ids().allocateLayerSlot() == id<LayerSlotId>(101) &&
-                            next.ids().allocateParameter() == id<ParameterId>(48) &&
+                            next.ids().allocateParameter() == id<ParameterId>(51) &&
                             next.ids().allocateAnimationCurve() == id<AnimationCurveId>(101) &&
                             next.ids().allocateKeyframe() == id<KeyframeId>(101) &&
                             next.ids().allocateDriverBinding() == id<DriverBindingId>(101),

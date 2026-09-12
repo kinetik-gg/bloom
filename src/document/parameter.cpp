@@ -48,9 +48,21 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
-    if (schemaKey == kPositionParameterSchemaKey) {
-        const auto* position = std::get_if<Vec2d>(&constant.value);
-        return position != nullptr && std::isfinite(position->x) && std::isfinite(position->y);
+    if (schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
+        schemaKey == kScaleParameterSchemaKey) {
+        // One rule for all three Vec2d transform values: finite, otherwise unbounded. Scale is
+        // deliberately NOT confined to positive numbers -- a negative factor mirrors the axis and
+        // zero collapses the layer, both of which evaluation renders rather than refuses -- and
+        // anchor is deliberately not confined to the layer's own box, so an off-layer pivot stays
+        // authorable.
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y);
+    }
+    if (schemaKey == kRotationParameterSchemaKey) {
+        // Degrees, finite and unbounded: an animated rotation must be able to wind past 360 and
+        // below zero, so only a non-finite value is rejected.
+        const auto* rotation = std::get_if<double>(&constant.value);
+        return rotation != nullptr && std::isfinite(*rotation);
     }
     if (schemaKey == kOpacityParameterSchemaKey) {
         const auto* opacity = std::get_if<double>(&constant.value);
