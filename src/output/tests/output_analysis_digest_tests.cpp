@@ -97,10 +97,17 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 };
 
 // These are produced by an independent byte-oriented oracle for the exact fixture below.
+// Re-derived for the task S3 semantics-version bumps (CPU composition evaluator 2 -> 3, CPU image
+// primitive 2 -> 3). Both are frozen fields of the process-frame semantic identity these preimages
+// embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
+// from the same kind of independent byte-oriented oracle that produced the originals -- a
+// standalone script that packs each frozen field itself with explicit big-endian integers and
+// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing the
+// PREVIOUS goldens byte for byte when fed the previous version numbers.
 constexpr std::string_view kExpectedExrDigest =
-    "791a0c2e688e0afe55a74c737aea787f1622ed2eef7847b8d62ee314718076c1";
+    "c5850d6e99a5c8d4a6296d509576bcea24d07b8b6e572065dc08fff7067507e2";
 constexpr std::string_view kExpectedPngDigest =
-    "a032aec2ed0b51e7d76120fa6229f720650ef2dab557968c776b0dfd03f4c6a6";
+    "c98edd8af56e7cfc02272f9c9f04bbae7775a6ff41dd264e4e791ba7311e751d";
 
 class Expectations final {
   public:

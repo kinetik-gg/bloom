@@ -20,9 +20,11 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QImage>
 #include <QString>
 
 #include <algorithm>
@@ -671,6 +673,87 @@ void testPngDestinationRoutesToPngPresetAndPublishes(Expectations& expectations)
 }
 
 // -------------------------------------------------------------------------------------------
+// Task S3: a text layer really reaches an exported PNG's pixels. This is the end of the slice's
+// chain -- document schema, compiled plan, CPU glyph rasterization, display mapping, PNG encode --
+// and it is asserted by decoding the published file rather than by trusting the writer.
+// -------------------------------------------------------------------------------------------
+
+void testPngExportContainsRasterizedText(Expectations& expectations) {
+    // Big enough for a readable glyph; U+2588 FULL BLOCK at 24 px per em so the assertion can name
+    // exact interior pixels instead of hunting for antialiased edges. The rasterized block's own
+    // geometry (origin and full-coverage interior) is pinned in src/render's own tests; here it
+    // only has to be comfortably inside this frame.
+    const auto textFormat = document::CompositionFormat::create(64, 48);
+    if (!textFormat.has_value()) {
+        expectations.expect(false, "text export: the fixture format is valid");
+        return;
+    }
+    Fixture fixture(*textFormat);
+    if (!fixture.setUp(expectations, "text export: fixture is available")) {
+        return;
+    }
+    // The text origin is the frame origin, so a layer centered in the frame puts the glyph's
+    // top-left corner at the frame's top-left corner.
+    expectations.expect(fixture.session.addTextLayer(QStringLiteral("Title"),
+                                                     QString::fromUtf8("\xe2\x96\x88"), 24.0,
+                                                     core::Color4d{1.0, 1.0, 1.0, 1.0}),
+                        "text export: the text layer is added");
+
+    const auto target = fixture.directory.path() / "text.png";
+    fixture.controller().setDestinationProvider(
+        [&target]() -> std::optional<std::filesystem::path> { return target; });
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Export; });
+
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString&) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                     });
+    fixture.controller().requestExport();
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "text export: the export reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Published,
+                        "text export: the export publishes");
+    if (outcome != FrameExportOutcome::Published) {
+        return;
+    }
+
+    // Decoded by Qt, not by Bloom's own writer, so this asserts what a reader actually sees.
+    QImage decoded;
+    expectations.expect(decoded.load(QString::fromStdString(target.string()), "PNG"),
+                        "text export: the published PNG decodes");
+    if (decoded.isNull()) {
+        return;
+    }
+    expectations.expect(decoded.width() == 64 && decoded.height() == 48,
+                        "text export: the PNG carries the composition's own resolution");
+    const QImage rgba = decoded.convertToFormat(QImage::Format_RGBA8888);
+    const QColor ink = rgba.pixelColor(4, 4);
+    expectations.expect(ink.alpha() == 255 && ink.red() == 255 && ink.green() == 255 &&
+                            ink.blue() == 255,
+                        "text export: a pixel under the glyph's fully covered interior is opaque "
+                        "white, which is the exported text");
+    const QColor background = rgba.pixelColor(60, 44);
+    expectations.expect(background.alpha() == 0,
+                        "text export: a pixel the glyph does not reach stays fully transparent, so "
+                        "the glyph is really glyph-shaped rather than a filled frame");
+
+    std::size_t inkPixels = 0;
+    for (int y = 0; y < rgba.height(); ++y) {
+        for (int x = 0; x < rgba.width(); ++x) {
+            inkPixels += rgba.pixelColor(x, y).alpha() == 0 ? 0U : 1U;
+        }
+    }
+    expectations.expect(inkPixels > 0 && inkPixels < static_cast<std::size_t>(rgba.width()) *
+                                                         static_cast<std::size_t>(rgba.height()),
+                        "text export: the exported frame is partly covered -- neither empty nor "
+                        "entirely filled");
+}
+
+// -------------------------------------------------------------------------------------------
 // Both presets from one controller, back to back: the EXR path is unchanged and the PNG path
 // coexists with it under the same one-export-at-a-time bound.
 // -------------------------------------------------------------------------------------------
@@ -735,6 +818,7 @@ int main(int argc, char** argv) {
     testExternalModificationConflictSurfacedAsFailure(expectations);
     testDestinationExtensionSelectsPreset(expectations);
     testPngDestinationRoutesToPngPresetAndPublishes(expectations);
+    testPngExportContainsRasterizedText(expectations);
     testBothPresetsExportBackToBack(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

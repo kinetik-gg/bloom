@@ -1,4 +1,3 @@
-#include "legacy_text_fixture.hpp"
 
 // Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
 // chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
@@ -455,8 +454,7 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Clip Bar Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-    ui::test::installLegacyTextLayer(fixture.document, fixture.commands, fixture.session, "B",
-                                     "Text");
+    (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;
@@ -473,8 +471,16 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
     }
 
     const QImage laneImage = lanes->grab().toImage();
-    const QColor expected = ui::kit::color(ui::kit::Color::DataComposition);
+    // ADAPTED (task S3): task T1 painted ONE data-type color for both kinds and disclosed that as a
+    // blocked sub-item, because text was not a rendering layer kind yet. It is now, so the two
+    // kinds are distinguishable on the lane: row 0 is the Solid (DataComposition), row 1 the Text
+    // (DataClip). See layerClipColorToken() for why those two roles and not the others.
+    const std::array<QColor, 2> expectedByRow{ui::kit::color(ui::kit::Color::DataComposition),
+                                              ui::kit::color(ui::kit::Color::DataClip)};
+    expectations.expect(expectedByRow[0] != expectedByRow[1],
+                        "the two layer kinds really do get different clip colors");
     for (int row = 0; row < 2; ++row) {
+        const QColor expected = expectedByRow[static_cast<std::size_t>(row)];
         const auto bar = lanes->clipBarRect(row);
         expectations.expect(bar.has_value(), "the row has a clip bar rect");
         if (!bar.has_value()) {
@@ -488,10 +494,8 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
                             "edge");
         const int sampleY = bar->top() + bar->height() / 2;
         const int sampleX = bar->left() + bar->width() / 2;
-        expectations.expect(
-            near(laneImage.pixelColor(sampleX, sampleY), expected, 6),
-            "the bar paints the documented DataComposition color, for a Solid and a Text layer "
-            "alike (one uniform honest mapping -- see layerClipColorToken()'s disclosure)");
+        expectations.expect(near(laneImage.pixelColor(sampleX, sampleY), expected, 6),
+                            "the bar paints its own layer kind's documented data-type color");
     }
 
     delete editor;
@@ -660,8 +664,7 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Kind Readability Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-    ui::test::installLegacyTextLayer(fixture.document, fixture.commands, fixture.session, "B",
-                                     "Text");
+    (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;

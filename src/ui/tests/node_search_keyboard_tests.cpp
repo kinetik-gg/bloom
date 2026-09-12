@@ -216,22 +216,19 @@ void testSearchKeyboardAndMenus() {
            "while a kind a composition may hold many of stays addable");
     field->setText(QStringLiteral("text"));
     const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
+    // ADAPTED (task S3): text used to be a disabled row carrying AddTextLayer's real refusal; the
+    // command now succeeds, so the same mechanism reports no refusal and leaves the row enabled.
     expect(resultRows(list->model()) == 1 && textRow.isValid() &&
-               !textRow.flags().testFlag(Qt::ItemIsEnabled) &&
-               textRow.data(Qt::ToolTipRole).toString().contains(QStringLiteral("CPU")),
-           "text remains listed with actual command refusal as a disabled row");
-    // Item 4: the reason is in the tooltip and NOWHERE else. A refusal appended to the label would
-    // make the list's widest row an error message and read as part of the node's name.
+               textRow.flags().testFlag(Qt::ItemIsEnabled) &&
+               !textRow.data(Qt::ToolTipRole).toString().contains(QStringLiteral("CPU")),
+           "text is listed as an enabled row with no refusal to report");
+    // Item 4: the label is the node's name alone; any refusal would live in the tooltip only.
     expect(textRow.data().toString() ==
-                   node_editor::nodeTypeDisplayName(document::kTextSourceNodeType) &&
-               !textRow.data().toString().contains(QStringLiteral("CPU")),
+               node_editor::nodeTypeDisplayName(document::kTextSourceNodeType),
            "and its label is the node's name alone");
     expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources")},
            "a filter that empties a section drops that section's heading with it");
     history = f.stack.size();
-    QTest::keyClick(field, Qt::Key_Return);
-    expect(f.stack.size() == history && popup->isVisible(),
-           "Enter cannot activate a disabled text result");
     field->setText(QStringLiteral("layer output image"));
     expect(resultRows(list->model()) == 1, "search combines display-name and socket-kind filters");
     QTest::keyClick(field, Qt::Key_Return);
@@ -251,6 +248,20 @@ void testSearchKeyboardAndMenus() {
                f.session.composition()->graph().layerOutputs().size() == 1,
            "armed search adds a structured solid layer and connects its compatible port in one "
            "transaction");
+    // Task S3: the same armed-search path creates a real text layer, in one transaction.
+    f.editor.openAddSearch({560, 460}, global);
+    popup = search(f);
+    field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
+    field->setText(QStringLiteral("text"));
+    history = f.stack.size();
+    const auto boundariesBeforeText = f.session.composition()->graph().layerOutputs().size();
+    QTest::keyClick(field, Qt::Key_Return);
+    selected = f.session.selectedNode();
+    expect(f.stack.size() == history + 1 && selected != nullptr &&
+               selected->typeId == document::kTextSourceNodeType &&
+               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText + 1,
+           "Enter on the text result adds a structured text layer in one transaction");
+
     const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
     f.session.selectLayer(layerId);
     const auto boundary = f.session.selectedNode()->id;

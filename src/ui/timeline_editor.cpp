@@ -155,34 +155,43 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
 
 // The clip bar's fill, from the data-type palette (task T1).
 //
-// BLOCKED SUB-ITEM, disclosed in this task's raw report. The task removes the Kind column and says
-// kind is expressed by the clip color instead. The data-type palette cannot express Bloom's kinds:
-// every one of its five roles names a kind of REFERENCED MEDIA (docs/ux/visual-language.md: image
-// sequences, clips, compositions, still images, audio), and Bloom has no media import pipeline and
-// no media-backed layer type at all -- its only kinds are Solid and Text, both generated
-// in-project. DataComposition is the single role whose stated meaning is in-project authored
-// content rather than a referenced asset, so it is the only honest choice for both; the others
-// would claim a kind of media this project cannot even open.
+// Task T1 shipped ONE color for both kinds and disclosed that as a blocked sub-item: with the Kind
+// column removed, kind was supposed to be expressed by the clip color, but every role in the
+// data-type palette names a kind of REFERENCED MEDIA (docs/ux/visual-language.md: image sequences,
+// clips, compositions, still images, audio), and Bloom has no media import pipeline at all -- its
+// only kinds are Solid and Text, both generated in-project. Task S3 makes text a real rendering
+// layer kind, so the two kinds now need to be distinguishable on the lane, and this is the choice:
 //
-// The one role that would have given a second distinct color to a generated raster plane,
-// DataImage, is additionally unusable on its own terms: its value (#3AA5F0) is byte-identical to
-// AccentHover and one step from Accent (#0C8CE9), so a solid's clip bar would read as an
-// accent/selected surface and would swallow the 1px Accent playhead crossing it. Adding a
-// DataSolid/DataText role is a kit edit, outside this task's fence.
+//   Solid -> DataComposition (#8B5CF6), unchanged, so no existing clip changes color.
+//   Text  -> DataClip (#3FBF6B).
 //
-// So this is ONE mapping for every kind that exists, exactly as task U7 reviewed it -- and kind is
-// NOT lost with the column: TimelineLayerStack::toolTipAt() names it on every row. An unrecognized
-// layer kind takes Muted instead, because there is no honest data-type color for "kind unknown" and
-// inventing one would be the misrepresentation this whole comment exists to refuse. A future
-// media-backed or pre-composition layer kind takes its own role here on the day it ships.
+// Why DataClip, having rejected the others on their own terms:
+//   * DataImage (#3AA5F0) is byte-identical to AccentHover and one step from Accent (#0C8CE9), so a
+//     clip bar painted with it reads as an accent/selected surface and swallows the 1px Accent
+//     playhead crossing it.
+//   * DataSequence (#E0554E) is byte-identical to Error, so a text clip would read as a failed one.
+//   * DataAudio (#7C5CFF) is a neighbouring purple to DataComposition's #8B5CF6 -- two kinds that
+//     are supposed to be told apart at a glance would not be.
+//   * DataClip is byte-identical to Ok (#3FBF6B), which is the one remaining collision, and a green
+//     clip bar reading as "ready" is a far smaller misstatement than one reading as "error",
+//     "selected", or "the same kind as a solid".
+// Adding a DataText role to the kit would be the ideal fix and remains a kit-owner decision; it is
+// not needed for the two kinds that exist.
+//
+// Kind is still named in text as well: TimelineLayerStack::toolTipAt() spells it on every row, so
+// the color is a second channel rather than the only one. An unrecognized layer kind takes Muted,
+// because there is no honest data-type color for "kind unknown". A future media-backed or
+// pre-composition layer kind takes its own role here on the day it ships.
 [[nodiscard]] kit::Color layerClipColorToken(const CompositionSession& session,
                                              const document::LayerId layerId) {
     const auto* sourceNode = directSourceNode(session, layerId);
     if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
-                      document::kSolidSourceNodeSchemaVersion) ||
-        isKnownSource(sourceNode, document::kTextSourceNodeType,
-                      document::kTextSourceNodeSchemaVersion)) {
+                      document::kSolidSourceNodeSchemaVersion)) {
         return kit::Color::DataComposition;
+    }
+    if (isKnownSource(sourceNode, document::kTextSourceNodeType,
+                      document::kTextSourceNodeSchemaVersion)) {
+        return kit::Color::DataClip;
     }
     return kit::Color::Muted;
 }

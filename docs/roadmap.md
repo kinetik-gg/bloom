@@ -156,8 +156,11 @@ Extend the document and command model with only the durable fields required by e
 Time remains exact rational seconds; frame numbers are display labels. Widget size never becomes
 semantic render resolution.
 
-Text stays authorable but is not faked by the first evaluator. Portable deterministic text requires
-font asset identity, resolution, shaping, and rasterization contracts that belong in a later batch.
+Text is authorable and rendered by the first evaluator on the portable CPU path, with one embedded
+face, a fixed single-line advance-and-kern layout, and linear coverage compositing. What is NOT faked
+is everything that needs its own contract: font asset identity and resolution, shaping, bidirectional
+text, and layout still belong to a later batch, so the text source carries no font parameter rather
+than promising a selection nothing can honor.
 
 Suggested commits:
 
@@ -586,7 +589,9 @@ composition root. Parallel speed comes from stable boundaries, not conflict-heav
 
 ## Deferred Until The First Proof Is Stable
 
-- deterministic text shaping/rasterization and font asset management
+- deterministic text shaping, bidirectional text, multi-line layout, and font asset management
+  (single-line rasterization of one embedded face is implemented; see
+  [`architecture/evaluation-primitives.md`](architecture/evaluation-primitives.md))
 - still/video ingest, broad codecs, and audio; the provider, isolation, qualification, and ProRes
   constraints are researched in [`architecture/media-io.md`](architecture/media-io.md) without
   moving implementation ahead of the first-proof gate

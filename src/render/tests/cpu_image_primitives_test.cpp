@@ -218,7 +218,7 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 2,
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 3,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});

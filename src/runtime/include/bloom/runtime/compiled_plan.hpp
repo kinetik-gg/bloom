@@ -10,11 +10,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <variant>
 #include <vector>
 
 namespace bloom::runtime {
 
+// Deliberately NOT bumped when CompiledText was added (task S3). This number exists so an evaluator
+// can refuse a plan built under different semantics, and a compiled plan never crosses a process or
+// persistence boundary: it is compiled in-process from a document snapshot and retained only by
+// frames of that same process, so no version-1 plan can reach a build that has CompiledText, and no
+// plan carrying a CompiledText can reach a build that does not. What DOES cross such a boundary is
+// ProcessFrameIdentity, and the two numbers it carries for this are
+// kCpuCompositionEvaluatorSemanticsVersion and render::kCpuImagePrimitiveSemanticsVersion -- both
+// bumped by the text path, because both describe pixels a cached or exported frame may already
+// hold. Bump this one when the plan's own grammar changes in a way an existing plan value could
+// misrepresent (a field's meaning changing, not a new alternative appearing).
 inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 1;
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 1;
 
@@ -126,6 +137,24 @@ struct CompiledSolid {
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
 
+// A lowered text source. Content, size, and color are all resolved constants, not parameter
+// sources: the text schema declares none of the three animatable, and the command surface has no
+// way to put any of them on a curve (CreateAnimationForParameter accepts only the position and
+// opacity schemas, and SetKeyframeAtTime has no string or Color4d overload). The parameter
+// identities travel with them so a diagnostic can name the exact parameter that failed, exactly as
+// CompiledSolid does.
+struct CompiledText {
+    document::NodeId sourceNodeId;
+    document::ParameterId contentParameterId;
+    std::string content;
+    document::ParameterId sizeParameterId;
+    double size = document::kDefaultTextSizePixels;
+    document::ParameterId colorParameterId;
+    core::Color4d color;
+
+    friend bool operator==(const CompiledText&, const CompiledText&) = default;
+};
+
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
@@ -160,8 +189,8 @@ struct CompiledCompositionOutput {
                            const CompiledCompositionOutput&) = default;
 };
 
-using CompiledOperation =
-    std::variant<CompiledSolid, CompiledLayerOutput, CompiledLayerStack, CompiledCompositionOutput>;
+using CompiledOperation = std::variant<CompiledSolid, CompiledText, CompiledLayerOutput,
+                                       CompiledLayerStack, CompiledCompositionOutput>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot

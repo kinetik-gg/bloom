@@ -313,9 +313,12 @@ class NodeItem final : public QGraphicsObject {
     // deletion. See the definition for why hiding it is not enough.
     void retireRenameProxy();
 
+    // Any proxied control, not only a kit::KValueField: task S3's text content row is a QLineEdit,
+    // because the kit has no string field and adding one is a kit change outside this task's fence.
+    // Everything relayout() needs from a row is its sizeHint(), so QWidget is the honest type here.
     struct ValueRow final {
         QString label;
-        kit::KValueField* field = nullptr;
+        QWidget* widget = nullptr;
     };
 
     // Selects THIS node through the session's one selection truth before any edit, because every
@@ -362,6 +365,36 @@ class NodeItem final : public QGraphicsObject {
         widget.setAutoFillBackground(false);
     }
 
+    // Task S3's three text writes, each through exactly the session method PropertiesEditor's own
+    // Text Source row calls, so the two surfaces cannot drift.
+    void commitTextContent() {
+        if (refreshing_ || textContent_ == nullptr || !selectSelf()) {
+            return;
+        }
+        (void)session_->setSelectedTextContent(textContent_->text());
+    }
+
+    void commitTextSize() {
+        if (refreshing_ || textSize_ == nullptr || !selectSelf()) {
+            return;
+        }
+        (void)session_->setSelectedTextSize(textSize_->value());
+    }
+
+    // One chip, two schemas: the role string is "color" for both a solid source and a text source
+    // (see document::kTextColorParameterRole), so the card builds one control and dispatches on the
+    // node's own type only to pick the honest undo label.
+    void commitColor(const kit::KColor& color) {
+        if (refreshing_ || colorChip_ == nullptr || !selectSelf()) {
+            return;
+        }
+        const core::Color4d value{static_cast<double>(color.red), static_cast<double>(color.green),
+                                  static_cast<double>(color.blue),
+                                  static_cast<double>(color.alpha)};
+        (void)(isTextSource_ ? session_->setSelectedTextColor(value)
+                             : session_->setSelectedSolidColor(value));
+    }
+
     void addProxy(QWidget* widget) {
         hostTranslucent(*widget);
         auto* proxy = new QGraphicsProxyWidget(this);
@@ -375,15 +408,20 @@ class NodeItem final : public QGraphicsObject {
     //   position -> two KValueFields (X, Y), committed through
     //               CompositionSession::setSelectedPosition()
     //   opacity  -> one KValueField, committed through CompositionSession::setSelectedOpacity()
-    //   color    -> a READ-ONLY KColorChip. There is no color write path anywhere: the whole
-    //               command layer is AddSolidLayer, AddTextLayer, SetProjectName,
-    //               SetCompositionName, SetCompositionDuration, SetCompositionFormat,
-    //               SetParameterSource, MoveLayerBefore plus the animation operations, and
-    //               CompositionSession exposes no color mutator at all -- PropertiesEditor's own
-    //               Solid Source row is read-only text for exactly this reason. An enabled chip
-    //               would open a picker whose result nothing could commit.
-    //   anything else (text today) -> a painted read-only value row, because KValueField cannot
-    //               carry a string and no command sets one after layer creation.
+    //   color    -> a KColorChip, committed through CompositionSession::setSelectedSolidColor() or
+    //               setSelectedTextColor(). It was read-only while no command set a color; both of
+    //               those now exist (SetParameterSource carrying a Color4d constant), so the chip
+    //               opens its picker and commits. The swatch's own value model is displayable
+    //               straight RGBA in [0, 1], so an HDR or negative authored channel still travels
+    //               in the tooltip rather than in the swatch.
+    //   text     -> a QLineEdit, committed through setSelectedTextContent() on
+    //               editingFinished/returnPressed -- not per keystroke, so typing a word is one
+    //               undo step. The kit has no string field; adding one is a kit change outside this
+    //               task.
+    //   size     -> one KValueField over the text size schema's own domain, committed through
+    //               setSelectedTextSize().
+    //   anything else -> a painted read-only value row, because no kit primitive carries that value
+    //               and no command writes it.
     void ensureFields(const document::NodeRecord& node) {
         std::vector<std::string> roles;
         roles.reserve(node.parameters.size());
@@ -416,7 +454,10 @@ class NodeItem final : public QGraphicsObject {
         positionY_ = nullptr;
         opacity_ = nullptr;
         colorChip_ = nullptr;
+        textContent_ = nullptr;
+        textSize_ = nullptr;
         colorRowLabel_.clear();
+        isTextSource_ = node.typeId == document::kTextSourceNodeType;
 
         for (const auto& role : roles) {
             if (role == document::kPositionParameterRole) {
@@ -444,12 +485,33 @@ class NodeItem final : public QGraphicsObject {
             } else if (role == document::kSolidColorParameterRole) {
                 colorChip_ = new kit::KColorChip;
                 colorChip_->setObjectName(QStringLiteral("nodeColorChip"));
-                colorChip_->setAccessibleName(tr("Solid color"));
+                colorChip_->setAccessibleName(isTextSource_ ? tr("Text color") : tr("Solid color"));
                 colorChip_->setControlSize(kit::KColorChip::ControlSize::Compact);
-                colorChip_->setEnabled(false);
                 colorChip_->resize(colorChip_->sizeHint());
                 addProxy(colorChip_);
+                connect(colorChip_, &kit::KColorChip::colorChanged, this,
+                        [this](const kit::KColor& color) { commitColor(color); });
                 colorRowLabel_ = tr("Color");
+            } else if (role == document::kTextParameterRole) {
+                textContent_ = new QLineEdit;
+                textContent_->setObjectName(QStringLiteral("nodeTextContentEditor"));
+                textContent_->setAccessibleName(tr("Text content"));
+                textContent_->setFont(kit::font(kit::TypeRole::Ui));
+                textContent_->resize(textContent_->sizeHint());
+                addProxy(textContent_);
+                connect(textContent_, &QLineEdit::editingFinished, this,
+                        [this] { commitTextContent(); });
+                valueRows_.push_back({tr("Text"), textContent_});
+            } else if (role == document::kTextSizeParameterRole) {
+                // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
+                // same gesture in either surface produces the same value.
+                textSize_ =
+                    makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"), 1.0,
+                                  document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
+                addProxy(textSize_);
+                connect(textSize_, &kit::KValueField::valueChanged, this,
+                        [this] { commitTextSize(); });
+                valueRows_.push_back({tr("Size"), textSize_});
             } else {
                 readOnlyRows_.push_back({displayTypeName(role), QString{}});
             }
@@ -496,30 +558,64 @@ class NodeItem final : public QGraphicsObject {
             opacity_->setValue(value.has_value() ? *value * 100.0 : 100.0);
         }
 
+        if (textContent_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kTextParameterRole);
+            const auto value = parameter == nullptr || session_ == nullptr
+                                   ? std::nullopt
+                                   : session_->constantStringValue(parameter->id);
+            textContent_->setEnabled(value.has_value());
+            textContent_->setToolTip(describe(parameter, tr("Text is not exposed by this node")));
+            if (value.has_value() && textContent_->text() != *value) {
+                const QSignalBlocker blocker(textContent_);
+                textContent_->setText(*value);
+            }
+        }
+
+        if (textSize_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kTextSizeParameterRole);
+            const auto value = parameter == nullptr || session_ == nullptr
+                                   ? std::nullopt
+                                   : session_->constantValue(parameter->id);
+            textSize_->setEnabled(value.has_value());
+            textSize_->setToolTip(describe(parameter, tr("Size is not exposed by this node")));
+            const QSignalBlocker blocker(textSize_);
+            textSize_->setValue(value.value_or(document::kDefaultTextSizePixels));
+        }
+
         if (colorChip_ != nullptr) {
             const auto* parameter =
                 parameterForRole(node, composition, document::kSolidColorParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
                                    : session_->constantColorValue(parameter->id);
+            colorChip_->setEnabled(value.has_value());
             if (value.has_value()) {
+                const QSignalBlocker blocker(colorChip_);
                 colorChip_->setColor(kit::KColor::fromRgba(
                     static_cast<float>(value->red), static_cast<float>(value->green),
                     static_cast<float>(value->blue), static_cast<float>(value->alpha)));
             }
             // The swatch quantizes to 8 bits and clamps, so an HDR or negative authoring channel
-            // cannot be shown in it honestly; the exact, unclipped value travels in the tooltip
-            // alongside the reason the chip does not open a picker.
+            // cannot be shown in it honestly; the exact, unclipped value travels in the tooltip,
+            // together with what committing through the picker would do to such a value.
             const QString exact =
                 value.has_value() ? exactColorText(*value) : describe(parameter, tr("No color"));
-            colorChip_->setToolTip(tr("%1\nRead-only: no command sets a color yet").arg(exact));
+            colorChip_->setToolTip(
+                value.has_value()
+                    ? tr("%1\nEditing here commits a color inside the displayable [0, 1] range")
+                          .arg(exact)
+                    : exact);
         }
 
         std::size_t readOnlyIndex = 0;
         for (const auto& binding : node.parameters) {
             if (binding.role == document::kPositionParameterRole ||
                 binding.role == document::kOpacityParameterRole ||
-                binding.role == document::kSolidColorParameterRole) {
+                binding.role == document::kSolidColorParameterRole ||
+                binding.role == document::kTextParameterRole ||
+                binding.role == document::kTextSizeParameterRole) {
                 continue;
             }
             const auto* parameter = composition.parameters().find(binding.parameterId);
@@ -548,8 +644,8 @@ class NodeItem final : public QGraphicsObject {
         for (const auto& row : valueRows_) {
             labelColumn = std::max(labelColumn, rowMetrics.horizontalAdvance(row.label));
             controlColumn =
-                std::max(controlColumn, static_cast<qreal>(row.field->sizeHint().width()));
-            rowHeight = std::max(rowHeight, static_cast<qreal>(row.field->sizeHint().height()));
+                std::max(controlColumn, static_cast<qreal>(row.widget->sizeHint().width()));
+            rowHeight = std::max(rowHeight, static_cast<qreal>(row.widget->sizeHint().height()));
         }
         if (colorChip_ != nullptr) {
             labelColumn = std::max(labelColumn, rowMetrics.horizontalAdvance(colorRowLabel_));
@@ -614,8 +710,8 @@ class NodeItem final : public QGraphicsObject {
         const qreal controlSpan = std::max(1.0, std::ceil(width_ - kCardPadding - controlLeft));
         qreal y = kCardHeaderHeight + socketHeight;
         for (const auto& row : valueRows_) {
-            row.field->resize(static_cast<int>(controlSpan), row.field->sizeHint().height());
-            positionProxy(row.field, controlLeft, y + (rowHeight - row.field->height()) / 2.0);
+            row.widget->resize(static_cast<int>(controlSpan), row.widget->sizeHint().height());
+            positionProxy(row.widget, controlLeft, y + (rowHeight - row.widget->height()) / 2.0);
             y += rowHeight + kCardRowGap;
         }
         if (colorChip_ != nullptr) {
@@ -703,6 +799,11 @@ class NodeItem final : public QGraphicsObject {
     kit::KValueField* positionY_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     kit::KColorChip* colorChip_ = nullptr;
+    QLineEdit* textContent_ = nullptr;
+    kit::KValueField* textSize_ = nullptr;
+    // Only to choose the honest undo label and accessible name for the shared "color" role; the
+    // control and its write path are identical for a solid and a text source.
+    bool isTextSource_ = false;
     QString colorRowLabel_;
     QGraphicsDropShadowEffect* dragShadow_ = nullptr;
     std::vector<NodeEdgeItem*> edges_;

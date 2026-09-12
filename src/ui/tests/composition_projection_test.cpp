@@ -1,4 +1,3 @@
-#include "legacy_text_fixture.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -212,27 +211,47 @@ parameterForRole(const bloom::document::Composition& composition,
                  "Solid action names the built-in proof palette encoding")) {
         return false;
     }
+    // ADAPTED (task S3): the Add > Text action used to refuse with "portable CPU text rendering",
+    // and the layer it could not create had to be installed by a test-only fixture so the rest of
+    // this projection could be exercised. The command now succeeds, so the action itself creates
+    // the layer, no fixture is involved, and the preview state to require is a real frame rather
+    // than an UnsupportedNode diagnostic.
     const auto beforeText = session.snapshot().revision();
     QString textRefusal;
     QObject::connect(&session, &ui::CompositionSession::commandRejected, &session,
                      [&textRefusal](const QString& message) { textRefusal = message; });
     addTextAction->trigger();
-    if (!require(session.snapshot().revision() == beforeText &&
-                     textRefusal.contains(QStringLiteral("CPU text rendering")),
-                 "text action refuses without creating an invisible layer"))
+    if (!require(session.snapshot().revision() != beforeText && textRefusal.isEmpty(),
+                 "the text action creates a layer and reports no refusal"))
         return false;
-    ui::test::installLegacyTextLayer(document, commands, session, "Text 1", "Text");
 
     if (!require(waitUntil([&] {
-                     return previewController.state().activity == ui::PreviewActivity::Unsupported;
+                     return previewController.state().activity == ui::PreviewActivity::Ready &&
+                            previewController.state().frame != nullptr;
                  }),
-                 "reachable text produces an explicit unsupported preview state") ||
-        !require(!previewController.state().diagnostics.empty() &&
-                     previewController.state().diagnostics.front().code ==
-                         runtime::compileDiagnosticCodeId(
-                             runtime::CompileDiagnosticCode::UnsupportedNode),
-                 "unsupported preview retains the structured compiler diagnostic")) {
+                 "reachable text produces a real preview frame") ||
+        !require(previewController.state().diagnostics.empty(),
+                 "a text layer produces no preview diagnostics at all")) {
         return false;
+    }
+
+    // Visible in the viewer, asserted on the exact packed RGBA8 buffer the viewer paints rather
+    // than on the activity state alone: a text layer whose frame existed but held no ink would
+    // satisfy every check above and still show nothing.
+    {
+        const auto frame = previewController.state().frame;
+        const auto buffer = frame == nullptr ? std::nullopt : frame->displayBufferView();
+        std::size_t inkPixels = 0;
+        if (buffer.has_value()) {
+            for (const auto& pixel : buffer->pixels) {
+                inkPixels += pixel.alpha == 0 ? 0U : 1U;
+            }
+        }
+        if (!require(buffer.has_value() && inkPixels > 0 && inkPixels < buffer->pixels.size(),
+                     "the viewer's own display buffer really carries glyph ink, covering part of "
+                     "the frame rather than none or all of it")) {
+            return false;
+        }
     }
 
     const auto* composition = session.composition();
@@ -457,13 +476,21 @@ parameterForRole(const bloom::document::Composition& composition,
         !require(restoredColor != nullptr &&
                      session.constantColorValue(restoredColor->id) == hdrColor,
                  "redo restores exact unclipped solid color truth") ||
+        // ADAPTED (task S3): this required the preview to stay Unsupported after later edits,
+        // because the composition still contained a text layer. Text renders now, so the
+        // composition
+        // -- one text layer and two solids -- must reach a real frame, and the viewer must be
+        // showing current pixels rather than retained previous ones.
         !require(waitUntil([&] {
-                     return previewController.state().activity == ui::PreviewActivity::Unsupported;
+                     return previewController.state().activity == ui::PreviewActivity::Ready &&
+                            previewController.state().frame != nullptr;
                  }),
-                 "unsupported Text remains explicit after later edits") ||
-        !require(viewer.accessibleDescription().contains(
+                 "a composition mixing text and solid layers keeps producing real frames") ||
+        !require(previewController.state().diagnostics.empty(),
+                 "and reports no diagnostics once text is renderable") ||
+        !require(!viewer.accessibleDescription().contains(
                      QStringLiteral("Previous composition pixels"), Qt::CaseInsensitive),
-                 "Viewer accessibility reports retained pixels as previous")) {
+                 "Viewer accessibility no longer reports retained previous pixels")) {
         return false;
     }
 

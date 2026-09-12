@@ -360,6 +360,50 @@ ImageStatus sourceOverLinearRec709SceneRow(const std::span<const Rgba32f> source
     return std::nullopt;
 }
 
+ImageStatus coverageSolidRow(const std::span<const std::uint8_t> coverage, const Rgba32f pixel,
+                             const std::span<Rgba32f> output) noexcept {
+    if (coverage.size() != output.size()) {
+        return ImageError::storageSizeMismatch(coverage.size_bytes(), output.size_bytes());
+    }
+    if (!supportedEnvironment()) {
+        return codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment);
+    }
+    if (pixel.alpha() == 0.0F) {
+        fillSolidRow(output, Rgba32f::transparent());
+        return std::nullopt;
+    }
+
+    const auto components = rawPixel(pixel);
+    for (std::size_t index = 0; index < coverage.size(); ++index) {
+        const auto sample = coverage[index];
+        // Exact at both ends: no coverage is exactly transparent and full coverage is exactly the
+        // solid pixel, with no multiply that could round either one away.
+        if (sample == 0) {
+            output[index] = Rgba32f::transparent();
+            continue;
+        }
+        if (sample == 255) {
+            output[index] = pixel;
+            continue;
+        }
+        const auto fraction = static_cast<double>(sample) / 255.0;
+        RawPixel scaled{};
+        for (std::size_t component = 0; component < scaled.size(); ++component) {
+            const auto value = checkedFloat(static_cast<double>(components[component]) * fraction);
+            if (!value.has_value()) {
+                return codeError(ImageErrorCode::NonFiniteResult);
+            }
+            scaled[component] = *value;
+        }
+        const auto scaledPixel = checkedProcessPixel(scaled);
+        if (!scaledPixel) {
+            return *scaledPixel.error();
+        }
+        output[index] = *scaledPixel.value();
+    }
+    return std::nullopt;
+}
+
 ImageStatus mapLinearRec709SceneToSrgbRow(const Rgba32fImageView source,
                                           const ImageWindow displayWindow,
                                           const std::int64_t outputY,

@@ -334,6 +334,27 @@ selected by artists for composition content are project assets and follow a sepa
 licensing, substitution, and missing-dependency workflow.
 
 
+### Timeline layer kinds
+
+The timeline's clip bar carries its layer's kind as a data-type color. Kind is also named in text by
+the row's own tooltip, so the color is a second channel rather than the only one.
+
+| Layer kind | Palette token |
+| --- | --- |
+| Solid | `DataComposition` |
+| Text | `DataClip` |
+| Unrecognized | `Muted` |
+
+Neither kind references media, and the data-type palette's five roles all name kinds of referenced
+media, so these two are the least-wrong available choices rather than literal matches. The rejections
+are on record: `DataImage` (`#3AA5F0`) is byte-identical to `AccentHover` and would make a clip read
+as a selected surface while swallowing the 1px `Accent` playhead crossing it; `DataSequence`
+(`#E0554E`) is byte-identical to `Error` and would make a clip read as failed; `DataAudio`
+(`#7C5CFF`) is a neighbouring purple to `DataComposition` and would not be told apart from a solid.
+`DataClip` is byte-identical to `Ok`, which is the remaining collision and the mildest one. Kit-owner
+gap: a `DataText` role would remove that collision. A future media-backed or pre-composition layer
+kind takes its own role here on the day it ships.
+
 ### Node socket kinds
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from

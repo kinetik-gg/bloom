@@ -331,7 +331,16 @@ by an explicit field or `abiFlags` entry.
 Component and profile IDs are unique. Every `profileBuilds.profileId` names a root profile. Every
 dependency names another component and may not name itself. Dependency records are direct edges;
 the complete transitive graph exists because every reached dependency, including vendored code,
-has its own component record. For each profile, components with a matching `profileBuild` form a
+has its own component record. That rule is about dependencies reached THROUGH this pipeline: a lock
+component carries a recipe, `profileBuilds`, a `consumerAbi`, and installed prefix artifacts the
+prefix manifest validates. Third-party content whose bytes are checked into this repository and
+compiled directly into a Bloom target has none of those and installs nothing, so the lock v1 shape
+cannot represent it without inventing a recipe; it is inventoried in `THIRD_PARTY_NOTICES.md`
+instead, and it still carries license text plus acquisition, license, and security review records --
+either beside the vendored files (`src/ui/kit/third_party/<component>/`) or, when the application's
+license catalog must ship its license text, in the same component-record shape under
+`dependencies/licenses/<component>/` with no lock entry. `dependencies/licenses/stb_truetype/` is
+that case and its own records state the determination. For each profile, components with a matching `profileBuild` form a
 closed acyclic dependency graph. Every provided capability has one component owner in that profile.
 Every production profile has at least one participating component and one qualification gate; every
 component has at least one profile build. A recipe owns a closed feature vocabulary, and each

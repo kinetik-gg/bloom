@@ -17,6 +17,8 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -26,6 +28,7 @@
 #include <QEnterEvent>
 #include <QImage>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointF>
@@ -34,6 +37,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <variant>
@@ -586,6 +590,109 @@ void testFocusedHoveredCellBorderIsAccentOnScreen(Expectations& expectations) {
                         "inside the panel, with no separate focus ring painted underneath it");
 }
 
+// Task S3: the Text Source group. Content, size, and color are real editable rows that read project
+// truth and commit through the session's own commands, and the Solid Source group is hidden while a
+// text layer is selected (and the other way round), so the two can never both claim a selection.
+void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Text Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    expectations.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Hello"), 48.0,
+                                             core::Color4d{0.25, 0.5, 0.75, 1.0}),
+                        "a text layer can be added for the text rows");
+    ui::PropertiesEditor properties(session);
+
+    auto* textPanel = properties.findChild<QWidget*>("textSourceProperties");
+    auto* solidPanel = properties.findChild<QWidget*>("solidColorProperties");
+    auto* content = properties.findChild<QLineEdit*>("textContentEditor");
+    auto* size = properties.findChild<ui::kit::KValueField*>("textSizeEditor");
+    auto* color = properties.findChild<ui::kit::KColorChip*>("textColorChip");
+    auto* font = properties.findChild<QLabel*>("textFontName");
+    expectations.expect(textPanel != nullptr && solidPanel != nullptr && content != nullptr &&
+                            size != nullptr && color != nullptr && font != nullptr,
+                        "the Text Source group exposes content, size, color, and font rows");
+    if (textPanel == nullptr || solidPanel == nullptr || content == nullptr || size == nullptr ||
+        color == nullptr || font == nullptr) {
+        return;
+    }
+
+    properties.resize(properties.sizeHint());
+    properties.show();
+    QCoreApplication::processEvents();
+    expectations.expect(textPanel->isVisible() && !solidPanel->isVisible(),
+                        "a text selection shows the Text Source group and hides the Solid one");
+    expectations.expect(content->text() == QStringLiteral("Hello") && size->value() == 48.0,
+                        "the rows read the authored content and em size from project truth");
+    expectations.expect(near(color->color().toQColor(), QColor::fromRgbF(0.25F, 0.5F, 0.75F), 2),
+                        "and the swatch reads the authored color");
+    expectations.expect(content->isEnabled() && size->isEnabled() && color->isEnabled(),
+                        "all three are editable, because a command exists for each");
+    expectations.expect(font->text().contains(QStringLiteral("DejaVu Sans")) &&
+                            font->text().contains(QStringLiteral("embedded")),
+                        "the font row names the one embedded face rather than offering a choice");
+
+    const auto historyBefore = stack.size();
+    content->setText(QStringLiteral("Edited"));
+    Q_EMIT content->editingFinished();
+    expectations.expect(stack.size() == historyBefore + 1,
+                        "committing the content field is exactly one history entry");
+    size->setValue(96.0);
+    expectations.expect(stack.size() == historyBefore + 2,
+                        "committing the size field is exactly one more");
+
+    const auto* textNode = [&]() -> const document::NodeRecord* {
+        const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary);
+        const auto nodeId =
+            layerId == nullptr ? std::nullopt : session.directSourceNodeForLayer(*layerId);
+        return nodeId.has_value() ? session.composition()->graph().findNode(*nodeId) : nullptr;
+    }();
+    expectations.expect(textNode != nullptr, "the selection still resolves its text source node");
+    if (textNode == nullptr) {
+        return;
+    }
+    const auto* contentParameter = session.parameterForSelection(document::kTextParameterRole);
+    const auto* sizeParameter = session.parameterForSelection(document::kTextSizeParameterRole);
+    expectations.expect(contentParameter != nullptr &&
+                            session.constantStringValue(contentParameter->id) ==
+                                QStringLiteral("Edited"),
+                        "the committed content reached project truth");
+    expectations.expect(sizeParameter != nullptr &&
+                            session.constantValue(sizeParameter->id) == 96.0,
+                        "and so did the committed size");
+
+    expectations.expect(session.setSelectedTextColor(core::Color4d{0.1, 0.2, 0.3, 0.5}),
+                        "the text color commits through its own session command");
+    const auto* colorParameter = session.parameterForSelection(document::kTextColorParameterRole);
+    expectations.expect(colorParameter != nullptr &&
+                            session.constantColorValue(colorParameter->id) ==
+                                core::Color4d{0.1, 0.2, 0.3, 0.5},
+                        "and reaches project truth with its alpha intact");
+    expectations.expect(
+        near(color->color().toQColor(), QColor::fromRgbF(0.1F, 0.2F, 0.3F, 0.5F), 2),
+        "and the swatch re-reads it after the snapshot change");
+
+    // Undone through the SESSION, not the bare stack: the session owns the snapshot every later
+    // command is based on, so undoing behind its back would leave it on a stale revision.
+    expectations.expect(session.undo(), "a text color edit is undoable");
+    const auto* colorAfterUndo = session.parameterForSelection(document::kTextColorParameterRole);
+    expectations.expect(colorAfterUndo != nullptr &&
+                            session.constantColorValue(colorAfterUndo->id) ==
+                                core::Color4d{0.25, 0.5, 0.75, 1.0},
+                        "and restores the previously authored color exactly");
+
+    // A solid selection swaps the groups back, which is what proves the two are mutually exclusive
+    // rather than both keyed off the shared "color" role.
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Plate"), core::Color4d{0.9, 0.1, 0.5, 1.0}),
+        "a solid layer can be added for the group swap");
+    QCoreApplication::processEvents();
+    expectations.expect(!textPanel->isVisible() && solidPanel->isVisible(),
+                        "selecting a solid hides the Text Source group and shows the Solid one");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -601,6 +708,7 @@ int main(int argc, char** argv) {
     testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
+    testTextSourceRowsEditThroughCommands(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";
         return 1;

@@ -10,19 +10,30 @@ commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
                                                    "No active composition");
     commands::OperationResult added;
     std::string_view nodeOutput = commands::kAddNodeOutput;
-    if (type_ == document::kTextSourceNodeType)
-        return commands::AddTextLayer(composition_, "Text", "Text", {}).apply(draft);
+    std::string_view boundaryOutput;
+    const document::Vec2d compositionCenter{composition->format().width() * 0.5,
+                                            composition->format().height() * 0.5};
     if (type_ == document::kSolidSourceNodeType) {
         constexpr std::array palette{
             core::Color4d{0.62, 0.08, 0.04, 1}, core::Color4d{0.04, 0.20, 0.72, 1},
             core::Color4d{0.06, 0.52, 0.16, 1}, core::Color4d{0.46, 0.07, 0.58, 1}};
         const auto number = composition->graph().layerOutputs().size();
-        added = commands::AddSolidLayer(
-                    composition_, "Solid " + std::to_string(number + 1),
-                    palette[number % palette.size()],
-                    {composition->format().width() * 0.5, composition->format().height() * 0.5})
+        added = commands::AddSolidLayer(composition_, "Solid " + std::to_string(number + 1),
+                                        palette[number % palette.size()], compositionCenter)
                     .apply(draft);
         nodeOutput = commands::kAddSolidLayerSolidNodeOutput;
+        boundaryOutput = commands::kAddSolidLayerLayerOutputNodeOutput;
+    } else if (type_ == document::kTextSourceNodeType) {
+        // Task S3: a text source is a structured layer exactly like a solid now, so it takes the
+        // same branch shape -- numbered default name, composition-centered position, and the same
+        // node/boundary output names resolved below -- instead of returning the command's result
+        // raw and leaving the editor with no node identity to select or place.
+        const auto number = composition->graph().layerOutputs().size();
+        added = commands::AddTextLayer(composition_, "Text " + std::to_string(number + 1), "Text",
+                                       compositionCenter)
+                    .apply(draft);
+        nodeOutput = commands::kAddTextLayerTextNodeOutput;
+        boundaryOutput = commands::kAddTextLayerLayerOutputNodeOutput;
     } else {
         added = commands::AddNode(composition_, type_, position_).apply(draft);
     }
@@ -38,8 +49,7 @@ commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
             node = *id;
             positions.emplace(*id, position_);
         }
-        if (type_ == document::kSolidSourceNodeType &&
-            item.name == commands::kAddSolidLayerLayerOutputNodeOutput)
+        if (!boundaryOutput.empty() && item.name == boundaryOutput)
             positions.emplace(*id, document::Vec2d{position_.x + 256, position_.y});
     }
     if (!node)

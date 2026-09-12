@@ -92,6 +92,7 @@ enum class NodeCardinality : std::uint8_t {
 
 enum class NodeLoweringKind {
     Solid,
+    Text,
     LayerOutput,
     LayerStack,
     CompositionOutput,

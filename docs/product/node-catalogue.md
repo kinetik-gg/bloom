@@ -36,7 +36,7 @@ level's dependencies.
 | Level | Planned nodes | Purpose |
 | --- | --- | --- |
 | `F0` | Solid Source | Deterministic finite RGBA source with explicit color-encoding identity |
-| `F0` | Text Source | Authorable text source; evaluation waits for portable font identity, shaping, and rasterization |
+| `F0` | Text Source | Authorable text source rendered on the portable CPU path: content, em size, and color with one embedded face and single-line layout; font identity, shaping, and layout contracts remain deferred |
 | `F0` | Layer Output | Explicit boundary that makes a graph result layer-addressable |
 | `F0` | Layer Stack | Stable ordered compositing inputs projected as Timeline rows |
 | `F0` | Composition Output | One explicit evaluation endpoint per composition |

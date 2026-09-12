@@ -3,12 +3,14 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 
 namespace bloom::ui {
 
 class CompositionSession;
 
 namespace kit {
+class KColorChip;
 class KValueField;
 } // namespace kit
 
@@ -23,6 +25,10 @@ class PropertiesEditor final : public QWidget {
     void configurePosition();
     void configureOpacity();
     void configureSolidColor();
+    // Task S3: the Text Source group (content, size, color). Shown exactly when the selection
+    // resolves a bloom.text-source, the same isKnownSource + schema-key test configureSolidColor()
+    // applies to a solid, so the two groups can never both claim a selection.
+    void configureTextSource();
     // Issue #120, decision 3: composition/document properties shown in place of an empty panel
     // when nothing is selected. Toggles documentSection_/selectionSection_ visibility and fills
     // documentSection_'s rows from composition()'s own read-only format/duration -- never a new
@@ -51,6 +57,16 @@ class PropertiesEditor final : public QWidget {
     kit::KValueField* solidColorAlpha_ = nullptr;
     QLabel* solidAlphaAssociation_ = nullptr;
     QLabel* solidColorEncoding_ = nullptr;
+
+    // Task S3's Text Source group. Content is a QLineEdit rather than a kit control because the kit
+    // has no string field; it commits on editingFinished/returnPressed, not per keystroke, so
+    // typing a word is one undo step instead of one per letter.
+    QWidget* textSourcePanel_ = nullptr;
+    QLineEdit* textContent_ = nullptr;
+    kit::KValueField* textSize_ = nullptr;
+    kit::KColorChip* textColor_ = nullptr;
+    QLabel* textColorKeyframe_ = nullptr;
+    QLabel* textFontName_ = nullptr;
 
     // The no-selection document/composition view (issue #120, decision 3).
     QWidget* documentSection_ = nullptr;

@@ -31,6 +31,10 @@ constexpr std::array kSolidSourceBindings{
 constexpr std::array kTextSourceBindings{
     ExpectedParameterBinding{bloom::document::kTextParameterRole,
                              bloom::document::kTextParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextSizeParameterRole,
+                             bloom::document::kTextSizeParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextColorParameterRole,
+                             bloom::document::kTextColorParameterSchemaKey},
 };
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,

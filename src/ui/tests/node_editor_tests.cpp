@@ -621,16 +621,19 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
     if (chip == nullptr) {
         return;
     }
-    // No command anywhere sets a color, so the chip must not offer a picker whose result nothing
-    // could commit -- the honesty rule, pinned.
-    expectations.expect(!chip->isEnabled(),
-                        "the chip is read-only: no command in src/commands sets a color");
-    expectations.expect(!chip->isPickerOpen(), "and it never opens its picker");
+    // ADAPTED (task S3): the chip was read-only because no command set a color. Both
+    // CompositionSession::setSelectedSolidColor() and setSelectedTextColor() now exist, so the
+    // honesty rule points the other way -- an enabled chip whose picker result really commits. What
+    // stays pinned is that the exact authoring value is still reported in text, because the swatch
+    // cannot show an HDR or negative channel.
+    expectations.expect(chip->isEnabled(), "the chip is editable: a command now sets a color");
+    expectations.expect(!chip->isPickerOpen(), "and it opens its picker only when asked");
     expectations.expect(chip->toolTip().contains(QStringLiteral("R 0.62")),
                         "the exact, unclipped authoring value travels in the tooltip, because an "
                         "8-bit swatch cannot show one honestly");
-    expectations.expect(chip->toolTip().contains(QStringLiteral("Read-only")),
-                        "and the tooltip says why the chip does not open");
+    expectations.expect(chip->toolTip().contains(QStringLiteral("[0, 1]")),
+                        "and the tooltip says what committing through the swatch would do to a "
+                        "value outside the displayable range");
 
     // A node that binds no parameters carries no rows at all.
     const auto stackNodeId = fixture.session.composition()->graph().layerStack().nodeId();

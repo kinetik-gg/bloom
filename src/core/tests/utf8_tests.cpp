@@ -149,6 +149,80 @@ void testUnsignedByteOrderingAndNoNormalization(ExpectationContext& expectations
                         "validation and ordering do not normalize canonically equivalent text");
 }
 
+// decodeUtf8Scalar() must accept exactly what isValidUtf8() accepts and fail at exactly the same
+// byte: the CPU text rasterizer validates the whole string once and then decodes it scalar by
+// scalar, so a disagreement between the two would be an unreachable-code failure in the middle of a
+// render (src/render/text_raster.cpp).
+void testScalarDecodingAgreesWithValidation(ExpectationContext& expectations) {
+    bool everyScalarRoundTrips = true;
+    std::uint32_t firstFailure = 0;
+    for (std::uint32_t scalar = 0; scalar <= 0x10FFFFU; ++scalar) {
+        if (scalar >= 0xD800U && scalar <= 0xDFFFU) {
+            continue;
+        }
+        const auto encoded = encodeScalar(scalar);
+        const auto decoded = bloom::core::decodeUtf8Scalar(encoded, 0);
+        if (!decoded.isValid() || decoded.length != encoded.size() ||
+            decoded.value != static_cast<char32_t>(scalar)) {
+            everyScalarRoundTrips = false;
+            firstFailure = scalar;
+            break;
+        }
+    }
+    expectations.expect(everyScalarRoundTrips,
+                        "every Unicode scalar decodes back to itself with its exact byte length "
+                        "(first failure U+" +
+                            std::to_string(firstFailure) + ")");
+
+    const std::array rejected{
+        bytes({0xC0, 0x80}),             // overlong NUL
+        bytes({0xC1, 0xBF}),             // overlong two-byte form
+        bytes({0xE0, 0x80, 0x80}),       // overlong three-byte form
+        bytes({0xED, 0xA0, 0x80}),       // UTF-16 high surrogate
+        bytes({0xF0, 0x80, 0x80, 0x80}), // overlong four-byte form
+        bytes({0xF4, 0x90, 0x80, 0x80}), // above U+10FFFF
+        bytes({0xF5, 0x80, 0x80, 0x80}), // lead byte out of range
+        bytes({0xE2, 0x82}),             // truncated three-byte sequence
+        bytes({0x80}),                   // lone continuation byte
+    };
+    bool rejectionsAgree = true;
+    for (const auto& sequence : rejected) {
+        if (bloom::core::isValidUtf8(sequence) ||
+            bloom::core::decodeUtf8Scalar(sequence, 0).isValid()) {
+            rejectionsAgree = false;
+            break;
+        }
+    }
+    expectations.expect(rejectionsAgree,
+                        "the decoder refuses every overlong, surrogate, out-of-range, truncated, "
+                        "and stray-continuation sequence the validator refuses");
+
+    const auto mixed = std::string("a") + bytes({0xC3, 0xA9}) + bytes({0xE2, 0x82, 0xAC}) +
+                       bytes({0xF0, 0x9F, 0x98, 0x80});
+    std::vector<char32_t> scalars;
+    std::size_t offset = 0;
+    while (offset < mixed.size()) {
+        const auto decoded = bloom::core::decodeUtf8Scalar(mixed, offset);
+        if (!decoded.isValid()) {
+            break;
+        }
+        scalars.push_back(decoded.value);
+        offset += decoded.length;
+    }
+    expectations.expect(offset == mixed.size() &&
+                            scalars == std::vector<char32_t>{U'a', U'é', U'€', U'\U0001F600'},
+                        "walking a mixed-width string consumes it exactly once, in order");
+
+    expectations.expect(
+        !bloom::core::decodeUtf8Scalar("abc", 3).isValid() &&
+            !bloom::core::decodeUtf8Scalar("", 0).isValid() &&
+            !bloom::core::decodeUtf8Scalar("abc", 99).isValid(),
+        "an offset at or past the end is a plain failure, never a read past the end");
+    expectations.expect(
+        bloom::core::decodeUtf8Scalar(mixed, 1) == bloom::core::Utf8Scalar{U'é', 2},
+        "decoding is positional: the same bytes at an interior offset decode alike");
+}
+
 } // namespace
 
 int main() {
@@ -156,5 +230,6 @@ int main() {
     testEveryUnicodeScalar(expectations);
     testBoundariesAndInvalidSequences(expectations);
     testUnsignedByteOrderingAndNoNormalization(expectations);
+    testScalarDecodingAgreesWithValidation(expectations);
     return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
