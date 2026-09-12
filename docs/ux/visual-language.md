@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Purpose
 
@@ -146,6 +146,12 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `EditorHeader` | `48` | An editor panel's header row |
 | `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
+| `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
+
+`MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
+and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
+applied to the row rather than to the popup window because a row that stopped short of the frame
+could not carry the full-width accent hover bar the State table requires.
 
 An editor panel's footer strip (task C1, item C5) is not a distinct token: it reuses `Control`
 (`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with

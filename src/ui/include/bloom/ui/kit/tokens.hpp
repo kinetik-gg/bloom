@@ -128,6 +128,11 @@ enum class Size : int {
     TimelineRow = 34,
     ScrollBar = 8,
     ScrollBarHover = 12,
+    // task S1, item 3: the narrowest a QMenu popup may be, roughly half again the width Bloom's
+    // shortest menus used to collapse to. Applied by kit::AltUnderlineProxyStyle to every menu ROW,
+    // because a menu's width is the widest row it holds -- forcing the popup window wider instead
+    // would leave its rows short of the frame, and a menu row's hover bar must be full width.
+    MenuMinWidth = 200,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }

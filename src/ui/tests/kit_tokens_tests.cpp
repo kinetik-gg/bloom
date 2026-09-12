@@ -123,6 +123,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Size::TimelineRow) == 34, "TimelineRow is 34");
     expectations.expect(kit::px(kit::Size::ScrollBar) == 8, "ScrollBar is 8");
     expectations.expect(kit::px(kit::Size::ScrollBarHover) == 12, "ScrollBar hover width is 12");
+    // task S1, item 3: the narrowest a menu popup may be.
+    expectations.expect(kit::px(kit::Size::MenuMinWidth) == 200, "MenuMinWidth is 200");
 }
 
 void testHairlinesLandOnWholePhysicalPixels(Expectations& expectations) {
