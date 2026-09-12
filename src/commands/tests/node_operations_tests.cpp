@@ -296,9 +296,9 @@ void testRemoveAndDissolve(TestContext& test) {
     exercise<DissolveNode>(test, fixture, *loose);
     const auto& dissolved = composition(fixture.document.snapshot());
     test.expect(!dissolved.graph().findNode(*loose) && !dissolved.nodeLayout().contains(*loose) &&
-                    // ADAPTED (task S4): a Layer Output node now owns five parameters, not two, so
-                    // dissolving one orphans five.
-                    dissolved.parameters().records().size() == count - 5 &&
+                    // ADAPTED (task S4, then blend modes): a Layer Output node now owns six
+                    // parameters, not two, so dissolving one orphans six.
+                    dissolved.parameters().records().size() == count - 6 &&
                     std::ranges::count_if(
                         dissolved.graph().edges(),
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,

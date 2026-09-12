@@ -38,19 +38,25 @@ using StepResult = std::optional<ReconstructionRejected>;
     return {.stage = stage, .compositionId = {}, .recordId = 0};
 }
 
-// One parameter the current Layer Output schema requires but version 1 did not persist, paired with
-// the default an upgraded node must receive. The defaults are exactly document::kDefaultAnchor,
-// kDefaultScale, and kDefaultRotationDegrees -- the identity transform -- so a version-1 file
-// evaluates after the upgrade to the pixels the version-1 build produced. They are read from the
-// document module rather than restated here, so a default can never drift between the registry, the
-// creation command, and this upgrade.
+// One parameter the current Layer Output schema requires but an older version did not persist,
+// paired with the default an upgraded node must receive. The defaults are exactly
+// document::kDefaultAnchor, kDefaultScale, kDefaultRotationDegrees, and kDefaultBlendModeValue --
+// the identity transform and Normal blending -- so an older file evaluates after the upgrade to the
+// pixels the build that wrote it produced. They are read from the document module rather than
+// restated here, so a default can never drift between the registry, the creation command, and this
+// upgrade.
+//
+// The table spans every version below the current one at once rather than one table per version
+// step, because the injection rule is already per-ROLE: a node that binds a role keeps its own
+// binding. A version-1 node therefore receives anchor, scale, rotation, and blendMode, and a
+// version-2 node receives only blendMode, from this one list.
 struct InjectedLayerOutputParameter final {
     std::string_view role;
     std::string_view schemaKey;
     document::ParameterValue defaultValue;
 };
 
-[[nodiscard]] std::array<InjectedLayerOutputParameter, 3> layerOutputV2Parameters() {
+[[nodiscard]] std::array<InjectedLayerOutputParameter, 4> injectedLayerOutputParameters() {
     return {{
         {document::kAnchorParameterRole, document::kAnchorParameterSchemaKey,
          document::kDefaultAnchor},
@@ -58,6 +64,8 @@ struct InjectedLayerOutputParameter final {
          document::kDefaultScale},
         {document::kRotationParameterRole, document::kRotationParameterSchemaKey,
          document::kDefaultRotationDegrees},
+        {document::kBlendModeParameterRole, document::kBlendModeParameterSchemaKey,
+         document::kDefaultBlendModeValue},
     }};
 }
 
@@ -72,7 +80,7 @@ struct InjectedLayerOutputParameter final {
 // inclusive-watermark rule Document's constructor enforces still holds. A node that somehow already
 // binds one of the new roles keeps its own binding.
 [[nodiscard]] StepResult upgradeDecodedNodeSchemas(DecodedDocumentEnvelope& envelope) {
-    const auto injected = layerOutputV2Parameters();
+    const auto injected = injectedLayerOutputParameters();
     auto& highWater = envelope.highWater.parameter;
     for (auto& composition : envelope.compositions) {
         for (auto& node : composition.graph.nodes) {

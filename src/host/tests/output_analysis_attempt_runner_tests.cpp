@@ -97,6 +97,7 @@ constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(0x100c);
 constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(0x100d);
 constexpr auto kScaleParameterId = document::ParameterId::fromRaw(0x100e);
 constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x100f);
+constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
 
 // A trivial one-node (solid -> composition output) plan: a real, directly evaluable composition,
 // unlike bloom/output/tests/flat_exr_test_support.hpp's shellPlan() (which evaluates a plan only
@@ -119,7 +120,8 @@ constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x100f);
         runtime::CompiledVec2Parameter{kAnchorParameterId, document::kDefaultAnchor},
         runtime::CompiledVec2Parameter{kScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
+        bloom::core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNodeId, {{kSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

@@ -11,6 +11,7 @@ class CompositionSession;
 
 namespace kit {
 class KColorChip;
+class KDropdown;
 class KValueField;
 } // namespace kit
 
@@ -27,6 +28,7 @@ class PropertiesEditor final : public QWidget {
     void configureScale();
     void configureRotation();
     void configureOpacity();
+    void configureBlendMode();
     void configureSolidColor();
     // Task S3: the Text Source group (content, size, color). Shown exactly when the selection
     // resolves a bloom.text-source, the same isKnownSource + schema-key test configureSolidColor()
@@ -59,6 +61,11 @@ class PropertiesEditor final : public QWidget {
     QLabel* rotationKeyframe_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     QLabel* opacityKeyframe_ = nullptr;
+    // The Appearance group's second row. A KDropdown rather than a KValueField because the value is
+    // a closed vocabulary, not a number, and it carries no keyframe indicator because the schema
+    // declares the blend mode non-animatable -- an indicator column that can never light up would
+    // promise a capability that does not exist.
+    kit::KDropdown* blendMode_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
     QLabel* solidColorKeyframe_ = nullptr;
     // Task P3: the RGBA cells replacing the former read-only solidColorValue_ label.

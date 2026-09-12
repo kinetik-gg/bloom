@@ -14,6 +14,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/core/artifact_target_key.hpp
+            include/bloom/core/blend_mode.hpp
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp

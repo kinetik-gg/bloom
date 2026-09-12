@@ -64,6 +64,9 @@ inline constexpr ParameterId kFirstScaleId = ParameterId::fromRaw(66);
 inline constexpr ParameterId kSecondScaleId = ParameterId::fromRaw(67);
 inline constexpr ParameterId kFirstRotationId = ParameterId::fromRaw(68);
 inline constexpr ParameterId kSecondRotationId = ParameterId::fromRaw(69);
+// ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+inline constexpr ParameterId kFirstBlendModeId = ParameterId::fromRaw(70);
+inline constexpr ParameterId kSecondBlendModeId = ParameterId::fromRaw(71);
 
 class TestContext final {
   public:
@@ -109,6 +112,7 @@ inline void requireFixture(const bool condition, const std::string_view message)
                            {std::string(document::kScaleParameterRole), kFirstScaleId},
                            {std::string(document::kRotationParameterRole), kFirstRotationId},
                            {std::string(document::kOpacityParameterRole), kOpacityId},
+                           {std::string(document::kBlendModeParameterRole), kFirstBlendModeId},
                        },
                        document::kLayerOutputNodeSchemaVersion}),
         "fixture first Layer Output node must be accepted");
@@ -121,6 +125,7 @@ inline void requireFixture(const bool condition, const std::string_view message)
                            {std::string(document::kScaleParameterRole), kSecondScaleId},
                            {std::string(document::kRotationParameterRole), kSecondRotationId},
                            {std::string(document::kOpacityParameterRole), kSecondOpacityId},
+                           {std::string(document::kBlendModeParameterRole), kSecondBlendModeId},
                        },
                        document::kLayerOutputNodeSchemaVersion}),
         "fixture second Layer Output node must be accepted");
@@ -164,12 +169,12 @@ inline void requireFixture(const bool condition, const std::string_view message)
                        {kSecondPositionId, std::string(document::kPositionParameterSchemaKey),
                         ConstantValueSource{Vec2d{0.0, 0.0}}}),
                    "fixture second position parameter must be accepted");
-    // The three transform breadth parameters every Layer Output now binds. Both layers carry them
-    // at their schema defaults -- the identity transform -- so a fixture that says nothing about
-    // the transform behaves exactly as it did before task S4.
-    for (const auto& [anchorId, scaleId, rotationId] :
-         {std::tuple{kFirstAnchorId, kFirstScaleId, kFirstRotationId},
-          std::tuple{kSecondAnchorId, kSecondScaleId, kSecondRotationId}}) {
+    // The three transform breadth parameters and the blend mode every Layer Output now binds. Both
+    // layers carry them at their schema defaults -- the identity transform and Normal blending --
+    // so a fixture that says nothing about either behaves exactly as it did before task S4.
+    for (const auto& [anchorId, scaleId, rotationId, blendModeId] :
+         {std::tuple{kFirstAnchorId, kFirstScaleId, kFirstRotationId, kFirstBlendModeId},
+          std::tuple{kSecondAnchorId, kSecondScaleId, kSecondRotationId, kSecondBlendModeId}}) {
         requireFixture(composition.parameters().insert(
                            {anchorId, std::string(document::kAnchorParameterSchemaKey),
                             ConstantValueSource{document::kDefaultAnchor}}),
@@ -182,6 +187,10 @@ inline void requireFixture(const bool condition, const std::string_view message)
                            {rotationId, std::string(document::kRotationParameterSchemaKey),
                             ConstantValueSource{document::kDefaultRotationDegrees}}),
                        "fixture rotation parameter must be accepted");
+        requireFixture(composition.parameters().insert(
+                           {blendModeId, std::string(document::kBlendModeParameterSchemaKey),
+                            ConstantValueSource{document::kDefaultBlendModeValue}}),
+                       "fixture blend mode parameter must be accepted");
     }
 
     Project project(kProjectId, "Original Project");

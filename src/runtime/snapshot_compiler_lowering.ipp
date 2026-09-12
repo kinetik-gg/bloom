@@ -303,6 +303,16 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto* scaleBinding = findParameterBinding(node, kScaleParameterRole);
     const auto* rotationBinding = findParameterBinding(node, kRotationParameterRole);
     const auto* opacityBinding = findParameterBinding(node, kOpacityParameterRole);
+    const auto* blendModeBinding = findParameterBinding(node, kBlendModeParameterRole);
+    // The blend mode lowers like CompiledText's three values: a validated constant read straight
+    // off the parameter store, not a curve source, because the schema declares it non-animatable.
+    // An integer naming no implemented mode cannot reach here -- ParameterStore refuses it on
+    // insert and document validation refuses it on publication -- so failing to resolve one is a
+    // topology failure, exactly as a missing transform binding is.
+    const auto* storedBlendMode = parameterConstant<std::int64_t>(blendModeBinding);
+    const auto blendMode = storedBlendMode == nullptr
+                               ? std::nullopt
+                               : core::blendModeFromStoredValue(*storedBlendMode);
     const auto position = compiledVec2Parameter(positionBinding);
     const auto anchor = compiledVec2Parameter(anchorBinding);
     const auto scale = compiledVec2Parameter(scaleBinding);
@@ -310,15 +320,22 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto opacity = compiledScalarParameter(opacityBinding);
     if (!input || boundary == layerOutputs_.end() || positionBinding == nullptr ||
         anchorBinding == nullptr || scaleBinding == nullptr || rotationBinding == nullptr ||
-        opacityBinding == nullptr || !position.has_value() || !anchor.has_value() ||
-        !scale.has_value() || !rotation.has_value() || !opacity.has_value()) {
+        opacityBinding == nullptr || blendModeBinding == nullptr || !position.has_value() ||
+        !anchor.has_value() || !scale.has_value() || !rotation.has_value() ||
+        !opacity.has_value() || !blendMode.has_value()) {
         addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledLayerOutput{node.id,   boundary->second->layerId,
-                                        *input,   *position,
-                                        *anchor,  *scale,
-                                        *rotation, *opacity};
+    return runtime::CompiledLayerOutput{node.id,
+                                        boundary->second->layerId,
+                                        *input,
+                                        *position,
+                                        *anchor,
+                                        *scale,
+                                        *rotation,
+                                        *opacity,
+                                        blendModeBinding->parameterId,
+                                        *blendMode};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

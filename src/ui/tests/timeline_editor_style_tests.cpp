@@ -5,6 +5,7 @@
 // every other widget test in this suite.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
@@ -40,11 +42,13 @@
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWidget>
 
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -623,7 +627,76 @@ void testReservedToggleColumnsAreDisabledWithHonestTooltips(Expectations& expect
     finishFixture(fixture);
 }
 
-// Blending and Parent are real KDropdowns, disabled, each carrying its single honest value.
+// The Blending row authors the layer it DRAWS, not the selection: a row is re-pointed on every
+// scroll step and must never have to move the selection to change a layer's blending. With two
+// layers selected as one, picking a mode in the second row must reach the second layer.
+void testBlendingRowAuthorsTheLayerItDraws(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Blending Commit Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("Top"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("Bottom"),
+                                        core::Color4d{0.4, 0.3, 0.2, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    const auto entries = fixture.session.composition()->graph().layerStack().entries();
+    const auto rows = editor->findChildren<ui::kit::KDropdown*>("layerBlendingDropdown");
+    expectations.expect(entries.size() == 2 && rows.size() >= 2,
+                        "two stacked layers give two pooled rows, each with its own dropdown");
+    if (entries.size() != 2 || rows.size() < 2) {
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+    // The pool is filled top-down from the first visible row, so rows[i] draws entries[i].
+    const auto secondLayer = entries[1].layerId;
+    fixture.session.selectLayer(entries[0].layerId);
+
+    int multiplyRow = -1;
+    for (int index = 0; index < rows[1]->count(); ++index) {
+        if (rows[1]->itemData(index).value<std::int64_t>() ==
+            core::blendModeStoredValue(core::BlendMode::Multiply)) {
+            multiplyRow = index;
+        }
+    }
+    expectations.expect(multiplyRow >= 0, "the vocabulary includes Multiply");
+    if (multiplyRow < 0) {
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    rows[1]->setCurrentIndex(multiplyRow);
+    expectations.expect(fixture.session.blendModeForLayer(secondLayer) == core::BlendMode::Multiply,
+                        "the second row authors the second layer, not the selected one");
+    expectations.expect(fixture.session.blendModeForLayer(entries[0].layerId) ==
+                            core::kDefaultBlendMode,
+                        "and leaves the selected layer's own blending alone");
+    expectations.expect(fixture.session.canUndo() && fixture.session.undo() &&
+                            fixture.session.blendModeForLayer(secondLayer) ==
+                                core::kDefaultBlendMode,
+                        "the edit is one undoable command");
+    // Rebuilding off snapshotChanged is what makes undo visible in the row itself rather than only
+    // in the document.
+    const auto refreshed = editor->findChildren<ui::kit::KDropdown*>("layerBlendingDropdown");
+    expectations.expect(refreshed.size() >= 2 &&
+                            refreshed[1]->currentText() ==
+                                ui::blendModeDisplayName(core::kDefaultBlendMode),
+                        "and the row follows the undone document");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// ADAPTED (blend modes): this pinned BOTH dropdowns as disabled placeholders carrying one honest
+// value. Blending is a real Layer Output parameter with a real command behind it now, so what is
+// pinned for it is the opposite property -- enabled, carrying the whole implemented vocabulary in
+// core::kBlendModes order, starting at the layer's authored mode. Parent is still a placeholder and
+// its half of the case is unchanged; the row-height assertion covers both exactly as before.
 void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Blending Parent Test"));
@@ -645,10 +718,23 @@ void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
         return;
     }
 
-    expectations.expect(!blending->isEnabled() &&
-                            blending->currentText() == QStringLiteral("Normal"),
-                        "Blending shows the one honest value \"Normal\", disabled");
-    expectations.expect(!blending->toolTip().isEmpty(), "Blending's disabled state is explained");
+    expectations.expect(blending->isEnabled() &&
+                            blending->count() == static_cast<int>(bloom::core::kBlendModes.size()),
+                        "Blending is enabled and offers every implemented blend mode");
+    bool vocabularyInOrder = blending->count() == static_cast<int>(core::kBlendModes.size());
+    for (std::size_t index = 0; index < core::kBlendModes.size() && vocabularyInOrder; ++index) {
+        vocabularyInOrder = blending->itemText(static_cast<int>(index)) ==
+                                ui::blendModeDisplayName(core::kBlendModes[index]) &&
+                            blending->itemData(static_cast<int>(index)).value<std::int64_t>() ==
+                                core::blendModeStoredValue(core::kBlendModes[index]);
+    }
+    expectations.expect(vocabularyInOrder,
+                        "each row carries its mode's shared display name and stored value, in "
+                        "core::kBlendModes order");
+    expectations.expect(blending->currentText() ==
+                            ui::blendModeDisplayName(core::kDefaultBlendMode),
+                        "a newly created layer's row starts at its authored Normal");
+    expectations.expect(!blending->toolTip().isEmpty(), "Blending explains what it does");
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
                         "Parent shows the one honest value \"None\", disabled");
     expectations.expect(!parent->toolTip().isEmpty(), "Parent's disabled state is explained");
@@ -1000,6 +1086,7 @@ int main(int argc, char** argv) {
         testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
         testReservedToggleColumnsAreDisabledWithHonestTooltips(expectations);
         testBlendingAndParentAreDisabledKDropdowns(expectations);
+        testBlendingRowAuthorsTheLayerItDraws(expectations);
         testKindHasNoColumnButStaysReadable(expectations);
         testLayerStackIsNoLongerAnItemView(expectations);
         testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);

@@ -31,6 +31,11 @@ enum class ParameterValueKind {
     Vec2d,
     Float64,
     String,
+    // A small signed integer. Today's only use is an enumeration stored under its own closed
+    // mapping (the Layer Output blend mode), which is why there is no separate "Enum" kind: the
+    // stored value IS an integer, and the schema key -- not the value kind -- is what names the
+    // enumeration the integer belongs to.
+    Integer,
 };
 
 struct InputPortDefinition {

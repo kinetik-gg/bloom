@@ -27,6 +27,7 @@ struct SolidOutputIds final {
     ParameterId scaleParameterId;
     ParameterId rotationParameterId;
     ParameterId opacityParameterId;
+    ParameterId blendModeParameterId;
     EdgeId solidToLayerEdgeId;
     EdgeId layerToStackEdgeId;
 };
@@ -53,11 +54,14 @@ template <typename Id, std::size_t LeftSize, std::size_t RightSize>
         result.outputId<ParameterId>(kAddSolidLayerRotationParameterOutput);
     const auto opacityParameterId =
         result.outputId<ParameterId>(kAddSolidLayerOpacityParameterOutput);
+    const auto blendModeParameterId =
+        result.outputId<ParameterId>(kAddSolidLayerBlendModeParameterOutput);
     const auto solidToLayerEdgeId = result.outputId<EdgeId>(kAddSolidLayerSolidToLayerEdgeOutput);
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddSolidLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !solidNodeId || !layerOutputNodeId || !colorParameterId ||
         !positionParameterId || !anchorParameterId || !scaleParameterId || !rotationParameterId ||
-        !opacityParameterId || !solidToLayerEdgeId || !layerToStackEdgeId) {
+        !opacityParameterId || !blendModeParameterId || !solidToLayerEdgeId ||
+        !layerToStackEdgeId) {
         return std::nullopt;
     }
     return SolidOutputIds{*layerId,
@@ -70,6 +74,7 @@ template <typename Id, std::size_t LeftSize, std::size_t RightSize>
                           *scaleParameterId,
                           *rotationParameterId,
                           *opacityParameterId,
+                          *blendModeParameterId,
                           *solidToLayerEdgeId,
                           *layerToStackEdgeId};
 }
@@ -93,6 +98,7 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
             {std::string(document::kScaleParameterRole), ids.scaleParameterId},
             {std::string(document::kRotationParameterRole), ids.rotationParameterId},
             {std::string(document::kOpacityParameterRole), ids.opacityParameterId},
+            {std::string(document::kBlendModeParameterRole), ids.blendModeParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };
@@ -115,9 +121,9 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
         std::string(document::kOpacityParameterSchemaKey),
         ConstantValueSource{opacityValue},
     };
-    // A newly created layer always starts at the identity transform: the command takes no anchor,
-    // scale, or rotation argument, so these three are pinned to their schema defaults rather than
-    // to anything the caller passed.
+    // A newly created layer always starts at the identity transform and Normal blending: the
+    // command takes no anchor, scale, rotation, or blend-mode argument, so these four are pinned to
+    // their schema defaults rather than to anything the caller passed.
     const ParameterRecord expectedAnchorParameter{
         ids.anchorParameterId,
         std::string(document::kAnchorParameterSchemaKey),
@@ -132,6 +138,11 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
         ids.rotationParameterId,
         std::string(document::kRotationParameterSchemaKey),
         ConstantValueSource{document::kDefaultRotationDegrees},
+    };
+    const ParameterRecord expectedBlendModeParameter{
+        ids.blendModeParameterId,
+        std::string(document::kBlendModeParameterSchemaKey),
+        ConstantValueSource{document::kDefaultBlendModeValue},
     };
     const EdgeRecord expectedSolidToLayerEdge{
         ids.solidToLayerEdgeId,
@@ -170,10 +181,13 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
     const auto* anchorParameter = value.parameters().find(ids.anchorParameterId);
     const auto* scaleParameter = value.parameters().find(ids.scaleParameterId);
     const auto* rotationParameter = value.parameters().find(ids.rotationParameterId);
-    test.expect(anchorParameter != nullptr && *anchorParameter == expectedAnchorParameter &&
-                    scaleParameter != nullptr && *scaleParameter == expectedScaleParameter &&
-                    rotationParameter != nullptr && *rotationParameter == expectedRotationParameter,
-                "a new solid layer starts at the identity transform");
+    const auto* blendModeParameter = value.parameters().find(ids.blendModeParameterId);
+    test.expect(
+        anchorParameter != nullptr && *anchorParameter == expectedAnchorParameter &&
+            scaleParameter != nullptr && *scaleParameter == expectedScaleParameter &&
+            rotationParameter != nullptr && *rotationParameter == expectedRotationParameter &&
+            blendModeParameter != nullptr && *blendModeParameter == expectedBlendModeParameter,
+        "a new solid layer starts at the identity transform and Normal blending");
     test.expect(std::ranges::find(value.graph().edges(), expectedSolidToLayerEdge) !=
                     value.graph().edges().end(),
                 "solid source edge should preserve exact ports and identity");
@@ -227,18 +241,21 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
         result.outputId<ParameterId>(kAddTextLayerRotationParameterOutput);
     const auto opacityParameterId =
         result.outputId<ParameterId>(kAddTextLayerOpacityParameterOutput);
+    const auto blendModeParameterId =
+        result.outputId<ParameterId>(kAddTextLayerBlendModeParameterOutput);
     const auto textToLayerEdgeId = result.outputId<EdgeId>(kAddTextLayerTextToLayerEdgeOutput);
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
         !sizeParameterId || !colorParameterId || !positionParameterId || !anchorParameterId ||
-        !scaleParameterId || !rotationParameterId || !opacityParameterId || !textToLayerEdgeId ||
-        !layerToStackEdgeId) {
-        test.fail("text branch should return all fourteen durable IDs");
+        !scaleParameterId || !rotationParameterId || !opacityParameterId || !blendModeParameterId ||
+        !textToLayerEdgeId || !layerToStackEdgeId) {
+        test.fail("text branch should return all fifteen durable IDs");
         return;
     }
-    const std::array textParameters{*contentParameterId,  *sizeParameterId,   *colorParameterId,
-                                    *positionParameterId, *anchorParameterId, *scaleParameterId,
-                                    *rotationParameterId, *opacityParameterId};
+    const std::array textParameters{
+        *contentParameterId,  *sizeParameterId,    *colorParameterId,
+        *positionParameterId, *anchorParameterId,  *scaleParameterId,
+        *rotationParameterId, *opacityParameterId, *blendModeParameterId};
     test.expect(std::ranges::adjacent_find(textParameters) == textParameters.end(),
                 "every parameter in a text branch has its own identity");
 
@@ -295,8 +312,9 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
                     value.parameters().find(*anchorParameterId) != nullptr &&
                     value.parameters().find(*scaleParameterId) != nullptr &&
                     value.parameters().find(*rotationParameterId) != nullptr &&
-                    value.parameters().find(*opacityParameterId) != nullptr,
-                "a text layer owns the same five Layer Output parameters a solid does");
+                    value.parameters().find(*opacityParameterId) != nullptr &&
+                    value.parameters().find(*blendModeParameterId) != nullptr,
+                "a text layer owns the same six Layer Output parameters a solid does");
 
     test.expect(stack.size() == 1 && stack.canUndo(),
                 "text layer creation is exactly one history entry");
@@ -406,10 +424,10 @@ void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto result = stack.execute(std::move(add));
     const auto ids = solidOutputIds(result);
     if (!ids) {
-        test.fail("AddSolidLayer should expose all twelve typed durable IDs");
+        test.fail("AddSolidLayer should expose all thirteen typed durable IDs");
         return;
     }
-    test.expect(result.changed() && result.outputs.size() == 12 &&
+    test.expect(result.changed() && result.outputs.size() == 13 &&
                     document.snapshot().project().validate().ok(),
                 "AddSolidLayer should publish one valid topology and every durable ID");
     expectSolidState(test, document.snapshot(), *ids, "Plate", color, Vec2d{320.0, 180.0}, 0.75);
@@ -430,7 +448,7 @@ void testPublishedSolidBranchIdsAreNeverReused(TestContext& test) {
                                     1.0);
     const auto firstIds = solidOutputIds(stack.execute(std::move(firstAdd)));
     if (!firstIds) {
-        test.fail("first solid branch should return all twelve durable IDs");
+        test.fail("first solid branch should return all thirteen durable IDs");
         return;
     }
     test.expect(stack.undo().changed(), "published solid branch should be undoable");
@@ -440,7 +458,7 @@ void testPublishedSolidBranchIdsAreNeverReused(TestContext& test) {
         kCompositionId, "Replacement", core::Color4d{0.2, 0.3, 0.4, 1.0}, Vec2d{30.0, 40.0}, 0.5);
     const auto replacementIds = solidOutputIds(stack.execute(std::move(replacementAdd)));
     if (!replacementIds) {
-        test.fail("replacement solid branch should return all twelve durable IDs");
+        test.fail("replacement solid branch should return all thirteen durable IDs");
         return;
     }
 

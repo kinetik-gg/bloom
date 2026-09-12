@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/core/blend_mode.hpp>
+
 #include <QString>
 
 namespace bloom::core {
@@ -41,6 +43,13 @@ class CompositionSession;
 // context menu): same default numbered name derived from the composition's own existing layers,
 // same next built-in reference-linear-sRGB proof color, same single command transaction. Returns
 // what CompositionSession::addSolidLayer()/addTextLayer() returned.
+// The artist-facing name of one blend mode -- "Normal", "Add", "Multiply", ... -- shown by the
+// timeline's Blending dropdown, the Properties Appearance row, and the Layer node card. One
+// definition, for the same reason parameterSourceDescription() is one definition: three surfaces
+// offering the same vocabulary must offer the same words, and core::kBlendModes already fixes the
+// order they appear in.
+[[nodiscard]] QString blendModeDisplayName(core::BlendMode mode);
+
 [[nodiscard]] bool addDefaultSolidLayer(CompositionSession& session);
 [[nodiscard]] bool addDefaultTextLayer(CompositionSession& session);
 

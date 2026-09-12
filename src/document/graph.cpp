@@ -47,6 +47,8 @@ constexpr std::array kLayerOutputBindings{
                              bloom::document::kRotationParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kOpacityParameterRole,
                              bloom::document::kOpacityParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kBlendModeParameterRole,
+                             bloom::document::kBlendModeParameterSchemaKey},
 };
 
 [[nodiscard]] std::span<const ExpectedParameterBinding>

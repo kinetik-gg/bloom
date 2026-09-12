@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -156,20 +157,23 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "the text schema names no font");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
-    // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
-    // assertion now covers all five rather than the original pair -- the property it pins is
-    // unchanged (animation support is declared per parameter, and a source parameter declares
-    // none).
-    expectations.expect(layer != nullptr && layer->parameters.size() == 5 &&
-                            std::ranges::all_of(layer->parameters,
+    // ADAPTED (task S4, then blend modes): the Layer Output schema grew from two parameters to
+    // five and then to six, so this assertion covers all six rather than the original pair -- the
+    // property it pins is unchanged (animation support is declared per parameter, and a source
+    // parameter declares none). The blend mode is the first Layer Output parameter that declares
+    // NO animation support, which is itself part of the contract: the five continuous values are
+    // animatable and the discrete one is not.
+    expectations.expect(layer != nullptr && layer->parameters.size() == 6 &&
+                            std::ranges::all_of(std::span(layer->parameters).first(5),
                                                 [](const auto& parameter) {
                                                     return parameter.supportsAnimation;
                                                 }) &&
-                            solid != nullptr && !solid->parameters.front().supportsAnimation &&
-                            text != nullptr && !text->parameters.front().supportsAnimation,
+                            !layer->parameters[5].supportsAnimation && solid != nullptr &&
+                            !solid->parameters.front().supportsAnimation && text != nullptr &&
+                            !text->parameters.front().supportsAnimation,
                         "animation support is an explicit per-parameter evaluator capability");
     expectations.expect(
-        layer != nullptr && layer->parameters.size() == 5 &&
+        layer != nullptr && layer->parameters.size() == 6 &&
             layer->parameters[0].role == document::kPositionParameterRole &&
             layer->parameters[0].schemaKey == document::kPositionParameterSchemaKey &&
             layer->parameters[0].valueKind == runtime::ParameterValueKind::Vec2d &&
@@ -184,18 +188,23 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             layer->parameters[3].valueKind == runtime::ParameterValueKind::Float64 &&
             layer->parameters[4].role == document::kOpacityParameterRole &&
             layer->parameters[4].schemaKey == document::kOpacityParameterSchemaKey &&
-            layer->parameters[4].valueKind == runtime::ParameterValueKind::Float64,
-        "the Layer Output schema is exactly position, anchor, scale, rotation, and opacity, in the "
-        "registered order");
-    expectations.expect(layer != nullptr && layer->parameters.size() == 5 &&
+            layer->parameters[4].valueKind == runtime::ParameterValueKind::Float64 &&
+            layer->parameters[5].role == document::kBlendModeParameterRole &&
+            layer->parameters[5].schemaKey == document::kBlendModeParameterSchemaKey &&
+            layer->parameters[5].valueKind == runtime::ParameterValueKind::Integer,
+        "the Layer Output schema is exactly position, anchor, scale, rotation, opacity, and blend "
+        "mode, in the registered order");
+    expectations.expect(layer != nullptr && layer->parameters.size() == 6 &&
                             layer->parameters[1].defaultValue ==
                                 document::ParameterValue{document::kDefaultAnchor} &&
                             layer->parameters[2].defaultValue ==
                                 document::ParameterValue{document::kDefaultScale} &&
                             layer->parameters[3].defaultValue ==
-                                document::ParameterValue{document::kDefaultRotationDegrees},
-                        "the transform defaults are the identity transform: centre anchor, unit "
-                        "scale, no rotation");
+                                document::ParameterValue{document::kDefaultRotationDegrees} &&
+                            layer->parameters[5].defaultValue ==
+                                document::ParameterValue{document::kDefaultBlendModeValue},
+                        "the transform defaults are the identity transform -- centre anchor, unit "
+                        "scale, no rotation -- and the blend mode defaults to Normal");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,
                         "registration is closed after freeze");

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
@@ -34,6 +35,14 @@ inline constexpr std::string_view kScaleParameterSchemaKey = "bloom.transform.sc
 // identically but are distinct authored values so a rotation curve can wind past a full turn.
 inline constexpr std::string_view kRotationParameterSchemaKey = "bloom.transform.rotation";
 inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opacity";
+// How the layer combines with what is beneath it in the stack. The value kind is a small integer
+// carrying core::BlendMode's own durable mapping (Normal = 0; see bloom/core/blend_mode.hpp and
+// docs/architecture/color-management.md, "Blend modes"), not a name: a stored name would make every
+// saved document depend on a spelling, and the enumeration is closed and owned by Bloom. NOT
+// animatable -- a blend mode is a discrete choice with no meaningful value between two modes, so
+// neither isScalarAnimatableSchemaKey() nor isVec2AnimatableSchemaKey() accepts it and no curve can
+// be created over it.
+inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.blend-mode";
 
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
 // Evaluation converts them to the canonical premultiplied image representation. The text color
@@ -65,6 +74,11 @@ struct Vec2d {
 inline constexpr Vec2d kDefaultAnchor{};
 inline constexpr Vec2d kDefaultScale{1.0, 1.0};
 inline constexpr double kDefaultRotationDegrees = 0.0;
+// The blend-mode default, in the same one place and for the same reason: Normal, stored as the
+// integer core::BlendMode's mapping gives it, so a newly authored layer and an upgraded version-1
+// or version-2 Layer Output agree exactly.
+inline constexpr std::int64_t kDefaultBlendModeValue =
+    core::blendModeStoredValue(core::kDefaultBlendMode);
 
 // The animatable schema set, split by the curve value kind each member requires. These three
 // predicates are the single authority every layer asks -- document validation, the animation

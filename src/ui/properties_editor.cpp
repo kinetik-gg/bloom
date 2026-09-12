@@ -7,11 +7,13 @@
 
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -27,10 +29,12 @@
 #include <QPalette>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -76,16 +80,16 @@ QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* la
 // exists for a narrower purpose (a field-local "X"/"Y" prefix inside the cell itself), so the row's
 // OUTER label column, which names the whole parameter, is measured independently here.
 int propertyLabelColumnWidth() {
-    static const std::array<QString, 17> kLabels{
-        PropertiesEditor::tr("Position"),     PropertiesEditor::tr("Anchor"),
-        PropertiesEditor::tr("Scale"),        PropertiesEditor::tr("Rotation"),
-        PropertiesEditor::tr("Opacity"),      PropertiesEditor::tr("RGBA"),
-        PropertiesEditor::tr("Alpha"),        PropertiesEditor::tr("Encoding"),
-        PropertiesEditor::tr("Name"),         PropertiesEditor::tr("Format"),
-        PropertiesEditor::tr("Frame Rate"),   PropertiesEditor::tr("Duration"),
-        PropertiesEditor::tr("Pixel Aspect"), PropertiesEditor::tr("Content"),
-        PropertiesEditor::tr("Size"),         PropertiesEditor::tr("Color"),
-        PropertiesEditor::tr("Font"),
+    static const std::array<QString, 18> kLabels{
+        PropertiesEditor::tr("Position"), PropertiesEditor::tr("Anchor"),
+        PropertiesEditor::tr("Scale"),    PropertiesEditor::tr("Rotation"),
+        PropertiesEditor::tr("Opacity"),  PropertiesEditor::tr("Blending"),
+        PropertiesEditor::tr("RGBA"),     PropertiesEditor::tr("Alpha"),
+        PropertiesEditor::tr("Encoding"), PropertiesEditor::tr("Name"),
+        PropertiesEditor::tr("Format"),   PropertiesEditor::tr("Frame Rate"),
+        PropertiesEditor::tr("Duration"), PropertiesEditor::tr("Pixel Aspect"),
+        PropertiesEditor::tr("Content"),  PropertiesEditor::tr("Size"),
+        PropertiesEditor::tr("Color"),    PropertiesEditor::tr("Font"),
     };
     const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
     int widest = 0;
@@ -380,6 +384,22 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                    makePropertyRowLabel(tr("Opacity"), labelColumnWidth, selectionSection_),
                    opacityKeyframe_, opacity_);
 
+    // Blending completes the Appearance group, in the registered parameter order. The items are
+    // core::kBlendModes in order, named by the one shared vocabulary, with the mode's stored
+    // integer as item data so the control never depends on the order it happened to be filled in --
+    // exactly the timeline row's dropdown, because both author the same parameter through the same
+    // session method. No keyframe indicator: the schema is not animatable.
+    blendMode_ = new kit::KDropdown(selectionSection_);
+    blendMode_->setObjectName("blendModeEditor");
+    blendMode_->setAccessibleName(tr("Blending"));
+    for (const auto mode : core::kBlendModes) {
+        blendMode_->addItem(blendModeDisplayName(mode),
+                            QVariant::fromValue(core::blendModeStoredValue(mode)));
+    }
+    addPropertyRow(selectionLayout, selectionSection_,
+                   makePropertyRowLabel(tr("Blending"), labelColumnWidth, selectionSection_),
+                   nullptr, blendMode_);
+
     solidColorPanel_ = new QWidget(selectionSection_);
     solidColorPanel_->setObjectName("solidColorProperties");
     auto* solidColorLayout = new QVBoxLayout(solidColorPanel_);
@@ -593,6 +613,16 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
             (void)session_.setSelectedRotation(value);
         }
     });
+    connect(blendMode_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
+        if (rebuilding_ || index < 0) {
+            return;
+        }
+        const auto mode =
+            core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
+        if (mode.has_value()) {
+            (void)session_.setSelectedBlendMode(*mode);
+        }
+    });
     connect(opacity_, &kit::KValueField::valueChanged, this, [this](const double value) {
         if (!rebuilding_) {
             (void)session_.setSelectedOpacity(value / 100.0);
@@ -645,6 +675,7 @@ void PropertiesEditor::rebuild() {
     configureScale();
     configureRotation();
     configureOpacity();
+    configureBlendMode();
     configureSolidColor();
     configureTextSource();
     configureDocumentProperties();
@@ -727,6 +758,32 @@ void PropertiesEditor::configureOpacity() {
     opacity_->setToolTip(parameter == nullptr ? tr("Opacity is not exposed by this selection")
                                               : parameterSourceDescription(*parameter));
     updateKeyframeIndicator(opacityKeyframe_, parameter);
+}
+
+void PropertiesEditor::configureBlendMode() {
+    // The contextual layer, not a parameter lookup on the selection: the selection may be the
+    // layer, its Layer Output node, or one of its parameters, and all three mean the same layer's
+    // blending.
+    const auto* direct = std::get_if<document::LayerId>(&session_.selection().primary);
+    const auto layerId =
+        direct != nullptr ? std::optional(*direct) : session_.selection().contextualLayer;
+    const auto mode = layerId.has_value() ? session_.blendModeForLayer(*layerId) : std::nullopt;
+    blendMode_->setEnabled(mode.has_value());
+    const QSignalBlocker blocker(blendMode_);
+    int row = 0;
+    if (mode.has_value()) {
+        const auto stored = core::blendModeStoredValue(*mode);
+        for (int index = 0; index < blendMode_->count(); ++index) {
+            if (blendMode_->itemData(index).value<std::int64_t>() == stored) {
+                row = index;
+                break;
+            }
+        }
+    }
+    blendMode_->setCurrentIndex(row);
+    blendMode_->setToolTip(mode.has_value()
+                               ? tr("How this layer combines with the layers beneath it")
+                               : tr("Blending is not exposed by this selection"));
 }
 
 void PropertiesEditor::configureSolidColor() {

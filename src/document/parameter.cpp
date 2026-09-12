@@ -68,6 +68,14 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* opacity = std::get_if<double>(&constant.value);
         return opacity != nullptr && std::isfinite(*opacity) && *opacity >= 0.0 && *opacity <= 1.0;
     }
+    if (schemaKey == kBlendModeParameterSchemaKey) {
+        // A blend mode is a stored integer under core::BlendMode's closed mapping. An integer that
+        // names no implemented mode is refused rather than folded to Normal: drawing a different
+        // mode than the document asked for would be a silent misrender, and a document from a newer
+        // build belongs in the "cannot be interpreted" path, not in a guess.
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
+    }
     if (schemaKey == kTextParameterSchemaKey) {
         return std::holds_alternative<std::string>(constant.value);
     }

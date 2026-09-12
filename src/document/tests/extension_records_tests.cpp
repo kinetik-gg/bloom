@@ -126,6 +126,8 @@ struct FixtureIds final {
     ParameterId anchorParameter = id<ParameterId>(13);
     ParameterId scaleParameter = id<ParameterId>(14);
     ParameterId rotationParameter = id<ParameterId>(15);
+    // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+    ParameterId blendModeParameter = id<ParameterId>(16);
     AnimationCurveId animationCurve = id<AnimationCurveId>(20);
     KeyframeId keyframe = id<KeyframeId>(20);
 };
@@ -150,6 +152,7 @@ inline constexpr FixtureIds kIds;
             {std::string(bloom::document::kScaleParameterRole), kIds.scaleParameter},
             {std::string(bloom::document::kRotationParameterRole), kIds.rotationParameter},
             {std::string(bloom::document::kOpacityParameterRole), kIds.opacityParameter},
+            {std::string(bloom::document::kBlendModeParameterRole), kIds.blendModeParameter},
         },
         bloom::document::kLayerOutputNodeSchemaVersion,
     };
@@ -173,6 +176,9 @@ inline constexpr FixtureIds kIds;
         first->parameters().insert({kIds.opacityParameter,
                                     std::string(bloom::document::kOpacityParameterSchemaKey),
                                     ConstantValueSource{1.0}}) &&
+        first->parameters().insert(
+            {kIds.blendModeParameter, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{bloom::document::kDefaultBlendModeValue}}) &&
         first->parameters().insert({kIds.animationParameter,
                                     std::string(bloom::document::kOpacityParameterSchemaKey),
                                     AnimationCurveSource{kIds.animationCurve}}) &&

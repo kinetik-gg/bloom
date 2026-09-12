@@ -27,7 +27,7 @@ inline constexpr std::string_view kCompositionOutputNodeType = "bloom.compositio
 // I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
 // the version-1 picture exactly (see src/project/document_node_schema_upgrade.cpp and
 // docs/architecture/project-format.md, "Node Schema Upgrades").
-inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 2;
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 3;
 inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 1;
@@ -57,6 +57,7 @@ inline constexpr std::string_view kAnchorParameterRole = "anchor";
 inline constexpr std::string_view kScaleParameterRole = "scale";
 inline constexpr std::string_view kRotationParameterRole = "rotation";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
+inline constexpr std::string_view kBlendModeParameterRole = "blendMode";
 
 struct NodeRecord {
     NodeId id;

@@ -779,9 +779,18 @@ routed to preservation. The rule:
 - The only failure mode is a persisted parameter high water with no room left for the required ids,
   which is reported as a typed `ReconstructionStage::NodeSchemaUpgrade` rejection naming the node.
 
-The one upgrade that exists today is `bloom.layer-output` version 1 to version 2, which injects
-`bloom.transform.anchor`, `bloom.transform.scale`, and `bloom.transform.rotation` at the identity
-transform (see [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform").
+The upgrades that exist today both belong to `bloom.layer-output`, and one per-role table covers both
+steps because the injection rule is already per role rather than per version step:
+
+| From | Injected | Default |
+| --- | --- | --- |
+| version 1 | `bloom.transform.anchor`, `bloom.transform.scale`, `bloom.transform.rotation` | the identity transform |
+| version 1 or 2 | `bloom.layer.blend-mode` | `Normal`, the integer `0` |
+
+A version-1 node therefore receives all four and a version-2 node only the blend mode, from the same
+table, and either way the upgraded document evaluates to the pixels the build that wrote the file
+produced. See [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform" and "Blending", and
+[`color-management.md`](color-management.md), "Blend modes".
 
 ## Project I/O Boundary
 

@@ -695,6 +695,71 @@ bool CompositionSession::setSelectedTextColor(const core::Color4d color) {
                                       QStringLiteral("Set Text Color"));
 }
 
+std::optional<core::BlendMode>
+CompositionSession::blendModeForLayer(const document::LayerId layerId) const noexcept {
+    const auto* current = composition();
+    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
+    const auto* node = current == nullptr || !boundaryNodeId.has_value()
+                           ? nullptr
+                           : current->graph().findNode(*boundaryNodeId);
+    const auto* parameter =
+        node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
+    const auto* constantSource =
+        parameter == nullptr ? nullptr
+                             : std::get_if<document::ConstantValueSource>(&parameter->source);
+    const auto* stored =
+        constantSource == nullptr ? nullptr : std::get_if<std::int64_t>(&constantSource->value);
+    return stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
+}
+
+bool CompositionSession::setLayerBlendMode(const document::LayerId layerId,
+                                           const core::BlendMode mode) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
+    const auto* node = current == nullptr || !boundaryNodeId.has_value()
+                           ? nullptr
+                           : current->graph().findNode(*boundaryNodeId);
+    const auto* parameter =
+        node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("That layer does not expose a blend mode"));
+        return false;
+    }
+    const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (constantSource == nullptr || std::get_if<std::int64_t>(&constantSource->value) == nullptr) {
+        // The blend-mode schema is constant-only -- CreateAnimationForParameter accepts only the
+        // animatable transform and opacity schemas, and SetKeyframeAtTime has no integer overload
+        // -- so a non-constant source here is a pre-existing document inconsistency rather than
+        // anything this command created. Refused exactly as the colour path refuses a driven
+        // colour.
+        reportUnavailable(QStringLiteral("Disconnect the driven blend mode before editing it"));
+        return false;
+    }
+    const auto stored = core::blendModeStoredValue(mode);
+    if (*std::get_if<std::int64_t>(&constantSource->value) == stored) {
+        return true;
+    }
+    commands::Transaction transaction("Set Blend Mode", snapshot_.revision());
+    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                      document::ConstantValueSource{stored});
+    return execute(std::move(transaction));
+}
+
+bool CompositionSession::setSelectedBlendMode(const core::BlendMode mode) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // Same resolution rule every other selection-driven writer uses: a directly selected layer, or
+    // the contextual layer a node/parameter/keyframe selection resolved to.
+    const auto* directLayer = std::get_if<document::LayerId>(&selection_.primary);
+    const auto layerId =
+        directLayer != nullptr ? std::optional(*directLayer) : selection_.contextualLayer;
+    if (!layerId.has_value()) {
+        reportUnavailable(QStringLiteral("The selected object does not expose a blend mode"));
+        return false;
+    }
+    return setLayerBlendMode(*layerId, mode);
+}
+
 bool CompositionSession::setSelectedSolidColor(const core::Color4d color) {
     return setSelectionColorParameter(document::kSolidColorParameterRole, color,
                                       QStringLiteral("Set Solid Color"));

@@ -7,10 +7,12 @@
 
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -352,6 +354,17 @@ class NodeItem final : public QGraphicsObject {
         (void)session_->setSelectedOpacity(opacity_->value() / 100.0);
     }
 
+    void commitBlendMode(const int index) {
+        if (refreshing_ || blendMode_ == nullptr || index < 0 || !selectSelf()) {
+            return;
+        }
+        const auto mode =
+            core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
+        if (mode.has_value()) {
+            (void)session_->setSelectedBlendMode(*mode);
+        }
+    }
+
     // A widget handed to a QGraphicsProxyWidget becomes a window, and Qt fills a window's own
     // rectangle with the palette's background before the widget paints. Inside a card that fill is
     // an opaque plate behind a control that only paints its own rounded cell, so the corners and
@@ -482,6 +495,7 @@ class NodeItem final : public QGraphicsObject {
         scaleY_ = nullptr;
         rotation_ = nullptr;
         opacity_ = nullptr;
+        blendMode_ = nullptr;
         colorChip_ = nullptr;
         textContent_ = nullptr;
         textSize_ = nullptr;
@@ -543,6 +557,24 @@ class NodeItem final : public QGraphicsObject {
                 connect(opacity_, &kit::KValueField::valueChanged, this,
                         [this] { commitOpacity(); });
                 valueRows_.push_back({tr("Opacity"), opacity_});
+            } else if (role == document::kBlendModeParameterRole) {
+                // A KDropdown rather than a field: the value is a closed vocabulary, offered in the
+                // same order and with the same words the timeline row and the properties grid use,
+                // and committed through the same session method, so the three surfaces cannot
+                // drift.
+                blendMode_ = new kit::KDropdown;
+                blendMode_->setObjectName(QStringLiteral("nodeBlendModeDropdown"));
+                blendMode_->setAccessibleName(tr("Blending"));
+                blendMode_->setControlSize(kit::KDropdown::ControlSize::Compact);
+                for (const auto mode : core::kBlendModes) {
+                    blendMode_->addItem(blendModeDisplayName(mode),
+                                        QVariant::fromValue(core::blendModeStoredValue(mode)));
+                }
+                blendMode_->resize(blendMode_->sizeHint());
+                addProxy(blendMode_);
+                connect(blendMode_, &kit::KDropdown::currentIndexChanged, this,
+                        [this](const int index) { commitBlendMode(index); });
+                valueRows_.push_back({tr("Blending"), blendMode_});
             } else if (role == document::kSolidColorParameterRole) {
                 colorChip_ = new kit::KColorChip;
                 colorChip_->setObjectName(QStringLiteral("nodeColorChip"));
@@ -669,6 +701,33 @@ class NodeItem final : public QGraphicsObject {
             opacity_->setValue(value.has_value() ? *value * 100.0 : 100.0);
         }
 
+        if (blendMode_ != nullptr) {
+            // The mode comes from the session's one reader, keyed by the LAYER this boundary owns,
+            // not from the node's parameter record: blendModeForLayer() is the same lookup the
+            // timeline row and the properties grid use, so all three show the same value.
+            const auto* parameter =
+                parameterForRole(node, composition, document::kBlendModeParameterRole);
+            const auto layerId =
+                session_ == nullptr ? std::nullopt : session_->layerForNode(node.id);
+            const auto mode = layerId.has_value() && session_ != nullptr
+                                  ? session_->blendModeForLayer(*layerId)
+                                  : std::nullopt;
+            blendMode_->setEnabled(mode.has_value());
+            blendMode_->setToolTip(describe(parameter, tr("Blending is not exposed by this node")));
+            const QSignalBlocker blocker(blendMode_);
+            int row = 0;
+            if (mode.has_value()) {
+                const auto stored = core::blendModeStoredValue(*mode);
+                for (int index = 0; index < blendMode_->count(); ++index) {
+                    if (blendMode_->itemData(index).value<std::int64_t>() == stored) {
+                        row = index;
+                        break;
+                    }
+                }
+            }
+            blendMode_->setCurrentIndex(row);
+        }
+
         if (textContent_ != nullptr) {
             const auto* parameter =
                 parameterForRole(node, composition, document::kTextParameterRole);
@@ -727,6 +786,7 @@ class NodeItem final : public QGraphicsObject {
                 binding.role == document::kScaleParameterRole ||
                 binding.role == document::kRotationParameterRole ||
                 binding.role == document::kOpacityParameterRole ||
+                binding.role == document::kBlendModeParameterRole ||
                 binding.role == document::kSolidColorParameterRole ||
                 binding.role == document::kTextParameterRole ||
                 binding.role == document::kTextSizeParameterRole) {
@@ -925,6 +985,7 @@ class NodeItem final : public QGraphicsObject {
     kit::KValueField* scaleY_ = nullptr;
     kit::KValueField* rotation_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
+    kit::KDropdown* blendMode_ = nullptr;
     kit::KColorChip* colorChip_ = nullptr;
     QLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;

@@ -45,6 +45,7 @@ inline constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(12);
 inline constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(13);
 inline constexpr auto kScaleParameterId = document::ParameterId::fromRaw(14);
 inline constexpr auto kRotationParameterId = document::ParameterId::fromRaw(15);
+inline constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(16);
 
 inline constexpr core::Sha256Digest::Bytes kOcioRevisionBytes{
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
@@ -140,7 +141,8 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         runtime::CompiledVec2Parameter{kAnchorParameterId, document::kDefaultAnchor},
         runtime::CompiledVec2Parameter{kScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
+        core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNodeId, {{kLayerSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

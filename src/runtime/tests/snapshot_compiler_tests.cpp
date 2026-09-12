@@ -55,6 +55,9 @@ constexpr auto kFirstScale = document::ParameterId::fromRaw(40);
 constexpr auto kSecondScale = document::ParameterId::fromRaw(41);
 constexpr auto kFirstRotation = document::ParameterId::fromRaw(42);
 constexpr auto kSecondRotation = document::ParameterId::fromRaw(43);
+// ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+constexpr auto kFirstBlendMode = document::ParameterId::fromRaw(44);
+constexpr auto kSecondBlendMode = document::ParameterId::fromRaw(45);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -124,7 +127,8 @@ struct ProjectOptions final {
           {std::string(kAnchorParameterRole), kFirstAnchor},
           {std::string(kScaleParameterRole), kFirstScale},
           {std::string(kRotationParameterRole), kFirstRotation},
-          {std::string(kOpacityParameterRole), kFirstOpacity}},
+          {std::string(kOpacityParameterRole), kFirstOpacity},
+          {std::string(kBlendModeParameterRole), kFirstBlendMode}},
          kLayerOutputNodeSchemaVersion},
         {kStackNode, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion},
         {kOutputNode,
@@ -143,7 +147,8 @@ struct ProjectOptions final {
                           {std::string(kAnchorParameterRole), kSecondAnchor},
                           {std::string(kScaleParameterRole), kSecondScale},
                           {std::string(kRotationParameterRole), kSecondRotation},
-                          {std::string(kOpacityParameterRole), kSecondOpacity}},
+                          {std::string(kOpacityParameterRole), kSecondOpacity},
+                          {std::string(kBlendModeParameterRole), kSecondBlendMode}},
                          kLayerOutputNodeSchemaVersion});
     }
     if (options.reverseInsertion) {
@@ -210,12 +215,13 @@ struct ProjectOptions final {
     require(composition.parameters().insert(
                 {kFirstOpacity, std::string(kOpacityParameterSchemaKey), ConstantValueSource{0.8}}),
             "first opacity must be accepted");
-    // The identity transform: every fixture here is about topology, parameter sources, and
-    // diagnostics, so the three transform breadth parameters stay at their schema defaults unless a
-    // case deliberately rewrites one.
+    // The identity transform and Normal blending: every fixture here is about topology, parameter
+    // sources, and diagnostics, so the three transform breadth parameters and the blend mode stay
+    // at their schema defaults unless a case deliberately rewrites one.
     const auto insertIdentityTransform = [&composition](const ParameterId anchor,
                                                         const ParameterId scale,
-                                                        const ParameterId rotation) {
+                                                        const ParameterId rotation,
+                                                        const ParameterId blendMode) {
         require(composition.parameters().insert({anchor, std::string(kAnchorParameterSchemaKey),
                                                  ConstantValueSource{kDefaultAnchor}}),
                 "anchor must be accepted");
@@ -225,8 +231,12 @@ struct ProjectOptions final {
         require(composition.parameters().insert({rotation, std::string(kRotationParameterSchemaKey),
                                                  ConstantValueSource{kDefaultRotationDegrees}}),
                 "rotation must be accepted");
+        require(
+            composition.parameters().insert({blendMode, std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+            "blend mode must be accepted");
     };
-    insertIdentityTransform(kFirstAnchor, kFirstScale, kFirstRotation);
+    insertIdentityTransform(kFirstAnchor, kFirstScale, kFirstRotation, kFirstBlendMode);
     if (options.secondLayer) {
         require(composition.parameters().insert(
                     {kSecondColor, std::string(kSolidColorParameterSchemaKey),
@@ -240,7 +250,7 @@ struct ProjectOptions final {
                                                  std::string(kOpacityParameterSchemaKey),
                                                  ConstantValueSource{0.6}}),
                 "second opacity must be accepted");
-        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation);
+        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation, kSecondBlendMode);
     }
 
     Project project(kProjectId, "Project");
@@ -381,6 +391,14 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                             firstLayer->opacity.id == kFirstOpacity && firstOpacity != nullptr &&
                             *firstOpacity == 0.8,
                         "Layer Output preserves typed input and static properties");
+    // The blend mode lowers to a resolved enumerator plus its own parameter identity, never to a
+    // curve index: the schema declares it non-animatable.
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendModeParameterId == kFirstBlendMode,
+                        "Layer Output carries the blend mode's own parameter identity");
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendMode == bloom::core::kDefaultBlendMode,
+                        "a layer with the schema default lowers to Normal");
     expectations.expect(stack != nullptr && stack->entries.size() == 2 &&
                             stack->entries[0] ==
                                 runtime::CompiledLayerStackEntry{
@@ -734,6 +752,43 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
         "driver source stays unsupported until its Batch 4 typed output contract");
 }
 
+// An authored blend mode lowers from its stored integer through core::BlendMode's one mapping, and
+// an integer naming no implemented mode never reaches lowering at all: ParameterStore refuses it on
+// write, so the lowering path has no "unknown mode" branch to guess in.
+void testBlendModeLowersFromItsStoredInteger(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "blend-mode fixture composition must exist");
+    auto& parameters = composition->parameters();
+    expectations.expect(
+        !parameters.setSource(
+            kFirstBlendMode,
+            document::ConstantValueSource{
+                bloom::core::blendModeStoredValue(bloom::core::BlendMode::Difference) + 1}),
+        "an integer naming no implemented blend mode is refused by the document layer");
+    expectations.expect(
+        !parameters.setSource(kFirstBlendMode, document::ConstantValueSource{std::int64_t{-1}}),
+        "a negative stored blend mode is refused by the document layer");
+    require(parameters.setSource(kFirstBlendMode,
+                                 document::ConstantValueSource{bloom::core::blendModeStoredValue(
+                                     bloom::core::BlendMode::Overlay)}),
+            "an implemented blend mode must be publishable");
+    require(project.validate().ok(), "blend-mode fixture must remain valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    const auto* layer =
+        result.plan == nullptr
+            ? nullptr
+            : std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations()[1]);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled &&
+                            layer != nullptr && layer->blendMode == bloom::core::BlendMode::Overlay,
+                        "an authored blend mode lowers to its own enumerator");
+}
+
 void testRequestScopedParameterOverrides(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -1015,6 +1070,7 @@ int main() {
         testReachableSchemaDiagnostics(expectations);
         testTypedParameterDiagnostics(expectations);
         testParameterSourcesAndDiagnosticIds(expectations);
+        testBlendModeLowersFromItsStoredInteger(expectations);
         testRequestScopedParameterOverrides(expectations);
         testMidWorkCancellationIsBounded(expectations);
     } catch (const std::exception& error) {

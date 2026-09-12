@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -165,6 +166,13 @@ class CompositionSession final : public QObject {
     // nullopt for a missing, non-constant, or wrong-typed parameter, exactly like they do.
     [[nodiscard]] std::optional<QString>
     constantStringValue(document::ParameterId parameterId) const;
+    // The blend mode a layer is authored with, or nullopt when the layer has no resolvable Layer
+    // Output blend-mode parameter (no such layer, a non-constant source, or an integer the closed
+    // mapping does not name). Every surface that shows the mode reads it through this one method,
+    // so the timeline row, the Properties row, and the node card cannot disagree about what a layer
+    // is set to.
+    [[nodiscard]] std::optional<core::BlendMode>
+    blendModeForLayer(document::LayerId layerId) const noexcept;
 
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
     // `size` is the em size in pixels and `color` a straight reference-linear-sRGB authoring value;
@@ -205,6 +213,17 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setSelectedTextContent(const QString& content);
     [[nodiscard]] bool setSelectedTextSize(double size);
     [[nodiscard]] bool setSelectedTextColor(core::Color4d color);
+    // The blend mode, by explicit LayerId. This is the primitive the timeline row needs: a row
+    // knows which layer it draws and must not have to move the selection to change that layer's
+    // blending. One commands::SetParameterSource carrying the mode's stored integer, one
+    // transaction, one undo step -- exactly the shape setSelectedSolidColor() uses, and for the
+    // same reason: the schema is constant-only, so there is no keyframe branch. A mode already
+    // equal to the one asked for commits nothing and returns true.
+    [[nodiscard]] bool setLayerBlendMode(document::LayerId layerId, core::BlendMode mode);
+    // The selection-driven form, for the Properties row and the Layer node card, which author
+    // whatever the contextual layer is. Resolves the selection's layer and delegates to
+    // setLayerBlendMode(), so there is exactly one write path.
+    [[nodiscard]] bool setSelectedBlendMode(core::BlendMode mode);
     [[nodiscard]] bool
     moveLayerBefore(document::LayerSlotId slotId,
                     std::optional<document::LayerSlotId> beforeSlotId = std::nullopt);

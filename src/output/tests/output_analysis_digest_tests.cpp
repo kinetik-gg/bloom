@@ -82,6 +82,7 @@ constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(12);
 constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(13);
 constexpr auto kScaleParameterId = document::ParameterId::fromRaw(14);
 constexpr auto kRotationParameterId = document::ParameterId::fromRaw(15);
+constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(16);
 
 constexpr std::string_view kChannels =
     "count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;"
@@ -101,17 +102,18 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 
 // These are produced by an independent byte-oriented oracle for the exact fixture below.
 // Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
-// primitive 3 -> 4). Both are frozen fields of the process-frame semantic identity these preimages
-// embed, so every digest below changed while every preimage LENGTH stayed the same -- S4 added no
-// frozen field and reordered none. The values come from the same independent byte-oriented oracle
-// that produced the originals -- a standalone script that packs each frozen field itself with
-// explicit big-endian integers and hashes the result, linking no Bloom code -- and that oracle was
-// validated by reproducing BOTH previously checked-in golden sets byte for byte when fed their own
-// version numbers.
+// primitive 3 -> 4), then again for the blend-mode slice (evaluator 4 -> 5, primitive 4 -> 5). Both
+// are frozen fields of the process-frame semantic identity these preimages embed, so every digest
+// below changed while every preimage LENGTH stayed the same -- neither slice added a frozen field
+// or reordered one. The values come from the same independent byte-oriented oracle that produced
+// the originals -- a standalone script that packs each frozen field itself with explicit big-endian
+// integers and hashes the result, linking no Bloom code -- and that oracle was validated by
+// reproducing EVERY previously checked-in golden set byte for byte when fed its own version
+// numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
-    "8a7e72ca8436579bb73e8198dbe2674930463dab53b093c3cff7d0738773afda";
+    "9d89e179035a3f6a516ab1b43a01c7ad7a81fb40cc5619e3e71d0a39a42863e2";
 constexpr std::string_view kExpectedPngDigest =
-    "8768f3e62742b325378cb4bfae967929d6c8f9b03700a55a40b8aa538d36a321";
+    "309e366e48fa2ae193a608ad2a24e2379e0c9532d8f92b020205cfd38605193e";
 
 class Expectations final {
   public:
@@ -163,7 +165,8 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         runtime::CompiledVec2Parameter{kAnchorParameterId, document::kDefaultAnchor},
         runtime::CompiledVec2Parameter{kScaleParameterId, document::kDefaultScale},
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
-        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}});
+        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
+        core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNodeId, {{kLayerSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

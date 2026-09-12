@@ -67,9 +67,11 @@ associative. Independent upstream sources may evaluate concurrently before the o
 There is no parallel `Composition::layers` collection that mirrors the stack and no persistent
 generated chain of Merge nodes that must be synchronized with it.
 
-The precise ownership of time mapping, blend, and enable parameters between the Layer Output
-boundary and its stable stack entry remains an implementation detail for the document spike. Each
-property must still have exactly one owning `ParameterId` and one evaluation meaning.
+The precise ownership of time mapping and enable parameters between the Layer Output boundary and its
+stable stack entry remains an implementation detail for the document spike. Each property must still
+have exactly one owning `ParameterId` and one evaluation meaning. The BLEND parameter's ownership is
+settled: it belongs to the Layer Output boundary (see "Blending" below), because a blend mode is a
+property of the layer, while a stack entry is the ordering of layers.
 
 ### Layer Transform
 
@@ -114,10 +116,35 @@ which evaluation renders as an empty layer rather than refusing (see
 [`evaluation-primitives.md`](evaluation-primitives.md), "Layer Transform Resampling"). A rotation may
 wind past a full turn in either direction, because a rotation curve has to be able to.
 
-`kLayerOutputNodeSchemaVersion` is `2`. A version-1 node — every Layer Output written before this
-change — is upgraded on open rather than refused: Project I/O injects the three new parameters at
-their defaults, which together are the identity transform, so an upgraded document renders exactly
-the version-1 picture. See [`project-format.md`](project-format.md), "Node Schema Upgrades".
+### Blending
+
+The Layer Output boundary also owns how the layer combines with what is beneath it in the stack:
+
+| Role | Schema key | Type | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's colour combines with the layers beneath it |
+
+The value is an enumeration stored as a small integer under one closed, durable mapping — `Normal`,
+`Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference` as `0` through `7`. The
+mapping, each mode's formula, and the premultiplied compositing fold that applies them are in
+[`color-management.md`](color-management.md), "Blend modes". Validation accepts exactly the integers
+that mapping names: one that names no implemented mode is refused rather than folded to `Normal`,
+because drawing a different mode than the document asked for would be a silent misrender.
+
+Unlike the five values above it, the blend mode is NOT animatable. There is no meaningful value
+between `Multiply` and `Screen`, so a curve over it could only hold or jump, which an enable model
+would express and an interpolated curve would not; `isScalarAnimatableSchemaKey` and
+`isVec2AnimatableSchemaKey` therefore both reject the key, and no command can put it on a curve.
+
+In the registered parameter order the blend mode comes last, after the four geometric values and
+opacity: it is the only Layer Output parameter that is not a continuous value at all. That order is
+what the properties grid, the node card, and the timeline all read.
+
+`kLayerOutputNodeSchemaVersion` is `3`. A version-1 or version-2 node — every Layer Output written
+before these changes — is upgraded on open rather than refused: Project I/O injects the missing
+parameters at their defaults, which together are the identity transform and `Normal` blending, so an
+upgraded document renders exactly the picture the build that wrote the file produced. See
+[`project-format.md`](project-format.md), "Node Schema Upgrades".
 
 ## Parameters And Properties
 

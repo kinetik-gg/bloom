@@ -79,20 +79,23 @@ constexpr auto kRotationA = document::ParameterId::fromRaw(53);
 constexpr auto kAnchorB = document::ParameterId::fromRaw(54);
 constexpr auto kScaleB = document::ParameterId::fromRaw(55);
 constexpr auto kRotationB = document::ParameterId::fromRaw(56);
+constexpr auto kBlendModeA = document::ParameterId::fromRaw(57);
+constexpr auto kBlendModeB = document::ParameterId::fromRaw(58);
 constexpr auto kAnchorCurve = document::AnimationCurveId::fromRaw(55);
 constexpr auto kScaleCurve = document::AnimationCurveId::fromRaw(56);
 constexpr auto kRotationCurve = document::AnimationCurveId::fromRaw(57);
 
-// The authored transform a Layer Output carries. Defaulted to the identity -- no anchor offset,
-// unit scale, no rotation -- so a fixture that cares only about position or opacity reads exactly
-// as it did before the transform breadth slice, and a fixture that cares about the transform names
-// only the value it is exercising.
+// The authored transform and blending a Layer Output carries. Defaulted to the identity -- no
+// anchor offset, unit scale, no rotation, Normal blending -- so a fixture that cares only about
+// position or opacity reads exactly as it did before the transform breadth slice, and a fixture
+// that cares about the transform or the blend mode names only the value it is exercising.
 struct LayerTransformValues final {
     document::Vec2d position{2.0, 1.0};
     document::Vec2d anchor = document::kDefaultAnchor;
     document::Vec2d scale = document::kDefaultScale;
     double rotation = document::kDefaultRotationDegrees;
     double opacity = 1.0;
+    core::BlendMode blendMode = core::kDefaultBlendMode;
 };
 
 struct LayerParameterIds final {
@@ -101,12 +104,13 @@ struct LayerParameterIds final {
     document::ParameterId scale;
     document::ParameterId rotation;
     document::ParameterId opacity;
+    document::ParameterId blendMode;
 };
 
-inline constexpr LayerParameterIds kLayerParametersA{kPositionA, kAnchorA, kScaleA, kRotationA,
-                                                     kOpacityA};
-inline constexpr LayerParameterIds kLayerParametersB{kPositionB, kAnchorB, kScaleB, kRotationB,
-                                                     kOpacityB};
+inline constexpr LayerParameterIds kLayerParametersA{kPositionA, kAnchorA,  kScaleA,
+                                                     kRotationA, kOpacityA, kBlendModeA};
+inline constexpr LayerParameterIds kLayerParametersB{kPositionB, kAnchorB,  kScaleB,
+                                                     kRotationB, kOpacityB, kBlendModeB};
 
 [[nodiscard]] runtime::CompiledLayerOutput layerOutput(const document::NodeId nodeId,
                                                        const document::LayerId layerId,
@@ -121,7 +125,9 @@ inline constexpr LayerParameterIds kLayerParametersB{kPositionB, kAnchorB, kScal
         runtime::CompiledVec2Parameter{ids.anchor, values.anchor},
         runtime::CompiledVec2Parameter{ids.scale, values.scale},
         runtime::CompiledScalarParameter{ids.rotation, values.rotation},
-        runtime::CompiledScalarParameter{ids.opacity, values.opacity}};
+        runtime::CompiledScalarParameter{ids.opacity, values.opacity},
+        ids.blendMode,
+        values.blendMode};
 }
 
 class Expectations final {
@@ -236,6 +242,35 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
         runtime::CompiledCompositionPlanDefinition{
             document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
             std::move(operations), runtime::OperationIndex::fromRaw(3)});
+}
+
+// Two opaque-format layers whose straight authoring colours premultiply to exactly the values the
+// blend-kernel goldens use: the top layer is straight (1, 0.5, 0.25) at half alpha -- premultiplied
+// (0.5, 0.25, 0.125, 0.5) -- over an opaque (0.25, 0.5, 0.75) backdrop. Both positions are the
+// composition centre, so each layer's transform is the translate-only identity and the resample
+// interpolates nothing; every pixel of the published frame is therefore the kernel's exact answer
+// rather than a value within a tolerance.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMode) {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA, {.blendMode = topMode}));
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}});
+    operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
+                                        kLayerParametersB, {.blendMode = bottomMode}));
+    operations.emplace_back(
+        runtime::CompiledLayerStack{kStackNode,
+                                    {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)},
+                                     {kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
+                                                   kCompositionId, format(), std::move(operations),
+                                                   runtime::OperationIndex::fromRaw(5)});
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
@@ -729,6 +764,71 @@ void testStackOrderingOpacityAndDisplay(Expectations& expectations) {
                                 displayPixels.front().alpha == 128,
                             "worker display mapping publishes straight packed reference sRGB");
     }
+}
+
+// The Merge stage reads each entry's OWN Layer Output blend mode. The expected pixels are the same
+// independently derived goldens src/render/tests/cpu_image_primitives_test.cpp pins for this exact
+// premultiplied pair, so this case proves the wiring -- that the mode reaches the fold, per layer
+// -- rather than re-proving the arithmetic.
+void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations) {
+    using core::BlendMode;
+    struct Case final {
+        BlendMode mode;
+        render::Rgba32f expected;
+    };
+    const auto premultiplied = [](const float red, const float green, const float blue,
+                                  const float alpha) {
+        const auto value = render::Rgba32f::fromPremultiplied(red, green, blue, alpha);
+        if (!value) {
+            throw std::logic_error("blend golden fixture must be a valid process pixel");
+        }
+        return *value.value();
+    };
+    const std::array<Case, 8> cases{{
+        {BlendMode::Normal, premultiplied(0.625F, 0.5F, 0.5F, 1.0F)},
+        {BlendMode::Add, premultiplied(0.75F, 0.75F, 0.875F, 1.0F)},
+        {BlendMode::Multiply, premultiplied(0.25F, 0.375F, 0.46875F, 1.0F)},
+        {BlendMode::Screen, premultiplied(0.625F, 0.625F, 0.78125F, 1.0F)},
+        {BlendMode::Overlay, premultiplied(0.375F, 0.5F, 0.6875F, 1.0F)},
+        {BlendMode::Darken, premultiplied(0.25F, 0.5F, 0.5F, 1.0F)},
+        {BlendMode::Lighten, premultiplied(0.625F, 0.5F, 0.75F, 1.0F)},
+        {BlendMode::Difference, premultiplied(0.5F, 0.25F, 0.625F, 1.0F)},
+    }};
+    expectations.expect(cases.size() == core::kBlendModes.size(),
+                        "the Merge stage is exercised under every implemented blend mode");
+
+    const runtime::CpuCompositionEvaluator evaluator;
+    for (const auto& testCase : cases) {
+        const auto plan = twoSolidBlendPlan(testCase.mode, BlendMode::Normal);
+        const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+        render::Rgba32f storage = render::Rgba32f::transparent();
+        const auto* composited = pixel(result, 1, 1, storage);
+        expectations.expect(
+            result.status() == runtime::EvaluationStatus::Evaluated && composited != nullptr &&
+                *composited == testCase.expected,
+            "the Merge stage folds the top layer under its own blend mode, exactly");
+    }
+
+    // The mode is read per ENTRY, from the Layer Output that entry names -- not once for the stack
+    // and not off the first entry. A mode on the BOTTOM layer has nothing beneath it to combine
+    // with, so it must leave the frame bit-identical to an all-Normal stack, while the same mode on
+    // the top layer must change it.
+    const auto allNormal = twoSolidBlendPlan(BlendMode::Normal, BlendMode::Normal);
+    const auto bottomDifference = twoSolidBlendPlan(BlendMode::Normal, BlendMode::Difference);
+    const auto topDifference = twoSolidBlendPlan(BlendMode::Difference, BlendMode::Normal);
+    render::Rgba32f normalStorage = render::Rgba32f::transparent();
+    render::Rgba32f bottomStorage = render::Rgba32f::transparent();
+    render::Rgba32f topStorage = render::Rgba32f::transparent();
+    const auto* normalPixel =
+        pixel(evaluator.evaluate(allNormal, requestFor(*allNormal), {}), 1, 1, normalStorage);
+    const auto* bottomPixel =
+        pixel(evaluator.evaluate(bottomDifference, requestFor(*bottomDifference), {}), 1, 1,
+              bottomStorage);
+    const auto* topPixel =
+        pixel(evaluator.evaluate(topDifference, requestFor(*topDifference), {}), 1, 1, topStorage);
+    expectations.expect(normalPixel != nullptr && bottomPixel != nullptr && topPixel != nullptr &&
+                            *bottomPixel == *normalPixel && *topPixel != *normalPixel,
+                        "each stack entry contributes its own layer's blend mode");
 }
 
 void testEmptyStackIsTransparent(Expectations& expectations) {
@@ -1327,6 +1427,7 @@ int main() {
         testAnimatedParametersAreSampledOncePerRequest(expectations);
         testClippingAndOpacityEndpoints(expectations);
         testStackOrderingOpacityAndDisplay(expectations);
+        testStackCompositesEachLayerUnderItsOwnBlendMode(expectations);
         testEmptyStackIsTransparent(expectations);
         testProxyAndPeakBudget(expectations);
         testIdentityAndPreparedHandoff(expectations);
