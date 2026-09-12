@@ -107,6 +107,9 @@ int main(int argc, char* argv[]) {
                                                   qualifiedDisplayProcessorProvider));
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     application.installEventFilter(&shutdownCoordinator);
+    // Kept live even though no editor shows it (task F1, item F6 removed Jobs from the registry
+    // below): this is the model a JobsEditor takes, and it is the bridge's own consumer. Dropping
+    // it would change what happens to task-bridge state, which item F6 does not ask for.
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);
 
     // "File -> Export Frame..." (task F3, issue #103): binds to the SAME application-wide
@@ -120,9 +123,14 @@ int main(int argc, char* argv[]) {
         &qualifiedDisplayProcessorProvider);
 
     bloom::ui::EditorRegistry editorRegistry;
-    const bool editorsRegistered = bloom::ui::registerFoundationEditors(
-                                       editorRegistry, compositionSession, previewController) &&
-                                   bloom::ui::registerJobsEditor(editorRegistry, taskMonitor);
+    // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an
+    // editor the panel switcher offers and a workspace can place, and Jobs is wanted in neither
+    // for now. The JobsEditor class and registerJobsEditor() both survive untouched -- the single
+    // `&& bloom::ui::registerJobsEditor(editorRegistry, taskMonitor)` this line used to carry is
+    // all it takes to offer the panel again -- so Jobs is reachable programmatically and simply
+    // not on offer in the interface.
+    const bool editorsRegistered =
+        bloom::ui::registerFoundationEditors(editorRegistry, compositionSession, previewController);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
