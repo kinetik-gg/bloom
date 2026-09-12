@@ -12,9 +12,13 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
+#include <QAction>
+#include <QActionGroup>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QFontMetrics>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -172,7 +176,56 @@ QString titleCase(const std::string_view role) {
 struct KeyEntry final {
     document::KeyframeId id;
     core::RationalTime time;
+    // Task S5, item 2: the key's OUTGOING interpolation, so the lane can give each mode its own
+    // glyph instead of one diamond for everything.
+    document::KeyframeInterpolation outgoingInterpolation = document::KeyframeInterpolation::Linear;
 };
+
+// The glyph for one interpolation mode (task S5, item 2: "timeline keyframe glyph differs per
+// interpolation"). The shapes are the standard timeline vocabulary, and each one says what the
+// SEGMENT LEAVING the key does:
+//
+//   Linear     a diamond  -- the shape every key had before this task; a straight ramp out
+//   Hold       a square   -- a held step out, drawn with the same corner-to-corner extent
+//   EaseInOut  a circle   -- a rounded departure, matching the rounded ease it names
+//
+// Shape, not colour, carries the mode: the gold/Accent colour pair is already spoken for by
+// unselected/selected, and overloading it would make a selected Hold key indistinguishable from an
+// unselected eased one.
+void paintKeyGlyph(QPainter& painter, const QPointF center,
+                   const document::KeyframeInterpolation interpolation) {
+    switch (interpolation) {
+    case document::KeyframeInterpolation::Hold: {
+        const qreal half = kKeyDiamondRadius * 0.78;
+        painter.drawRect(QRectF(center.x() - half, center.y() - half, 2.0 * half, 2.0 * half));
+        return;
+    }
+    case document::KeyframeInterpolation::EaseInOut:
+        painter.drawEllipse(center, kKeyDiamondRadius * 0.92, kKeyDiamondRadius * 0.92);
+        return;
+    case document::KeyframeInterpolation::Linear:
+        break;
+    }
+    QPolygonF diamond;
+    diamond << QPointF(center.x(), center.y() - kKeyDiamondRadius)
+            << QPointF(center.x() + kKeyDiamondRadius, center.y())
+            << QPointF(center.x(), center.y() + kKeyDiamondRadius)
+            << QPointF(center.x() - kKeyDiamondRadius, center.y());
+    painter.drawPolygon(diamond);
+}
+
+[[nodiscard]] QString
+interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
+    switch (interpolation) {
+    case document::KeyframeInterpolation::Hold:
+        return QStringLiteral("Hold");
+    case document::KeyframeInterpolation::Linear:
+        return QStringLiteral("Linear");
+    case document::KeyframeInterpolation::EaseInOut:
+        return QStringLiteral("Ease In-Out");
+    }
+    return QStringLiteral("Linear");
+}
 
 // The Geist Mono tick/label font (decision 3), sized down slightly the same way the pre-restyle
 // ruler already scaled its tick font -- ticks are secondary chrome, not a Value-role readout.
@@ -231,10 +284,8 @@ struct MajorTickLabel final {
 class TimelineKeyframeRow final : public QWidget {
   public:
     TimelineKeyframeRow(CompositionSession& session, QString label,
-                        const document::AnimationCurveId curveId, const bool isVec2,
-                        QWidget* parent)
-        : QWidget(parent), session_(session), label_(std::move(label)), curveId_(curveId),
-          isVec2_(isVec2) {
+                        const document::AnimationCurveId curveId, QWidget* parent)
+        : QWidget(parent), session_(session), label_(std::move(label)), curveId_(curveId) {
         setFixedHeight(kKeyframeRowHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { update(); });
@@ -282,12 +333,7 @@ class TimelineKeyframeRow final : public QWidget {
                 selected ? kit::color(kit::Color::Accent) : kit::color(kit::Color::Keyframe);
             painter.setPen(QPen(fill.darker(140), 1.0));
             painter.setBrush(fill);
-            QPolygonF diamond;
-            diamond << QPointF(x, centerY - kKeyDiamondRadius)
-                    << QPointF(x + kKeyDiamondRadius, centerY)
-                    << QPointF(x, centerY + kKeyDiamondRadius)
-                    << QPointF(x - kKeyDiamondRadius, centerY);
-            painter.drawPolygon(diamond);
+            paintKeyGlyph(painter, QPointF(x, centerY), key.outgoingInterpolation);
         }
 
         if (dragging_ && ghostTime_.has_value()) {
@@ -297,12 +343,9 @@ class TimelineKeyframeRow final : public QWidget {
             ghostColor.setAlpha(150);
             painter.setPen(QPen(ghostColor.darker(120), 1.5, Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
-            QPolygonF diamond;
-            diamond << QPointF(x, centerY - kKeyDiamondRadius)
-                    << QPointF(x + kKeyDiamondRadius, centerY)
-                    << QPointF(x, centerY + kKeyDiamondRadius)
-                    << QPointF(x - kKeyDiamondRadius, centerY);
-            painter.drawPolygon(diamond);
+            // The ghost wears the DRAGGED key's own glyph, so a Hold key being moved still reads as
+            // a Hold key rather than turning into a diamond for the duration of the gesture.
+            paintKeyGlyph(painter, QPointF(x, centerY), ghostInterpolation_);
         }
 
         painter.setFont(kit::font(kit::TypeRole::UiSmall));
@@ -341,6 +384,7 @@ class TimelineKeyframeRow final : public QWidget {
             // a click selects a key.
             panel->setFocus(Qt::MouseFocusReason);
         }
+        ghostInterpolation_ = interpolationOf(*closest);
         pressedKeyId_ = closest;
         pressPos_ = event->position();
         dragging_ = false;
@@ -381,6 +425,59 @@ class TimelineKeyframeRow final : public QWidget {
                 panel->setFocus(Qt::MouseFocusReason);
             }
         }
+    }
+
+    // The key context menu (task S5, item 2): right-clicking a key selects it, then offers its
+    // three outgoing interpolations and Delete. Command construction lives in CompositionSession,
+    // exactly as it does for every other gesture on this row; this handler is hit-testing and
+    // dispatch only.
+    //
+    // Hold/Ease In-Out are DISABLED on a curve's final key rather than offered and refused: that
+    // key's interpolation is canonical Linear (docs/architecture/animation-and-time.md), so the
+    // command layer would reject the pick and the menu would have promised something it cannot do.
+    // Delete is likewise disabled on a single-key curve, whose last key DeleteKeyframe refuses --
+    // removing a parameter's whole animation is the diamond's job, not this menu's.
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        const auto* composition = session_.composition();
+        if (composition == nullptr) {
+            return;
+        }
+        const auto axis = TimelineAxis::create(*composition, width());
+        if (!axis.has_value()) {
+            return;
+        }
+        const auto hit = hitTestKey(*axis, static_cast<qreal>(event->pos().x()));
+        if (!hit.has_value()) {
+            return;
+        }
+        session_.selectKeyframe(curveId_, *hit);
+        const auto current = session_.selectedKeyframeInterpolation();
+        const bool isFinal = session_.selectedKeyframeIsFinal();
+        const auto keys = collectKeys();
+
+        QMenu menu(this);
+        auto* group = new QActionGroup(&menu);
+        group->setExclusive(true);
+        for (const auto mode :
+             {document::KeyframeInterpolation::Hold, document::KeyframeInterpolation::Linear,
+              document::KeyframeInterpolation::EaseInOut}) {
+            auto* action = menu.addAction(interpolationDisplayName(mode));
+            action->setObjectName(QStringLiteral("keyframeInterpolationAction"));
+            action->setCheckable(true);
+            action->setChecked(current.has_value() && *current == mode);
+            action->setEnabled(!isFinal || mode == document::KeyframeInterpolation::Linear);
+            group->addAction(action);
+            connect(action, &QAction::triggered, this,
+                    [this, mode] { (void)session_.setSelectedKeyframeInterpolation(mode); });
+        }
+        menu.addSeparator();
+        auto* remove = menu.addAction(QStringLiteral("Delete Keyframe"));
+        remove->setObjectName(QStringLiteral("keyframeDeleteAction"));
+        remove->setEnabled(keys.size() > 1);
+        connect(remove, &QAction::triggered, this,
+                [this] { (void)session_.deleteSelectedKeyframe(); });
+        menu.exec(event->globalPos());
+        event->accept();
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
@@ -463,42 +560,51 @@ class TimelineKeyframeRow final : public QWidget {
         return closest;
     }
 
+    // The outgoing interpolation of one key on this row's curve, or Linear when it no longer
+    // resolves. Only the drag ghost needs it, and only at press time.
+    [[nodiscard]] document::KeyframeInterpolation
+    interpolationOf(const document::KeyframeId keyframeId) const {
+        for (const auto& key : collectKeys()) {
+            if (key.id == keyframeId) {
+                return key.outgoingInterpolation;
+            }
+        }
+        return document::KeyframeInterpolation::Linear;
+    }
+
     [[nodiscard]] std::vector<KeyEntry> collectKeys() const {
         std::vector<KeyEntry> entries;
         const auto* composition = session_.composition();
         if (composition == nullptr) {
             return entries;
         }
-        if (isVec2_) {
-            const auto* curve = composition->animationCurves().findVec2(curveId_);
-            if (curve == nullptr) {
-                return entries;
-            }
-            entries.reserve(curve->keyframes.size());
-            for (const auto& key : curve->keyframes) {
-                entries.push_back({key.id, key.time});
-            }
-        } else {
-            const auto* curve = composition->animationCurves().findScalar(curveId_);
-            if (curve == nullptr) {
-                return entries;
-            }
-            entries.reserve(curve->keyframes.size());
-            for (const auto& key : curve->keyframes) {
-                entries.push_back({key.id, key.time});
-            }
+        // One visit over the curve-kind variant, so a colour curve's lane (task S5, item 1) needs
+        // no third copy of this loop -- and so the `isVec2_` flag no longer has to enumerate kinds.
+        const auto* record = composition->animationCurves().find(curveId_);
+        if (record == nullptr) {
+            return entries;
         }
+        std::visit(
+            [&entries](const auto& curve) {
+                entries.reserve(curve.keyframes.size());
+                for (const auto& key : curve.keyframes) {
+                    entries.push_back({key.id, key.time, key.outgoingInterpolation});
+                }
+            },
+            *record);
         return entries;
     }
 
     CompositionSession& session_;
     QString label_;
     document::AnimationCurveId curveId_;
-    bool isVec2_;
     bool dragging_ = false;
     std::optional<document::KeyframeId> pressedKeyId_;
     QPointF pressPos_;
     std::optional<core::RationalTime> ghostTime_;
+    // The pressed key's own outgoing interpolation, captured at press so the drag ghost keeps its
+    // shape without re-walking the curve on every mouse move.
+    document::KeyframeInterpolation ghostInterpolation_ = document::KeyframeInterpolation::Linear;
 };
 
 namespace {
@@ -506,7 +612,6 @@ namespace {
 struct AnimatedParameterRow final {
     QString label;
     document::AnimationCurveId curveId;
-    bool isVec2 = false;
 };
 
 [[nodiscard]] std::vector<AnimatedParameterRow>
@@ -527,26 +632,36 @@ collectAnimatedParameters(const CompositionSession& session) {
         return rows;
     }
 
-    const auto boundaryNodeId = session.boundaryNodeForLayer(*layerId);
-    if (!boundaryNodeId.has_value()) {
-        return rows;
+    // BOTH of the layer's nodes, in evaluation order: its Layer Output boundary (the transform and
+    // opacity) and the source node feeding it (task S5, item 1 made a solid's colour and a text
+    // layer's size and colour animatable, and those parameters live on the SOURCE node -- a lane
+    // set that only walked the boundary would silently hide every key the new diamonds create).
+    // Enumerated from each node's own bindings rather than from a list kept here, so this panel
+    // still cannot carry a narrower idea of what is animatable than the schema does.
+    std::vector<document::NodeId> nodeIds;
+    if (const auto boundaryNodeId = session.boundaryNodeForLayer(*layerId)) {
+        nodeIds.push_back(*boundaryNodeId);
     }
-    const auto* node = composition->graph().findNode(*boundaryNodeId);
-    if (node == nullptr) {
-        return rows;
+    if (const auto sourceNodeId = session.directSourceNodeForLayer(*layerId)) {
+        nodeIds.push_back(*sourceNodeId);
     }
 
-    for (const auto& binding : node->parameters) {
-        const auto* parameter = composition->parameters().find(binding.parameterId);
-        if (parameter == nullptr) {
+    for (const auto nodeId : nodeIds) {
+        const auto* node = composition->graph().findNode(nodeId);
+        if (node == nullptr) {
             continue;
         }
-        const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
-        if (source == nullptr) {
-            continue;
+        for (const auto& binding : node->parameters) {
+            const auto* parameter = composition->parameters().find(binding.parameterId);
+            if (parameter == nullptr) {
+                continue;
+            }
+            const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+            if (source == nullptr) {
+                continue;
+            }
+            rows.push_back({titleCase(binding.role), source->curveId});
         }
-        const bool isVec2 = composition->animationCurves().findVec2(source->curveId) != nullptr;
-        rows.push_back({titleCase(binding.role), source->curveId, isVec2});
     }
     return rows;
 }
@@ -854,7 +969,7 @@ void TimelineKeyframePanel::rebuild() {
 
     rows_.reserve(specs.size());
     for (const auto& spec : specs) {
-        auto* row = new TimelineKeyframeRow(session_, spec.label, spec.curveId, spec.isVec2, this);
+        auto* row = new TimelineKeyframeRow(session_, spec.label, spec.curveId, this);
         rowsLayout_->addWidget(row);
         rows_.push_back(row);
     }

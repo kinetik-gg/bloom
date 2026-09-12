@@ -53,7 +53,7 @@ const document::NodeRecord* selectedPresentationSource(const CompositionSession&
 // control itself (KValueField's own borderToken()/cellBorderColor(), kit::borderForInteraction()),
 // never from this container.
 QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label,
-                        QLabel* indicator, QWidget* value) {
+                        QWidget* indicator, QWidget* value) {
     auto* row = new QWidget(sectionParent);
     row->setObjectName(QStringLiteral("propertiesRow"));
     row->setMinimumHeight(kit::px(kit::Size::Control));
@@ -107,11 +107,14 @@ QLabel* makePropertyRowLabel(const QString& text, const int columnWidth, QWidget
     return label;
 }
 
-QLabel* makeKeyframeIndicator(QWidget* parent) {
-    auto* indicator = new QLabel(parent);
-    indicator->setObjectName(QStringLiteral("propertiesKeyframeIndicator"));
-    indicator->setFixedSize(kit::px(kit::Size::IconSmall), kit::px(kit::Size::IconSmall));
-    return indicator;
+// Task S5, item 0: the row's indicator became a clickable control. objectName
+// "propertiesKeyframeIndicator" is deliberately unchanged -- same role, same name, new primitive --
+// so every existing projection assertion keeps finding it.
+KeyframeDiamond* makeKeyframeDiamond(CompositionSession& session, const std::string_view role,
+                                     QWidget* parent) {
+    auto* diamond = new KeyframeDiamond(session, std::string(role), parent);
+    diamond->setObjectName(QStringLiteral("propertiesKeyframeIndicator"));
+    return diamond;
 }
 
 // A read-only value cell's text: `role` is Value (Geist Mono) for numeric-looking content --
@@ -157,34 +160,6 @@ void addSectionHeader(QVBoxLayout* section, QWidget* parent, const QString& titl
     divider->setPalette(dividerPalette);
     divider->setAutoFillBackground(true);
     section->addWidget(divider);
-}
-
-// True when `parameter` carries an animation curve source (issue #120, decision 2: "truth from
-// the session snapshot, no new session API") -- the same std::holds_alternative check
-// parameterSourceDescription() below already uses to report "Animated", read directly rather than
-// by string-comparing that tooltip text.
-bool isAnimatedParameter(const document::ParameterRecord* parameter) {
-    return parameter != nullptr &&
-           std::holds_alternative<document::AnimationCurveSource>(parameter->source);
-}
-
-// Paints `indicator` gold-filled when `parameter` is animation-sourced, Muted-dimmed-outline
-// otherwise (decision 2). The dim opacity reuses tokens::kDisabledOpacity rather than a new
-// literal: "dimmed" and "disabled ink" are the same fade recipe applied to a different ink. The
-// weight switch follows docs/ux/visual-language.md's own iconography rule verbatim ("regular is
-// the default visual weight and fill for selected or toggled states"): an animated parameter is
-// this indicator's "on" state, so it takes the solid diamond-fill glyph rather than the outline
-// one static rows show.
-void updateKeyframeIndicator(QLabel* indicator, const document::ParameterRecord* parameter) {
-    const bool animated = isAnimatedParameter(parameter);
-    const QColor tint =
-        animated ? kit::color(kit::Color::Keyframe)
-                 : kit::withOpacity(kit::color(kit::Color::Muted), kit::kDisabledOpacity);
-    const auto weight = animated ? kit::IconWeight::Fill : kit::IconWeight::Regular;
-    indicator->setPixmap(
-        kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint, 0.0, weight));
-    indicator->setToolTip(animated ? PropertiesEditor::tr("Animated")
-                                   : PropertiesEditor::tr("Static"));
 }
 
 // Frame rate as an exact rational (decision 3: "exact rational shown honestly"): numerator and
@@ -274,7 +249,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     positionFieldsLayout->addWidget(positionX_);
     positionFieldsLayout->addWidget(positionY_);
 
-    positionKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    positionKeyframe_ =
+        makeKeyframeDiamond(session_, document::kPositionParameterRole, selectionSection_);
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Position"), labelColumnWidth, selectionSection_),
                    positionKeyframe_, positionFields);
@@ -312,7 +288,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     anchorFieldsLayout->addWidget(anchorX_);
     anchorFieldsLayout->addWidget(anchorY_);
 
-    anchorKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    anchorKeyframe_ =
+        makeKeyframeDiamond(session_, document::kAnchorParameterRole, selectionSection_);
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Anchor"), labelColumnWidth, selectionSection_),
                    anchorKeyframe_, anchorFields);
@@ -344,7 +321,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     scaleFieldsLayout->addWidget(scaleX_);
     scaleFieldsLayout->addWidget(scaleY_);
 
-    scaleKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    scaleKeyframe_ =
+        makeKeyframeDiamond(session_, document::kScaleParameterRole, selectionSection_);
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Scale"), labelColumnWidth, selectionSection_),
                    scaleKeyframe_, scaleFields);
@@ -360,7 +338,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     rotation_->setSingleStep(1.0);
     rotation_->setUnit(QString::fromUtf8("\u00b0"));
 
-    rotationKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    rotationKeyframe_ =
+        makeKeyframeDiamond(session_, document::kRotationParameterRole, selectionSection_);
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Rotation"), labelColumnWidth, selectionSection_),
                    rotationKeyframe_, rotation_);
@@ -375,7 +354,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     opacity_->setSingleStep(1.0);
     opacity_->setUnit(QStringLiteral("%"));
 
-    opacityKeyframe_ = makeKeyframeIndicator(selectionSection_);
+    opacityKeyframe_ =
+        makeKeyframeDiamond(session_, document::kOpacityParameterRole, selectionSection_);
     addPropertyRow(selectionLayout, selectionSection_,
                    makePropertyRowLabel(tr("Opacity"), labelColumnWidth, selectionSection_),
                    opacityKeyframe_, opacity_);
@@ -438,7 +418,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     solidColorFieldsLayout->addWidget(solidColorBlue_);
     solidColorFieldsLayout->addWidget(solidColorAlpha_);
 
-    solidColorKeyframe_ = makeKeyframeIndicator(solidColorPanel_);
+    solidColorKeyframe_ =
+        makeKeyframeDiamond(session_, document::kSolidColorParameterRole, solidColorPanel_);
     addPropertyRow(solidColorLayout, solidColorPanel_,
                    makePropertyRowLabel(tr("RGBA"), labelColumnWidth, solidColorPanel_),
                    solidColorKeyframe_, solidColorFields);
@@ -489,14 +470,17 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     textSize_->setDecimals(1);
     textSize_->setSingleStep(1.0);
     textSize_->setUnit(QStringLiteral("px"));
+    textSizeKeyframe_ =
+        makeKeyframeDiamond(session_, document::kTextSizeParameterRole, textSourcePanel_);
     addPropertyRow(textLayout, textSourcePanel_,
-                   makePropertyRowLabel(tr("Size"), labelColumnWidth, textSourcePanel_), nullptr,
-                   textSize_);
+                   makePropertyRowLabel(tr("Size"), labelColumnWidth, textSourcePanel_),
+                   textSizeKeyframe_, textSize_);
 
     textColor_ = new kit::KColorChip(textSourcePanel_);
     textColor_->setObjectName("textColorChip");
     textColor_->setAccessibleName(tr("Text color"));
-    textColorKeyframe_ = makeKeyframeIndicator(textSourcePanel_);
+    textColorKeyframe_ =
+        makeKeyframeDiamond(session_, document::kTextColorParameterRole, textSourcePanel_);
     addPropertyRow(textLayout, textSourcePanel_,
                    makePropertyRowLabel(tr("Color"), labelColumnWidth, textSourcePanel_),
                    textColorKeyframe_, textColor_);
@@ -653,8 +637,12 @@ void PropertiesEditor::rebuild() {
 
 void PropertiesEditor::configurePosition() {
     const auto* position = session_.parameterForSelection(document::kPositionParameterRole);
-    const auto positionValue =
-        position == nullptr ? std::nullopt : session_.constantVec2Value(position->id);
+    // effectiveVec2Value(), not constantVec2Value(): an ANIMATED parameter's row must stay live and
+    // show the curve's exactly sampled value at the current time, because editing it there is how
+    // AE inserts a key (task S5, item 0 -- the write path already routes an animation source
+    // through SetKeyframeAtTime; before this, the field was simply disabled so the gesture was
+    // unreachable). A driven source still yields nullopt and still disables the field.
+    const auto positionValue = session_.effectiveVec2Value(document::kPositionParameterRole);
     const bool canEditPosition = positionValue.has_value();
     positionX_->setEnabled(canEditPosition);
     positionY_->setEnabled(canEditPosition);
@@ -669,12 +657,12 @@ void PropertiesEditor::configurePosition() {
                                     : parameterSourceDescription(*position);
     positionX_->setToolTip(positionTip);
     positionY_->setToolTip(positionTip);
-    updateKeyframeIndicator(positionKeyframe_, position);
+    positionKeyframe_->refresh();
 }
 
 void PropertiesEditor::configureAnchor() {
     const auto* anchor = session_.parameterForSelection(document::kAnchorParameterRole);
-    const auto value = anchor == nullptr ? std::nullopt : session_.constantVec2Value(anchor->id);
+    const auto value = session_.effectiveVec2Value(document::kAnchorParameterRole);
     const bool editable = value.has_value();
     for (auto* field : {anchorX_, anchorY_}) {
         field->setEnabled(editable);
@@ -687,12 +675,12 @@ void PropertiesEditor::configureAnchor() {
         anchorX_->setValue(value->x);
         anchorY_->setValue(value->y);
     }
-    updateKeyframeIndicator(anchorKeyframe_, anchor);
+    anchorKeyframe_->refresh();
 }
 
 void PropertiesEditor::configureScale() {
     const auto* scale = session_.parameterForSelection(document::kScaleParameterRole);
-    const auto value = scale == nullptr ? std::nullopt : session_.constantVec2Value(scale->id);
+    const auto value = session_.effectiveVec2Value(document::kScaleParameterRole);
     const bool editable = value.has_value();
     for (auto* field : {scaleX_, scaleY_}) {
         field->setEnabled(editable);
@@ -704,29 +692,29 @@ void PropertiesEditor::configureScale() {
     // Stored as a unitless factor, shown as a percentage: an unscaled layer reads 100%.
     scaleX_->setValue(editable ? value->x * 100.0 : 100.0);
     scaleY_->setValue(editable ? value->y * 100.0 : 100.0);
-    updateKeyframeIndicator(scaleKeyframe_, scale);
+    scaleKeyframe_->refresh();
 }
 
 void PropertiesEditor::configureRotation() {
     const auto* parameter = session_.parameterForSelection(document::kRotationParameterRole);
-    const auto value = parameter == nullptr ? std::nullopt : session_.constantValue(parameter->id);
+    const auto value = session_.effectiveScalarValue(document::kRotationParameterRole);
     rotation_->setEnabled(value.has_value());
     const QSignalBlocker blocker(rotation_);
     rotation_->setValue(value.value_or(0.0));
     rotation_->setToolTip(parameter == nullptr ? tr("Rotation is not exposed by this selection")
                                                : parameterSourceDescription(*parameter));
-    updateKeyframeIndicator(rotationKeyframe_, parameter);
+    rotationKeyframe_->refresh();
 }
 
 void PropertiesEditor::configureOpacity() {
     const auto* parameter = session_.parameterForSelection(document::kOpacityParameterRole);
-    const auto value = parameter == nullptr ? std::nullopt : session_.constantValue(parameter->id);
+    const auto value = session_.effectiveScalarValue(document::kOpacityParameterRole);
     opacity_->setEnabled(value.has_value());
     const QSignalBlocker blocker(opacity_);
     opacity_->setValue(value.has_value() ? *value * 100.0 : 100.0);
     opacity_->setToolTip(parameter == nullptr ? tr("Opacity is not exposed by this selection")
                                               : parameterSourceDescription(*parameter));
-    updateKeyframeIndicator(opacityKeyframe_, parameter);
+    opacityKeyframe_->refresh();
 }
 
 void PropertiesEditor::configureSolidColor() {
@@ -741,8 +729,8 @@ void PropertiesEditor::configureSolidColor() {
         return;
     }
 
-    updateKeyframeIndicator(solidColorKeyframe_, parameter);
-    const auto value = session_.constantColorValue(parameter->id);
+    solidColorKeyframe_->refresh();
+    const auto value = session_.effectiveColorValue(document::kSolidColorParameterRole);
     const bool canEditColor = value.has_value();
     for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
         field->setEnabled(canEditColor);
@@ -794,7 +782,7 @@ void PropertiesEditor::configureTextSource() {
     textContent_->setPlaceholderText(tr("Type the layer's text"));
     textContent_->setToolTip(parameterSourceDescription(*content));
 
-    const auto sizeValue = session_.constantValue(size->id);
+    const auto sizeValue = session_.effectiveScalarValue(document::kTextSizeParameterRole);
     textSize_->setEnabled(sizeValue.has_value());
     if (sizeValue.has_value()) {
         const QSignalBlocker blocker(textSize_);
@@ -802,7 +790,7 @@ void PropertiesEditor::configureTextSource() {
     }
     textSize_->setToolTip(parameterSourceDescription(*size));
 
-    const auto colorValue = session_.constantColorValue(color->id);
+    const auto colorValue = session_.effectiveColorValue(document::kTextColorParameterRole);
     textColor_->setEnabled(colorValue.has_value());
     if (colorValue.has_value()) {
         const QSignalBlocker blocker(textColor_);
@@ -819,7 +807,8 @@ void PropertiesEditor::configureTextSource() {
             ? tr("%1\nEditing here commits a color inside the displayable [0, 1] range")
                   .arg(exactColorText(*colorValue))
             : parameterSourceDescription(*color));
-    updateKeyframeIndicator(textColorKeyframe_, color);
+    textColorKeyframe_->refresh();
+    textSizeKeyframe_->refresh();
 
     textFontName_->setText(
         tr("%1 %2 (embedded)")

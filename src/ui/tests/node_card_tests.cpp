@@ -38,10 +38,27 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     expect(card != nullptr, "the layer output card exists");
     if (card == nullptr)
         return;
-    const auto hosted = hostedControls(*card);
+    const auto allHosted = hostedControls(*card);
+    // ADAPTED (task S5): the card hosts keyframe diamonds beside its value cells now, and a diamond
+    // is NOT a value cell -- it is a fixed-size icon-sized control in its own column, so the
+    // full-width/control-height assertions below are about the value cells only. The two kinds are
+    // split by objectName, and each is counted in its own right.
+    std::vector<std::pair<QGraphicsProxyWidget*, QWidget*>> hosted;
+    std::size_t diamondCount = 0;
+    for (const auto& entry : allHosted) {
+        if (entry.second->objectName() == QStringLiteral("nodeKeyframeDiamond")) {
+            ++diamondCount;
+            continue;
+        }
+        hosted.push_back(entry);
+    }
     // ADAPTED (task S4): the Layer Output card now hosts position X/Y, anchor X/Y, scale X/Y,
     // rotation and opacity -- eight fields, one per transform component plus opacity.
     expect(hosted.size() == 8, "the layer output card hosts its transform and opacity fields");
+    // One diamond per animatable PARAMETER, not per field: the paired X/Y rows share a parameter,
+    // so position, anchor, scale, rotation and opacity make five.
+    expect(diamondCount == 5,
+           "and one keyframe diamond per animatable parameter, not per value cell");
     for (const auto& [proxy, widget] : hosted) {
         expect(proxy->scale() == 1.0,
                "a hosted control is never scaled: a fractional scale resampled its hairlines, "

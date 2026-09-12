@@ -9,6 +9,8 @@ namespace bloom::ui {
 
 class CompositionSession;
 
+class KeyframeDiamond;
+
 namespace kit {
 class KColorChip;
 class KValueField;
@@ -48,19 +50,22 @@ class PropertiesEditor final : public QWidget {
     QWidget* selectionSection_ = nullptr;
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;
-    QLabel* positionKeyframe_ = nullptr;
+    // Task S5, item 0: every indicator below is now a clickable KeyframeDiamond rather than the
+    // QLabel that only reported a source. The member names are unchanged -- the row they live in
+    // and the objectName the tests read are the same -- so only the control kind moved.
+    KeyframeDiamond* positionKeyframe_ = nullptr;
     kit::KValueField* anchorX_ = nullptr;
     kit::KValueField* anchorY_ = nullptr;
-    QLabel* anchorKeyframe_ = nullptr;
+    KeyframeDiamond* anchorKeyframe_ = nullptr;
     kit::KValueField* scaleX_ = nullptr;
     kit::KValueField* scaleY_ = nullptr;
-    QLabel* scaleKeyframe_ = nullptr;
+    KeyframeDiamond* scaleKeyframe_ = nullptr;
     kit::KValueField* rotation_ = nullptr;
-    QLabel* rotationKeyframe_ = nullptr;
+    KeyframeDiamond* rotationKeyframe_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
-    QLabel* opacityKeyframe_ = nullptr;
+    KeyframeDiamond* opacityKeyframe_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
-    QLabel* solidColorKeyframe_ = nullptr;
+    KeyframeDiamond* solidColorKeyframe_ = nullptr;
     // Task P3: the RGBA cells replacing the former read-only solidColorValue_ label.
     kit::KValueField* solidColorRed_ = nullptr;
     kit::KValueField* solidColorGreen_ = nullptr;
@@ -76,7 +81,10 @@ class PropertiesEditor final : public QWidget {
     QLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;
     kit::KColorChip* textColor_ = nullptr;
-    QLabel* textColorKeyframe_ = nullptr;
+    KeyframeDiamond* textColorKeyframe_ = nullptr;
+    // Task S5, item 1: text size is animatable now, so its row gets a diamond like every other
+    // animatable row. It had none before because no command could key it.
+    KeyframeDiamond* textSizeKeyframe_ = nullptr;
     QLabel* textFontName_ = nullptr;
 
     // The no-selection document/composition view (issue #120, decision 3).

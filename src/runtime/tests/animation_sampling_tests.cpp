@@ -133,7 +133,9 @@ void testValidationAndEnvironment(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
-    expectations.expect(runtime::kAnimationSamplingSemanticsVersion == 1,
+    // Task S5 moved this 1 -> 2: EaseInOut lets sampling produce a value no version-1 sampler
+    // could, and the Color4 curve table added a third sampled value kind.
+    expectations.expect(runtime::kAnimationSamplingSemanticsVersion == 2,
                         "animation sampling semantics are explicitly versioned");
     testSampling(expectations);
     testVec2AndExtremeTime(expectations);

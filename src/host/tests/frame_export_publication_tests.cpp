@@ -133,8 +133,8 @@ constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x200f);
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, kColorParameterId,
-                                                   bloom::core::Color4d{0.1, 0.2, 0.3, 1.0}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeId, {kColorParameterId, bloom::core::Color4d{0.1, 0.2, 0.3, 1.0}}});
     // CompiledCompositionOutput requires a layer-stack input, not a bare solid (mirrors
     // bloom/output/tests/flat_exr_test_support.hpp's shellPlan()): solid -> layer output -> layer
     // stack -> composition output.

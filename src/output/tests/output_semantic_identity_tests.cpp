@@ -53,14 +53,21 @@ using namespace std::chrono_literals;
 // embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
 // from the same kind of independent byte-oriented oracle that produced the originals -- a
 // standalone script that packs each frozen field itself with explicit big-endian integers and
-// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing the
-// BOTH previously checked-in golden sets byte for byte when fed their own version numbers.
+// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing EVERY
+// previously checked-in golden set byte for byte when fed its own version numbers.
+//
+// Task S5 moved all four: kCompiledCompositionPlanSemanticsVersion and
+// kAnimationSamplingSemanticsVersion are both 2 now (a solid's colour and a text layer's size and
+// colour became typed operands; EaseInOut and Color4 curves changed what sampling can produce), and
+// both integers are hashed into the process-frame identity preimage. Every preimage LENGTH below is
+// unchanged -- no frozen field was added, removed, or reordered -- which is exactly why only the
+// digests move.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "8768f3e62742b325378cb4bfae967929d6c8f9b03700a55a40b8aa538d36a321";
+    "8953402a7c1af00e44240460e5befba8204c8ffda8f2d0444f046b525d501e0f";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "206d3348034058221c6cdaf2a6e463f4b38aae345d583827989cb54347fd05eb";
+    "6bba111bcf935003a3cae0392b273e5a851b71d7f613e04cf158cc7498921086";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "cc908d21c2a61fe2f7989a2c1d1af11c115797c82a0fe2fafdfa551a14236424";
+    "7bef666a9cce233901d01fa85dd23933e1e0f6f7e4083d24cb38cbf45fa068dc";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
@@ -387,7 +394,7 @@ tinyFrameWithPixelAspect(const core::PixelAspectRatio pixelAspect) {
     }
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledSolid{
-        test::kSolidNodeId, test::kColorParameterId, {0.25, 0.5, 0.75, 1.0}});
+        test::kSolidNodeId, {test::kColorParameterId, core::Color4d{0.25, 0.5, 0.75, 1.0}}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         test::kLayerNodeId, test::kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{test::kPositionParameterId, document::Vec2d{0.5, 0.5}},

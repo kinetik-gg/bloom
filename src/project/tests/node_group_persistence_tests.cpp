@@ -105,8 +105,8 @@ void roundTripAndReopen() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 2 && !opened.roundTrip,
-           "a grouped project is written and read as schema 1.2");
+    expect(opened.schemaMinor == 3 && !opened.roundTrip,
+           "a grouped project is written and read as the current schema minor");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
     expect(composition != nullptr, "the reopened project keeps its composition");
@@ -156,10 +156,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 2");
+    const auto minor = documentText.find("\"minor\": 3");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 2").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 3").size(), "\"minor\": 1");
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");
 
@@ -185,7 +185,7 @@ void migrationFromSchema11() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 2 && !opened.roundTrip,
+    expect(opened.schemaMinor == 3 && !opened.roundTrip,
            "migration lands on the current editable schema");
     const auto snapshot = opened.document->snapshot();
     const auto& composition = snapshot.project().compositions().front();

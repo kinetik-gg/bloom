@@ -160,7 +160,7 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
              const document::Vec2d position = {2.0, 1.0}, const double opacity = 1.0,
              const document::CompositionFormat compositionFormat = format()) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, kColorA, color});
+    operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, {kColorA, color}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
@@ -178,11 +178,11 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
 twoSolidPlan(const bool redOnTop = true) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}});
+        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, {}));
     operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}});
+        runtime::CompiledSolid{kSolidNodeB, {kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {}));
     const runtime::CompiledLayerStackEntry red{kSlotA, kLayerA,
@@ -223,8 +223,8 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
             const document::Vec2d position = {8.0, 10.0},
             const document::CompositionFormat compositionFormat = format(16, 20)) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledText{kTextNode, kTextContent, content, kTextSize, size,
-                                                  kTextColor, color});
+    operations.emplace_back(runtime::CompiledText{
+        kTextNode, kTextContent, content, {kTextSize, size}, {kTextColor, color}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
@@ -339,7 +339,7 @@ void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
 squareTransformPlan(const LayerTransformValues values) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}});
+        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, values));
     operations.emplace_back(runtime::CompiledLayerStack{
@@ -918,7 +918,7 @@ void testPublishedPlanOwnsItsImmutableDefinition(Expectations& expectations) {
     const auto before = evaluator.evaluate(publishedPlan, requestFor(*publishedPlan), {});
     retainedDefinition.sourceRevision = document::Revision::fromRaw(99);
     retainedDefinition.output = runtime::OperationIndex::fromRaw(0);
-    std::get<runtime::CompiledSolid>(retainedDefinition.operations.front()).color =
+    std::get<runtime::CompiledSolid>(retainedDefinition.operations.front()).color.source =
         core::Color4d{0.0, 1.0, 0.0, 1.0};
     retainedDefinition.operations.clear();
     retainedDefinition.scalarCurves.push_back(

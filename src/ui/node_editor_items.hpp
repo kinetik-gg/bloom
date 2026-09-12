@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -319,6 +320,13 @@ class NodeItem final : public QGraphicsObject {
     struct ValueRow final {
         QString label;
         QWidget* widget = nullptr;
+        // Task S5, item 0: the row's keyframe diamond, for a row whose parameter is animatable.
+        // Null for a row that is not (text content), so the layout below reserves the diamond
+        // column only when some row actually carries one.
+        KeyframeDiamond* diamond = nullptr;
+        // The role this row's diamond keys, so refreshValues() can bind it to the node's own
+        // parameter without re-deriving which role built which control.
+        std::string_view role;
     };
 
     // Selects THIS node through the session's one selection truth before any edit, because every
@@ -425,6 +433,22 @@ class NodeItem final : public QGraphicsObject {
         proxy->setWidget(widget);
     }
 
+    // The card's own keyframe diamond for `role` (task S5, item 0): the SAME shared
+    // ui::KeyframeDiamond the Properties rows use, hosted on the canvas the way every other card
+    // control is. Null when this card has no session to read, which is the same guard every commit*
+    // path above already applies. objectName "nodeKeyframeDiamond" is new -- enumerated in this
+    // task's report.
+    [[nodiscard]] KeyframeDiamond* makeCardDiamond(const std::string_view role) {
+        if (session_ == nullptr) {
+            return nullptr;
+        }
+        auto* diamond = new KeyframeDiamond(*session_, std::string(role));
+        diamond->setObjectName(QStringLiteral("nodeKeyframeDiamond"));
+        diamond->resize(diamond->sizeHint());
+        addProxy(diamond);
+        return diamond;
+    }
+
     // Builds the card's rows once per role set. Editable rows exist only for roles that have BOTH a
     // kit primitive able to carry the value AND an existing session/command path able to write it
     // (decision 5's honesty rule):
@@ -483,6 +507,7 @@ class NodeItem final : public QGraphicsObject {
         rotation_ = nullptr;
         opacity_ = nullptr;
         colorChip_ = nullptr;
+        colorDiamond_ = nullptr;
         textContent_ = nullptr;
         textSize_ = nullptr;
         colorRowLabel_.clear();
@@ -502,8 +527,10 @@ class NodeItem final : public QGraphicsObject {
                         [this] { commitPosition(); });
                 connect(positionY_, &kit::KValueField::valueChanged, this,
                         [this] { commitPosition(); });
-                valueRows_.push_back({QStringLiteral("X"), positionX_});
-                valueRows_.push_back({QStringLiteral("Y"), positionY_});
+                valueRows_.push_back({QStringLiteral("X"), positionX_,
+                                      makeCardDiamond(document::kPositionParameterRole),
+                                      document::kPositionParameterRole});
+                valueRows_.push_back({QStringLiteral("Y"), positionY_, nullptr, {}});
             } else if (role == document::kAnchorParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
                 anchorX_ = makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
@@ -516,8 +543,10 @@ class NodeItem final : public QGraphicsObject {
                         [this] { commitAnchor(); });
                 connect(anchorY_, &kit::KValueField::valueChanged, this,
                         [this] { commitAnchor(); });
-                valueRows_.push_back({tr("Anchor X"), anchorX_});
-                valueRows_.push_back({tr("Anchor Y"), anchorY_});
+                valueRows_.push_back({tr("Anchor X"), anchorX_,
+                                      makeCardDiamond(document::kAnchorParameterRole),
+                                      document::kAnchorParameterRole});
+                valueRows_.push_back({tr("Anchor Y"), anchorY_, nullptr, {}});
             } else if (role == document::kScaleParameterRole) {
                 scaleX_ = makeCardField(QStringLiteral("nodeScaleXEditor"), tr("Scale X"),
                                         -100'000.0, 100'000.0, 2, QStringLiteral("%"));
@@ -527,22 +556,28 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(scaleY_);
                 connect(scaleX_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
                 connect(scaleY_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
-                valueRows_.push_back({tr("Scale X"), scaleX_});
-                valueRows_.push_back({tr("Scale Y"), scaleY_});
+                valueRows_.push_back({tr("Scale X"), scaleX_,
+                                      makeCardDiamond(document::kScaleParameterRole),
+                                      document::kScaleParameterRole});
+                valueRows_.push_back({tr("Scale Y"), scaleY_, nullptr, {}});
             } else if (role == document::kRotationParameterRole) {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
                 addProxy(rotation_);
                 connect(rotation_, &kit::KValueField::valueChanged, this,
                         [this] { commitRotation(); });
-                valueRows_.push_back({tr("Rotation"), rotation_});
+                valueRows_.push_back({tr("Rotation"), rotation_,
+                                      makeCardDiamond(document::kRotationParameterRole),
+                                      document::kRotationParameterRole});
             } else if (role == document::kOpacityParameterRole) {
                 opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"), 0.0,
                                          100.0, 1, QStringLiteral("%"));
                 addProxy(opacity_);
                 connect(opacity_, &kit::KValueField::valueChanged, this,
                         [this] { commitOpacity(); });
-                valueRows_.push_back({tr("Opacity"), opacity_});
+                valueRows_.push_back({tr("Opacity"), opacity_,
+                                      makeCardDiamond(document::kOpacityParameterRole),
+                                      document::kOpacityParameterRole});
             } else if (role == document::kSolidColorParameterRole) {
                 colorChip_ = new kit::KColorChip;
                 colorChip_->setObjectName(QStringLiteral("nodeColorChip"));
@@ -553,6 +588,9 @@ class NodeItem final : public QGraphicsObject {
                 connect(colorChip_, &kit::KColorChip::colorChanged, this,
                         [this](const kit::KColor& color) { commitColor(color); });
                 colorRowLabel_ = tr("Color");
+                // The colour row is the one row that is not a ValueRow (the chip is positioned on
+                // its own, below), so its diamond is held directly rather than in valueRows_.
+                colorDiamond_ = makeCardDiamond(document::kSolidColorParameterRole);
             } else if (role == document::kTextParameterRole) {
                 textContent_ = new QLineEdit;
                 textContent_->setObjectName(QStringLiteral("nodeTextContentEditor"));
@@ -562,7 +600,7 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(textContent_);
                 connect(textContent_, &QLineEdit::editingFinished, this,
                         [this] { commitTextContent(); });
-                valueRows_.push_back({tr("Text"), textContent_});
+                valueRows_.push_back({tr("Text"), textContent_, nullptr, {}});
             } else if (role == document::kTextSizeParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
                 // same gesture in either surface produces the same value.
@@ -572,7 +610,9 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(textSize_);
                 connect(textSize_, &kit::KValueField::valueChanged, this,
                         [this] { commitTextSize(); });
-                valueRows_.push_back({tr("Size"), textSize_});
+                valueRows_.push_back({tr("Size"), textSize_,
+                                      makeCardDiamond(document::kTextSizeParameterRole),
+                                      document::kTextSizeParameterRole});
             } else {
                 readOnlyRows_.push_back({displayTypeName(role), QString{}});
             }
@@ -593,7 +633,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kPositionParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantVec2Value(parameter->id);
+                                   : session_->effectiveVec2Value(parameter->id);
             const QString tip = describe(parameter, tr("Position is not exposed by this node"));
             for (auto* field : {positionX_, positionY_}) {
                 field->setEnabled(value.has_value());
@@ -612,7 +652,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kAnchorParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantVec2Value(parameter->id);
+                                   : session_->effectiveVec2Value(parameter->id);
             const QString tip = describe(parameter, tr("Anchor is not exposed by this node"));
             for (auto* field : {anchorX_, anchorY_}) {
                 field->setEnabled(value.has_value());
@@ -631,7 +671,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kScaleParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantVec2Value(parameter->id);
+                                   : session_->effectiveVec2Value(parameter->id);
             const QString tip = describe(parameter, tr("Scale is not exposed by this node"));
             for (auto* field : {scaleX_, scaleY_}) {
                 field->setEnabled(value.has_value());
@@ -650,7 +690,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kRotationParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantValue(parameter->id);
+                                   : session_->effectiveScalarValue(parameter->id);
             rotation_->setEnabled(value.has_value());
             rotation_->setToolTip(describe(parameter, tr("Rotation is not exposed by this node")));
             const QSignalBlocker blocker(rotation_);
@@ -662,7 +702,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kOpacityParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantValue(parameter->id);
+                                   : session_->effectiveScalarValue(parameter->id);
             opacity_->setEnabled(value.has_value());
             opacity_->setToolTip(describe(parameter, tr("Opacity is not exposed by this node")));
             const QSignalBlocker blocker(opacity_);
@@ -688,7 +728,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kTextSizeParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantValue(parameter->id);
+                                   : session_->effectiveScalarValue(parameter->id);
             textSize_->setEnabled(value.has_value());
             textSize_->setToolTip(describe(parameter, tr("Size is not exposed by this node")));
             const QSignalBlocker blocker(textSize_);
@@ -700,7 +740,7 @@ class NodeItem final : public QGraphicsObject {
                 parameterForRole(node, composition, document::kSolidColorParameterRole);
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantColorValue(parameter->id);
+                                   : session_->effectiveColorValue(parameter->id);
             colorChip_->setEnabled(value.has_value());
             if (value.has_value()) {
                 const QSignalBlocker blocker(colorChip_);
@@ -718,6 +758,26 @@ class NodeItem final : public QGraphicsObject {
                     ? tr("%1\nEditing here commits a color inside the displayable [0, 1] range")
                           .arg(exact)
                     : exact);
+        }
+
+        // Every diamond is bound to THIS node's own parameter (never the selection's) and then
+        // re-read, in one pass, so a card that is not selected still paints the truth for its own
+        // rows -- and clicking one keys that parameter without moving the selection.
+        for (const auto& row : valueRows_) {
+            if (row.diamond == nullptr) {
+                continue;
+            }
+            const auto* parameter = parameterForRole(node, composition, row.role);
+            row.diamond->setParameterId(parameter == nullptr ? document::ParameterId{}
+                                                             : parameter->id);
+            row.diamond->refresh();
+        }
+        if (colorDiamond_ != nullptr) {
+            const auto* parameter =
+                parameterForRole(node, composition, document::kSolidColorParameterRole);
+            colorDiamond_->setParameterId(parameter == nullptr ? document::ParameterId{}
+                                                               : parameter->id);
+            colorDiamond_->refresh();
         }
 
         std::size_t readOnlyIndex = 0;
@@ -752,6 +812,20 @@ class NodeItem final : public QGraphicsObject {
         qreal labelColumn = 0.0;
         qreal controlColumn = 0.0;
         qreal rowHeight = 0.0;
+        // The diamond column is reserved only when this card actually carries one, so a card with
+        // no animatable parameter is exactly as wide as it was before task S5.
+        qreal diamondColumn = 0.0;
+        for (const auto& row : valueRows_) {
+            if (row.diamond != nullptr) {
+                diamondColumn =
+                    std::max(diamondColumn, static_cast<qreal>(row.diamond->sizeHint().width()));
+            }
+        }
+        if (colorDiamond_ != nullptr) {
+            diamondColumn =
+                std::max(diamondColumn, static_cast<qreal>(colorDiamond_->sizeHint().width()));
+        }
+        const qreal diamondSpan = diamondColumn > 0.0 ? diamondColumn + kCardLabelGap : 0.0;
         // sizeHint(), never the CURRENT width: a control is stretched to the card's own control
         // column below, so measuring its live width here would feed the card's width back into
         // itself and make the layout depend on how many times it had been run.
@@ -790,7 +864,7 @@ class NodeItem final : public QGraphicsObject {
         minimumWidth_ = kCardMinimumWidth;
         if (rowCount > 0.0) {
             minimumWidth_ = std::max(minimumWidth_, kCardPadding + labelColumn + kCardLabelGap +
-                                                        controlColumn + kCardPadding);
+                                                        diamondSpan + controlColumn + kCardPadding);
         }
         if (socketColumn > 0.0) {
             minimumWidth_ = std::max(minimumWidth_, 2.0 * kCardPadding + socketColumn);
@@ -817,7 +891,8 @@ class NodeItem final : public QGraphicsObject {
         labelColumnWidth_ = labelColumn;
         rowHeight_ = rowHeight;
 
-        const qreal controlLeft = kCardPadding + labelColumn + kCardLabelGap;
+        const qreal diamondLeft = kCardPadding + labelColumn + kCardLabelGap;
+        const qreal controlLeft = diamondLeft + diamondSpan;
         // CEIL, never truncate: a fractional span rounded down leaves the control a pixel short of
         // the card's own padding, and at a fractional row pitch that gap is exactly the sliver of
         // card surface that made a full-width field look inset.
@@ -826,6 +901,11 @@ class NodeItem final : public QGraphicsObject {
         for (const auto& row : valueRows_) {
             row.widget->resize(static_cast<int>(controlSpan), row.widget->sizeHint().height());
             positionProxy(row.widget, controlLeft, y + (rowHeight - row.widget->height()) / 2.0);
+            if (row.diamond != nullptr) {
+                row.diamond->resize(row.diamond->sizeHint());
+                positionProxy(row.diamond, diamondLeft,
+                              y + (rowHeight - row.diamond->height()) / 2.0);
+            }
             y += rowHeight + kCardRowGap;
         }
         if (colorChip_ != nullptr) {
@@ -833,6 +913,11 @@ class NodeItem final : public QGraphicsObject {
             // The color row is the last row carrying a real widget -- read-only rows below it are
             // painted, not positioned -- so `y` is deliberately not advanced again here.
             positionProxy(colorChip_, controlLeft, y + (rowHeight - colorChip_->height()) / 2.0);
+            if (colorDiamond_ != nullptr) {
+                colorDiamond_->resize(colorDiamond_->sizeHint());
+                positionProxy(colorDiamond_, diamondLeft,
+                              y + (rowHeight - colorDiamond_->height()) / 2.0);
+            }
         }
         for (auto* child : childItems()) {
             auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
@@ -926,6 +1011,7 @@ class NodeItem final : public QGraphicsObject {
     kit::KValueField* rotation_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     kit::KColorChip* colorChip_ = nullptr;
+    KeyframeDiamond* colorDiamond_ = nullptr;
     QLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;
     // Only to choose the honest undo label and accessible name for the shared "color" role; the
