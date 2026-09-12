@@ -664,6 +664,44 @@ void testSpaceHoldLeftDragPans(Expectations& expectations) {
                         "the space-pan fixture reaches asynchronous scheduler quiescence");
 }
 
+// Task S1, item 8: Ctrl+0 fits and Ctrl+1 is actual size, the same pair the node canvas answers to.
+// F and Z are retired in both and are bound by nothing here.
+void testCtrlZeroFitsAndCtrlOneIsActualSize(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Viewer Zoom Keys Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the fixture's initial frame becomes ready");
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "the viewer starts in Fit mode");
+
+    const auto sendKey = [&fixture](const int key, const Qt::KeyboardModifiers modifiers) {
+        QKeyEvent event(QEvent::KeyPress, key, modifiers);
+        QCoreApplication::sendEvent(&fixture.viewer, &event);
+    };
+
+    sendKey(Qt::Key_1, Qt::ControlModifier);
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow &&
+                            near(fixture.viewer.viewTransformForTest().zoom, 1.0),
+                        "Ctrl+1 leaves Fit for exactly 100%");
+    sendKey(Qt::Key_0, Qt::ControlModifier);
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "and Ctrl+0 returns to Fit");
+
+    // The retired keys do nothing: two ways to do one thing is exactly what item 8 removed.
+    sendKey(Qt::Key_Z, Qt::NoModifier);
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "Z no longer reaches actual size");
+    sendKey(Qt::Key_1, Qt::ControlModifier);
+    sendKey(Qt::Key_F, Qt::NoModifier);
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow,
+                        "and F no longer reaches Fit");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the zoom-key fixture reaches asynchronous scheduler quiescence");
+}
+
 // Honest empty state (decision 5): with no composition at all, the canvas shows a quiet,
 // product-neutral invitation instead of any evaluation warning or banner.
 void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expectations) {
@@ -722,6 +760,7 @@ int main(int argc, char** argv) {
     testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(expectations);
     testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(expectations);
     testSpaceHoldLeftDragPans(expectations);
+    testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

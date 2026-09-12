@@ -371,7 +371,7 @@ The interaction implementation accepts a `NodeGraphicsScene::Submit` transaction
 current application editor factory constructs `NodeGraphEditor` with only `CompositionSession`,
 whose command execution and result publication remain private. No production adapter is installed.
 Consequently **node command authoring is not enabled in the application yet**. Persisted projection,
-sockets, session click/Shift/box selection, Ctrl+A, Home/F/Z, zoom/pan, existing in-node parameter
+sockets, session click/Shift/box selection, Ctrl+A, Home/Ctrl+0/Ctrl+1, zoom/pan, existing in-node parameter
 edits and legacy Add Solid work. Command gestures show no draggable cursor without an adapter;
 command-only node menus and cursor-positioned Add search are not offered. The legacy Add menu
 keeps Solid creation and a disabled Text row. Keyboard authoring requests report unavailability
@@ -406,22 +406,27 @@ With that adapter supplied, the following behavior is implemented and covered by
   one transaction. A moved single node with an unconnected first Image input and a first Image
   output highlights a wire under the cursor and inserts with two `ConnectPorts` operations in the
   same transaction as the move. Any command refusal rolls the entire transaction back.
-- Shift+A and canvas Add… open `KSearchPopup` at the cursor. Case-insensitive word filtering matches
+- Tab and canvas Add… open `KSearchPopup` at the cursor. Case-insensitive word filtering matches
   readable node type names and socket-kind names. Enter, arrows, pointer selection and Escape use
   the kit popup machinery. Every built-in registry kind is listed. Text retains the actual
   `AddTextLayer` refusal in a disabled row. Solid uses `AddSolidLayer`; other kinds use `AddNode`.
   Creation, cursor layout and the first compatible armed-port connection share one transaction.
   The editor's compound operation delegates all durable writes to existing commands and only reads
   the returned IDs to resolve subsequent operations.
-- X/Delete remove the selection; Shift+D duplicates with a 24px offset, selects returned IDs, and
-  starts floating placement. Escape cancels placement while keeping the undoable copies at their
-  initial offset. Ctrl+X dissolves a single selection. M and H toggle mute and collapse in one
-  transaction for the entire selection (a mixed selection becomes uniformly enabled for that
-  state). Empty and protected targets report refusal. F/Home fit, Z is 100%, and Ctrl+A selects all.
-  `ShortcutOverride` claims only canvas commands; focused proxy field widgets retain text editing.
+- Delete/Backspace remove the selection; Ctrl+D duplicates with a 24px offset, selects returned IDs,
+  and starts floating placement. Escape cancels placement while keeping the undoable copies at their
+  initial offset. Enter, and a double-click on the card, rename a layer node. Dissolve, mute and
+  collapse are context-menu commands and bind no key; mute and collapse still toggle in one
+  transaction for the entire selection (a mixed selection becomes uniformly enabled for that state),
+  and empty or protected targets report refusal through the same shared guard. Ctrl+0 fits, Home is
+  its alias, Ctrl+1 is 100%, and Ctrl+A selects all. `ShortcutOverride` claims only canvas commands;
+  focused proxy field widgets retain text editing, Tab included.
+  `docs/ux/interaction-model.md` is the binding list for this editor and every other.
 - Canvas menus offer Add…, Fit, 100%, Zoom In/Out and Select All. Node menus offer only accepted
   Duplicate, Dissolve, Mute/Unmute, Collapse/Expand, Rename and Delete operations. Rename appears
-  only for a single participating Layer Output and edits its header through `RenameLayer`.
+  only for a single participating Layer Output and edits its header through `RenameLayer`. Each of
+  those menu items calls the editor's own named command method, never a synthesized key press, so a
+  command can exist in the menu without owning a key.
   `canApplyNodeOperation` is needed because commands have no dry-run surface: it checks the actual
   operation and final validation on an isolated draft, without publishing or advancing live IDs,
   revisions or history. Menus do not maintain a second set of command eligibility rules.

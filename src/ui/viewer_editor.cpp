@@ -1024,17 +1024,22 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
             event->accept();
             return;
         }
-        // Two ways to reach 100%: this key, or the "100%" context-menu/zoom-dropdown item
-        // (decision 2/4).
-        if (event->key() == Qt::Key_Z) {
-            setZoomActualSize();
-            event->accept();
-            return;
-        }
-        if (event->key() == Qt::Key_F) {
-            setZoomFit();
-            event->accept();
-            return;
+        // Ctrl+0 fits and Ctrl+1 is actual size, in this canvas and in the node canvas alike (task
+        // S1, item 8). F and Z are retired in both: the Adobe-standard pair is what an artist
+        // arriving from another compositor reaches for, and a single-letter binding that far up the
+        // alphabet is needed for tools. The other two ways to reach either are still the context
+        // menu and the zoom dropdown (decision 2/4).
+        if (event->modifiers() == Qt::ControlModifier) {
+            if (event->key() == Qt::Key_1) {
+                setZoomActualSize();
+                event->accept();
+                return;
+            }
+            if (event->key() == Qt::Key_0) {
+                setZoomFit();
+                event->accept();
+                return;
+            }
         }
     }
     QWidget::keyPressEvent(event);

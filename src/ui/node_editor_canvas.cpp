@@ -36,7 +36,8 @@ NodeGraphicsView::NodeGraphicsView(QWidget* parent) : QGraphicsView(parent) {
     // kCanvasHalfExtent for why it is fixed and oversized rather than tracking the graph.
     setSceneRect(-kCanvasHalfExtent, -kCanvasHalfExtent, kCanvasHalfExtent * 2.0,
                  kCanvasHalfExtent * 2.0);
-    // StrongFocus so Space/F/Z reach the canvas without a prior click -- the Viewer's own rule.
+    // StrongFocus so Space and the navigation keys reach the canvas without a prior click -- the
+    // Viewer's own rule.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 }
@@ -217,16 +218,20 @@ void NodeGraphicsView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 namespace {
+// The canvas's own keys (task S1, item 8; docs/ux/interaction-model.md is the list). Adobe-first:
+// Delete/Backspace remove, Ctrl+D duplicates, Ctrl+A selects all, Ctrl+0 fits and Ctrl+1 is actual
+// size, Tab opens Add, Enter renames, Space holds to pan. Mute, collapse and dissolve are
+// context-menu commands and bind no key at all; Ctrl+G and Ctrl+Shift+G are reserved for groups and
+// deliberately unbound.
 bool canvasShortcut(const QKeyEvent& event) {
     const auto modifiers = event.modifiers();
     const int key = event.key();
     if (modifiers == Qt::NoModifier)
-        return key == Qt::Key_Space || key == Qt::Key_F || key == Qt::Key_Z ||
-               key == Qt::Key_Home || key == Qt::Key_X || key == Qt::Key_Delete ||
-               key == Qt::Key_M || key == Qt::Key_H || key == Qt::Key_Escape;
-    if (modifiers == Qt::ShiftModifier)
-        return key == Qt::Key_A || key == Qt::Key_D;
-    return modifiers == Qt::ControlModifier && (key == Qt::Key_X || key == Qt::Key_A);
+        return key == Qt::Key_Space || key == Qt::Key_Home || key == Qt::Key_Delete ||
+               key == Qt::Key_Backspace || key == Qt::Key_Escape || key == Qt::Key_Return ||
+               key == Qt::Key_Enter || key == Qt::Key_Tab;
+    return modifiers == Qt::ControlModifier &&
+           (key == Qt::Key_A || key == Qt::Key_D || key == Qt::Key_0 || key == Qt::Key_1);
 }
 bool fieldFocused(const QGraphicsScene* scene) {
     return scene && dynamic_cast<QGraphicsProxyWidget*>(scene->focusItem()) != nullptr;
@@ -237,6 +242,16 @@ bool NodeGraphicsView::event(QEvent* event) {
         canvasShortcut(*static_cast<QKeyEvent*>(event))) {
         event->accept();
         return true;
+    }
+    // Tab is claimed before QWidget::event() can spend it on focus traversal, which is what would
+    // otherwise happen to it and is never what Tab means on this canvas. A focused in-node field
+    // keeps Tab for committing and travelling, exactly as it did.
+    if (event->type() == QEvent::KeyPress && !fieldFocused(scene())) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Tab && key->modifiers() == Qt::NoModifier) {
+            keyPressEvent(key);
+            return true;
+        }
     }
     return QGraphicsView::event(event);
 }
@@ -258,12 +273,20 @@ void NodeGraphicsView::keyPressEvent(QKeyEvent* event) {
                 updatePanCursor();
                 return;
             }
-            if (event->key() == Qt::Key_Z) {
-                zoomToActualSize();
+            if (event->key() == Qt::Key_Home) {
+                frameGraph();
                 return;
             }
-            if (event->key() == Qt::Key_F || event->key() == Qt::Key_Home) {
+        }
+        if (event->modifiers() == Qt::ControlModifier) {
+            // Ctrl+0 fit and Ctrl+1 actual size, the same pair the Viewer now answers to. F and Z
+            // are retired in both canvases (task S1, item 8).
+            if (event->key() == Qt::Key_0) {
                 frameGraph();
+                return;
+            }
+            if (event->key() == Qt::Key_1) {
+                zoomToActualSize();
                 return;
             }
         }

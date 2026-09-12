@@ -601,6 +601,22 @@ void NodeItem::setPreviewWidth(const qreal width) {
 } // namespace bloom::ui::node_editor
 
 namespace bloom::ui::node_editor {
+// Retires a rename field for good: detached from the card and taken out of the scene NOW, then
+// deferred-deleted. Hiding it and waiting for the deferred delete left a stale, invisible editor
+// among the card's children, and fieldWidget() answers with the first child that matches a name --
+// so the next rename's own field could not be found at all.
+void NodeItem::retireRenameProxy() {
+    auto* retired = renameProxy_;
+    if (retired == nullptr)
+        return;
+    renameProxy_ = nullptr;
+    retired->hide();
+    retired->setParentItem(nullptr);
+    if (scene() != nullptr)
+        scene()->removeItem(retired);
+    retired->deleteLater();
+}
+
 void NodeItem::startRename() {
     auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
     if (!session_ || !session_->composition() || !graphScene || !graphScene->canSubmit())
@@ -633,23 +649,15 @@ void NodeItem::startRename() {
             [this, field, graphScene, layer = *layer, revision, composition] {
                 if (!renameProxy_ || !renameProxy_->isVisible())
                     return;
-                renameProxy_->hide();
+                const auto name = field->text().toStdString();
+                retireRenameProxy();
                 commands::Transaction transaction("Rename Layer", revision);
-                transaction.emplace<commands::RenameLayer>(composition, layer,
-                                                           field->text().toStdString());
+                transaction.emplace<commands::RenameLayer>(composition, layer, name);
                 (void)graphScene->submit(std::move(transaction));
-                auto* retired = renameProxy_;
-                renameProxy_ = nullptr;
-                retired->deleteLater();
             });
     auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
     cancel->setContext(Qt::WidgetShortcut);
-    connect(cancel, &QShortcut::activated, this, [this] {
-        auto* retired = renameProxy_;
-        retired->hide();
-        renameProxy_ = nullptr;
-        retired->deleteLater();
-    });
+    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
     field->setFocus(Qt::OtherFocusReason);
     field->selectAll();
 }

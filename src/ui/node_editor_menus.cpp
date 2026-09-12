@@ -31,75 +31,136 @@ void NodeGraphEditor::showStatus(const QString& message) {
     Q_EMIT session_.commandRejected(message);
 }
 
+// The canvas's key bindings (task S1, item 8). Every node command below is a named method rather
+// than a key this function re-dispatches to itself, because the context menu invokes the same
+// commands and a menu item that worked by synthesizing a key press could only offer what the
+// keyboard happened to bind -- which is exactly what mute, collapse and dissolve no longer are.
 void NodeGraphEditor::handleCanvasKey(const int key, const Qt::KeyboardModifiers modifiers) {
     if (key == Qt::Key_Escape) {
         scene_->cancelGesture();
         return;
     }
-    if (key == Qt::Key_A && modifiers == Qt::ControlModifier) {
-        scene_->selectAllNodes();
+    if (modifiers == Qt::ControlModifier) {
+        if (key == Qt::Key_A)
+            scene_->selectAllNodes();
+        else if (key == Qt::Key_D)
+            duplicateSelectedNodes();
         return;
     }
-    if (key == Qt::Key_A && modifiers == Qt::ShiftModifier) {
+    if (modifiers != Qt::NoModifier)
+        return;
+    if (key == Qt::Key_Tab) {
         const QPoint global = QCursor::pos();
         openAddSearch(view_->sceneFromViewport(view_->viewport()->mapFromGlobal(global)), global);
         return;
     }
-    if (!scene_->canSubmit()) {
-        showStatus(tr("Node command submission is unavailable"));
+    if (key == Qt::Key_Delete || key == Qt::Key_Backspace) {
+        removeSelectedNodes();
         return;
     }
-    const auto nodes = session_.selectedNodes();
+    if (key == Qt::Key_Return || key == Qt::Key_Enter)
+        renameSelectedLayer();
+}
+
+// The guard every node command shares: an available submission path, a live composition, a
+// non-empty selection, and no transient gesture left in flight. An empty result means nothing will
+// happen and the reason has already been reported.
+std::set<document::NodeId> NodeGraphEditor::commandTargets() {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return {};
+    }
+    auto nodes = session_.selectedNodes();
     if (nodes.empty() || !session_.composition()) {
         showStatus(tr("Select a node first"));
-        return;
+        return {};
     }
     if (scene_->gestureActive())
         scene_->cancelGesture();
-    const auto composition = session_.compositionId();
-    commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
-    if ((key == Qt::Key_Delete || key == Qt::Key_X) && modifiers == Qt::NoModifier)
-        transaction.emplace<commands::RemoveNodes>(composition, nodes);
-    else if (key == Qt::Key_X && modifiers == Qt::ControlModifier) {
-        if (nodes.size() != 1) {
-            showStatus(tr("Dissolve requires exactly one selected node"));
-            return;
-        }
-        transaction.emplace<commands::DissolveNode>(composition, *nodes.begin());
-    } else if (key == Qt::Key_D && modifiers == Qt::ShiftModifier)
-        transaction.emplace<commands::DuplicateNodes>(composition, nodes, document::Vec2d{24, 24});
-    else if (key == Qt::Key_M || key == Qt::Key_H) {
-        const bool mute = key == Qt::Key_M;
-        const bool target = std::ranges::any_of(nodes, [&](const auto id) {
-            const auto layout = layoutFor(*session_.composition(), id);
-            return !(mute ? layout.muted : layout.collapsed);
-        });
-        for (const auto id : nodes) {
-            if (mute)
-                transaction.emplace<commands::SetNodeMuted>(composition, id, target);
-            else
-                transaction.emplace<commands::SetNodeCollapsed>(composition, id, target);
-        }
-    }
-    if (transaction.empty())
+    return nodes;
+}
+
+void NodeGraphEditor::removeSelectedNodes() {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
         return;
+    commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::RemoveNodes>(session_.compositionId(), nodes);
+    (void)scene_->submit(std::move(transaction));
+}
+
+void NodeGraphEditor::duplicateSelectedNodes() {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
+        return;
+    commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::DuplicateNodes>(session_.compositionId(), nodes,
+                                                  document::Vec2d{24, 24});
     const auto result = scene_->submit(std::move(transaction));
     if (!result.succeeded())
         return;
-    if (key == Qt::Key_D) {
-        std::set<document::NodeId> copies;
-        for (const auto id : nodes) {
-            const auto copy =
-                result.outputId<document::NodeId>("node." + std::to_string(id.value()));
-            if (copy)
-                copies.insert(*copy);
-        }
-        if (!copies.empty()) {
-            session_.selectNodes(copies, *copies.begin());
-            scene_->startDuplicateMove(
-                view_->sceneFromViewport(view_->viewport()->mapFromGlobal(QCursor::pos())));
-        }
+    std::set<document::NodeId> copies;
+    for (const auto id : nodes) {
+        const auto copy = result.outputId<document::NodeId>("node." + std::to_string(id.value()));
+        if (copy)
+            copies.insert(*copy);
     }
+    if (copies.empty())
+        return;
+    session_.selectNodes(copies, *copies.begin());
+    scene_->startDuplicateMove(
+        view_->sceneFromViewport(view_->viewport()->mapFromGlobal(QCursor::pos())));
+}
+
+void NodeGraphEditor::dissolveSelectedNode() {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
+        return;
+    if (nodes.size() != 1) {
+        showStatus(tr("Dissolve requires exactly one selected node"));
+        return;
+    }
+    commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::DissolveNode>(session_.compositionId(), *nodes.begin());
+    (void)scene_->submit(std::move(transaction));
+}
+
+void NodeGraphEditor::toggleSelectedMuted(const bool muted) {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
+        return;
+    // A mixed selection becomes uniformly enabled for the state, not individually flipped.
+    const bool target = std::ranges::any_of(nodes, [&](const auto id) {
+        const auto layout = layoutFor(*session_.composition(), id);
+        return !(muted ? layout.muted : layout.collapsed);
+    });
+    commands::Transaction transaction("Edit Nodes", session_.snapshot().revision());
+    for (const auto id : nodes) {
+        if (muted)
+            transaction.emplace<commands::SetNodeMuted>(session_.compositionId(), id, target);
+        else
+            transaction.emplace<commands::SetNodeCollapsed>(session_.compositionId(), id, target);
+    }
+    (void)scene_->submit(std::move(transaction));
+}
+
+void NodeGraphEditor::renameSelectedLayer() {
+    const auto nodes = commandTargets();
+    if (nodes.empty())
+        return;
+    if (nodes.size() != 1) {
+        showStatus(tr("Rename requires exactly one selected layer"));
+        return;
+    }
+    const auto id = *nodes.begin();
+    for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
+        if (boundary.nodeId != id)
+            continue;
+        if (auto* card = dynamic_cast<NodeItem*>(scene_->findNodeItem(id)))
+            card->startRename();
+        return;
+    }
+    showStatus(tr("Only a layer node can be renamed"));
 }
 
 QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
@@ -124,10 +185,10 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
         };
         if (accepts(commands::DuplicateNodes(composition, nodes, {24, 24})))
             action(tr("Duplicate"), QStringLiteral("nodeDuplicateAction"),
-                   [this] { handleCanvasKey(Qt::Key_D, Qt::ShiftModifier); });
+                   [this] { duplicateSelectedNodes(); });
         if (nodes.size() == 1 && accepts(commands::DissolveNode(composition, *nodes.begin())))
             action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
-                   [this] { handleCanvasKey(Qt::Key_X, Qt::ControlModifier); });
+                   [this] { dissolveSelectedNode(); });
         const bool allMuted = std::ranges::all_of(
             nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
         const bool allCollapsed = std::ranges::all_of(
@@ -136,13 +197,12 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
                 return accepts(commands::SetNodeMuted(composition, id, !allMuted));
             }))
             action(allMuted ? tr("Unmute") : tr("Mute"), QStringLiteral("nodeMuteAction"),
-                   [this] { handleCanvasKey(Qt::Key_M, Qt::NoModifier); });
+                   [this] { toggleSelectedMuted(true); });
         if (std::ranges::all_of(nodes, [&](const auto id) {
                 return accepts(commands::SetNodeCollapsed(composition, id, !allCollapsed));
             }))
             action(allCollapsed ? tr("Expand") : tr("Collapse"),
-                   QStringLiteral("nodeCollapseAction"),
-                   [this] { handleCanvasKey(Qt::Key_H, Qt::NoModifier); });
+                   QStringLiteral("nodeCollapseAction"), [this] { toggleSelectedMuted(false); });
         if (nodes.size() == 1) {
             for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
                 if (boundary.nodeId == *nodes.begin() &&
@@ -156,7 +216,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
         }
         if (accepts(commands::RemoveNodes(composition, nodes)))
             action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
-                   [this] { handleCanvasKey(Qt::Key_Delete, Qt::NoModifier); });
+                   [this] { removeSelectedNodes(); });
         return menu;
     }
     if (scene_->canSubmit()) {

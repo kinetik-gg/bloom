@@ -7,6 +7,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <functional>
 #include <memory>
+#include <set>
 
 #include <QGraphicsScene>
 #include <QGraphicsView>
@@ -102,6 +103,10 @@ class NodeGraphicsScene final : public QGraphicsScene {
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override;
     void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override;
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override;
+    // Task S1, item 8: a double-click on a layer card renames it, the second way into the rename
+    // besides Enter. A card that is not a layer boundary has no name of its own to edit, and
+    // NodeItem::startRename() is what says so.
+    void mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) override;
 
   private:
     void rebuildEdges(const document::Composition& composition);
@@ -115,7 +120,8 @@ class NodeGraphicsScene final : public QGraphicsScene {
 // the wheel step factor and the zoom bounds are the SAME named constants viewer_editor.hpp
 // publishes (kZoomStepFactor, ViewTransform::kMinZoom/kMaxZoom), so the two canvases cannot drift
 // apart by someone re-spelling a number. Wheel zooms about the cursor, Space-hold + left drag or a
-// middle drag pans, F frames the graph, Z returns to 100% -- one app, one feel (decision 1).
+// middle drag pans, Ctrl+0 frames the graph and Ctrl+1 returns to 100% -- the same pair the Viewer
+// answers to, one app, one feel (decision 1; task S1, item 8 retired F and Z in both).
 //
 // QGraphicsView's own transform is what carries zoom and pan underneath, but its SCROLLING is
 // switched off entirely -- both scroll bar policies AlwaysOff, top-left alignment, and a fixed
@@ -135,8 +141,8 @@ class NodeGraphicsView final : public QGraphicsView {
 
     // False until the artist zooms or pans; the editor re-frames the graph on a projection rebuild
     // only while it is false, so a freshly opened panel frames its content and a deliberately
-    // positioned view is never yanked out from under the artist. Fit (F) puts it back to false --
-    // "keep framing everything" -- while 100% (Z), a wheel step, and a pan set it.
+    // positioned view is never yanked out from under the artist. Fit (Ctrl+0) puts it back to false
+    // -- "keep framing everything" -- while 100% (Ctrl+1), a wheel step, and a pan set it.
     [[nodiscard]] bool viewAdjusted() const noexcept;
 
     // The scene point under a viewport point, exactly (no integer rounding): the mapping the
@@ -149,9 +155,9 @@ class NodeGraphicsView final : public QGraphicsView {
     // `notches` wheel detents' worth of zoom about the viewport's own center -- the menu's Zoom
     // In/Out and the keyboard both land here.
     void zoomStep(int notches);
-    // F: scales and centers so every item fits, clamped into the shared zoom bounds.
+    // Ctrl+0: scales and centers so every item fits, clamped into the shared zoom bounds.
     void frameGraph();
-    // Z: exactly 100%, with the graph's bounding rectangle centered -- the same "actual size,
+    // Ctrl+1: exactly 100%, with the graph's bounding rectangle centered -- the same "actual size,
     // centered" the Viewer's 100% means.
     void zoomToActualSize();
 
@@ -219,6 +225,16 @@ class NodeGraphEditor final : public QWidget {
     void showContextMenu(const QPoint& viewportPosition);
     [[nodiscard]] QMenu* buildContextMenu(QWidget* parent, bool nodeMenu = false);
     void handleCanvasKey(int key, Qt::KeyboardModifiers modifiers);
+    // The node commands, each named for what it does (task S1, item 8). The keyboard and the
+    // context menu call these; neither synthesizes a key press at the other, so a command can exist
+    // in the menu without owning a key -- which is what mute, collapse and dissolve now are.
+    [[nodiscard]] std::set<document::NodeId> commandTargets();
+    void removeSelectedNodes();
+    void duplicateSelectedNodes();
+    void dissolveSelectedNode();
+    // `muted` selects which layout flag is toggled: true for mute, false for collapse.
+    void toggleSelectedMuted(bool muted);
+    void renameSelectedLayer();
     void addNode(const QString& type);
     void showStatus(const QString& message);
 

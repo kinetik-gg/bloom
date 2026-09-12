@@ -5,6 +5,7 @@
 #include <QRegion>
 #include <QShortcut>
 #include <QStringList>
+#include <memory>
 
 namespace bloom::ui::test {
 namespace {
@@ -41,6 +42,16 @@ kit::KSearchPopup* search(Fixture& f) {
         throw std::runtime_error("search popup missing");
     return popup;
 }
+// Task S1, item 8 moved mute, collapse and dissolve out of the keyboard and into the context menu
+// alone, so the way to exercise one is now the menu item itself.
+bool triggerNodeMenuAction(Fixture& f, const char* name) {
+    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest(true));
+    auto* action = named(menu.get(), name);
+    if (action == nullptr)
+        return false;
+    action->trigger();
+    return true;
+}
 } // namespace
 void testSearchKeyboardAndMenus() {
     Fixture f;
@@ -48,29 +59,43 @@ void testSearchKeyboardAndMenus() {
     const auto b = f.add(document::kLayerOutputNodeType, {400, 100});
     f.session.selectNodes({a, b}, b);
     auto history = f.stack.size();
-    f.key(Qt::Key_M);
+    expect(triggerNodeMenuAction(f, "nodeMuteAction"), "the node menu offers Mute");
     expect(f.session.composition()->nodeLayout().at(a).muted &&
                f.session.composition()->nodeLayout().at(b).muted && f.stack.size() == history + 1,
-           "M mutes the entire selection in one command transaction");
-    f.key(Qt::Key_M);
-    expect(!f.session.composition()->nodeLayout().at(a).muted,
-           "M toggles selection back to unmuted");
-    f.key(Qt::Key_H);
+           "Mute mutes the entire selection in one command transaction");
+    expect(triggerNodeMenuAction(f, "nodeMuteAction"), "and offers Unmute next");
+    expect(!f.session.composition()->nodeLayout().at(a).muted, "Unmute toggles the selection back");
+    expect(triggerNodeMenuAction(f, "nodeCollapseAction"), "the node menu offers Collapse");
     expect(f.session.composition()->nodeLayout().at(a).collapsed &&
                f.session.composition()->nodeLayout().at(b).collapsed,
-           "H collapses the entire selection");
-    f.key(Qt::Key_H);
-    expect(!f.session.composition()->nodeLayout().at(b).collapsed, "H expands selected cards");
+           "Collapse collapses the entire selection");
+    expect(triggerNodeMenuAction(f, "nodeCollapseAction"), "and offers Expand next");
+    expect(!f.session.composition()->nodeLayout().at(b).collapsed, "Expand expands selected cards");
     QSignalSpy refused(&f.session, &CompositionSession::commandRejected);
+    // A multi-selection has no Dissolve to reach at all: the menu is the only route to it and the
+    // menu only offers operations the command layer accepts for the current selection.
+    {
+        std::unique_ptr<QMenu> multiMenu(f.editor.contextMenuForTest(true));
+        expect(named(multiMenu.get(), "nodeDissolveAction") == nullptr,
+               "a multi-selection is offered no Dissolve to refuse");
+    }
+    // And the keys these used to own are bound by nothing.
+    const auto beforeRetired = f.stack.size();
+    for (const auto retired : {Qt::Key_M, Qt::Key_H, Qt::Key_X})
+        f.key(retired);
     f.key(Qt::Key_X, Qt::ControlModifier);
-    expect(!refused.empty(), "multi-selection dissolve refuses with status");
+    f.key(Qt::Key_D, Qt::ShiftModifier);
+    f.key(Qt::Key_A, Qt::ShiftModifier);
+    expect(f.stack.size() == beforeRetired && refused.empty() &&
+               f.editor.findChild<kit::KSearchPopup*>() == nullptr,
+           "every retired node key is bound by nothing: no command, no refusal, no popup");
     f.session.selectNode(a);
     history = f.stack.size();
-    f.key(Qt::Key_D, Qt::ShiftModifier);
+    f.key(Qt::Key_D, Qt::ControlModifier);
     const auto* selected = f.session.selectedNode();
     expect(selected && selected->id != a && f.scene()->gestureActive() &&
                f.stack.size() == history + 1,
-           "Shift D duplicates, selects the new IDs and starts a floating move");
+           "Ctrl D duplicates, selects the new IDs and starts a floating move");
     if (!selected)
         return;
     const auto copy = selected->id;
@@ -86,31 +111,29 @@ void testSearchKeyboardAndMenus() {
            "cancelling duplicate placement restores its 24px offset");
     expect(!f.scene()->gestureActive(),
            "Escape stops duplicate placement while retaining the undoable copies");
-    f.key(Qt::Key_X);
-    expect(!f.session.composition()->graph().findNode(copy), "X removes selected copies");
+    f.key(Qt::Key_Backspace);
+    expect(!f.session.composition()->graph().findNode(copy), "Backspace removes selected copies");
     expect(f.session.undo() && f.session.composition()->graph().findNode(copy),
-           "X removal undoes once");
+           "the removal undoes once");
     f.session.selectNode(copy);
     f.key(Qt::Key_Delete);
-    expect(!f.session.composition()->graph().findNode(copy), "Delete aliases remove selection");
+    expect(!f.session.composition()->graph().findNode(copy), "Delete aliases Backspace");
     f.session.selectNode(a);
-    f.key(Qt::Key_X, Qt::ControlModifier);
-    expect(!refused.empty() && f.session.composition()->graph().findNode(a),
-           "source without Image input refuses dissolve");
     auto* menu = f.editor.contextMenuForTest(true);
     expect(named(menu, "nodeDuplicateAction") && named(menu, "nodeDeleteAction") &&
                !named(menu, "nodeDissolveAction") && named(menu, "nodeMuteAction") &&
                named(menu, "nodeCollapseAction") && !named(menu, "nodeRenameAction"),
            "source node menu shows exactly the commands accepted for its selection");
+    expect(!named(menu, "nodeDissolveAction"),
+           "a source with no Image input is offered no Dissolve -- the menu is its only route");
     delete menu;
     const auto stackId = f.session.composition()->graph().layerStack().nodeId();
     f.session.selectNode(stackId);
     history = f.stack.size();
     const auto refusalCount = refused.size();
     f.key(Qt::Key_Delete);
-    f.key(Qt::Key_X, Qt::ControlModifier);
-    expect(f.stack.size() == history && refused.size() == refusalCount + 2,
-           "protected remove/dissolve keyboard paths report refusal without mutation");
+    expect(f.stack.size() == history && refused.size() == refusalCount + 1,
+           "the protected remove keyboard path reports refusal without mutation");
     menu = f.editor.contextMenuForTest(true);
     expect(!named(menu, "nodeDeleteAction") && !named(menu, "nodeDissolveAction"),
            "protected node menu omits removal and dissolve");
@@ -124,8 +147,9 @@ void testSearchKeyboardAndMenus() {
     expect(named(menu, "nodeDissolveAction") != nullptr,
            "connected graph-only Image pair offers dissolve");
     delete menu;
-    f.key(Qt::Key_X, Qt::ControlModifier);
-    expect(!f.session.composition()->graph().findNode(b), "Ctrl X dissolves a valid single node");
+    expect(triggerNodeMenuAction(f, "nodeDissolveAction") &&
+               !f.session.composition()->graph().findNode(b),
+           "Dissolve dissolves a valid single node");
     f.key(Qt::Key_A, Qt::ControlModifier);
     expect(f.session.selectedNodes().size() == f.session.composition()->graph().nodes().size(),
            "Ctrl A selects every graph node through session");
@@ -133,10 +157,10 @@ void testSearchKeyboardAndMenus() {
     f.key(Qt::Key_Home);
     const auto fit = f.view()->transform();
     f.view()->zoomStep(1);
-    f.key(Qt::Key_F);
-    expect(f.view()->transform() == fit && !f.view()->viewAdjusted(), "Home aliases Fit F");
-    f.key(Qt::Key_Z);
-    expect(f.view()->zoomFactor() == 1, "Z remains actual size");
+    f.key(Qt::Key_0, Qt::ControlModifier);
+    expect(f.view()->transform() == fit && !f.view()->viewAdjusted(), "Home aliases Ctrl+0 Fit");
+    f.key(Qt::Key_1, Qt::ControlModifier);
+    expect(f.view()->zoomFactor() == 1, "Ctrl+1 is actual size");
     int stolen = 0;
     QShortcut windowDelete(QKeySequence(Qt::Key_Delete), &f.editor);
     QObject::connect(&windowDelete, &QShortcut::activated, &f.editor, [&] { ++stolen; });
@@ -149,14 +173,14 @@ void testSearchKeyboardAndMenus() {
     const auto cursorScene =
         f.view()->sceneFromViewport(f.view()->viewport()->mapFromGlobal(global));
     QCursor::setPos(global);
-    f.key(Qt::Key_A, Qt::ShiftModifier);
+    f.key(Qt::Key_Tab);
     auto* popup = search(f);
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
     expect(popup->isVisible() &&
                resultRows(list->model()) ==
                    static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
-           "Shift A opens all registered node kinds at the cursor");
+           "Tab opens all registered node kinds at the cursor");
     // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
     // heading only for a section that actually has results under it.
     expect(sectionHeadings(list->model()) ==
@@ -216,7 +240,7 @@ void testSearchKeyboardAndMenus() {
                f.stack.size() == history + 1 &&
                f.session.composition()->nodeLayout().at(selected->id).position ==
                    document::Vec2d{cursorScene.x(), cursorScene.y()},
-           "Enter adds the selected registry kind at the Shift A cursor scene position");
+           "Enter adds the selected registry kind at the Tab cursor scene position");
     f.editor.openAddSearch({550, 450}, global, document::NodeInputRef{selected->id, "image"}, {});
     popup = search(f);
     field = popup->findChild<QLineEdit*>();
@@ -275,11 +299,19 @@ void testSearchKeyboardAndMenus() {
            "clicking a search result adds and closes the popup");
     f.session.clearSelection();
     const auto emptyRefusals = refused.size();
-    for (const auto key : {Qt::Key_M, Qt::Key_H, Qt::Key_Delete})
-        f.key(key);
-    f.key(Qt::Key_D, Qt::ShiftModifier);
+    f.key(Qt::Key_Delete);
+    f.key(Qt::Key_Backspace);
+    f.key(Qt::Key_D, Qt::ControlModifier);
+    f.key(Qt::Key_Return);
     expect(refused.size() == emptyRefusals + 4,
-           "mute, collapse, removal and duplication refuse empty selection with status");
+           "removal, duplication and rename refuse an empty selection with status");
+    {
+        // Mute and collapse share that guard but are unreachable with an empty selection at all:
+        // the node menu offers nothing when nothing is selected, and the menu is their only route.
+        std::unique_ptr<QMenu> emptyMenu(f.editor.contextMenuForTest(true));
+        expect(emptyMenu->actions().isEmpty(),
+               "an empty selection has no node menu to reach mute or collapse through");
+    }
     // A fixture-owned durable driver ID pins the N2 limitation; there is no driver record to copy.
     auto beforeDriver = f.document.snapshot();
     auto draft = f.document.draft(beforeDriver);
@@ -300,7 +332,7 @@ void testSearchKeyboardAndMenus() {
     f.session.rebind(f.document, f.stack, f.session.compositionId());
     f.session.selectNode(a);
     const auto driverRefusals = refused.size();
-    f.key(Qt::Key_D, Qt::ShiftModifier);
+    f.key(Qt::Key_D, Qt::ControlModifier);
     expect(f.stack.size() == 0 && refused.size() == driverRefusals + 1 &&
                !f.scene()->gestureActive(),
            "driven-parameter duplication refuses without copies or a dangling move gesture");

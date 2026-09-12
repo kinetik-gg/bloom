@@ -263,6 +263,62 @@ void testMergeRendersOneOrderedMultiInput() {
     expect(!pill->dropIndicator().has_value(),
            "and ending the drag clears the indicator with the gesture");
 }
+// Item 8. Two ways into a layer card's name -- Enter and a double-click -- and a card with no name
+// of its own refuses both.
+void testEnterAndDoubleClickRenameALayerCard() {
+    Fixture f;
+    expect(f.session.addSolidLayer(QStringLiteral("Before"), core::Color4d{1, 0, 0, 1}),
+           "layer fixture");
+    const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
+    const auto boundary = f.session.boundaryNodeForLayer(layerId);
+    expect(boundary.has_value(), "the layer resolves its boundary node");
+    if (!boundary.has_value())
+        return;
+
+    f.session.selectNode(*boundary);
+    f.key(Qt::Key_Return);
+    auto* field = qobject_cast<QLineEdit*>(
+        f.scene()->nodeFieldForTest(*boundary, QStringLiteral("nodeRenameEditor")));
+    expect(field != nullptr, "Enter opens the layer card's inline name field");
+    if (field == nullptr)
+        return;
+    field->setText(QStringLiteral("Renamed by Enter"));
+    QTest::keyClick(field, Qt::Key_Return);
+    expect(f.session.composition()->graph().layerOutputs().front().name == "Renamed by Enter",
+           "and committing it executes RenameLayer");
+
+    // The committed field is retired with deleteLater(), so the event loop has to run before the
+    // card can be asked about its rename field again -- otherwise the stale, hidden one answers.
+    QCoreApplication::processEvents();
+
+    // A double-click on the card itself is the pointer route to the same field.
+    auto* card = f.card(*boundary);
+    expect(card != nullptr, "the layer card exists");
+    if (card == nullptr)
+        return;
+    const QPointF header = card->pos() + QPointF(card->cardWidth() / 2.0, 8.0);
+    f.mouse(QEvent::MouseButtonDblClick, header, Qt::LeftButton, Qt::LeftButton);
+    auto* reopened = qobject_cast<QLineEdit*>(
+        f.scene()->nodeFieldForTest(*boundary, QStringLiteral("nodeRenameEditor")));
+    expect(reopened != nullptr && reopened->graphicsProxyWidget() != nullptr &&
+               reopened->graphicsProxyWidget()->isVisible() && reopened != field,
+           "a double-click on a layer card opens the same field");
+
+    // A card that is not a layer boundary has no name of its own, and neither route invents one.
+    const auto stackId = f.session.composition()->graph().layerStack().nodeId();
+    f.session.selectNode(stackId);
+    f.key(Qt::Key_Return);
+    expect(f.scene()->nodeFieldForTest(stackId, QStringLiteral("nodeRenameEditor")) == nullptr,
+           "Enter on a node with no layer name of its own opens nothing");
+    auto* stackCard = f.card(stackId);
+    if (stackCard == nullptr)
+        return;
+    f.mouse(QEvent::MouseButtonDblClick,
+            stackCard->pos() + QPointF(stackCard->cardWidth() / 2.0, 8.0), Qt::LeftButton,
+            Qt::LeftButton);
+    expect(f.scene()->nodeFieldForTest(stackId, QStringLiteral("nodeRenameEditor")) == nullptr,
+           "and neither does a double-click on it");
+}
 } // namespace bloom::ui::test
 
 int main(int argc, char** argv) {
@@ -273,6 +329,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
         bloom::ui::test::testNodeTypesAreNamedForWhatTheyAre();
         bloom::ui::test::testMergeRendersOneOrderedMultiInput();
+        bloom::ui::test::testEnterAndDoubleClickRenameALayerCard();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

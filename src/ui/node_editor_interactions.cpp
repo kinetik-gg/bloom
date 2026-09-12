@@ -302,6 +302,20 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     event->accept();
 }
 
+void NodeGraphicsScene::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
+    // A double-click inside a hosted field belongs to the field (it selects a word); only a click
+    // on the card itself is a rename gesture.
+    if (!fieldAt(*this, event->scenePos())) {
+        if (auto* card = cardAt(*this, event->scenePos())) {
+            cancelGesture();
+            card->startRename();
+            event->accept();
+            return;
+        }
+    }
+    QGraphicsScene::mouseDoubleClickEvent(event);
+}
+
 void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
     auto& gesture = *interaction_;
     if (!gestureActive()) {

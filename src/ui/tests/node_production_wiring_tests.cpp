@@ -117,13 +117,14 @@ int main(int argc, char** argv) {
         expect(a.session.composition()->graph().edges().size() == edgesBefore + 1,
                "a production socket drag connects through the session");
 
-        // One Shift+D: duplicates the selection through the session.
+        // One Ctrl+D: duplicates the selection through the session (task S1, item 8 moved duplicate
+        // from Shift+D to the Adobe-standard Ctrl+D).
         a.session.selectNodes({solid}, solid);
         QCoreApplication::processEvents();
         const auto nodesBefore = a.session.composition()->graph().nodes().size();
-        QTest::keyClick(a.editor.graphView(), Qt::Key_D, Qt::ShiftModifier);
+        QTest::keyClick(a.editor.graphView(), Qt::Key_D, Qt::ControlModifier);
         expect(a.session.composition()->graph().nodes().size() > nodesBefore,
-               "Shift+D duplicates through the session");
+               "Ctrl+D duplicates through the session");
         expect(a.session.canUndo(), "duplication is undoable through the session");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -300,6 +300,9 @@ class NodeItem final : public QGraphicsObject {
   private:
     void buildSockets(const document::NodeRecord& node, const document::Composition& composition,
                       const document::NodeDefinitionRegistry& registry);
+    // Takes the inline rename field off the card and out of the scene immediately, then defers its
+    // deletion. See the definition for why hiding it is not enough.
+    void retireRenameProxy();
 
     struct ValueRow final {
         QString label;

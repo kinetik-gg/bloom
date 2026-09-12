@@ -105,8 +105,9 @@ void sendWheel(ui::NodeGraphicsView* view, const QPointF position, const int not
     QCoreApplication::sendEvent(view->viewport(), &event);
 }
 
-void sendKey(ui::NodeGraphicsView* view, const QEvent::Type type, const int key) {
-    QKeyEvent event(type, key, Qt::NoModifier);
+void sendKey(ui::NodeGraphicsView* view, const QEvent::Type type, const int key,
+             const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QKeyEvent event(type, key, modifiers);
     QCoreApplication::sendEvent(view, &event);
 }
 
@@ -203,10 +204,11 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(!fixture.view()->viewAdjusted(),
                         "Fit leaves the canvas following the graph until the artist moves it");
 
-    // Z, through the real key event, not the method.
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Z);
+    // Actual size, through the real key event, not the method. Task S1, item 8 retired Z in favour
+    // of the Adobe-standard Ctrl+1, in this canvas and in the Viewer alike.
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
-                        "Z is exactly 100%, one scene unit per screen pixel");
+                        "Ctrl+1 is exactly 100%, one scene unit per screen pixel");
     const QRectF actual = fixture.view()->viewportTransform().mapRect(bounds);
     expectations.expect(near(actual.center().x(), viewport.center().x(), 0.5) &&
                             near(actual.center().y(), viewport.center().y(), 0.5),
@@ -214,10 +216,20 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(fixture.view()->viewAdjusted(),
                         "an explicit 100% counts as the artist having moved the view");
 
-    // F, through the real key event.
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_F);
+    // Fit, through the real key event.
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
     expectations.expect(!fixture.view()->viewAdjusted() && !near(fixture.view()->zoomFactor(), 1.0),
-                        "F re-frames the graph");
+                        "Ctrl+0 re-frames the graph");
+
+    // And the keys they replaced are bound by nothing: a retired binding that still worked would be
+    // two ways to do one thing, which is exactly what item 8 exists to stop.
+    const double frameZoom = fixture.view()->zoomFactor();
+    for (const int retired : {Qt::Key_F, Qt::Key_Z}) {
+        sendKey(fixture.view(), QEvent::KeyPress, retired);
+        expectations.expect(near(fixture.view()->zoomFactor(), frameZoom) &&
+                                !fixture.view()->viewAdjusted(),
+                            "a retired navigation key changes nothing at all");
+    }
 
     // While the artist has not moved the view, a resize re-frames -- the same way the Viewer's Fit
     // recomputes its rectangle from the available area. Once they HAVE moved it, a resize leaves
@@ -228,7 +240,7 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(!near(fixture.view()->zoomFactor(), fittedZoom),
                         "a resize re-frames the graph while the view is still following it");
 
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Z);
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     fixture.editor.resize(800, 600);
     QCoreApplication::processEvents();
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
@@ -295,10 +307,10 @@ void testEmptyCanvasZoomDoesNotLatchTheViewAway(Expectations& expectations) {
                         "the fixture genuinely has no composition -- this is the empty canvas");
     expectations.expect(editor.graphScene()->items().isEmpty(), "so the canvas projects nothing");
 
-    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_Z);
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     expectations.expect(!editor.graphView()->viewAdjusted(),
                         "100% on an empty canvas changes nothing, so it does not claim the view");
-    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_F);
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
     expectations.expect(!editor.graphView()->viewAdjusted(), "and neither does Fit");
 }
 
