@@ -1,9 +1,12 @@
 #pragma once
 
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <functional>
+#include <memory>
 
 #include <QGraphicsScene>
 #include <QGraphicsView>
@@ -25,35 +28,22 @@ class QWheelEvent;
 namespace bloom::ui {
 
 class CompositionSession;
+struct NodeInteraction;
+namespace kit {
+class KSearchPopup;
+}
 
 inline constexpr int kNodeItemKindRole = Qt::UserRole + 1;
 inline constexpr int kNodeStableIdRole = Qt::UserRole + 2;
 
-// The typed-connector color mapping (task U4, issue #123, decision 3), keyed by the runtime's own
-// socket kind rather than by a node-editor-local guess at what a wire carries.
-//
-// `runtime::SocketValueKind` has exactly ONE enumerator today -- `Image` -- and
-// docs/architecture/evaluation-primitives.md says so in as many words: "The current `Image` socket
-// is only the first transport kind; semantic role constraints must exist before masks, depth,
-// normals, motion, UV, ID, or arbitrary data images can use it safely." Every port constant in
-// src/document is literally named "image" (kSolidSourceOutputPort, kTextSourceOutputPort,
-// kLayerOutputContentInputPort, kLayerOutputOutputPort, kLayerStackOutputPort,
-// kCompositionOutputInputPort, kCompositionOutputOutputPort), and every edge in a
-// document::CanonicalGraph -- whether its destination is a NodeInputRef or a LayerStackInputRef
-// slot -- carries that one transport.
-//
-// So this is deliberately a ONE-ENTRY mapping, not a speculative palette. Image transport takes
-// `Color::DataImage`, the data-type palette's own image role (docs/ux/visual-language.md). The
-// second transport kind gets its own token the day `SocketValueKind` gains its second enumerator,
-// and this switch is what will refuse to compile until someone makes that decision explicitly.
-//
-// Parameter/object links are NOT colored here because they do not exist as connectors: a
-// document::ParameterRecord binds to a node through a ParameterBinding (a role plus a stable
-// ParameterId), never through a graph edge, and the one "graph-driven value" source the model
-// declares -- document::DriverBindingSource -- is rejected outright by both the project format
-// (project::CanonicalDocumentError::UnsupportedDriverBindingSource) and the runtime snapshot
-// compiler. Drawing a second connector color for a link kind no document can currently contain
-// would be exactly the speculative palette this decision forbids.
+inline constexpr int kNodeSocketNameRole = Qt::UserRole + 3;
+inline constexpr int kNodeSocketInputRole = Qt::UserRole + 4;
+inline constexpr int kNodeHoveredRole = Qt::UserRole + 5;
+inline constexpr int kNodeMutedRole = Qt::UserRole + 6;
+inline constexpr int kNodeCollapsedRole = Qt::UserRole + 7;
+inline constexpr int kNodeStructuralRole = Qt::UserRole + 8;
+
+// Socket schema kinds use the N1 palette mapping, including presently nonlinkable kinds.
 [[nodiscard]] kit::Color socketColorToken(runtime::SocketValueKind kind) noexcept;
 
 // Which ends of a card's header line carry a port dot: an input on the left, an output on the
@@ -71,7 +61,22 @@ class NodeGraphicsScene final : public QGraphicsScene {
 
   public:
     explicit NodeGraphicsScene(QObject* parent = nullptr);
+    ~NodeGraphicsScene() override;
+    using Submit = std::function<commands::CommandResult(commands::Transaction&&)>;
+    void setSubmit(Submit submit);
+    [[nodiscard]] bool canSubmit() const { return static_cast<bool>(submit_); }
+    void cancelGesture();
+    void startDuplicateMove(QPointF scenePosition);
+    [[nodiscard]] bool gestureActive() const;
+    [[nodiscard]] commands::CommandResult submit(commands::Transaction&& transaction);
+    void selectAllNodes();
 
+  Q_SIGNALS:
+    void addSearchRequested(QPointF scenePosition, QPoint screenPosition,
+                            std::optional<document::InputPortRef> input,
+                            std::optional<document::OutputPortRef> output);
+
+  public:
     // The session in-node field rows read and commit through (decision 5). Null leaves the scene a
     // pure read-only projection with no editable rows at all -- the shape
     // kinetik_baseline_tests.cpp constructs directly to assert the canvas background token.
@@ -96,11 +101,16 @@ class NodeGraphicsScene final : public QGraphicsScene {
 
   protected:
     void drawBackground(QPainter* painter, const QRectF& rect) override;
+    void mousePressEvent(QGraphicsSceneMouseEvent* event) override;
+    void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override;
+    void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override;
 
   private:
     void rebuildEdges(const document::Composition& composition);
 
     CompositionSession* session_ = nullptr;
+    Submit submit_;
+    std::unique_ptr<NodeInteraction> interaction_;
 };
 
 // The graph canvas. Its navigation conventions are the Viewer's, deliberately and structurally:
@@ -152,8 +162,12 @@ class NodeGraphicsView final : public QGraphicsView {
     // behavior, which no item here consumes. `viewportPosition` is in viewport coordinates, so it
     // feeds itemAt()/mapToGlobal() directly.
     void contextMenuRequested(const QPoint& viewportPosition);
+    void canvasKeyPressed(int key, Qt::KeyboardModifiers modifiers);
+    void canvasFocusLost();
 
   protected:
+    bool event(QEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -195,19 +209,30 @@ class NodeGraphEditor final : public QWidget {
     // Test/diagnostic surface only: the exact menu a right-click builds, parented to this widget
     // and never shown. Lets a test enumerate what the canvas offers -- and, just as importantly,
     // what it honestly does not.
-    [[nodiscard]] QMenu* contextMenuForTest();
+    [[nodiscard]] QMenu* contextMenuForTest(bool nodeMenu = false);
+    void openAddSearch(QPointF scenePosition, QPoint screenPosition,
+                       std::optional<document::InputPortRef> input = {},
+                       std::optional<document::OutputPortRef> output = {});
 
   private:
     void rebuild();
     void updateSelection();
     void sceneSelectionChanged();
     void showContextMenu(const QPoint& viewportPosition);
-    [[nodiscard]] QMenu* buildContextMenu(QWidget* parent);
+    [[nodiscard]] QMenu* buildContextMenu(QWidget* parent, bool nodeMenu = false);
+    void handleCanvasKey(int key, Qt::KeyboardModifiers modifiers);
+    void addNode(const QString& type);
+    void showStatus(const QString& message);
 
     CompositionSession& session_;
     NodeGraphicsScene* scene_ = nullptr;
     NodeGraphicsView* view_ = nullptr;
     bool rebuilding_ = false;
+    kit::KSearchPopup* search_ = nullptr;
+    QPointF addPosition_;
+    std::optional<document::InputPortRef> addInput_;
+    std::optional<document::OutputPortRef> addOutput_;
+    document::Revision addRevision_;
 };
 
 } // namespace bloom::ui

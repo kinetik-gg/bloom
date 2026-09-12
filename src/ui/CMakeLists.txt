@@ -224,6 +224,11 @@ target_sources(
         main_window.cpp
         media_editor.cpp
         node_editor.cpp
+        node_editor_canvas.cpp
+        node_editor_items.cpp
+        node_editor_interactions.cpp
+        node_editor_add.cpp
+        node_editor_menus.cpp
         playback_controller.cpp
         project_host.cpp
         properties_editor.cpp
