@@ -1,6 +1,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
+#include <bloom/render/text_raster.hpp>
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,13 @@
 
 namespace bloom::runtime {
 namespace detail {
+
+// The text size schema bound and the rasterizer's own bound must be the same number: a document the
+// schema accepts has to be a document the reference rasterizer can draw. src/runtime is the only
+// module that sees both headers, so this is where the two are held equal -- at compile time, not in
+// a test that could be deleted. See bloom/document/parameter.hpp and bloom/render/text_raster.hpp.
+static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
+              "the text size schema bound and the text rasterizer bound must agree");
 
 [[nodiscard]] EvaluationDiagnostic diagnostic(const EvaluationDiagnosticCode code,
                                               std::string summary, std::string detail,
@@ -41,6 +49,7 @@ namespace detail {
     std::visit(
         Overloaded{
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+            [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
             [&subject](const CompiledLayerOutput& layer) {
                 subject.nodeId = layer.sourceNodeId;
                 subject.layerId = layer.layerId;
@@ -168,13 +177,21 @@ template <typename Value>
     return std::visit(
         Overloaded{
             [](const CompiledSolid&) { return true; },
+            [](const CompiledText&) { return true; },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
-                if (layer.input.value() >= index || !std::holds_alternative<CompiledSolid>(
-                                                        plan.operations()[layer.input.value()])) {
+                const auto sourcesAnImage = [&plan, index, &layer] {
+                    if (layer.input.value() >= index) {
+                        return false;
+                    }
+                    const auto& input = plan.operations()[layer.input.value()];
+                    return std::holds_alternative<CompiledSolid>(input) ||
+                           std::holds_alternative<CompiledText>(input);
+                };
+                if (!sourcesAnImage()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer Output has an invalid image input",
-                        "The input must name an earlier Solid operation.",
+                        "The input must name an earlier Solid or Text operation.",
                         subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
@@ -493,6 +510,34 @@ template <typename Value>
                 [&](const CompiledSolid& solid) {
                     static_cast<void>(registerParameter(solid.colorParameterId, operationSubject));
                 },
+                [&](const CompiledText& text) {
+                    if (!registerParameter(text.contentParameterId, operationSubject) ||
+                        !registerParameter(text.sizeParameterId, operationSubject) ||
+                        !registerParameter(text.colorParameterId, operationSubject)) {
+                        return;
+                    }
+                    // Re-checked here rather than trusted from compilation: the evaluator validates
+                    // the plan it is handed, because a plan can also arrive from a retained frame
+                    // or a test fixture rather than straight from the compiler.
+                    if (!std::isfinite(text.size) || text.size <= 0.0 ||
+                        text.size > document::kMaximumTextSizePixels) {
+                        auto subject = operationSubject;
+                        subject.parameterId = text.sizeParameterId;
+                        subject.field = "size";
+                        parameterFailure =
+                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                       "Text size is outside its domain", {}, std::move(subject));
+                        return;
+                    }
+                    if (!text.color.isValid()) {
+                        auto subject = operationSubject;
+                        subject.parameterId = text.colorParameterId;
+                        subject.field = "color";
+                        parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                      "Text color is not a valid authoring color",
+                                                      {}, std::move(subject));
+                    }
+                },
                 [&](const CompiledLayerOutput& layer) {
                     if (!registerParameter(layer.position.id, operationSubject) ||
                         !registerParameter(layer.opacity.id, operationSubject)) {
@@ -807,6 +852,106 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             operationFailure =
                                 imageDiagnostic(*frozen.error(), operationSubject,
                                                 "Solid process image could not be published");
+                            return;
+                        }
+                        produced.emplace(std::move(*frozen.value()));
+                    },
+                    [&](const CompiledText& text) {
+                        // A text source produces a full-frame image exactly like a solid, so the
+                        // Layer Output stage translates and fades it with the same primitive and
+                        // the same position/opacity semantics. The difference is only what is
+                        // inside the frame: transparent black everywhere except where glyph
+                        // coverage lands.
+                        //
+                        // Placement: the text origin is the frame's own data-window origin, so the
+                        // first line's ascender is flush with the top edge and its pen starts at
+                        // the left edge. Position then moves the whole layer from there, which is
+                        // why nothing here reads the position parameter.
+                        const auto pixel =
+                            render::solidPixelFromStraightLinearRec709Scene(text.color);
+                        if (!pixel) {
+                            operationFailure = imageDiagnostic(*pixel.error(), operationSubject,
+                                                               "Text color is not evaluable");
+                            return;
+                        }
+                        // Proxy evaluation scales the em size per axis by exactly the factors the
+                        // Layer Output stage scales translation by, so a proxy frame is a smaller
+                        // picture of the same composition rather than full-size glyphs in a small
+                        // frame.
+                        const auto rasterParameters = render::TextRasterParameters::create(
+                            text.size * resolved.horizontalScale,
+                            text.size * resolved.verticalScale);
+                        if (!rasterParameters) {
+                            operationFailure =
+                                imageDiagnostic(*rasterParameters.error(), operationSubject,
+                                                "Text size is not rasterizable");
+                            operationFailure->subject.parameterId = text.sizeParameterId;
+                            operationFailure->subject.field = "size";
+                            return;
+                        }
+                        auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+                            text.content, *rasterParameters.value(), request.pixelStorageByteLimit);
+                        if (!coverage) {
+                            operationFailure =
+                                imageDiagnostic(*coverage.error(), operationSubject,
+                                                "Text content could not be rasterized");
+                            operationFailure->subject.parameterId = text.contentParameterId;
+                            operationFailure->subject.field = "content";
+                            return;
+                        }
+                        auto builder = render::Rgba32fImageBuilder::create(
+                            resolved.imageDescriptor, resolved.imageBytes,
+                            render::Rgba32f::transparent());
+                        if (!builder) {
+                            operationFailure =
+                                imageDiagnostic(*builder.error(), operationSubject,
+                                                "Text process image could not be allocated");
+                            return;
+                        }
+                        const auto window = resolved.imageDescriptor.dataWindow();
+                        const auto height = window.extent().height();
+                        const auto& bitmap = *coverage.value();
+                        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
+                            if (cancellation.isCancellationRequested()) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            const auto y = window.originY() + static_cast<std::int64_t>(rowIndex);
+                            const auto clipped = detail::clipCoverageRow(bitmap, window, y);
+                            if (clipped.coverage.empty()) {
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = rowIndex + 1,
+                                                .total = height});
+                                continue;
+                            }
+                            auto outputRow = builder.value()->row(y);
+                            if (!outputRow) {
+                                operationFailure =
+                                    imageDiagnostic(*outputRow.error(), operationSubject,
+                                                    "Text output row could not be addressed");
+                                return;
+                            }
+                            if (const auto rowStatus = render::coverageSolidRow(
+                                    clipped.coverage, *pixel.value(),
+                                    outputRow.value()->subspan(clipped.outputOffset,
+                                                               clipped.coverage.size()))) {
+                                operationFailure =
+                                    imageDiagnostic(*rowStatus, operationSubject,
+                                                    "Text coverage could not be composited");
+                                return;
+                            }
+                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                                      .operation = operationIndex,
+                                                      .completed = rowIndex + 1,
+                                                      .total = height});
+                        }
+                        auto frozen = std::move(*builder.value()).freeze();
+                        if (!frozen) {
+                            operationFailure =
+                                imageDiagnostic(*frozen.error(), operationSubject,
+                                                "Text process image could not be published");
                             return;
                         }
                         produced.emplace(std::move(*frozen.value()));

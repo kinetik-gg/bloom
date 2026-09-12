@@ -1,7 +1,9 @@
+#include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -104,7 +106,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
     expectations.expect(registry.definitions().size() == 5,
-                        "startup contribution includes four lowerings and recognized Text");
+                        "startup contribution includes all five built-in lowerings");
 
     registry.freeze();
     const auto* solid =
@@ -116,11 +118,42 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                                       document::kSolidSourceNodeSchemaVersion) == solid,
                         "idempotent freeze preserves lookup addresses");
     expectations.expect(registry.containsType(document::kTextSourceNodeType),
-                        "recognized unsupported types remain discoverable");
+                        "every built-in type remains discoverable");
     const auto* text =
         registry.find(document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion);
-    expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Unsupported,
-                        "Text is explicit unsupported capability, not an unknown node");
+    // ADAPTED (task S3): Text was NodeLoweringKind::Unsupported while no portable CPU glyph
+    // rasterizer existed. It now has its own lowering, so the contract pinned here is its parameter
+    // shape -- content, then size, then color, in that order, none animatable -- rather than the
+    // absence of one.
+    expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
+                        "Text is a lowered capability with its own compiled operation");
+    expectations.expect(
+        text != nullptr && text->parameters.size() == 3 &&
+            text->parameters[0].role == document::kTextParameterRole &&
+            text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
+            text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
+            text->parameters[1].role == document::kTextSizeParameterRole &&
+            text->parameters[1].schemaKey == document::kTextSizeParameterSchemaKey &&
+            text->parameters[1].valueKind == runtime::ParameterValueKind::Float64 &&
+            text->parameters[2].role == document::kTextColorParameterRole &&
+            text->parameters[2].schemaKey == document::kTextColorParameterSchemaKey &&
+            text->parameters[2].valueKind == runtime::ParameterValueKind::Color4d,
+        "the text schema is exactly content, size, and color, in the registered order");
+    expectations.expect(text != nullptr && text->parameters.size() == 3 &&
+                            text->parameters[1].defaultValue ==
+                                document::ParameterValue{document::kDefaultTextSizePixels} &&
+                            text->parameters[2].defaultValue ==
+                                document::ParameterValue{core::Color4d{1.0, 1.0, 1.0, 1.0}},
+                        "a new text layer defaults to 72 px opaque white");
+    // The font is deliberately absent from the schema: the CPU reference path has exactly one
+    // embedded face, so a font parameter would persist a choice nothing can honor.
+    expectations.expect(text != nullptr &&
+                            std::ranges::none_of(text->parameters,
+                                                 [](const auto& parameter) {
+                                                     return parameter.role.find("font") !=
+                                                            std::string::npos;
+                                                 }),
+                        "the text schema names no font");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     expectations.expect(layer != nullptr && layer->parameters.size() == 2 &&

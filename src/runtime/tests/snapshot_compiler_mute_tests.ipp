@@ -66,27 +66,43 @@ void testMuteKindsAndPixels(Expectations& expectations) {
                                                single.frame()->processImage().pixels()),
                         "muted stack passes only its first stable slot");
 
+    // ADAPTED (task S3): a text source used to be the repository's only "recognized but
+    // unevaluable" node, so this block proved the UnsupportedNode diagnostic was scoped to that
+    // exact node and that muting it removed the need for a text renderer. Text now lowers and
+    // evaluates, so what is proved here is the mute behavior itself against a text source: unmuted
+    // it compiles and paints glyph coverage; muted it is transparent; and a muted Layer Output
+    // still prunes it entirely. The diagnostic-scoping proof moves to the "test.bypass" schema
+    // below, which is still an Unsupported lowering.
     auto text = muteProject();
     auto* composition = text.findComposition(kCompositionId);
     auto* node = composition->graph().findNode(kFirstSolidNode);
     node->typeId = std::string(document::kTextSourceNodeType);
-    node->parameters = {{std::string(document::kTextParameterRole), kFirstColor}};
+    node->schemaVersion = document::kTextSourceNodeSchemaVersion;
+    node->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
+                        {std::string(document::kTextSizeParameterRole), kTextSize},
+                        {std::string(document::kTextColorParameterRole), kTextColor}};
     require(composition->parameters().erase(kFirstColor) &&
                 composition->parameters().insert(
                     {kFirstColor, std::string(document::kTextParameterSchemaKey),
-                     document::ConstantValueSource{std::string("Legacy text")}}),
-            "legacy text source");
-    const auto unsupported = compile(text, registry);
-    expectations.expect(
-        unsupported.status == runtime::SnapshotCompileStatus::Unsupported &&
-            std::ranges::any_of(unsupported.diagnostics,
-                                [](const auto& diagnostic) {
-                                    return diagnostic.code ==
-                                               runtime::CompileDiagnosticCode::UnsupportedNode &&
-                                           diagnostic.subject.compositionId == kCompositionId &&
-                                           diagnostic.subject.nodeId == kFirstSolidNode;
-                                }),
-        "unmuted text diagnostic is scoped to the exact node");
+                     document::ConstantValueSource{std::string("Legacy text")}}) &&
+                composition->parameters().insert(
+                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                     document::ConstantValueSource{8.0}}) &&
+                composition->parameters().insert(
+                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
+                     document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}),
+            "text source");
+    const auto drawn = compile(text, registry);
+    expectations.expect(drawn.status == runtime::SnapshotCompileStatus::Compiled &&
+                            drawn.diagnostics.empty(),
+                        "an unmuted text source compiles with no diagnostics");
+    const auto drawnFrame = evaluateMuteProof(drawn);
+    expectations.expect(drawnFrame.frame() &&
+                            std::ranges::any_of(drawnFrame.frame()->processImage().pixels(),
+                                                [](const auto& pixel) {
+                                                    return pixel != render::Rgba32f::transparent();
+                                                }),
+                        "and paints glyph coverage into the composed frame");
     composition->nodeLayout().at(kFirstSolidNode).muted = true;
     const auto emptyText = evaluateMuteProof(compile(text, registry));
     expectations.expect(emptyText.frame() &&
@@ -94,13 +110,13 @@ void testMuteKindsAndPixels(Expectations& expectations) {
                                                 [](const auto& pixel) {
                                                     return pixel == render::Rgba32f::transparent();
                                                 }),
-                        "muted text source needs no text renderer");
+                        "a muted text source contributes nothing, exactly like a muted solid");
     composition->nodeLayout().at(kFirstSolidNode).muted = false;
     composition->nodeLayout().at(kFirstLayerNode).muted = true;
     const auto omitted = compile(std::move(text), registry);
     expectations.expect(omitted.plan && omitted.diagnostics.empty() &&
                             omitted.plan->operations().size() == 2,
-                        "muted Layer Output prunes unsupported upstream text entirely");
+                        "muted Layer Output prunes its upstream text source entirely");
 }
 
 void testMuteFirstImageInput(Expectations& expectations) {

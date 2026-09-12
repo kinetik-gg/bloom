@@ -5,6 +5,7 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -67,6 +69,10 @@ constexpr auto kPositionB = document::ParameterId::fromRaw(44);
 constexpr auto kOpacityB = document::ParameterId::fromRaw(45);
 constexpr auto kOpacityCurve = document::AnimationCurveId::fromRaw(50);
 constexpr auto kPositionCurve = document::AnimationCurveId::fromRaw(51);
+constexpr auto kTextNode = document::NodeId::fromRaw(16);
+constexpr auto kTextContent = document::ParameterId::fromRaw(46);
+constexpr auto kTextSize = document::ParameterId::fromRaw(47);
+constexpr auto kTextColor = document::ParameterId::fromRaw(48);
 
 class Expectations final {
   public:
@@ -146,6 +152,46 @@ twoSolidPlan(const bool redOnTop = true) {
         runtime::CompiledCompositionPlanDefinition{document::Revision::fromRaw(7), kProjectId,
                                                    kCompositionId, format(), std::move(operations),
                                                    runtime::OperationIndex::fromRaw(5)});
+}
+
+// U+2588 FULL BLOCK at 12 px per em in the embedded DejaVu Sans face. Chosen because it makes the
+// evaluator's placement and compositing testable with exact, independently stated pixel
+// coordinates: the rasterized bitmap is 11 x 15 at text-origin offset (-1, -1), and its interior 9
+// x 13 is coverage 255 exactly, so a frame pixel under that interior must equal the premultiplied
+// text color bit for bit. The glyph's own coverage bytes are pinned separately by
+// src/render/tests/text_raster_test.cpp's byte-exact golden; this fixture's job is WHERE those
+// bytes land and what they composite to.
+constexpr std::string_view kFullBlock = "\xe2\x96\x88";
+constexpr double kFullBlockSize = 12.0;
+constexpr std::int64_t kFullBlockOriginX = -1;
+constexpr std::int64_t kFullBlockOriginY = -1;
+constexpr std::int64_t kFullBlockFullCoverageWidth = 9;
+constexpr std::int64_t kFullBlockFullCoverageHeight = 13;
+
+// A single text layer centered so its Layer Output translation is exactly zero, which keeps the
+// bilinear resample an identity and lets the composed frame be compared exactly rather than within
+// a tolerance.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
+            const std::string& content = std::string(kFullBlock),
+            const double size = kFullBlockSize, const double opacity = 1.0,
+            const document::Vec2d position = {8.0, 10.0},
+            const document::CompositionFormat compositionFormat = format(16, 20)) {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(runtime::CompiledText{kTextNode, kTextContent, content, kTextSize, size,
+                                                  kTextColor, color});
+    operations.emplace_back(
+        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                     runtime::CompiledVec2Parameter{kPositionA, position},
+                                     runtime::CompiledScalarParameter{kOpacityA, opacity}});
+    operations.emplace_back(runtime::CompiledLayerStack{
+        kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlanDefinition{
+            document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+            std::move(operations), runtime::OperationIndex::fromRaw(3)});
 }
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
@@ -886,11 +932,127 @@ void testDisplayPreparationCancellationPublishesNothing(Expectations& expectatio
                         "display cancellation test shuts the scheduler down");
 }
 
+// Task S3: a text layer is present in the composed frame at known glyph positions, behaves like a
+// solid through the Layer Output path, and is clipped rather than wrapped when it leaves the frame.
+void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto color = core::Color4d{0.5, 0.25, 0.75, 1.0};
+    const auto plan = oneTextPlan(color);
+    const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+    expectations.expect(result.status() == runtime::EvaluationStatus::Evaluated &&
+                            result.frame() != nullptr && result.diagnostics().empty(),
+                        "a text layer evaluates with no diagnostics");
+    if (result.frame() == nullptr) {
+        return;
+    }
+
+    // The premultiplied process pixel for an opaque color is the color itself, so the fully covered
+    // interior must match it exactly -- coverage 255 is the exact identity, never a 254/255
+    // multiply.
+    const auto expected = render::solidPixelFromStraightLinearRec709Scene(color);
+    expectations.expect(static_cast<bool>(expected), "the fixture text color is evaluable");
+    if (!expected) {
+        return;
+    }
+    render::Rgba32f storage{render::Rgba32f::transparent()};
+    bool interiorExact = true;
+    std::int64_t interiorChecked = 0;
+    for (std::int64_t row = 0; row < kFullBlockFullCoverageHeight; ++row) {
+        for (std::int64_t column = 0; column < kFullBlockFullCoverageWidth; ++column) {
+            // Bitmap (1 + column, 1 + row) is inside the full-coverage interior; the text origin is
+            // the frame's own data-window origin, so the frame pixel is that plus the bitmap
+            // origin.
+            const auto x = kFullBlockOriginX + 1 + column;
+            const auto y = kFullBlockOriginY + 1 + row;
+            const auto* composed = pixel(result, x, y, storage);
+            if (composed == nullptr || *composed != *expected.value()) {
+                interiorExact = false;
+                continue;
+            }
+            ++interiorChecked;
+        }
+    }
+    expectations.expect(interiorExact && interiorChecked == kFullBlockFullCoverageWidth *
+                                                                kFullBlockFullCoverageHeight,
+                        "every fully covered glyph pixel is exactly the premultiplied text color");
+
+    const auto* farCorner = pixel(result, 15, 19, storage);
+    expectations.expect(farCorner != nullptr && *farCorner == render::Rgba32f::transparent(),
+                        "a frame pixel the glyph does not reach stays transparent black");
+
+    // Empty content is a valid, fully transparent frame -- not a failure and not a frame of noise.
+    const auto emptyPlan = oneTextPlan(color, "");
+    const auto emptyResult = evaluator.evaluate(emptyPlan, requestFor(*emptyPlan), {});
+    expectations.expect(emptyResult.frame() != nullptr &&
+                            std::ranges::all_of(emptyResult.frame()->processImage().pixels(),
+                                                [](const auto& value) {
+                                                    return value == render::Rgba32f::transparent();
+                                                }),
+                        "a text layer with no content composes a transparent frame");
+
+    // Opacity and position come from the Layer Output stage, exactly as they do for a solid: half
+    // opacity halves every premultiplied component of the covered pixels.
+    const auto fadedPlan = oneTextPlan(color, std::string(kFullBlock), kFullBlockSize, 0.5);
+    const auto faded = evaluator.evaluate(fadedPlan, requestFor(*fadedPlan), {});
+    const auto* fadedPixel = faded.frame() == nullptr ? nullptr : pixel(faded, 2, 2, storage);
+    expectations.expect(fadedPixel != nullptr &&
+                            near(fadedPixel->alpha(), expected.value()->alpha() * 0.5F) &&
+                            near(fadedPixel->red(), expected.value()->red() * 0.5F),
+                        "layer opacity fades text exactly like it fades a solid");
+
+    // Translated far off the left edge, the glyph is clipped away rather than wrapped around.
+    const auto offFramePlan =
+        oneTextPlan(color, std::string(kFullBlock), kFullBlockSize, 1.0, {-1000.0, 10.0});
+    const auto offFrame = evaluator.evaluate(offFramePlan, requestFor(*offFramePlan), {});
+    expectations.expect(offFrame.frame() != nullptr &&
+                            std::ranges::all_of(offFrame.frame()->processImage().pixels(),
+                                                [](const auto& value) {
+                                                    return value == render::Rgba32f::transparent();
+                                                }),
+                        "text moved off the frame is clipped, never wrapped");
+
+    // A size the evaluator cannot rasterize is a typed parameter diagnostic naming the size
+    // parameter, not a crash or a blank frame.
+    const auto hugePlan =
+        oneTextPlan(color, std::string(kFullBlock), document::kMaximumTextSizePixels + 1.0);
+    const auto huge = evaluator.evaluate(hugePlan, requestFor(*hugePlan), {});
+    expectations.expect(
+        huge.status() == runtime::EvaluationStatus::Failed && huge.frame() == nullptr &&
+            !huge.diagnostics().empty() &&
+            huge.diagnostics().front().code ==
+                runtime::EvaluationDiagnosticCode::InvalidParameter &&
+            huge.diagnostics().front().subject.parameterId == kTextSize &&
+            huge.diagnostics().front().subject.field == "size",
+        "an out-of-domain text size fails with a diagnostic naming the size parameter");
+
+    // A proxy evaluation scales the glyph, so a smaller frame holds a smaller picture of the same
+    // composition rather than full-size glyphs in a cropped frame.
+    const auto proxyExtent = render::ImageExtent::create(8, 10);
+    expectations.expect(static_cast<bool>(proxyExtent), "the proxy fixture extent is valid");
+    if (proxyExtent) {
+        const auto proxy = evaluator.evaluate(
+            plan, requestFor(*plan, 1U << 20U, runtime::ProxyResolution{*proxyExtent.value()}), {});
+        std::size_t proxyInk = 0;
+        if (proxy.frame() != nullptr) {
+            for (const auto& value : proxy.frame()->processImage().pixels()) {
+                proxyInk += value == render::Rgba32f::transparent() ? 0U : 1U;
+            }
+        }
+        std::size_t fullInk = 0;
+        for (const auto& value : result.frame()->processImage().pixels()) {
+            fullInk += value == render::Rgba32f::transparent() ? 0U : 1U;
+        }
+        expectations.expect(proxy.frame() != nullptr && proxyInk > 0 && proxyInk < fullInk,
+                            "a half-resolution proxy draws the same glyph smaller, not cropped");
+    }
+}
+
 } // namespace
 
 int main() {
     Expectations expectations;
     try {
+        testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);
         testAnimatedParametersAreSampledOncePerRequest(expectations);
         testClippingAndOpacityEndpoints(expectations);

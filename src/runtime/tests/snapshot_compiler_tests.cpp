@@ -47,6 +47,8 @@ constexpr auto kFirstPosition = document::ParameterId::fromRaw(32);
 constexpr auto kSecondPosition = document::ParameterId::fromRaw(33);
 constexpr auto kFirstOpacity = document::ParameterId::fromRaw(34);
 constexpr auto kSecondOpacity = document::ParameterId::fromRaw(35);
+constexpr auto kTextSize = document::ParameterId::fromRaw(36);
+constexpr auto kTextColor = document::ParameterId::fromRaw(37);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -447,24 +449,65 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                                           kFirstSolidNode),
                         "known type with unavailable version is distinguished from unknown type");
 
+    // ADAPTED (task S3): this case previously asserted that a recognized text source reports
+    // UnsupportedNode, because no portable CPU glyph rasterizer existed. Text now has its own
+    // lowering, so what is pinned here is the lowered operation -- including that the three
+    // parameter identities travel with it for diagnostics -- and the ABSENCE of the diagnostic this
+    // case used to require. UnsupportedNode itself stays covered by
+    // unsupportedColorDefinition()'s own case above.
     auto text = makeProject(singleLayerOptions());
     auto* textComposition = text.findComposition(kCompositionId);
     auto* textNode = textComposition->graph().findNode(kFirstSolidNode);
     textNode->typeId = std::string(document::kTextSourceNodeType);
     textNode->schemaVersion = document::kTextSourceNodeSchemaVersion;
-    textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor}};
+    textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
+                            {std::string(document::kTextSizeParameterRole), kTextSize},
+                            {std::string(document::kTextColorParameterRole), kTextColor}};
+    const auto textColorValue = core::Color4d{0.25, 0.5, 0.75, 1.0};
     require(textComposition->parameters().erase(kFirstColor) &&
                 textComposition->parameters().insert(
                     {kFirstColor, std::string(document::kTextParameterSchemaKey),
                      document::ConstantValueSource{std::string("Title")}}) &&
+                textComposition->parameters().insert(
+                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                     document::ConstantValueSource{48.0}}) &&
+                textComposition->parameters().insert(
+                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
+                     document::ConstantValueSource{textColorValue}}) &&
                 text.validate().ok(),
             "recognized Text fixture must remain valid");
     const auto textResult = compile(std::move(text), registry);
-    expectations.expect(textResult.status == runtime::SnapshotCompileStatus::Unsupported &&
-                            hasDiagnostic(textResult,
-                                          runtime::CompileDiagnosticCode::UnsupportedNode,
-                                          kFirstSolidNode),
-                        "recognized Text reports an unavailable capability, not an unknown node");
+    expectations.expect(textResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            textResult.plan && textResult.diagnostics.empty(),
+                        "a recognized text source compiles with no diagnostics at all");
+    const auto* compiledText =
+        textResult.plan && !textResult.plan->operations().empty()
+            ? std::get_if<runtime::CompiledText>(&textResult.plan->operations().front())
+            : nullptr;
+    expectations.expect(compiledText != nullptr && compiledText->sourceNodeId == kFirstSolidNode &&
+                            compiledText->content == "Title" && compiledText->size == 48.0 &&
+                            compiledText->color == textColorValue,
+                        "the lowered text operation carries the exact authored content, size, and "
+                        "color");
+    expectations.expect(compiledText != nullptr &&
+                            compiledText->contentParameterId == kFirstColor &&
+                            compiledText->sizeParameterId == kTextSize &&
+                            compiledText->colorParameterId == kTextColor,
+                        "and each parameter identity, so an evaluation diagnostic can name the "
+                        "exact parameter that failed");
+
+    // A size the schema refuses never reaches the evaluator: the document rejects the value at
+    // insertion, so there is no "valid document, unrenderable plan" state to lower.
+    auto oversized = makeProject(singleLayerOptions());
+    auto* oversizedComposition = oversized.findComposition(kCompositionId);
+    expectations.expect(
+        !oversizedComposition->parameters().insert(
+            {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+             document::ConstantValueSource{document::kMaximumTextSizePixels + 1.0}}) &&
+            !oversizedComposition->parameters().insert(
+                {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                 document::ConstantValueSource{0.0}}),
+        "the text size schema refuses an out-of-range size at the document boundary");
 }
 
 void testReachableSchemaDiagnostics(Expectations& expectations) {

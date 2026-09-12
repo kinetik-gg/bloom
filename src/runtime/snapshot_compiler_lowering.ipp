@@ -241,6 +241,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return lowerSolid(node);
+    case NodeLoweringKind::Text:
+        return lowerText(node);
     case NodeLoweringKind::LayerOutput:
         return lowerLayerOutput(node, indices);
     case NodeLoweringKind::LayerStack:
@@ -268,6 +270,26 @@ lowerSolid(const document::NodeRecord& node) {
         return std::nullopt;
     }
     return runtime::CompiledSolid{node.id, binding->parameterId, *color};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerText(const document::NodeRecord& node) {
+    using namespace document;
+    const auto* contentBinding = findParameterBinding(node, kTextParameterRole);
+    const auto* sizeBinding = findParameterBinding(node, kTextSizeParameterRole);
+    const auto* colorBinding = findParameterBinding(node, kTextColorParameterRole);
+    const auto* content = parameterConstant<std::string>(contentBinding);
+    const auto* size = parameterConstant<double>(sizeBinding);
+    const auto* color = parameterConstant<core::Color4d>(colorBinding);
+    if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
+        content == nullptr || size == nullptr || color == nullptr) {
+        addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledText{node.id,          contentBinding->parameterId,
+                                 *content,        sizeBinding->parameterId,
+                                 *size,           colorBinding->parameterId,
+                                 *color};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

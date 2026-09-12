@@ -18,7 +18,10 @@
 
 namespace bloom::runtime {
 
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 2;
+// Bumped to 3 by the CPU text path (task S3): the evaluator now produces pixels for a text source
+// it previously refused, so a frame identity from before this change must not compare equal to one
+// from after it.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 3;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,
