@@ -1,3 +1,4 @@
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -8,13 +9,16 @@
 #include <QComboBox>
 #include <QImage>
 #include <QLineEdit>
+#include <QMenuBar>
 #include <QPixmap>
+#include <QRect>
 #include <QSplitter>
 #include <QString>
 #include <QTest>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -200,6 +204,98 @@ void testTheStyledQComboBoxRendersFieldAndBorder(Expectations& expectations) {
     expectations.expect(sawBorder, "the closed field really paints the Border hairline");
 }
 
+// task C1, item C4 (owner: "panels inside window is overlapping with actual window border at the
+// edges; window needs inner padding"): the workspace's single area sits inset from WorkspaceHost's
+// own rect by exactly Spacing::Gutter on every side -- the same visible Background gap the
+// splitter handle already gives panels between each other, now also given to the window's own
+// edge.
+void testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    WorkspaceHost host(registry);
+    host.resize(400, 300);
+    // Shown (like testTheStyledQComboBoxRendersFieldAndBorder's own precedent just below):
+    // an unshown top-level widget's layout is not guaranteed to activate from resize() and
+    // processEvents() alone, so the area would still report its default sizeHint-based geometry
+    // rather than the real, gutter-inset one this test means to measure.
+    host.show();
+    QCoreApplication::processEvents();
+
+    auto* area = host.activeArea();
+    expectations.expect(area != nullptr, "the workspace has an active area to measure");
+    if (area == nullptr) {
+        host.hide();
+        return;
+    }
+    const QRect areaGeometry = area->geometry();
+    const int gutter = kit::px(kit::Spacing::Gutter);
+    expectations.expect(areaGeometry.left() == gutter && areaGeometry.top() == gutter,
+                        "the area is inset from the host's near edges by exactly the gutter");
+    const int rightGap = host.rect().width() - areaGeometry.right() - 1;
+    const int bottomGap = host.rect().height() - areaGeometry.bottom() - 1;
+    expectations.expect(rightGap == gutter && bottomGap == gutter,
+                        "...and from its far edges too, uniformly on all four sides");
+    host.hide();
+}
+
+// task C1, item C3 (owner: "menus properly padded, not reaching the top edge"): the generated
+// theme carries the exact Spacing::S (8px) vertical bar padding and Spacing::MenuItemX (10px)
+// horizontal item padding the owner asked for.
+void testMenuBarCarriesItsDocumentedPadding(Expectations& expectations) {
+    const QString sheet = kit::kinetikStyleSheet();
+
+    // "\n" before "QMenuBar {": the FIRST bare occurrence of "QMenuBar {" is a substring of the
+    // combined "QMainWindow, QMenuBar {" selector above it, which carries no padding at all --
+    // the standalone rule this test means to inspect always starts its own line.
+    const qsizetype barRule = sheet.indexOf(QStringLiteral("\nQMenuBar {"));
+    expectations.expect(barRule >= 0, "the theme styles the menu bar container");
+    if (barRule >= 0) {
+        const qsizetype barRuleEnd = sheet.indexOf(QStringLiteral("}"), barRule);
+        const QString block = sheet.mid(barRule, barRuleEnd - barRule);
+        expectations.expect(
+            block.contains(QStringLiteral("padding: %1px").arg(kit::px(kit::Spacing::S))),
+            "the bar carries Spacing::S (8px) vertical padding around its items, off the top "
+            "client-area edge");
+    }
+
+    const qsizetype itemRule = sheet.indexOf(QStringLiteral("QMenuBar::item {"));
+    expectations.expect(itemRule >= 0, "the theme styles the menu bar's items");
+    if (itemRule >= 0) {
+        const qsizetype itemRuleEnd = sheet.indexOf(QStringLiteral("}"), itemRule);
+        const QString block = sheet.mid(itemRule, itemRuleEnd - itemRule);
+        expectations.expect(
+            block.contains(QStringLiteral("%1px").arg(kit::px(kit::Spacing::MenuItemX))),
+            "each item carries Spacing::MenuItemX (10px) horizontal padding");
+    }
+}
+
+// The same padding, rendered: a real QMenuBar's own item sits with an equal gap above and below
+// it in the bar's row -- vertically centered -- rather than flush against the top client-area
+// edge the owner complained about.
+void testMenuBarItemsRenderVerticallyCenteredWithRoomAboveThem(Expectations& expectations) {
+    QMenuBar menuBar;
+    menuBar.setStyleSheet(kit::kinetikStyleSheet());
+    menuBar.addMenu(QStringLiteral("&File"));
+    menuBar.resize(menuBar.sizeHint());
+    QCoreApplication::processEvents();
+
+    const auto actions = menuBar.actions();
+    expectations.expect(!actions.isEmpty(), "the probe menu bar has a File menu action");
+    if (actions.isEmpty()) {
+        return;
+    }
+    const QRect itemRect = menuBar.actionGeometry(actions.constFirst());
+    expectations.expect(!itemRect.isNull(), "the item has real, laid-out geometry");
+    if (itemRect.isNull()) {
+        return;
+    }
+    const int topGap = itemRect.top();
+    const int bottomGap = menuBar.height() - itemRect.bottom() - 1;
+    expectations.expect(topGap > 0, "the item never reaches the bar's own top edge");
+    expectations.expect(std::abs(topGap - bottomGap) <= 1,
+                        "the item sits vertically centered in the bar's row (symmetric top/bottom "
+                        "gap)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -212,5 +308,8 @@ int main(int argc, char** argv) {
     testTheNodeGraphSitsOnTheKinetikBackground(expectations);
     testBacktickTogglesFullscreenForTheActivePanelAndDefersToTextEntry(expectations);
     testTheStyledQComboBoxRendersFieldAndBorder(expectations);
+    testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(expectations);
+    testMenuBarCarriesItsDocumentedPadding(expectations);
+    testMenuBarItemsRenderVerticallyCenteredWithRoomAboveThem(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
