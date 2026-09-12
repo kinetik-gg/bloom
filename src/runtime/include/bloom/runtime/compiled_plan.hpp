@@ -139,8 +139,9 @@ struct CompiledSolid {
 
 // A lowered text source. Content, size, and color are all resolved constants, not parameter
 // sources: the text schema declares none of the three animatable, and the command surface has no
-// way to put any of them on a curve (CreateAnimationForParameter accepts only the position and
-// opacity schemas, and SetKeyframeAtTime has no string or Color4d overload). The parameter
+// way to put any of them on a curve (CreateAnimationForParameter accepts only the animatable
+// transform and opacity schemas, and SetKeyframeAtTime has no string or Color4d overload). The
+// parameter
 // identities travel with them so a diagnostic can name the exact parameter that failed, exactly as
 // CompiledSolid does.
 struct CompiledText {
@@ -155,11 +156,18 @@ struct CompiledText {
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
 
+// A lowered Layer Output boundary. The five parameters appear in the registered authoring order --
+// position, anchor, scale, rotation, opacity -- and each one carries its own parameter identity so
+// a diagnostic can name the exact parameter that failed. All five are animatable, so each is either
+// a resolved constant or an index into the plan's curve tables.
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
     OperationIndex input;
     CompiledVec2Parameter position;
+    CompiledVec2Parameter anchor;
+    CompiledVec2Parameter scale;
+    CompiledScalarParameter rotation;
     CompiledScalarParameter opacity;
 
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;

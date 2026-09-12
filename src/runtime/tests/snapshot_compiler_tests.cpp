@@ -49,6 +49,12 @@ constexpr auto kFirstOpacity = document::ParameterId::fromRaw(34);
 constexpr auto kSecondOpacity = document::ParameterId::fromRaw(35);
 constexpr auto kTextSize = document::ParameterId::fromRaw(36);
 constexpr auto kTextColor = document::ParameterId::fromRaw(37);
+constexpr auto kFirstAnchor = document::ParameterId::fromRaw(38);
+constexpr auto kSecondAnchor = document::ParameterId::fromRaw(39);
+constexpr auto kFirstScale = document::ParameterId::fromRaw(40);
+constexpr auto kSecondScale = document::ParameterId::fromRaw(41);
+constexpr auto kFirstRotation = document::ParameterId::fromRaw(42);
+constexpr auto kSecondRotation = document::ParameterId::fromRaw(43);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -115,6 +121,9 @@ struct ProjectOptions final {
         {kFirstLayerNode,
          std::string(kLayerOutputNodeType),
          {{std::string(kPositionParameterRole), kFirstPosition},
+          {std::string(kAnchorParameterRole), kFirstAnchor},
+          {std::string(kScaleParameterRole), kFirstScale},
+          {std::string(kRotationParameterRole), kFirstRotation},
           {std::string(kOpacityParameterRole), kFirstOpacity}},
          kLayerOutputNodeSchemaVersion},
         {kStackNode, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion},
@@ -131,6 +140,9 @@ struct ProjectOptions final {
         nodes.push_back({kSecondLayerNode,
                          std::string(kLayerOutputNodeType),
                          {{std::string(kPositionParameterRole), kSecondPosition},
+                          {std::string(kAnchorParameterRole), kSecondAnchor},
+                          {std::string(kScaleParameterRole), kSecondScale},
+                          {std::string(kRotationParameterRole), kSecondRotation},
                           {std::string(kOpacityParameterRole), kSecondOpacity}},
                          kLayerOutputNodeSchemaVersion});
     }
@@ -198,6 +210,23 @@ struct ProjectOptions final {
     require(composition.parameters().insert(
                 {kFirstOpacity, std::string(kOpacityParameterSchemaKey), ConstantValueSource{0.8}}),
             "first opacity must be accepted");
+    // The identity transform: every fixture here is about topology, parameter sources, and
+    // diagnostics, so the three transform breadth parameters stay at their schema defaults unless a
+    // case deliberately rewrites one.
+    const auto insertIdentityTransform = [&composition](const ParameterId anchor,
+                                                        const ParameterId scale,
+                                                        const ParameterId rotation) {
+        require(composition.parameters().insert({anchor, std::string(kAnchorParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultAnchor}}),
+                "anchor must be accepted");
+        require(composition.parameters().insert({scale, std::string(kScaleParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultScale}}),
+                "scale must be accepted");
+        require(composition.parameters().insert({rotation, std::string(kRotationParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultRotationDegrees}}),
+                "rotation must be accepted");
+    };
+    insertIdentityTransform(kFirstAnchor, kFirstScale, kFirstRotation);
     if (options.secondLayer) {
         require(composition.parameters().insert(
                     {kSecondColor, std::string(kSolidColorParameterSchemaKey),
@@ -211,6 +240,7 @@ struct ProjectOptions final {
                                                  std::string(kOpacityParameterSchemaKey),
                                                  ConstantValueSource{0.6}}),
                 "second opacity must be accepted");
+        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation);
     }
 
     Project project(kProjectId, "Project");

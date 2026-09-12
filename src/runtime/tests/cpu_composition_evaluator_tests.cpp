@@ -73,6 +73,56 @@ constexpr auto kTextNode = document::NodeId::fromRaw(16);
 constexpr auto kTextContent = document::ParameterId::fromRaw(46);
 constexpr auto kTextSize = document::ParameterId::fromRaw(47);
 constexpr auto kTextColor = document::ParameterId::fromRaw(48);
+constexpr auto kAnchorA = document::ParameterId::fromRaw(49);
+constexpr auto kScaleA = document::ParameterId::fromRaw(52);
+constexpr auto kRotationA = document::ParameterId::fromRaw(53);
+constexpr auto kAnchorB = document::ParameterId::fromRaw(54);
+constexpr auto kScaleB = document::ParameterId::fromRaw(55);
+constexpr auto kRotationB = document::ParameterId::fromRaw(56);
+constexpr auto kAnchorCurve = document::AnimationCurveId::fromRaw(55);
+constexpr auto kScaleCurve = document::AnimationCurveId::fromRaw(56);
+constexpr auto kRotationCurve = document::AnimationCurveId::fromRaw(57);
+
+// The authored transform a Layer Output carries. Defaulted to the identity -- no anchor offset,
+// unit scale, no rotation -- so a fixture that cares only about position or opacity reads exactly
+// as it did before the transform breadth slice, and a fixture that cares about the transform names
+// only the value it is exercising.
+struct LayerTransformValues final {
+    document::Vec2d position{2.0, 1.0};
+    document::Vec2d anchor = document::kDefaultAnchor;
+    document::Vec2d scale = document::kDefaultScale;
+    double rotation = document::kDefaultRotationDegrees;
+    double opacity = 1.0;
+};
+
+struct LayerParameterIds final {
+    document::ParameterId position;
+    document::ParameterId anchor;
+    document::ParameterId scale;
+    document::ParameterId rotation;
+    document::ParameterId opacity;
+};
+
+inline constexpr LayerParameterIds kLayerParametersA{kPositionA, kAnchorA, kScaleA, kRotationA,
+                                                     kOpacityA};
+inline constexpr LayerParameterIds kLayerParametersB{kPositionB, kAnchorB, kScaleB, kRotationB,
+                                                     kOpacityB};
+
+[[nodiscard]] runtime::CompiledLayerOutput layerOutput(const document::NodeId nodeId,
+                                                       const document::LayerId layerId,
+                                                       const runtime::OperationIndex input,
+                                                       const LayerParameterIds ids,
+                                                       const LayerTransformValues values) {
+    return runtime::CompiledLayerOutput{
+        nodeId,
+        layerId,
+        input,
+        runtime::CompiledVec2Parameter{ids.position, values.position},
+        runtime::CompiledVec2Parameter{ids.anchor, values.anchor},
+        runtime::CompiledVec2Parameter{ids.scale, values.scale},
+        runtime::CompiledScalarParameter{ids.rotation, values.rotation},
+        runtime::CompiledScalarParameter{ids.opacity, values.opacity}};
+}
 
 class Expectations final {
   public:
@@ -111,10 +161,9 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
              const document::CompositionFormat compositionFormat = format()) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, kColorA, color});
-    operations.emplace_back(
-        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
-                                     runtime::CompiledVec2Parameter{kPositionA, position},
-                                     runtime::CompiledScalarParameter{kOpacityA, opacity}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA,
+                                        {.position = position, .opacity = opacity}));
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
@@ -130,16 +179,12 @@ twoSolidPlan(const bool redOnTop = true) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}});
-    operations.emplace_back(runtime::CompiledLayerOutput{
-        kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
-        runtime::CompiledVec2Parameter{kPositionA, document::Vec2d{2.0, 1.0}},
-        runtime::CompiledScalarParameter{kOpacityA, 1.0}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA, {}));
     operations.emplace_back(
         runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}});
-    operations.emplace_back(runtime::CompiledLayerOutput{
-        kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
-        runtime::CompiledVec2Parameter{kPositionB, document::Vec2d{2.0, 1.0}},
-        runtime::CompiledScalarParameter{kOpacityB, 1.0}});
+    operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
+                                        kLayerParametersB, {}));
     const runtime::CompiledLayerStackEntry red{kSlotA, kLayerA,
                                                runtime::OperationIndex::fromRaw(1)};
     const runtime::CompiledLayerStackEntry blue{kSlotB, kLayerB,
@@ -180,10 +225,9 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledText{kTextNode, kTextContent, content, kTextSize, size,
                                                   kTextColor, color});
-    operations.emplace_back(
-        runtime::CompiledLayerOutput{kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
-                                     runtime::CompiledVec2Parameter{kPositionA, position},
-                                     runtime::CompiledScalarParameter{kOpacityA, opacity}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA,
+                                        {.position = position, .opacity = opacity}));
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
@@ -285,6 +329,230 @@ void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
     expectations.expect(interiorPixel != nullptr && interiorPixel->red() == 1.0F &&
                             interiorPixel->alpha() == 1.0F,
                         "fractional translation preserves fully covered interior pixels");
+}
+
+// A square white solid layer, centred, so the transform under test is the only thing shaping the
+// frame. Every expectation below is derived from the documented model: a 4x4 layer's pixel-area
+// centre is (1.5, 1.5), the inverse map is the anchor plus S^-1 R(-rotation) applied to the output
+// offset from the pivot, and a bilinear gather between two equal white taps is exactly white.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+squareTransformPlan(const LayerTransformValues values) {
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA, values));
+    operations.emplace_back(runtime::CompiledLayerStack{
+        kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlanDefinition{
+            document::Revision::fromRaw(7), kProjectId, kCompositionId, format(4, 4),
+            std::move(operations), runtime::OperationIndex::fromRaw(3)});
+}
+
+// The layer is centred when its position is the composition format centre, which for a 4x4 frame is
+// (2, 2) -- that is what makes the authored translation exactly zero.
+inline constexpr document::Vec2d kSquareCentre{2.0, 2.0};
+
+// Renders one 4x4 frame as a row-major opacity mask, so a shape assertion reads as the shape.
+[[nodiscard]] std::optional<std::array<float, 16>>
+alphaMask(const runtime::EvaluationResult& result) {
+    if (result.frame() == nullptr) {
+        return std::nullopt;
+    }
+    std::array<float, 16> mask{};
+    for (std::int64_t y = 0; y < 4; ++y) {
+        for (std::int64_t x = 0; x < 4; ++x) {
+            const auto read = result.frame()->processImage().read(x, y);
+            if (!read) {
+                return std::nullopt;
+            }
+            mask[static_cast<std::size_t>(y * 4 + x)] = read.value()->alpha();
+        }
+    }
+    return mask;
+}
+
+void testLayerTransformShapesTheFrame(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    constexpr std::array<float, 16> kVerticalBar{0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F,
+                                                 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F};
+    constexpr std::array<float, 16> kHorizontalBar{0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+                                                   1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+    constexpr std::array<float, 16> kLeftBar{1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F,
+                                             1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F};
+    constexpr std::array<float, 16> kEmpty{};
+
+    // Half scale on one axis only: the layer narrows about its own centre to columns 1 and 2.
+    const auto narrowed =
+        squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}});
+    const auto narrowedMask = alphaMask(evaluator.evaluate(narrowed, requestFor(*narrowed), {}));
+    expectations.expect(narrowedMask.has_value() && *narrowedMask == kVerticalBar,
+                        "a half scale on one axis narrows the layer about its own centre exactly");
+
+    // The same narrowing plus a quarter turn: scale applies first, then rotation, so the vertical
+    // bar becomes a horizontal one, and every sample coordinate stays exact.
+    const auto turned = squareTransformPlan(
+        {.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}, .rotation = 90.0});
+    const auto turnedMask = alphaMask(evaluator.evaluate(turned, requestFor(*turned), {}));
+    expectations.expect(turnedMask.has_value() && *turnedMask == kHorizontalBar,
+                        "rotation composes after scale, about the anchor, and stays exact at 90 "
+                        "degrees");
+
+    // Moving the anchor to the layer's left edge pins the narrowing there instead of at the centre.
+    const auto anchored = squareTransformPlan({.position = kSquareCentre,
+                                               .anchor = document::Vec2d{-1.5, 0.0},
+                                               .scale = document::Vec2d{0.5, 1.0}});
+    const auto anchoredMask = alphaMask(evaluator.evaluate(anchored, requestFor(*anchored), {}));
+    expectations.expect(anchoredMask.has_value() && *anchoredMask == kLeftBar,
+                        "the anchor, not the centre, is the point scale and rotation hold still");
+
+    // A zero scale factor collapses the layer to no area: the Layer Output publishes no image at
+    // all and the stack composites nothing, which is an entirely transparent frame rather than a
+    // failure.
+    const auto collapsed =
+        squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.0, 1.0}});
+    const auto collapsedResult = evaluator.evaluate(collapsed, requestFor(*collapsed), {});
+    const auto collapsedMask = alphaMask(collapsedResult);
+    expectations.expect(collapsedResult.status() == runtime::EvaluationStatus::Evaluated &&
+                            collapsedMask.has_value() && *collapsedMask == kEmpty,
+                        "a zero scale factor is an empty layer, not an evaluation failure");
+
+    // Carried entirely off the frame, the layer likewise publishes nothing.
+    const auto gone = squareTransformPlan({.position = document::Vec2d{1000.0, 2.0}});
+    const auto goneResult = evaluator.evaluate(gone, requestFor(*gone), {});
+    const auto goneMask = alphaMask(goneResult);
+    expectations.expect(goneResult.status() == runtime::EvaluationStatus::Evaluated &&
+                            goneMask.has_value() && *goneMask == kEmpty,
+                        "a layer carried off the composition contributes nothing");
+
+    // A rotation is not confined to a turn: an authored 450 degrees must evaluate exactly where 90
+    // does, and a rotation key is never clamped to any domain.
+    const auto wound = squareTransformPlan(
+        {.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}, .rotation = 450.0});
+    const auto woundMask = alphaMask(evaluator.evaluate(wound, requestFor(*wound), {}));
+    expectations.expect(woundMask.has_value() && woundMask == turnedMask,
+                        "an authored rotation past a full turn evaluates exactly as its reduced "
+                        "angle");
+}
+
+void testEveryTransformParameterAnimates(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    constexpr std::array<float, 16> kFull{1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+                                          1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+    constexpr std::array<float, 16> kVerticalBar{0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F,
+                                                 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F};
+    constexpr std::array<float, 16> kHorizontalBar{0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+                                                   1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+    constexpr std::array<float, 16> kLeftBar{1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F,
+                                             1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F};
+
+    // One plan per animated parameter, each curve running from the value that leaves the frame full
+    // to the value that shapes it, so the frame at the first key, the midpoint, and the last key
+    // are three distinct, independently predictable pictures.
+    const auto maskAt = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+                            const std::int64_t numerator, const std::int64_t denominator) {
+        auto request = requestFor(*plan);
+        const auto time = core::RationalTime::create(numerator, denominator);
+        if (!time.has_value()) {
+            throw std::logic_error("animated transform fixture time must be valid");
+        }
+        request.time = *time;
+        return alphaMask(evaluator.evaluate(plan, request, {}));
+    };
+
+    // Scale: (1, 1) at t = 0 to (0.5, 1) at t = 1. The midpoint is (0.75, 1), which inverts to
+    // u = 1.5 + (4/3)(x - 1.5): columns 0 and 3 land 2 pixels outside the layer and read exactly
+    // transparent, so the midpoint is already the narrowed bar.
+    auto scaleDefinition = squareTransformPlan({.position = kSquareCentre})->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(scaleDefinition.operations[1]).scale.source =
+        runtime::Vec2CurveIndex::fromRaw(0);
+    scaleDefinition.vec2Curves.push_back({kScaleCurve,
+                                          {{document::KeyframeId::fromRaw(70),
+                                            core::RationalTime::fromInteger(0),
+                                            {1.0, 1.0},
+                                            runtime::CompiledKeyframeInterpolation::Linear},
+                                           {document::KeyframeId::fromRaw(71),
+                                            core::RationalTime::fromInteger(1),
+                                            {0.5, 1.0},
+                                            runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto scalePlan = publishPlan(std::move(scaleDefinition));
+    const auto scaleStart = maskAt(scalePlan, 0, 1);
+    const auto scaleMiddle = maskAt(scalePlan, 1, 2);
+    const auto scaleEnd = maskAt(scalePlan, 1, 1);
+    expectations.expect(
+        scaleStart.has_value() && *scaleStart == kFull && scaleEnd.has_value() &&
+            *scaleEnd == kVerticalBar && scaleMiddle.has_value() && *scaleMiddle != kFull,
+        "an animated scale is sampled per request and reshapes the frame over time");
+
+    // Rotation: 0 at t = 0 to 90 at t = 1, with a constant one-axis narrowing, so the bar turns
+    // from vertical to horizontal. The midpoint is 45 degrees, which is neither.
+    auto rotationDefinition =
+        squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}})
+            ->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(rotationDefinition.operations[1]).rotation.source =
+        runtime::ScalarCurveIndex::fromRaw(0);
+    rotationDefinition.scalarCurves.push_back(
+        {kRotationCurve,
+         {{document::KeyframeId::fromRaw(72), core::RationalTime::fromInteger(0), 0.0,
+           runtime::CompiledKeyframeInterpolation::Linear},
+          {document::KeyframeId::fromRaw(73), core::RationalTime::fromInteger(1), 90.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto rotationPlan = publishPlan(std::move(rotationDefinition));
+    const auto rotationStart = maskAt(rotationPlan, 0, 1);
+    const auto rotationMiddle = maskAt(rotationPlan, 1, 2);
+    const auto rotationEnd = maskAt(rotationPlan, 1, 1);
+    expectations.expect(
+        rotationStart.has_value() && *rotationStart == kVerticalBar && rotationEnd.has_value() &&
+            *rotationEnd == kHorizontalBar && rotationMiddle.has_value() &&
+            *rotationMiddle != kVerticalBar && *rotationMiddle != kHorizontalBar,
+        "an animated rotation is sampled per request and turns the layer over time");
+
+    // Anchor: the centre at t = 0 to the left edge at t = 1, with a constant one-axis narrowing, so
+    // the bar slides from the middle to the left edge without the layer itself moving.
+    auto anchorDefinition =
+        squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}})
+            ->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(anchorDefinition.operations[1]).anchor.source =
+        runtime::Vec2CurveIndex::fromRaw(0);
+    anchorDefinition.vec2Curves.push_back({kAnchorCurve,
+                                           {{document::KeyframeId::fromRaw(74),
+                                             core::RationalTime::fromInteger(0),
+                                             {0.0, 0.0},
+                                             runtime::CompiledKeyframeInterpolation::Linear},
+                                            {document::KeyframeId::fromRaw(75),
+                                             core::RationalTime::fromInteger(1),
+                                             {-1.5, 0.0},
+                                             runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto anchorPlan = publishPlan(std::move(anchorDefinition));
+    const auto anchorStart = maskAt(anchorPlan, 0, 1);
+    const auto anchorMiddle = maskAt(anchorPlan, 1, 2);
+    const auto anchorEnd = maskAt(anchorPlan, 1, 1);
+    expectations.expect(anchorStart.has_value() && *anchorStart == kVerticalBar &&
+                            anchorEnd.has_value() && *anchorEnd == kLeftBar &&
+                            anchorMiddle.has_value() && *anchorMiddle != kVerticalBar &&
+                            *anchorMiddle != kLeftBar,
+                        "an animated anchor is sampled per request and slides the pivot over time");
+
+    // A rotation key is NOT confined to the unit interval the way an opacity key is: 360 degrees is
+    // a perfectly valid key value, and the evaluator must accept it rather than reject it as
+    // out-of-domain.
+    auto wideDefinition = squareTransformPlan({.position = kSquareCentre})->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(wideDefinition.operations[1]).rotation.source =
+        runtime::ScalarCurveIndex::fromRaw(0);
+    wideDefinition.scalarCurves.push_back(
+        {kRotationCurve,
+         {{document::KeyframeId::fromRaw(76), core::RationalTime::fromInteger(0), -720.0,
+           runtime::CompiledKeyframeInterpolation::Linear},
+          {document::KeyframeId::fromRaw(77), core::RationalTime::fromInteger(1), 1080.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto widePlan = publishPlan(std::move(wideDefinition));
+    const auto wideResult = evaluator.evaluate(widePlan, requestFor(*widePlan), {});
+    expectations.expect(wideResult.status() == runtime::EvaluationStatus::Evaluated,
+                        "a rotation key outside the unit interval is accepted, unlike an opacity "
+                        "key");
 }
 
 void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) {
@@ -1054,6 +1322,8 @@ int main() {
     try {
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);
+        testLayerTransformShapesTheFrame(expectations);
+        testEveryTransformParameterAnimates(expectations);
         testAnimatedParametersAreSampledOncePerRequest(expectations);
         testClippingAndOpacityEndpoints(expectations);
         testStackOrderingOpacityAndDisplay(expectations);

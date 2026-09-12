@@ -632,32 +632,37 @@ class CompilePass final {
                    "Overrides may affect only parameters on the requested output path.");
             return;
         }
-        const bool isPosition =
-            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
-            parameterDefinition->role == document::kPositionParameterRole &&
-            parameterDefinition->schemaKey == document::kPositionParameterSchemaKey;
-        const bool isOpacity =
-            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
-            parameterDefinition->role == document::kOpacityParameterRole &&
-            parameterDefinition->schemaKey == document::kOpacityParameterSchemaKey;
+        // An override may target any animatable Layer Output parameter: the five transform values
+        // a scrub can move. The animatable set comes from the shared schema predicates rather than
+        // a second list here, so widening the schema widens scrubbing with it.
+        const bool isLayerOutput =
+            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput;
+        const bool isVec2Target =
+            isLayerOutput && document::isVec2AnimatableSchemaKey(parameterDefinition->schemaKey);
+        const bool isScalarTarget =
+            isLayerOutput && document::isScalarAnimatableSchemaKey(parameterDefinition->schemaKey);
         const auto* scalar = std::get_if<double>(&parameterOverride.value);
         const auto* vector = std::get_if<document::Vec2d>(&parameterOverride.value);
         const bool kindMatches =
-            (isPosition && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
+            (isVec2Target && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
              vector != nullptr) ||
-            (isOpacity && parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
+            (isScalarTarget &&
+             parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
              scalar != nullptr);
         if (parameter->schemaKey != parameterDefinition->schemaKey || !kindMatches) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override type does not match its target",
-                   "Version one accepts only typed Layer Output position and opacity overrides.");
+                   "Only typed Layer Output transform and opacity overrides are accepted.");
             return;
         }
+        // The unit domain is opacity's alone; a rotation override is finite and otherwise free.
+        const bool unitDomain = document::hasUnitDomainSchemaKey(parameterDefinition->schemaKey);
         if ((vector != nullptr && (!std::isfinite(vector->x) || !std::isfinite(vector->y))) ||
-            (scalar != nullptr && (!std::isfinite(*scalar) || *scalar < 0.0 || *scalar > 1.0))) {
+            (scalar != nullptr &&
+             (!std::isfinite(*scalar) || (unitDomain && (*scalar < 0.0 || *scalar > 1.0))))) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override value is outside its schema domain",
-                   "Position must be finite and opacity must be finite within zero and one.");
+                   "Every override must be finite, and opacity must also be within zero and one.");
             return;
         }
         if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
