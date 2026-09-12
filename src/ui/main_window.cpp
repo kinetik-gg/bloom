@@ -405,6 +405,18 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
             &FrameExportController::requestExport);
 
     fileMenu.addSeparator();
+
+    // "Quit" (task S1): the artist had no way to quit from the menu at all -- closing the window
+    // was the only path that reached shutdown. Reuses that exact path (QWidget::close() ->
+    // MainWindow::closeEvent() -> confirmUnsavedChanges() -> shutdownRequested()) rather than
+    // duplicating any shutdown sequencing here, so busy-state and unsaved-change handling stay in
+    // the one place that already owns them.
+    quitAction_ = fileMenu.addAction(tr("&Quit"));
+    quitAction_->setObjectName("quitAction");
+    quitAction_->setMenuRole(QAction::QuitRole);
+    quitAction_->setShortcut(QKeySequence::Quit);
+    quitAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(quitAction_, &QAction::triggered, this, &QWidget::close);
 }
 
 void MainWindow::updateFileActions() {
