@@ -4,17 +4,18 @@ Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.1` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.2` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
 staged-artifact close/reopen verification foundation, the version 1 canonical document writer
 over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
-container reader and writer, and the document `1.0` → `1.1` node-layout migration are implemented.
+container reader and writer, and the document `1.0` → `1.1` node-layout and `1.1` → `1.2` node-group
+migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Purpose And Ownership
 
@@ -36,26 +37,28 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.1`.
-The original document `1.0` artifact is retained for migration fixtures. Version objects always contain
-JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
+The container version remains `1.0`; the current document schema is `1.2`.
+The earlier document `1.0` and `1.1` artifacts are retained for migration fixtures. Version objects
+always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.1.schema.json` and `schemas/project/document-1.1.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.1` and
-`urn:kinetik:bloom:schema:project-document:1.1`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.1`. Both historical `1.0` artifacts remain checked. They declare the 2020-12 `$schema` and use only
-repository-local `$ref` targets during validation. A generic schema validator is useful for
-fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
+`schemas/project/manifest-1.2.schema.json` and `schemas/project/document-1.2.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.2` and
+`urn:kinetik:bloom:schema:project-document:1.2`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.2`. Every historical artifact -- `1.0` and `1.1`, manifest and
+document -- remains checked, and each version's checker validates what its own minor adds and then
+reduces the artifact to its predecessor so the older checks run unchanged. They declare the 2020-12
+`$schema` and use only repository-local `$ref` targets during validation. A generic schema validator
+is useful for fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
 cross-reference, allocator, graph, and preservation validation.
 
-`document-1.1.schema.json` retains required `$defs` named `colorSettings-1.0`,
+`document-1.2.schema.json` retains required `$defs` named `colorSettings-1.0`,
 `ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
 definition requires `colorSettings`; the OCIO reference definition requires every member specified
 below and selects one closed locator shape with `oneOf`. These definitions validate structure and
 lexical bounds. Project I/O additionally validates locator normalization, digest spelling, sorted
 context variables, locator/portability agreement, and the fixed v1 process Color Interop ID.
-`manifest-1.1.schema.json` retains a required `requirement-1.0` definition with the exact provider,
+`manifest-1.2.schema.json` retains a required `requirement-1.0` definition with the exact provider,
 capability, schema-version, and node-type-coverage members specified below.
 
 Known versioned object definitions permit additional members through
@@ -580,12 +583,13 @@ Each value is inclusive:
 - a value below `uint64` maximum makes the next allocation `highestIssued + 1`
 - `18446744073709551615` means that maximum was issued and the namespace is permanently exhausted
 
-The exact allocator namespaces in schema `1.0` are `composition`, `node`, `edge`, `layer`,
-`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, and `extensionRecord`; no
-other member is accepted as a known v1 namespace. Every high-water value is an unsigned decimal
-string in `0..18446744073709551615`. Every declared object ID is an unsigned decimal string in
-`1..18446744073709551615`. The document's sole `ProjectId` has the same nonzero typed-ID domain but
-is not allocator-backed.
+The allocator namespaces in schema `1.0` are exactly `composition`, `node`, `edge`, `layer`,
+`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, and `extensionRecord`.
+Schema `1.2` appends one more, `nodeGroup`, after `extensionRecord`; see **Node Groups In Document
+1.2**. No other member is accepted as a known namespace at the version that declares it. Every
+high-water value is an unsigned decimal string in `0..18446744073709551615`. Every declared object
+ID is an unsigned decimal string in `1..18446744073709551615`. The document's sole `ProjectId` has
+the same nonzero typed-ID domain but is not allocator-backed.
 
 `driverBinding` remains required even though `DriverBindingSource` is outside the v1 writable
 parameter-source subset and no driver declaration table is serialized. The live allocator may have
@@ -939,6 +943,32 @@ additive members on layout records and their positions use normal round-trip pre
 
 The production `1.0` → `1.1` DOM migration preserves all existing fields and numeric spellings,
 changes only the document schema version, and appends the original four-column default layout
-in stored node order. It charges the operation budget and reparses before trusted decode. Current
-writes emit at least minor 1; old files are never rewritten by Open. Color-setting, OCIO, node,
+in stored node order. It charges the operation budget and reparses before trusted decode. Old files
+are never rewritten by Open. Color-setting, OCIO, node,
 container, and extension schema versions remain independent and unchanged.
+
+## Node Groups In Document 1.2
+
+`document-1.2.schema.json` adds a required `nodeGroups` member after `nodeLayout` in each
+composition. It is an array sorted by numeric `groupId`; each record has exactly `groupId`, `name`,
+`members`, and `padding` (`x`, `y`), in that order. `members` is an array of node object ids sorted
+ascending and duplicate-free, `name` is a human-facing name, and both padding components are finite
+and nonnegative. Membership disjointness across groups and member existence are document-model
+validation rather than wire shape: a member naming an unknown node survives with a warning
+diagnostic, and a node claimed by two groups is a document error. Group identity never advances node
+allocation watermarks. Future-minor additive members on group records and their padding use normal
+round-trip preservation.
+
+`1.2` also adds the `nodeGroup` allocator namespace as the eleventh member of `highestIssued`, after
+`extensionRecord`. That member was previously unknown additive data, and giving it allocator meaning
+is exactly what an additive minor is for: a reader that does not know it preserves it as unknown
+singleton data, and a `1.2` reader understands it. The eleven-member shape is therefore its own
+`highestIssued-1.2` definition, and the historical ten-member `highestIssued-1.0` definition is left
+exactly as it shipped.
+
+The production `1.1` → `1.2` DOM migration preserves all existing fields and numeric spellings,
+changes only the document schema version, appends an empty `nodeGroups` array to every composition,
+and appends a zero `nodeGroup` high water: groups did not exist in `1.1`, so there is nothing to
+infer from an older file. It charges the operation budget and reparses before trusted decode, and
+each step refuses any document that is not its own source version, so the chain cannot be entered
+twice or out of order. Current writes emit at least minor 2.

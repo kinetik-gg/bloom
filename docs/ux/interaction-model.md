@@ -22,8 +22,9 @@ hosts reach with a modifier — bare letters belong to tools.
   that: they are in the node context menu and bind nothing.
 - **A focused text field keeps its own keys.** While an in-node value field or rename field holds
   focus, the canvas claims nothing — including Tab, which commits and travels.
-- **Reserved keys are left unbound**, so the gesture that will own them is not taken first. `Ctrl+G`
-  and `Ctrl+Shift+G` are reserved for grouping and ungrouping and are bound by nothing today.
+- **Reserved keys are left unbound**, so the gesture that will own them is not taken first. Nothing
+  is reserved at the moment: `Ctrl+G` and `Ctrl+Shift+G` were, and the Nodes canvas now binds them
+  to grouping and ungrouping.
 
 ## Global
 
@@ -63,16 +64,22 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+A` | Select all nodes |
 | `Delete` / `Backspace` | Remove the selection |
 | `Ctrl+D` | Duplicate the selection and start placing it |
+| `Ctrl+G` | Group the selection in a node group |
+| `Ctrl+Shift+G` | Ungroup every node group the selection is in |
 | `Enter` | Rename the selected layer node |
 | Double-click a layer node | Rename it |
+| Double-click a group frame | Rename the group |
 | `Esc` | Cancel the gesture in flight |
 | Left drag on a card | Move the selection |
+| Left drag on a group frame | Move every member of that group |
 | Left drag on a card's right edge | Resize the card |
 | Left drag from a socket | Connect, rewire, or disconnect |
 | `Ctrl` + right drag | Cut every ordinary wire crossed |
 | Right-click | Context menu |
 
-Mute, collapse, and dissolve are context-menu commands in this editor and bind no key.
+Mute, collapse, and dissolve are context-menu commands in this editor and bind no key. A group's own
+`Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
+becomes "rename whichever thing is selected".
 
 ## Timeline
 

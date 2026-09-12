@@ -96,7 +96,8 @@ distinct meanings:
 - `Drive from Graph` creates a typed connection.
 - `Convert Value to Node` materializes the current literal without changing its value.
 - `Convert Animation to Curve Node` materializes the existing curve without baking it.
-- `Expose as Group Input` applies only inside a semantic node group.
+- `Expose as Group Input` applies only inside node group encapsulation (deferred; see
+  **Terminology**).
 
 A graph-driven property remains visibly driven. Typing into its field must not silently replace the
 connection; the artist chooses how to disconnect or preserve the evaluated value.
@@ -181,7 +182,11 @@ defined in [`evaluation-primitives.md`](evaluation-primitives.md).
 - `Parent`: transform inheritance only.
 - `Folder`: timeline organization with no render effect.
 - `Layer Group`: a nested Layer Stack with explicit compositing semantics.
-- `Node Group`: graph encapsulation with exposed ports; it does not imply a layer.
+- `Node Group`: a named frame over a set of nodes in a composition's layout. It organizes the
+  canvas and has no evaluation meaning whatsoever (see **Node Groups**).
+- `Node Group Encapsulation`: the deferred feature that hides a subgraph behind exposed ports.
+  `Expose as Group Input` belongs to it. It is a separate, unimplemented contract: the two are
+  named apart here precisely because one is presentation and the other would be topology.
 - `Nested Composition`: a separate composition used as a source.
 
 Avoid using the generic word `Group` when one of the distinct terms is intended.
@@ -237,6 +242,64 @@ participation; other graph consumers can still receive its bypassed input. A mut
 only its first stable slot, and a muted composition endpoint passes through its input (empty
 when disconnected). Unused branches and bypassed parameter sources are not evaluated. The CPU
 evaluator primitives are unchanged.
+
+## Node Groups
+
+Compositions own `NodeGroupRecord{id, name, members, padding}` keyed by `NodeGroupId`, stored in the
+composition LAYOUT beside `NodeLayout`. A group is presentation: it has no ports, no encapsulation,
+no parameters and no evaluation meaning, and compilation never sees one. It is the Blender `Frame`
+shape -- a named rectangle drawn around cards -- and deliberately not the encapsulation feature the
+terminology reserves `Node Group Encapsulation` for.
+
+A node is a member of at most one group; a member naming a node that does not exist is a warning
+diagnostic, exactly as an unknown-node layout entry is, so an unreadable module never costs the
+artist the document. Group names follow the same valid-nonempty-UTF-8 rule as layer names. Padding
+is the finite, nonnegative inset between the member bounding rectangle and the frame's border, and
+its `24` default is frozen in document units so a file frames its members identically on every
+build. A group holds its own `NodeGroupId` namespace in the allocator, so a group id is never
+reissued after an undo and layout identity still never advances the node watermark.
+
+`GroupNodes(set, name = "Group")` creates one frame over existing nodes; its members leave whatever
+group held them, because a node belongs to exactly one. `UngroupNodes(groupId)` removes the frame
+and nothing else -- every member keeps its position, width, collapse, mute and wiring.
+`RenameGroup(groupId, name)` changes the name in place; an identical name is a no-op.
+`SetGroupMembers(groupId, set)` replaces a frame's membership wholesale. `MoveNodes` additionally
+carries optional membership deltas, so a drag that ends inside or outside a frame publishes the move
+and the membership change in ONE transaction and therefore one undo. Any group a command leaves with
+no members is removed by that same command: a nameplate over nothing is not something an artist
+asked to keep, and removing or dissolving a node is one of those commands. An empty group remains
+representable and durable in the model -- no command produces one, and the format neither invents
+nor drops one.
+
+Duplication deliberately puts copies in no group. `DuplicateNodes` copies layout fields, not
+membership; the copy lands ungrouped and the editor's own drop rule puts it in a frame if the artist
+drops it in one.
+
+### Group Frames In The Editor
+
+A frame is painted BEHIND its members -- behind their links too -- as the bounding rectangle of the
+member cards plus the record's padding, with a bordered hairline, a faint `SurfaceRaised` fill at
+low opacity, `Radius::Panel`, and an inline-editable title strip along its top. The frame owns no
+geometry of its own: it is recomputed from the live cards, including while a gesture is in flight.
+
+While a member is being dragged out of a frame, that frame is computed from the members holding
+still, so it does not chase the card leaving it -- otherwise "drop it outside to leave the group"
+would name a rectangle the artist can never get out of. A gesture that picks up the frame itself
+carries every member at once, excludes nothing from that computation, and changes no membership.
+
+A card's drop is judged on its CENTER against the innermost frame under it, so one card has exactly
+one landing; the resulting membership change travels in the same `MoveNodes` as the move. Clicking a
+frame selects what it frames: `CompositionSession` owns one selection truth and it is made of
+`NodeId`s, so a frame is never itself a document selection. The frame's whole body is its grip, the
+Blender behavior this shape comes from, which does mean a box selection has to start outside every
+frame.
+
+`Ctrl+G` groups the selection and `Ctrl+Shift+G` ungroups every frame the selection sits in; the
+canvas claims both through `ShortcutOverride` like every other key it owns. The selection's context
+menu offers `Group`, and `Ungroup` when the selection is in one; a right-click on a frame offers
+`Ungroup` and `Rename`. `Enter` keeps its one meaning in this editor -- rename the selected layer
+node -- so a frame's title opens on double-click or from its own menu, and `Enter` commits from
+inside the field. `docs/ux/interaction-model.md` remains the binding key list.
 
 ## Node Authoring Commands
 
