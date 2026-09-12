@@ -12,11 +12,12 @@ namespace bloom::render {
 // byte array by bloom_render_fonts (src/render/CMakeLists.txt's file(READ ... HEX) embed of
 // src/ui/kit/third_party/dejavu-sans/DejaVuSans.ttf).
 //
-// Qt-free by construction: src/render may not use Qt (AGENTS.md), so the bytes cannot come from
-// QFontDatabase, a Qt resource, or any font-service lookup. They are also never read from the
-// filesystem at runtime -- an evaluator that had to find a file on disk would not be reproducible
-// across machines, and a render task must not perform media I/O. This mirrors the existing
-// configure-time embed of the Bloom Neutral v1 OCIO config (src/color/ocio_builtin_payload.inc.in).
+// Qt-free by construction: src/render may not use Qt (AGENTS.md), so the bytes cannot come from the
+// interface toolkit's font database, a toolkit resource bundle, or any font-service lookup. They
+// are also never read from the filesystem at runtime -- an evaluator that had to find a file on
+// disk would not be reproducible across machines, and a render task must not perform media I/O.
+// This mirrors the existing configure-time embed of the Bloom Neutral v1 OCIO config
+// (src/color/ocio_builtin_payload.inc.in).
 //
 // Provenance: the embedded bytes are exactly the vendored file recorded in
 // src/ui/kit/third_party/dejavu-sans/provenance.md ("DejaVuSans.ttf", SHA-256
