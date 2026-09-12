@@ -26,6 +26,8 @@ enum class OperationIssueCode {
     MissingReference,
     InvalidOrder,
     Unsupported,
+    GraphCycle,
+    SocketKindMismatch,
 };
 
 struct OperationIssue {

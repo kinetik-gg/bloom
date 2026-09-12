@@ -120,6 +120,9 @@ class CanonicalGraph final {
     inputKind(const InputPortRef& input,
               const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
+    [[nodiscard]] bool eraseNode(NodeId id);
+    [[nodiscard]] bool eraseEdge(EdgeId id);
+    [[nodiscard]] bool renameLayer(LayerId id, std::string name);
     void setCompositionOutput(OutputPortRef output) { compositionOutput_ = std::move(output); }
 
     [[nodiscard]] ValidationResult

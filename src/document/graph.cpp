@@ -194,6 +194,46 @@ bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
     return true;
 }
 
+bool CanonicalGraph::eraseEdge(const EdgeId id) {
+    return std::erase_if(edges_, [id](const auto& edge) { return edge.id == id; }) != 0;
+}
+
+bool CanonicalGraph::eraseNode(const NodeId id) {
+    if (findNode(id) == nullptr)
+        return false;
+    std::vector<LayerSlotId> removedSlots;
+    for (const auto& boundary : layerOutputs_) {
+        if (boundary.nodeId != id)
+            continue;
+        for (const auto& entry : layerStack_.entries()) {
+            if (entry.layerId == boundary.layerId)
+                removedSlots.push_back(entry.slotId);
+        }
+    }
+    for (const auto slot : removedSlots)
+        (void)layerStack_.erase(slot);
+    std::erase_if(edges_, [&](const auto& edge) {
+        const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination);
+        return edge.source.nodeId == id || destinationNode(edge.destination) == id ||
+               (slot && std::ranges::find(removedSlots, slot->slotId) != removedSlots.end());
+    });
+    std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
+    std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
+    return true;
+}
+
+bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {
+    if (!isValidHumanFacingName(name))
+        return false;
+    for (auto& boundary : layerOutputs_) {
+        if (boundary.layerId == id) {
+            boundary.name = std::move(name);
+            return true;
+        }
+    }
+    return false;
+}
+
 ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                                           const NodeDefinitionRegistry& registry) const {
     ValidationResult result;

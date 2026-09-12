@@ -6,6 +6,9 @@ target_sources(
         animation_operations.cpp
         command_stack.cpp
         operations.cpp
+        node_operations.cpp
+        node_duplication.cpp
+        node_layout_operations.cpp
         result.cpp
         transaction.cpp
     PUBLIC
@@ -16,6 +19,7 @@ target_sources(
             include/bloom/commands/command_stack.hpp
             include/bloom/commands/operation.hpp
             include/bloom/commands/operations.hpp
+            include/bloom/commands/node_operations.hpp
             include/bloom/commands/result.hpp
             include/bloom/commands/transaction.hpp
 )
