@@ -688,10 +688,10 @@ bool CompositionSession::setSelectedTextContent(const QString& content) {
     }
     const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constantSource == nullptr || std::get_if<std::string>(&constantSource->value) == nullptr) {
-        // The content schema is String, which CreateAnimationForParameter refuses and
-        // SetKeyframeAtTime has no overload for, so a non-constant source here is a pre-existing
-        // document inconsistency rather than anything this command created -- refused the same way
-        // the driven-parameter branches above are.
+        // The content schema is String, the one parameter schema that is still constant-only:
+        // CreateAnimationForParameter refuses it and SetKeyframeAtTime has no string overload, so a
+        // non-constant source here is a pre-existing document inconsistency rather than anything
+        // this command created -- refused the same way the driven-parameter branches above are.
         reportUnavailable(QStringLiteral("Disconnect the driven text content before editing it"));
         return false;
     }

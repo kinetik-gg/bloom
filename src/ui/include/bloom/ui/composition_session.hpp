@@ -199,18 +199,12 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setSelectedScale(double x, double y);
     [[nodiscard]] bool setSelectedRotation(double degrees);
     [[nodiscard]] bool setSelectedOpacity(double opacity);
-    // Task P3 (issue #120 follow-up, owner review 2026-09-12): the properties panel's editable
-    // RGBA cells write through this, exactly mirroring setSelectedOpacity()'s shape -- resolve the
-    // selection's document::kSolidColorParameterRole parameter, then a single
-    // commands::SetParameterSource carrying the whole core::Color4d as its ConstantValueSource
-    // (the same generic command Position/Opacity already use for their own constant branch), one
-    // transaction per call. Unlike Position, there is no animated branch:
-    // CreateAnimationForParameter accepts only the animatable transform and opacity schemas
-    // (src/commands/animation_operations.cpp) and commands::SetKeyframeAtTime has no core::Color4d
-    // overload, so a solid color parameter can never actually become an AnimationCurveSource
-    // through the existing command surface -- a non-constant source (driven, or the
-    // otherwise-unreachable animated case) is refused the same way setSelectionScalarParameter()'s
-    // driven branch is. See this task's raw report.
+    // The properties panel's editable RGBA cells write through this, exactly mirroring
+    // setSelectedOpacity()'s shape -- resolve the selection's document::kSolidColorParameterRole
+    // parameter, then one transaction. Task S5 gave it Position's full branch set: a constant
+    // source takes commands::SetParameterSource, an ANIMATED one takes commands::SetKeyframeAtTime
+    // at the session time (a colour parameter can be animated now), and a driven one is refused the
+    // way setSelectionScalarParameter()'s driven branch is.
     [[nodiscard]] bool setSelectedSolidColor(core::Color4d color);
     // Task S3: the three text parameters, written through exactly the paths their solid/opacity
     // counterparts already use -- one commands::SetParameterSource per call, one transaction, one
@@ -396,10 +390,9 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setSelectionVec2Parameter(std::string_view role, double x, double y,
                                                  const QString& commandLabel);
     // The one command-selection decision for writing a Color4d-valued parameter, shared by
-    // setSelectedSolidColor() and setSelectedTextColor(). A driven source is refused exactly as the
-    // scalar helper refuses one; there is no animated branch, because no command in the surface can
-    // put a color parameter on a curve (CreateAnimationForParameter accepts only the animatable
-    // transform and opacity schemas, and SetKeyframeAtTime has no Color4d overload).
+    // setSelectedSolidColor() and setSelectedTextColor(). Identical in shape to the scalar and Vec2
+    // helpers since task S5: constant source -> SetParameterSource, animation source ->
+    // SetKeyframeAtTime at the session time, driver source -> refused.
     [[nodiscard]] bool setSelectionColorParameter(std::string_view role, core::Color4d color,
                                                   const QString& commandLabel);
     // The one command-selection decision for writing a position value (constant source ->

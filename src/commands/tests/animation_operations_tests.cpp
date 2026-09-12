@@ -389,7 +389,7 @@ void testCreateAnimationOutputsUndoAndRedo(TestContext& test) {
     unsupported.emplace<CreateAnimationForParameter>(
         kCompositionId, document::ParameterId::fromRaw(80), initialTime);
     test.expect(unsupportedStack.execute(std::move(unsupported)).status == CommandStatus::Rejected,
-                "creation accepts only the animatable transform and opacity schemas");
+                "creation refuses a schema the shared animatable predicates do not name");
 }
 
 void testRejectedTransactionDoesNotConsumeIds(TestContext& test) {

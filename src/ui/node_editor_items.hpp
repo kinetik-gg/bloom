@@ -457,11 +457,11 @@ class NodeItem final : public QGraphicsObject {
     //               CompositionSession::setSelectedPosition()
     //   opacity  -> one KValueField, committed through CompositionSession::setSelectedOpacity()
     //   color    -> a KColorChip, committed through CompositionSession::setSelectedSolidColor() or
-    //               setSelectedTextColor(). It was read-only while no command set a color; both of
-    //               those now exist (SetParameterSource carrying a Color4d constant), so the chip
-    //               opens its picker and commits. The swatch's own value model is displayable
-    //               straight RGBA in [0, 1], so an HDR or negative authored channel still travels
-    //               in the tooltip rather than in the swatch.
+    //               setSelectedTextColor(). The swatch's own value model is displayable straight
+    //               RGBA in [0, 1], so an HDR or negative authored channel still travels in the
+    //               tooltip rather than in the swatch. Task S5 made the colour schemas animatable,
+    //               so the chip's row carries a keyframe diamond like every other animatable row,
+    //               and a commit on an animated colour writes a key at the session time.
     //   text     -> a QLineEdit, committed through setSelectedTextContent() on
     //               editingFinished/returnPressed -- not per keystroke, so typing a word is one
     //               undo step. The kit has no string field; adding one is a kit change outside this
