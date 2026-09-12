@@ -546,6 +546,40 @@ bool CompositionSession::setSelectedOpacity(const double opacity) {
                                        QStringLiteral("Set Opacity"));
 }
 
+bool CompositionSession::setSelectedSolidColor(const core::Color4d color) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!std::isfinite(color.red) || !std::isfinite(color.green) || !std::isfinite(color.blue) ||
+        !std::isfinite(color.alpha)) {
+        reportUnavailable(QStringLiteral("Color values must be finite"));
+        return false;
+    }
+    const auto* parameter = parameterForSelection(document::kSolidColorParameterRole);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose a solid color"));
+        return false;
+    }
+    const auto* constantSource = std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (constantSource == nullptr) {
+        // Position/Opacity's driven-parameter refusal, mirrored here for a driven color source.
+        // Reached defensively rather than in practice: today nothing in the command surface can
+        // put a solid color parameter into an AnimationCurveSource
+        // (CreateAnimationForParameter rejects every schema but position/opacity, and
+        // SetKeyframeAtTime has no Color4d overload to write one even if it existed), so an
+        // AnimationCurveSource here would itself be a pre-existing document inconsistency, not
+        // something this command created.
+        reportUnavailable(QStringLiteral("Disconnect the driven color before editing its value"));
+        return false;
+    }
+    if (std::get_if<core::Color4d>(&constantSource->value) == nullptr) {
+        reportUnavailable(QStringLiteral("The color value does not match its schema"));
+        return false;
+    }
+    commands::Transaction transaction("Set Solid Color", snapshot_.revision());
+    transaction.emplace<commands::SetParameterSource>(compositionId_, parameter->id,
+                                                      document::ConstantValueSource{color});
+    return execute(std::move(transaction));
+}
+
 bool CompositionSession::moveLayerBefore(const document::LayerSlotId slotId,
                                          const std::optional<document::LayerSlotId> beforeSlotId) {
     Q_ASSERT(QThread::currentThread() == thread());

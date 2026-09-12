@@ -30,11 +30,12 @@ class PropertiesEditor final : public QWidget {
     void configureDocumentProperties();
 
     CompositionSession& session_;
-    QLabel* selectionLabel_ = nullptr;
 
     // The selection-driven groups (Transform/Appearance/source-specific), shown together and
     // hidden as one unit whenever configureDocumentProperties() shows documentSection_ instead
-    // (issue #120, decision 3).
+    // (issue #120, decision 3). Task P1 (owner review 2026-09-12) removed the selection title row
+    // and its "Nothing selected" placeholder text entirely -- section headers are the only
+    // grouping left, so there is no selectionLabel_ member any more.
     QWidget* selectionSection_ = nullptr;
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;
@@ -43,7 +44,11 @@ class PropertiesEditor final : public QWidget {
     QLabel* opacityKeyframe_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
     QLabel* solidColorKeyframe_ = nullptr;
-    QLabel* solidColorValue_ = nullptr;
+    // Task P3: the RGBA cells replacing the former read-only solidColorValue_ label.
+    kit::KValueField* solidColorRed_ = nullptr;
+    kit::KValueField* solidColorGreen_ = nullptr;
+    kit::KValueField* solidColorBlue_ = nullptr;
+    kit::KValueField* solidColorAlpha_ = nullptr;
     QLabel* solidAlphaAssociation_ = nullptr;
     QLabel* solidColorEncoding_ = nullptr;
 

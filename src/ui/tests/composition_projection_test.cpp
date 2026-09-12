@@ -358,7 +358,13 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto* solidColorParameter =
         parameterForRole(*composition, *solidSourceNodeId, document::kSolidColorParameterRole);
     auto* solidColorPanel = properties.findChild<QWidget*>("solidColorProperties");
-    auto* solidColorValue = properties.findChild<QLabel*>("solidColorValue");
+    // Task P3 (owner review 2026-09-12) replaced the read-only RGBA label with four editable
+    // kit::KValueField cells; this fixture now reads the same default color back through them
+    // instead of a QLabel's text.
+    auto* solidColorRed = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* solidColorGreen = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* solidColorBlue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    auto* solidColorAlpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
     auto* solidAlphaAssociation = properties.findChild<QLabel*>("solidAlphaAssociation");
     auto* solidColorEncoding = properties.findChild<QLabel*>("solidColorEncoding");
     if (!require(solidSourceNode != nullptr &&
@@ -369,9 +375,11 @@ parameterForRole(const bloom::document::Composition& composition,
                          core::Color4d{0.62, 0.08, 0.04, 1.0},
                  "first default solid stores the warm proof-palette color") ||
         !require(solidColorPanel != nullptr && !solidColorPanel->isHidden() &&
-                     solidColorValue != nullptr &&
-                     solidColorValue->text() == QStringLiteral("R 0.62  G 0.08  B 0.04  A 1"),
-                 "Properties exposes the exact default RGBA as read-only text") ||
+                     solidColorRed != nullptr && solidColorGreen != nullptr &&
+                     solidColorBlue != nullptr && solidColorAlpha != nullptr &&
+                     solidColorRed->value() == 0.62 && solidColorGreen->value() == 0.08 &&
+                     solidColorBlue->value() == 0.04 && solidColorAlpha->value() == 1.0,
+                 "Properties exposes the exact default RGBA through editable value cells") ||
         !require(solidAlphaAssociation != nullptr &&
                      solidAlphaAssociation->text() == QStringLiteral("Straight (unassociated)") &&
                      solidColorEncoding != nullptr &&
@@ -412,7 +420,11 @@ parameterForRole(const bloom::document::Composition& composition,
         (void)require(false, "HDR solid layer has one exact direct source node");
         return false;
     }
-    if (!require(solidColorValue->text() == QStringLiteral("R -0.25  G 1.5  B 0.125  A 0.8"),
+    // FORMAL AMENDMENT 1 (2026-09-12): the RGBA cells are unbounded, exactly like the read-only
+    // label they replaced -- restores the original "preserves negative and HDR RGB without
+    // clipping" pin, now read through the editable cells instead of a QLabel's text.
+    if (!require(solidColorRed->value() == -0.25 && solidColorGreen->value() == 1.5 &&
+                     solidColorBlue->value() == 0.125 && solidColorAlpha->value() == 0.8,
                  "Properties preserves negative and HDR RGB without clipping") ||
         !require(session.undo(), "adding the HDR solid is undoable") ||
         !require(session.composition()->graph().layerStack().entries().size() == 2 &&

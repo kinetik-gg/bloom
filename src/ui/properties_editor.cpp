@@ -17,11 +17,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
-#include <QEnterEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPainter>
 #include <QPalette>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -42,75 +40,31 @@ const document::NodeRecord* selectedPresentationSource(const CompositionSession&
     return session.selectedNode();
 }
 
-QString selectionName(const CompositionSession& session) {
-    const auto* composition = session.composition();
-    if (composition == nullptr) {
-        return QStringLiteral("No composition");
-    }
-    if (const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary)) {
-        return layerName(*composition, *layerId);
-    }
-    if (const auto* nodeId = std::get_if<document::NodeId>(&session.selection().primary)) {
-        const auto* node = composition->graph().findNode(*nodeId);
-        return node == nullptr ? QStringLiteral("Node unavailable")
-                               : QString::fromStdString(node->typeId);
-    }
-    if (const auto* parameterId =
-            std::get_if<document::ParameterId>(&session.selection().primary)) {
-        const auto* parameter = composition->parameters().find(*parameterId);
-        return parameter == nullptr ? QStringLiteral("Parameter unavailable")
-                                    : QString::fromStdString(parameter->schemaKey);
-    }
-    return QStringLiteral("Nothing selected");
-}
-
 // Issue #120 (task U5), decisions 1/2: the properties panel's kit field grid. A row is
-// [right-aligned Muted label][optional gold/dimmed Keyframe indicator][value widget], and every
-// row lives inside a PropertiesRow so hovering anywhere across the row -- label, indicator, or
-// value -- paints the SAME States-recipe highlight (docs/ux/visual-language.md, "State": "Hover:
-// one surface step up, plus BorderHover"). Qt delivers Enter/Leave to the common ancestor of the
-// previously- and newly-hovered leaf widgets only when that ancestor's OWN membership in the
-// "currently entered" chain changes, so moving the pointer between a row's own label and its value
-// cell never toggles this row's hover off: the row is entered once and left once, exactly as a
-// single hoverable unit.
-class PropertiesRow final : public QWidget {
-  public:
-    explicit PropertiesRow(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("propertiesRow"));
-        setMinimumHeight(kit::px(kit::Size::Control));
+// [right-aligned Muted label][optional gold/dimmed Keyframe indicator][value widget]. Task P1/P2
+// (owner review 2026-09-12) removed both the selection title row above the grid and the row's own
+// whole-row hover fill: the owner's read was "hover is for the component being interacted, not the
+// whole row," so a row is now a plain, non-painting QWidget that exists only to lay its
+// label/indicator/value out together -- every hover and focus affordance comes from the kit
+// control itself (KValueField's own borderToken()/cellBorderColor(), kit::borderForInteraction()),
+// never from this container.
+QWidget* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label,
+                        QLabel* indicator, QWidget* value) {
+    auto* row = new QWidget(sectionParent);
+    row->setObjectName(QStringLiteral("propertiesRow"));
+    row->setMinimumHeight(kit::px(kit::Size::Control));
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),
+                               kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS));
+    layout->setSpacing(kit::px(kit::Spacing::S));
+    layout->addWidget(label);
+    if (indicator != nullptr) {
+        layout->addWidget(indicator);
     }
-
-  protected:
-    void enterEvent(QEnterEvent* event) override {
-        hovered_ = true;
-        update();
-        QWidget::enterEvent(event);
-    }
-
-    void leaveEvent(QEvent* event) override {
-        hovered_ = false;
-        update();
-        QWidget::leaveEvent(event);
-    }
-
-    void paintEvent(QPaintEvent* event) override {
-        Q_UNUSED(event)
-        if (!hovered_) {
-            return;
-        }
-        QPainter painter(this);
-        // The panel itself paints no surface of its own (PropertiesEditor sits directly on the
-        // editor area's Background), so the row's resting surface for the recipe is Background --
-        // hover steps it to Surface, exactly one step up the ladder.
-        kit::fillRoundedSurface(
-            painter, rect(),
-            kit::color(kit::surfaceForState(kit::Color::Background, kit::State::Hover)),
-            kit::color(kit::borderForState(kit::State::Hover)), kit::Radius::Small);
-    }
-
-  private:
-    bool hovered_ = false;
-};
+    layout->addWidget(value, 1);
+    section->addWidget(row);
+    return row;
+}
 
 // The fixed right-aligned label column every row in the panel shares (decision 1), sized once from
 // the widest label this panel can ever show rather than a spelled pixel width -- KValueField's own
@@ -153,11 +107,14 @@ QLabel* makeKeyframeIndicator(QWidget* parent) {
 }
 
 // A read-only value cell's text: `role` is Value (Geist Mono) for numeric-looking content --
-// RGBA, format, frame rate, duration, pixel aspect -- and Ui for prose -- the alpha association
-// sentence, the composition name. None of these are editable through the current session API
-// (issue #120, decision 1's read-only carve-out: "do not add editing capability that doesn't
-// exist today"), so they stay plain selectable text rather than kit::KValueField, which has no way
-// to carry a string and would otherwise misrepresent them as steppable controls.
+// format, frame rate, duration, pixel aspect -- and Ui for prose -- the alpha association
+// sentence, the color encoding name, the composition name. None of these are editable through the
+// current session API (issue #120, decision 1's read-only carve-out: "do not add editing
+// capability that doesn't exist today"), so they stay plain selectable text rather than
+// kit::KValueField, which has no way to carry a string and would otherwise misrepresent them as
+// steppable controls. Task P3 (owner review 2026-09-12) moved the RGBA row itself off this
+// carve-out: it is a real parameter today, so it gets kit::KValueField cells instead -- see
+// solidColorRed_/Green_/Blue_/Alpha_ below.
 QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
     auto* label = new QLabel(parent);
     label->setFont(kit::font(role));
@@ -166,26 +123,6 @@ QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
     label->setPalette(palette);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     return label;
-}
-
-// Wraps `label` (+ optional `indicator`) and `value` in one PropertiesRow, added to `section`'s
-// layout. `section` also parents label/indicator/value at construction, but QBoxLayout::addWidget
-// below reparents each into the row -- the same "construct with `this`, let the layout reparent"
-// idiom the rest of this file already uses for its form rows.
-PropertiesRow* addPropertyRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label,
-                              QLabel* indicator, QWidget* value) {
-    auto* row = new PropertiesRow(sectionParent);
-    auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),
-                               kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS));
-    layout->setSpacing(kit::px(kit::Spacing::S));
-    layout->addWidget(label);
-    if (indicator != nullptr) {
-        layout->addWidget(indicator);
-    }
-    layout->addWidget(value, 1);
-    section->addWidget(row);
-    return row;
 }
 
 // A UISmall uppercase group header (decision 1: "Transform", "Appearance", a source-specific
@@ -283,10 +220,12 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                                kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
     layout->setSpacing(kit::px(kit::Spacing::S));
 
-    selectionLabel_ = new QLabel(this);
-    selectionLabel_->setObjectName("propertiesSelectionTitle");
-    selectionLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(selectionLabel_);
+    // Task P1 (owner review 2026-09-12: "should not show 'Nothing selected' or any other selected
+    // layer info") removed the selection title row that used to sit here ("Solid 1", "Nothing
+    // selected", ...) entirely. With nothing selected the panel shows only the document/composition
+    // section below; with a selection it shows only the Transform/Appearance/source-specific
+    // groups. Section headers (TRANSFORM/APPEARANCE/SOLID SOURCE/COMPOSITION) are the only grouping
+    // left.
 
     // Issue #120 (task U5), decision 1: the kit field grid. Every row's label lives in ONE fixed,
     // right-aligned column shared across the whole panel -- Transform, Appearance, the
@@ -354,14 +293,61 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     solidColorLayout->setSpacing(kit::px(kit::Spacing::XS));
     addSectionHeader(solidColorLayout, solidColorPanel_, tr("Solid Source"));
 
-    solidColorValue_ = makeReadOnlyValueLabel(kit::TypeRole::Value, solidColorPanel_);
-    solidColorValue_->setObjectName("solidColorValue");
-    solidColorValue_->setAccessibleName(tr("Solid RGBA value"));
-    solidColorValue_->setWordWrap(true);
+    // Task P3 (owner review 2026-09-12: "params not yet editable like the RGBA values of a
+    // solid... simple input fields are not being implemented yet and that sucks"): four
+    // kit::KValueField cells, one per channel, in place of the former read-only solidColorValue_
+    // label. Straight scene-linear authoring values are the schema (document::
+    // kSolidColorParameterSchemaKey), and per FORMAL AMENDMENT 1 (2026-09-12) these cells are
+    // UNBOUNDED, exactly like the read-only label they replace: they never clip negative or HDR
+    // channels, display the exact stored value, and commit exactly what was typed or scrubbed.
+    //
+    // kit::KValueField has no true "no limit" range -- setRange() always clamps in commitValue()
+    // -- and this task cannot edit the kit (no kit changes). A literal +-infinity range clamps
+    // nothing either, but it wrecks sizeHint(): KValueField sizes its cell from
+    // QString::number(max(|minimum|, |maximum|), 'f', decimals), and Qt's own formatter special-
+    // cases +-infinity to the 3-4 character strings "inf"/"-inf" rather than a wide number,
+    // producing a cell too narrow for any real value. The finite extremes
+    // (std::numeric_limits<double>::lowest()/max()) are worse: that same call produces a
+    // 300+ character string. -1'000'000/1'000'000 is exactly Position's own existing "unbounded in
+    // practice" bound two rows up in this same panel: no realistic scene-linear authoring value
+    // (this task's own test fixtures included) reaches it, so nothing is ever actually clipped,
+    // while sizeHint() stays sane.
+    solidColorRed_ = new kit::KValueField(solidColorPanel_);
+    solidColorGreen_ = new kit::KValueField(solidColorPanel_);
+    solidColorBlue_ = new kit::KValueField(solidColorPanel_);
+    solidColorAlpha_ = new kit::KValueField(solidColorPanel_);
+    for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
+        field->setRange(-1'000'000.0, 1'000'000.0);
+        field->setDecimals(3);
+        field->setSingleStep(0.01);
+    }
+    solidColorRed_->setObjectName("solidColorRedEditor");
+    solidColorRed_->setAccessibleName(tr("Solid color red"));
+    solidColorRed_->setLabel(QStringLiteral("R"));
+    solidColorGreen_->setObjectName("solidColorGreenEditor");
+    solidColorGreen_->setAccessibleName(tr("Solid color green"));
+    solidColorGreen_->setLabel(QStringLiteral("G"));
+    solidColorBlue_->setObjectName("solidColorBlueEditor");
+    solidColorBlue_->setAccessibleName(tr("Solid color blue"));
+    solidColorBlue_->setLabel(QStringLiteral("B"));
+    solidColorAlpha_->setObjectName("solidColorAlphaEditor");
+    solidColorAlpha_->setAccessibleName(tr("Solid color alpha"));
+    solidColorAlpha_->setLabel(QStringLiteral("A"));
+
+    auto* solidColorFields = new QWidget(solidColorPanel_);
+    solidColorFields->setObjectName(QStringLiteral("solidColorFieldGroup"));
+    auto* solidColorFieldsLayout = new QHBoxLayout(solidColorFields);
+    solidColorFieldsLayout->setContentsMargins(0, 0, 0, 0);
+    solidColorFieldsLayout->setSpacing(kit::px(kit::Spacing::S));
+    solidColorFieldsLayout->addWidget(solidColorRed_);
+    solidColorFieldsLayout->addWidget(solidColorGreen_);
+    solidColorFieldsLayout->addWidget(solidColorBlue_);
+    solidColorFieldsLayout->addWidget(solidColorAlpha_);
+
     solidColorKeyframe_ = makeKeyframeIndicator(solidColorPanel_);
     addPropertyRow(solidColorLayout, solidColorPanel_,
                    makePropertyRowLabel(tr("RGBA"), labelColumnWidth, solidColorPanel_),
-                   solidColorKeyframe_, solidColorValue_);
+                   solidColorKeyframe_, solidColorFields);
 
     solidAlphaAssociation_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, solidColorPanel_);
     solidAlphaAssociation_->setObjectName("solidAlphaAssociation");
@@ -446,6 +432,21 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
             (void)session_.setSelectedOpacity(value / 100.0);
         }
     });
+    // Task P3: exactly Position's own commitPosition shape (read every cell in the group, write
+    // the whole value through one session call) -- one SetSolidColor command per emitted
+    // valueChanged, the same one-command-per-emission parity Position already has (BASE FACTS:
+    // "accept that parity; do not add coalescing").
+    const auto commitSolidColor = [this] {
+        if (!rebuilding_) {
+            (void)session_.setSelectedSolidColor(
+                core::Color4d{solidColorRed_->value(), solidColorGreen_->value(),
+                              solidColorBlue_->value(), solidColorAlpha_->value()});
+        }
+    };
+    connect(solidColorRed_, &kit::KValueField::valueChanged, this, commitSolidColor);
+    connect(solidColorGreen_, &kit::KValueField::valueChanged, this, commitSolidColor);
+    connect(solidColorBlue_, &kit::KValueField::valueChanged, this, commitSolidColor);
+    connect(solidColorAlpha_, &kit::KValueField::valueChanged, this, commitSolidColor);
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
@@ -455,8 +456,6 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
 
 void PropertiesEditor::rebuild() {
     rebuilding_ = true;
-    selectionLabel_->setText(selectionName(session_));
-
     configurePosition();
     configureOpacity();
     configureSolidColor();
@@ -510,10 +509,26 @@ void PropertiesEditor::configureSolidColor() {
 
     updateKeyframeIndicator(solidColorKeyframe_, parameter);
     const auto value = session_.constantColorValue(parameter->id);
-    solidColorValue_->setText(value.has_value() ? exactColorText(*value)
-                                                : parameterSourceDescription(*parameter));
-    solidColorValue_->setToolTip(
-        tr("Straight scene-linear authoring values; negative and HDR RGB are not clipped"));
+    const bool canEditColor = value.has_value();
+    for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
+        field->setEnabled(canEditColor);
+    }
+    if (canEditColor) {
+        const QSignalBlocker blockRed(solidColorRed_);
+        const QSignalBlocker blockGreen(solidColorGreen_);
+        const QSignalBlocker blockBlue(solidColorBlue_);
+        const QSignalBlocker blockAlpha(solidColorAlpha_);
+        solidColorRed_->setValue(value->red);
+        solidColorGreen_->setValue(value->green);
+        solidColorBlue_->setValue(value->blue);
+        solidColorAlpha_->setValue(value->alpha);
+    }
+    // Mirrors Position/Opacity's own tooltip shape exactly (parameterSourceDescription() for a
+    // resolvable parameter).
+    const QString colorTip = parameterSourceDescription(*parameter);
+    for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
+        field->setToolTip(colorTip);
+    }
     solidAlphaAssociation_->setText(tr("Straight (unassociated)"));
     solidColorEncoding_->setText(
         QString::fromUtf8(document::kSolidColorEncoding.data(),
