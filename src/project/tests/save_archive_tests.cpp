@@ -427,7 +427,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    // Bump the root schemaVersion.minor from 0 to 1 (the anchor text uniquely identifies the
+    // Bump the root schemaVersion.minor from 1 to 2 (the anchor text uniquely identifies the
     // root's own schemaVersion object, which the canonical writer always emits first, ahead of
     // "project").
     const std::string anchor = "\"minor\": 1\n  },\n  \"project\"";
@@ -439,7 +439,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
     }
     text.replace(anchorPos, std::string_view("\"minor\": 1").size(), "\"minor\": 2");
 
-    // Splice one unknown trailing root member -- a conforming 1.1 writer could have produced
+    // Splice one unknown trailing root member -- a conforming 1.2 writer could have produced
     // this (strictly after every known root member, in ascending UTF-8 key order; there is only
     // one, so ordering is trivially satisfied).
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
@@ -452,14 +452,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
     text += '\n';
 
     auto parsed = parseStrictJsonDom(asBytes(text), {}, makeOperation());
-    expectations.expect(static_cast<bool>(parsed), "RT green chain: spliced 1.1 document parses");
+    expectations.expect(static_cast<bool>(parsed), "RT green chain: spliced 1.2 document parses");
     if (!parsed) {
         return;
     }
     DocumentDecodeResult decoded = decodeDocumentEnvelope(parsed.document()->root());
     expectations.expect(decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                             decoded.value() != nullptr,
-                        "RT green chain: spliced 1.1 document decodes");
+                        "RT green chain: spliced 1.2 document decodes");
     expectations.expect(decoded.classification() == DocumentClassification::EditableWithRoundTrip,
                         "RT green chain: spliced document classifies EditableWithRoundTrip");
     if (decoded.value() == nullptr || decoded.roundTrip() == nullptr) {
@@ -476,7 +476,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
@@ -527,7 +527,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Version disagreement: manifest {1,0} vs. a document written at minor 1, and vice versa.
+// Version disagreement: manifest {1,1} vs. a document written at minor 2, and vice versa.
 // ---------------------------------------------------------------------------------------------
 
 void testVersionDisagreement(Expectations& expectations) {
@@ -549,7 +549,7 @@ void testVersionDisagreement(Expectations& expectations) {
         auto built =
             buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
         expectations.expect(!built,
-                            "version disagreement: manifest {1,0} vs. document minor 1 fails");
+                            "version disagreement: manifest {1,1} vs. document minor 2 fails");
         const auto* failure = built.failure();
         expectations.expect(
             failure != nullptr && failure->stage() == SaveArchiveStage::VersionAgreement,
@@ -558,19 +558,19 @@ void testVersionDisagreement(Expectations& expectations) {
             const auto* payload = failure->payloadAs<SaveArchiveVersionAgreementFailure>();
             expectations.expect(
                 payload != nullptr &&
-                    payload->manifestVersion == bloom::document::SchemaVersion{1, 0} &&
-                    payload->documentVersion == bloom::document::SchemaVersion{1, 1},
+                    payload->manifestVersion == bloom::document::SchemaVersion{1, 1} &&
+                    payload->documentVersion == bloom::document::SchemaVersion{1, 2},
                 "version disagreement: failure names the exact mismatched versions");
         }
     }
     {
-        const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}, .requirements = {}};
+        const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}, .requirements = {}};
         const CanonicalDocumentV1 documentInput{
-            .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 0};
+            .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 1};
         auto built =
             buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
         expectations.expect(!built,
-                            "version disagreement (reversed): manifest {1,1} vs. document minor 0 "
+                            "version disagreement (reversed): manifest {1,2} vs. document minor 1 "
                             "fails");
         const auto* failure = built.failure();
         expectations.expect(failure != nullptr &&

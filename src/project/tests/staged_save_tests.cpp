@@ -592,7 +592,7 @@ void testFaultInjection(Expectations& expectations) {
 //
 // Instead, this is reached through ordinary public parameters: a manifest whose
 // documentSchemaVersion disagrees with the document's own embedded schema version (which
-// CanonicalDocumentV1::schemaMinor controls, defaulted to 0 here) is a legitimate, seam-free way
+// CanonicalDocumentV1::schemaMinor controls, defaulted to 1 here) is a legitimate, seam-free way
 // to make verifySaveArchive() fail its VersionAgreement check over the exact bytes that were
 // staged and read back -- the encode step happily writes self-inconsistent input; only
 // verification catches it. This is a genuine failure of stageSaveArchive()'s verification-over-
@@ -615,7 +615,7 @@ void testVerificationFailureOverStagedBytes(Expectations& expectations) {
         expectations, "Version Mismatch Project",
         [&](const CanonicalManifestV1& baseManifest, const CanonicalDocumentV1& documentInput) {
             CanonicalManifestV1 manifest = baseManifest;
-            manifest.documentSchemaVersion = {1, 1}; // documentInput still encodes {1, 0}.
+            manifest.documentSchemaVersion = {1, 2}; // documentInput still encodes {1, 1}.
 
             auto preflight = coordinator->preflight(
                 makeRequest(targetPath, ArtifactOverwritePolicy::CreateOnly));

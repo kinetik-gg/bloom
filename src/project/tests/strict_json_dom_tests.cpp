@@ -350,7 +350,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         }
         if (const auto* minor =
                 expectChild(expectations, *schemaVersion, "minor", "minor exists")) {
-            expectNumber(expectations, *minor, "0", "the document schema minor is preserved");
+            expectNumber(expectations, *minor, "1", "the document schema minor is preserved");
         }
     }
 
@@ -435,10 +435,10 @@ void testWriterDomRoundTrip(Expectations& expectations) {
             if (compositions->kind() == JsonValueKind::Array &&
                 !compositions->arrayElements().empty()) {
                 const auto& composition = compositions->arrayElements().front();
-                expectKeyOrder(
-                    expectations, composition,
-                    {"id", "name", "duration", "format", "parameters", "animationCurves", "graph"},
-                    "the composition keeps its exact member order");
+                expectKeyOrder(expectations, composition,
+                               {"id", "name", "duration", "format", "parameters", "animationCurves",
+                                "graph", "nodeLayout"},
+                               "the composition keeps its exact member order");
                 if (const auto* name =
                         expectChild(expectations, composition, "name", "composition.name exists")) {
                     expectString(expectations, *name, "Main Composition",

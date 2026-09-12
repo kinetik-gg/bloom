@@ -988,21 +988,26 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
-    testRulerAndLanesShareTheLaneRegionOrigin(expectations);
-    testPlayheadSpansRulerAndEveryLane(expectations);
-    testRowsAreFlatThirtyTwoPixelRows(expectations);
-    testOneScrollbarMovesBothHalvesTogether(expectations);
-    testClipBarSpansTheCompositionRangeInItsDataTypeColor(expectations);
-    testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
-    testReservedToggleColumnsAreDisabledWithHonestTooltips(expectations);
-    testBlendingAndParentAreDisabledKDropdowns(expectations);
-    testKindHasNoColumnButStaysReadable(expectations);
-    testLayerStackIsNoLongerAnItemView(expectations);
-    testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);
-    testDraggingALaneScrubsThroughTheRulerScrubPath(expectations);
-    testClickingTheLeftColumnSelectsAndClears(expectations);
-    testPlayPauseButtonIconSwapsWithState(expectations);
-    testLoopIndicatorIsNonInteractiveAndHonest(expectations);
-    testTransportClusterIsSquareAndInsideTheLeftColumn(expectations);
+    try {
+        testRulerAndLanesShareTheLaneRegionOrigin(expectations);
+        testPlayheadSpansRulerAndEveryLane(expectations);
+        testRowsAreFlatThirtyTwoPixelRows(expectations);
+        testOneScrollbarMovesBothHalvesTogether(expectations);
+        testClipBarSpansTheCompositionRangeInItsDataTypeColor(expectations);
+        testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
+        testReservedToggleColumnsAreDisabledWithHonestTooltips(expectations);
+        testBlendingAndParentAreDisabledKDropdowns(expectations);
+        testKindHasNoColumnButStaysReadable(expectations);
+        testLayerStackIsNoLongerAnItemView(expectations);
+        testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);
+        testDraggingALaneScrubsThroughTheRulerScrubPath(expectations);
+        testClickingTheLeftColumnSelectsAndClears(expectations);
+        testPlayPauseButtonIconSwapsWithState(expectations);
+        testLoopIndicatorIsNonInteractiveAndHonest(expectations);
+        testTransportClusterIsSquareAndInsideTheLeftColumn(expectations);
+    } catch (const std::exception& error) {
+        std::cerr << "FAILED: legacy text fixture: " << error.what() << '\n';
+        return 1;
+    }
     return expectations.failures() == 0 ? 0 : 1;
 }
