@@ -5,6 +5,12 @@
 #include <bloom/document/persisted_text.hpp>
 
 namespace bloom::commands {
+bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& operation) {
+    document::Document isolated(snapshot.project(), snapshot.ids().highWater());
+    auto draft = isolated.draft(isolated.snapshot());
+    return operation.apply(draft).status != OperationStatus::Rejected && draft.validate().ok();
+}
+
 std::string_view AddNode::typeId() const noexcept { return "bloom.node.add"; }
 OperationResult AddNode::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);

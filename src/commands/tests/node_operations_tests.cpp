@@ -105,6 +105,22 @@ NodeId addSource(Fixture& fixture) {
     return *id;
 }
 
+void testValidityQuery(TestContext& test) {
+    Fixture fixture;
+    const auto before = fixture.document.snapshot();
+    const auto history = fixture.stack.size();
+    test.expect(canApplyNodeOperation(before, DuplicateNodes(kCompositionId, {kFirstLayerNodeId}, {24, 24})),
+                "menu query accepts a valid duplicate without issuing IDs");
+    test.expect(!canApplyNodeOperation(before, RemoveNodes(kCompositionId, {kLayerStackNodeId})),
+                "menu query refuses protected removal");
+    test.expect(!canApplyNodeOperation(before, DissolveNode(kCompositionId, kFirstLayerNodeId)),
+                "menu query refuses participating Layer Output dissolve");
+    const auto after = fixture.document.snapshot();
+    test.expect(sameTruth(before, after) && before.revision() == after.revision() &&
+                    before.ids().highWater() == after.ids().highWater() && fixture.stack.size() == history,
+                "queries leave all live truth, allocator, revision and history untouched");
+}
+
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
@@ -433,6 +449,7 @@ void testDuplicationOwnershipEdges(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

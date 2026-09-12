@@ -23,6 +23,7 @@ target_sources(
         kit/color_sampler.cpp
         kit/color_swatches.cpp
         kit/dropdown.cpp
+        kit/search_popup.cpp
         kit/dropdown_popup.cpp
         kit/fonts.cpp
         kit/icons.cpp
@@ -48,6 +49,7 @@ target_sources(
             include/bloom/ui/kit/color_sampler.hpp
             include/bloom/ui/kit/color_swatches.hpp
             include/bloom/ui/kit/dropdown.hpp
+            include/bloom/ui/kit/search_popup.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp

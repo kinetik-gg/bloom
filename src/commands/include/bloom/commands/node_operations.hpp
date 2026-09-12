@@ -10,6 +10,11 @@
 #include <utility>
 
 namespace bloom::commands {
+// Checks the exact operation and final document validation on an isolated draft. Never publishes,
+// advances the caller's allocator, or touches history. Menus must not duplicate command policy.
+[[nodiscard]] bool canApplyNodeOperation(const document::Snapshot& snapshot,
+                                         const Operation& operation);
+
 inline constexpr std::string_view kAddNodeOutput = "node";
 
 class AddNode final : public Operation {
