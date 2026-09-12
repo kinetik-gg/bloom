@@ -15,6 +15,8 @@
 #include <QRectF>
 #include <QString>
 
+#include <bloom/commands/result.hpp>
+
 #include <optional>
 #include <set>
 #include <string_view>
@@ -234,6 +236,15 @@ class CompositionSession final : public QObject {
     // animated source), targeted at the frozen parameter/time rather than live selection. A stale
     // base revision or a zero-displacement move commits nothing. Always clears interaction state.
     [[nodiscard]] bool commitPositionInteraction();
+
+    // Node authoring (task N3): the ONE public submission seam for node-operation transactions
+    // built by the node editor (MoveNodes, ConnectPorts, DuplicateNodes, ...). Executes exactly
+    // one transaction through the same command stack and publication path as every other session
+    // edit (snapshot/selection normalization/history/rejection signals are identical), and returns
+    // the full command result so the caller can read the ids the transaction created. Refusals
+    // surface through commandRejected() exactly as they do for setSelectedPosition().
+    [[nodiscard]] commands::CommandResult
+    executeNodeTransaction(commands::Transaction&& transaction);
 
     [[nodiscard]] bool canUndo() const noexcept;
     [[nodiscard]] bool canRedo() const noexcept;

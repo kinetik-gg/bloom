@@ -227,6 +227,12 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
 
     scene_ = new NodeGraphicsScene(this);
     scene_->setSession(&session_);
+    // Production submission (task N3): every gesture transaction goes through the session's one
+    // public node-transaction seam, so publication and refusal reporting match Properties and the
+    // Timeline. Tests may replace this with an adapter through setSubmit().
+    scene_->setSubmit([this](commands::Transaction&& transaction) {
+        return session_.executeNodeTransaction(std::move(transaction));
+    });
     view_ = new NodeGraphicsView(this);
     view_->setScene(scene_);
     layout->addWidget(view_);

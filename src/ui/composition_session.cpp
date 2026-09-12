@@ -895,6 +895,14 @@ bool CompositionSession::redo() {
     return handleResult(commandStack_->redo());
 }
 
+commands::CommandResult
+CompositionSession::executeNodeTransaction(commands::Transaction&& transaction) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    auto result = commandStack_->execute(std::move(transaction));
+    (void)handleResult(result);
+    return result;
+}
+
 bool CompositionSession::execute(commands::Transaction&& transaction) {
     return handleResult(commandStack_->execute(std::move(transaction)));
 }
