@@ -190,6 +190,16 @@ QString exactFrameAndTimecodeText(const CompositionSession& session) {
     return ViewerEditor::tr("Frame %1 · %2").arg(frameText, formatExactSecondsForViewer(time));
 }
 
+// The footer's dropped-frame text, or an empty string when nothing honest can be said: counting is
+// armed only between play() and pause(), so outside a playback run this reports nothing rather than
+// a stale or invented figure.
+[[nodiscard]] QString droppedFrameText(const CompositionPreviewController& previewController) {
+    if (!previewController.isCountingDroppedFrames()) {
+        return {};
+    }
+    return ViewerEditor::tr("%1 dropped").arg(previewController.droppedFrameCount());
+}
+
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
     // 22px pattern from the SurfaceRaised/Surface pair (decision 1): this is now the WHOLE canvas
     // surround, not just an under-image alpha indicator -- the image is drawn on top of it with its
@@ -329,10 +339,31 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 
     // Center: exact frame + timecode readout, Geist Mono (kit::TypeRole::Value is the monospaced
     // role every numeric/timecode surface uses -- kit/tokens.hpp). Occupies whatever room is left
-    // between the zoom dropdown and the color chip.
+    // between the zoom dropdown and the color chip, minus the dropped-frame readout below when one
+    // is showing.
     painter.setFont(kit::font(kit::TypeRole::Value));
     painter.setPen(kit::color(kit::Color::Foreground));
-    const qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
+    qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
+
+    // Task S5, item 3b: the dropped-frame counter, shown ONLY while a playback run is counting.
+    // It sits immediately left of the color chip, in the same monospaced role the frame readout
+    // uses, and is deliberately a count rather than a rate -- see
+    // CompositionPreviewController::droppedFrameCount() for exactly what it counts and what it
+    // does not claim. Zero dropped frames still shows "0 dropped" during playback: silence would
+    // read as "not measured", which is a different statement.
+    const QString droppedText = droppedFrameText(previewController);
+    if (!droppedText.isEmpty()) {
+        const qreal droppedWidth = painter.fontMetrics().horizontalAdvance(droppedText);
+        const qreal droppedLeft = std::max<qreal>(chipLeftBound, centerRight - droppedWidth);
+        painter.setPen(previewController.droppedFrameCount() == 0 ? kit::color(kit::Color::Muted)
+                                                                  : kit::color(kit::Color::Warn));
+        painter.drawText(QRectF(droppedLeft, bar.top(),
+                                std::max<qreal>(0.0, centerRight - droppedLeft), bar.height()),
+                         Qt::AlignVCenter | Qt::AlignRight, droppedText);
+        centerRight = droppedLeft - kit::px(kit::Spacing::S);
+        painter.setPen(kit::color(kit::Color::Foreground));
+    }
+
     const QRectF centerRect(chipLeftBound, bar.top(),
                             std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
     painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session));
@@ -522,6 +553,15 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             statusBarFooter_->update();
         }
     });
+    // Task S5, item 3b: the dropped-frame readout follows the SAME refresh idiom as every other
+    // footer element -- connect to whatever changes it, then update() this widget and the footer.
+    connect(&previewController_, &CompositionPreviewController::droppedFrameCountChanged, this,
+            [this] {
+                update();
+                if (statusBarFooter_ != nullptr) {
+                    statusBarFooter_->update();
+                }
+            });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
         updatePreviewAccessibility();
         // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
@@ -566,6 +606,10 @@ ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return trans
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {
     return exactFrameAndTimecodeText(session_);
+}
+
+QString ViewerEditor::statusBarDroppedFrameTextForTest() const {
+    return droppedFrameText(previewController_);
 }
 
 QString ViewerEditor::statusBarColorChipTextForTest() const {

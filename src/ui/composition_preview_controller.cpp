@@ -152,6 +152,42 @@ void CompositionPreviewController::notifyScrubEnded() {
     flushCadence();
 }
 
+std::uint64_t CompositionPreviewController::droppedFrameCount() const noexcept {
+    return droppedFrameCount_;
+}
+
+bool CompositionPreviewController::isCountingDroppedFrames() const noexcept {
+    return countingDroppedFrames_;
+}
+
+void CompositionPreviewController::beginDroppedFrameCounting() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    countingDroppedFrames_ = true;
+    droppedFrameCount_ = 0;
+    emit droppedFrameCountChanged();
+}
+
+void CompositionPreviewController::endDroppedFrameCounting() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!countingDroppedFrames_) {
+        return;
+    }
+    countingDroppedFrames_ = false;
+    // The count is kept until the next beginDroppedFrameCounting() resets it, so a surface can
+    // still report what the run that just ended dropped; it reads isCountingDroppedFrames() to
+    // decide whether to show it at all.
+    emit droppedFrameCountChanged();
+}
+
+void CompositionPreviewController::noteDroppedFrame() {
+    if (!countingDroppedFrames_ ||
+        droppedFrameCount_ == std::numeric_limits<std::uint64_t>::max()) {
+        return;
+    }
+    ++droppedFrameCount_;
+    emit droppedFrameCountChanged();
+}
+
 void CompositionPreviewController::flushCadence() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!pending_.has_value() || active_.has_value()) {
@@ -283,6 +319,9 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         // The cancelled handle remains the admission gate until its terminal result is observed.
         // Cadence is irrelevant beneath this gate: it delays SUBMISSION, and this request cannot
         // submit before the active task reaches terminal regardless of kind or timer state.
+        if (pending_.has_value()) {
+            noteDroppedFrame();
+        }
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
         taskUiBridge_.wake();
@@ -293,6 +332,9 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         // No active task is gating submission, but the trailing cadence still is: hold this as the
         // newest pending request (superseding any earlier one still waiting out the same window)
         // and let the cadence timer -- or notifyScrubEnded()'s bypass -- perform the submission.
+        if (pending_.has_value()) {
+            noteDroppedFrame();
+        }
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
         if (!interactiveCadenceTimer_.isActive()) {
@@ -305,6 +347,9 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     // Visible bypasses the cadence entirely: any Interactive request still waiting out its window
     // is superseded immediately.
     interactiveCadenceTimer_.stop();
+    if (pending_.has_value()) {
+        noteDroppedFrame();
+    }
     pending_.reset();
     submitPreview(std::move(pendingRequest), std::move(retainedFrame));
 }
@@ -410,6 +455,11 @@ void CompositionPreviewController::consumeReadyResult() {
     if (pending_.has_value()) {
         PendingRequest pendingRequest = std::move(*pending_);
         pending_.reset();
+        // The completed frame is discarded unpublished in favour of the newer pending request: the
+        // work was done and the artist never saw it, which is exactly a dropped frame. Counted
+        // after the pending request is taken, so the optional is provably disengaged across the
+        // call.
+        noteDroppedFrame();
         submitPreview(std::move(pendingRequest), state_.frame);
         return;
     }
