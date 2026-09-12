@@ -286,6 +286,95 @@ void drawDiagnosticBanner(QPainter& painter, const QRectF& available, const QStr
     painter.drawText(banner.adjusted(10.0, 0.0, -10.0, 0.0), Qt::AlignCenter, visible);
 }
 
+// Paints the status bar's surface, hairline, color-state chip, and exact frame/timecode readout
+// into `bar` (FORMAL AMENDMENT 1: a free function, not a ViewerEditor method, so the exact same
+// code paints it whether `bar` is a strip inside ViewerEditor's own canvas -- every existing
+// test's world, where `zoomDropdown` is still a direct ViewerEditor child -- or the full rect of
+// the separate footer widget takeFooterWidget() hands to EditorArea, where `zoomDropdown` has been
+// reparented into that same widget). `zoomDropdown`'s geometry is always expressed relative to
+// whichever widget currently parents it, and `bar` is always expressed in that SAME widget's own
+// coordinate space in both cases, so the chip/readout layout math below needs no special-casing.
+void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* zoomDropdown,
+                           const CompositionSession& session,
+                           const CompositionPreviewController& previewController) {
+    painter.save();
+    painter.fillRect(bar, kit::color(kit::Color::Surface));
+    painter.setPen(QPen(kit::color(kit::Color::Border), 1.0));
+    painter.drawLine(bar.topLeft(), bar.topRight());
+
+    // Right: the color-state chip (decision 3) -- the contract-preserved qualified/unqualified
+    // indicator this whole status bar exists partly to relocate. Computed fresh every paint from
+    // live preview state, exactly like the top-row label it replaces, so it is never a step behind
+    // or a silent relabel.
+    painter.setFont(kit::font(kit::TypeRole::Ui));
+    const auto chipState = colorChipStateFor(previewController.state());
+    const qreal chipHeight = std::max<qreal>(16.0, bar.height() - 6.0);
+    const qreal chipTop = bar.top() + (bar.height() - chipHeight) / 2.0;
+    const qreal chipLeftBound =
+        zoomDropdown != nullptr
+            ? static_cast<qreal>(zoomDropdown->geometry().right()) + kit::px(kit::Spacing::L)
+            : bar.left();
+    const qreal maxChipWidth = std::max<qreal>(0.0, bar.width() * 0.4);
+    const QString elidedChipText = painter.fontMetrics().elidedText(
+        chipState.text, Qt::ElideRight,
+        static_cast<int>(std::max<qreal>(0.0, maxChipWidth - 16.0)));
+    const qreal chipWidth = std::min<qreal>(
+        maxChipWidth, painter.fontMetrics().horizontalAdvance(elidedChipText) + 16.0);
+    const qreal chipLeft =
+        std::max<qreal>(chipLeftBound, bar.right() - chipWidth - kit::px(kit::Spacing::S));
+    const QRectF chipRect(chipLeft, chipTop,
+                          std::max<qreal>(0.0, bar.right() - chipLeft - kit::px(kit::Spacing::S)),
+                          chipHeight);
+    paintChip(painter, chipRect, chipState.text, kit::color(chipState.colorToken));
+
+    // Center: exact frame + timecode readout, Geist Mono (kit::TypeRole::Value is the monospaced
+    // role every numeric/timecode surface uses -- kit/tokens.hpp). Occupies whatever room is left
+    // between the zoom dropdown and the color chip.
+    painter.setFont(kit::font(kit::TypeRole::Value));
+    painter.setPen(kit::color(kit::Color::Foreground));
+    const qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
+    const QRectF centerRect(chipLeftBound, bar.top(),
+                            std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
+    painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session));
+
+    painter.restore();
+}
+
+// FORMAL AMENDMENT 1 (task C1): the viewer's status bar, exposed as a real footer widget once
+// ViewerEditor::takeFooterWidget() hands it (and the zoom dropdown reparented into it) to
+// EditorArea. Repaints via the SAME paintStatusBarSurface() free function above, over its own
+// full rect instead of a strip inside a larger canvas -- the visual is unchanged either way.
+class ViewerStatusBarFooter final : public QWidget {
+  public:
+    ViewerStatusBarFooter(CompositionSession& session,
+                          CompositionPreviewController& previewController, QWidget* zoomDropdown)
+        : session_(session), previewController_(previewController), zoomDropdown_(zoomDropdown) {
+        setFixedHeight(kit::px(kit::Size::Control));
+    }
+
+    void layoutDropdown() {
+        if (zoomDropdown_ == nullptr) {
+            return;
+        }
+        const QSize hint = zoomDropdown_->sizeHint();
+        const int x = kit::px(kit::Spacing::S);
+        const int y = (height() - hint.height() + 1) / 2;
+        zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent*) override { layoutDropdown(); }
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        paintStatusBarSurface(painter, QRectF(rect()), zoomDropdown_, session_, previewController_);
+    }
+
+  private:
+    CompositionSession& session_;
+    CompositionPreviewController& previewController_;
+    QWidget* zoomDropdown_;
+};
+
 } // namespace
 
 QRectF fitDisplayRect(const QRectF& available, const render::ImageExtent extent,
@@ -403,16 +492,36 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     layoutStatusBar();
 
-    connect(&session_, &CompositionSession::snapshotChanged, this,
-            qOverload<>(&ViewerEditor::update));
-    connect(&session_, &CompositionSession::compositionChanged, this,
-            qOverload<>(&ViewerEditor::update));
-    connect(&session_, &CompositionSession::selectionChanged, this,
-            qOverload<>(&ViewerEditor::update));
+    // Every one of these already repainted the status bar for free when it was part of this
+    // widget's own paintEvent; FORMAL AMENDMENT 1 keeps that true once takeFooterWidget() moves it
+    // out into its own widget by also nudging statusBarFooter_ (a no-op update() call until then,
+    // since it starts null).
+    connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        update();
+        if (statusBarFooter_ != nullptr) {
+            statusBarFooter_->update();
+        }
+    });
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        update();
+        if (statusBarFooter_ != nullptr) {
+            statusBarFooter_->update();
+        }
+    });
+    connect(&session_, &CompositionSession::selectionChanged, this, [this] {
+        update();
+        if (statusBarFooter_ != nullptr) {
+            statusBarFooter_->update();
+        }
+    });
     // New for the status bar's exact readout (decision 3): the original Viewer never needed
     // current-time updates before, since nothing it drew depended on session time.
-    connect(&session_, &CompositionSession::currentTimeChanged, this,
-            qOverload<>(&ViewerEditor::update));
+    connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
+        update();
+        if (statusBarFooter_ != nullptr) {
+            statusBarFooter_->update();
+        }
+    });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
         updatePreviewAccessibility();
         // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
@@ -422,8 +531,35 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             endDrag(false);
         }
         update();
+        if (statusBarFooter_ != nullptr) {
+            statusBarFooter_->update();
+        }
     });
     updatePreviewAccessibility();
+}
+
+QWidget* ViewerEditor::takeFooterWidget() {
+    // FORMAL AMENDMENT 1 (task C1): idempotent -- a second call (this ViewerEditor already gave
+    // its footer away) returns nullptr rather than a dangling or duplicate widget.
+    if (statusBarFooterTaken_) {
+        return nullptr;
+    }
+    statusBarFooterTaken_ = true;
+
+    auto* footer = new ViewerStatusBarFooter(session_, previewController_, zoomDropdown_);
+    if (zoomDropdown_ != nullptr) {
+        // setParent() hides the widget by Qt's own convention when reparenting across top-level
+        // boundaries; the caller (EditorArea) will show/lay out `footer` itself once it takes
+        // ownership, but the dropdown inside it needs an explicit show() to come back visible.
+        zoomDropdown_->setParent(footer);
+        zoomDropdown_->show();
+    }
+    footer->layoutDropdown();
+    statusBarFooter_ = footer;
+    // canvasRect() is now full-bleed (statusBarRect() returns empty) -- repaint immediately rather
+    // than waiting for the next incidental update().
+    update();
+    return footer;
 }
 
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
@@ -439,6 +575,11 @@ QString ViewerEditor::statusBarColorChipTextForTest() const {
 kit::KDropdown* ViewerEditor::zoomDropdownForTest() const noexcept { return zoomDropdown_; }
 
 QRectF ViewerEditor::statusBarRect() const {
+    // FORMAL AMENDMENT 1: once takeFooterWidget() has relocated the status bar to an externally
+    // hosted footer widget, this widget's own rect no longer reserves any space for it at all.
+    if (statusBarFooterTaken_) {
+        return {};
+    }
     const qreal barHeight = kit::px(kit::Size::Control);
     return QRectF(0.0, static_cast<qreal>(height()) - barHeight, static_cast<qreal>(width()),
                   barHeight);
@@ -447,12 +588,17 @@ QRectF ViewerEditor::statusBarRect() const {
 QRectF ViewerEditor::canvasRect() const {
     const QRectF bar = statusBarRect();
     // Full-bleed (decision 1): no side or top inset at all, only the bottom strip the status bar
-    // structurally requires -- that strip is a persistent control row, not "padding".
+    // structurally requires -- that strip is a persistent control row, not "padding" -- and
+    // (FORMAL AMENDMENT 1) not reserved at all once that row has moved into an external footer
+    // widget, where bar.height() is already 0.
     return QRectF(rect()).adjusted(0.0, 0.0, 0.0, -bar.height());
 }
 
 void ViewerEditor::layoutStatusBar() {
-    if (zoomDropdown_ == nullptr) {
+    // FORMAL AMENDMENT 1: once the footer (and the dropdown reparented into it) has been taken,
+    // the footer widget's OWN resizeEvent (ViewerStatusBarFooter::layoutDropdown()) positions the
+    // dropdown within itself; this widget no longer has a bar rect to position it against at all.
+    if (statusBarFooterTaken_ || zoomDropdown_ == nullptr) {
         return;
     }
     const QRectF bar = statusBarRect();
@@ -551,7 +697,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
-        paintStatusBarSurface(painter);
+        if (!statusBarFooterTaken_) {
+            paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+                                  previewController_);
+        }
         return;
     }
 
@@ -624,52 +773,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                              static_cast<int>(selectionStatus.width() - 16.0)));
     }
 
-    paintStatusBarSurface(painter);
-}
-
-void ViewerEditor::paintStatusBarSurface(QPainter& painter) {
-    const QRectF bar = statusBarRect();
-    painter.save();
-    painter.fillRect(bar, kit::color(kit::Color::Surface));
-    painter.setPen(QPen(kit::color(kit::Color::Border), 1.0));
-    painter.drawLine(bar.topLeft(), bar.topRight());
-
-    // Right: the color-state chip (decision 3) -- the contract-preserved qualified/unqualified
-    // indicator this whole status bar exists partly to relocate. Computed fresh every paint from
-    // live preview state, exactly like the top-row label it replaces, so it is never a step behind
-    // or a silent relabel.
-    painter.setFont(kit::font(kit::TypeRole::Ui));
-    const auto chipState = colorChipStateFor(previewController_.state());
-    const qreal chipHeight = std::max<qreal>(16.0, bar.height() - 6.0);
-    const qreal chipTop = bar.top() + (bar.height() - chipHeight) / 2.0;
-    const qreal chipLeftBound =
-        zoomDropdown_ != nullptr
-            ? static_cast<qreal>(zoomDropdown_->geometry().right()) + kit::px(kit::Spacing::L)
-            : bar.left();
-    const qreal maxChipWidth = std::max<qreal>(0.0, bar.width() * 0.4);
-    const QString elidedChipText = painter.fontMetrics().elidedText(
-        chipState.text, Qt::ElideRight,
-        static_cast<int>(std::max<qreal>(0.0, maxChipWidth - 16.0)));
-    const qreal chipWidth = std::min<qreal>(
-        maxChipWidth, painter.fontMetrics().horizontalAdvance(elidedChipText) + 16.0);
-    const qreal chipLeft =
-        std::max<qreal>(chipLeftBound, bar.right() - chipWidth - kit::px(kit::Spacing::S));
-    const QRectF chipRect(chipLeft, chipTop,
-                          std::max<qreal>(0.0, bar.right() - chipLeft - kit::px(kit::Spacing::S)),
-                          chipHeight);
-    paintChip(painter, chipRect, chipState.text, kit::color(chipState.colorToken));
-
-    // Center: exact frame + timecode readout, Geist Mono (kit::TypeRole::Value is the monospaced
-    // role every numeric/timecode surface uses -- kit/tokens.hpp). Occupies whatever room is left
-    // between the zoom dropdown and the color chip.
-    painter.setFont(kit::font(kit::TypeRole::Value));
-    painter.setPen(kit::color(kit::Color::Foreground));
-    const qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
-    const QRectF centerRect(chipLeftBound, bar.top(),
-                            std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
-    painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session_));
-
-    painter.restore();
+    if (!statusBarFooterTaken_) {
+        paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+                              previewController_);
+    }
 }
 
 void ViewerEditor::updatePreviewAccessibility() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_area.hpp>
 
 #include <QCursor>
 #include <QPointF>
@@ -24,7 +25,6 @@ class KDropdown;
 class QContextMenuEvent;
 class QKeyEvent;
 class QMouseEvent;
-class QPainter;
 class QResizeEvent;
 class QWheelEvent;
 
@@ -90,12 +90,31 @@ struct ViewTransform final {
                                            core::PixelAspectRatio pixelAspect, QPointF screenPoint,
                                            double factor) noexcept;
 
-class ViewerEditor final : public QWidget {
+// FORMAL AMENDMENT 1 (task C1): ViewerEditor also implements EditorFooterProvider so EditorArea
+// can host its bottom status bar (zoom control, exact frame/timecode readout, and the
+// color-state chip -- see the contract on takeFooterWidget() below) as a real footer widget
+// instead of a strip painted inside ViewerEditor's own canvas. Until something actually calls
+// takeFooterWidget() -- which happens only when a ViewerEditor is created through EditorArea's
+// rebuildEditor() -- the status bar stays exactly where every existing test already expects it:
+// painted inside ViewerEditor's own bottom Size::Control strip, with canvasRect() reserving that
+// same space it always has. Every geometry-sensitive test that constructs a ViewerEditor directly
+// (viewer_editor_tests.cpp, direct_manipulation_tests.cpp, composition_session_position_
+// interaction_tests.cpp) never calls it, so their pinned canvasRect()-derived math is completely
+// unaffected by this amendment.
+class ViewerEditor final : public QWidget, public EditorFooterProvider {
     Q_OBJECT
 
   public:
     ViewerEditor(CompositionSession& session, CompositionPreviewController& previewController,
                  QWidget* parent = nullptr);
+
+    // EditorFooterProvider (task C1, FORMAL AMENDMENT 1): the first call reparents the status bar
+    // widget away from this ViewerEditor and returns it -- the caller (EditorArea) takes ownership
+    // from there. canvasRect() becomes full-bleed from that point on, since the bottom strip it
+    // used to reserve now belongs to the caller's own footer slot instead. The color-state chip
+    // keeps rendering inside the returned widget exactly as before (contract, FORMAL AMENDMENT 1).
+    // A second call (this ViewerEditor already gave its footer away) returns nullptr.
+    [[nodiscard]] QWidget* takeFooterWidget() override;
 
     // Test/diagnostic surface only (never read by production code, mirroring kit::KDropdown's own
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
@@ -125,11 +144,14 @@ class ViewerEditor final : public QWidget {
 
   private:
     // The region paintEvent() draws the canvas into and currentMapping() maps gestures against:
-    // the full widget rect minus the bottom status bar strip. There is no other inset -- the canvas
-    // is full-bleed (decision 1).
+    // the full widget rect minus the bottom status bar strip -- UNLESS takeFooterWidget() has
+    // already relocated that strip to an external footer slot (FORMAL AMENDMENT 1), in which case
+    // the canvas is full-bleed with no inset at all. There is no other inset either way
+    // (decision 1).
     [[nodiscard]] QRectF canvasRect() const;
+    // Returns an empty rect once takeFooterWidget() has been called: the strip it used to
+    // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;
-    void paintStatusBarSurface(QPainter& painter);
     void updatePreviewAccessibility();
     // Recomputes the mapping context (fitted display rectangle, composition format, proxy
     // resolution, pixel aspect, display descriptor) from the currently displayed preview frame and
@@ -175,8 +197,17 @@ class ViewerEditor final : public QWidget {
 
     // Bottom status bar (decision 3). Only the zoom control is a real child widget; the exact
     // frame/timecode readout and the color-state chip are painted directly (they update every
-    // repaint from live session/preview state, so there is no separate text-cache to keep in sync).
+    // repaint from live session/preview state, so there is no separate text-cache to keep in
+    // sync). Reparented into statusBarFooter_ the moment takeFooterWidget() is called; until then
+    // (every existing standalone test) it stays a direct child of this ViewerEditor, positioned by
+    // layoutStatusBar(), exactly as before FORMAL AMENDMENT 1.
     kit::KDropdown* zoomDropdown_ = nullptr;
+    // FORMAL AMENDMENT 1: null until takeFooterWidget() is called; from that point on, the
+    // surviving reference this ViewerEditor keeps so its own session/preview-state signal
+    // handlers can also repaint the (now externally-owned) footer. Its concrete type is private to
+    // viewer_editor.cpp -- this ViewerEditor never needs anything from it beyond QWidget::update().
+    QWidget* statusBarFooter_ = nullptr;
+    bool statusBarFooterTaken_ = false;
 };
 
 } // namespace bloom::ui
