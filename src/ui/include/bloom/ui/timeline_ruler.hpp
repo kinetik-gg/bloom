@@ -182,9 +182,11 @@ class TimelineWorkAreaRow final : public QWidget {
     TimelineWorkAreaStrip* strip_ = nullptr;
 };
 
-// One row per animated parameter of the current selection's layer (position/opacity only in
-// version 1 -- docs/architecture/animation-and-time.md, "Durable Type Model"): a name label plus a
-// key lane painting each key at its exact time. Clicking a key selects it; dragging past
+// One row per animated parameter of the current selection's layer -- every animatable Layer Output
+// parameter, enumerated from the boundary node's own bindings rather than from a list kept here, so
+// the panel cannot carry a narrower idea of what is animatable than the schema does
+// (docs/architecture/animation-and-time.md, "Durable Type Model"): a name label plus a key lane
+// painting each key at its exact time. Clicking a key selects it; dragging past
 // QApplication::startDragDistance() moves it (a presentation-only ghost until release); Delete/
 // Backspace on the panel deletes the selected key.
 //

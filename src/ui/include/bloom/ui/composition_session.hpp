@@ -187,7 +187,7 @@ class CompositionSession final : public QObject {
     // commands::SetParameterSource carrying the whole core::Color4d as its ConstantValueSource
     // (the same generic command Position/Opacity already use for their own constant branch), one
     // transaction per call. Unlike Position, there is no animated branch:
-    // CreateAnimationForParameter only accepts the opacity/position schemas today
+    // CreateAnimationForParameter accepts only the animatable transform and opacity schemas
     // (src/commands/animation_operations.cpp) and commands::SetKeyframeAtTime has no core::Color4d
     // overload, so a solid color parameter can never actually become an AnimationCurveSource
     // through the existing command surface -- a non-constant source (driven, or the
@@ -313,13 +313,16 @@ class CompositionSession final : public QObject {
     parameterForNode(const document::NodeRecord& node, std::string_view role) const noexcept;
     [[nodiscard]] bool setSelectionScalarParameter(std::string_view role, double value,
                                                    const QString& commandLabel);
+    // The Vec2d counterpart of setSelectionScalarParameter(), shared by every Vec2d transform row.
+    // It routes through executePositionCommand() deliberately: the constant/keyframe/driven
+    // decision is identical for position, anchor, and scale, so one write path serves all three.
     [[nodiscard]] bool setSelectionVec2Parameter(std::string_view role, double x, double y,
                                                  const QString& commandLabel);
     // The one command-selection decision for writing a Color4d-valued parameter, shared by
     // setSelectedSolidColor() and setSelectedTextColor(). A driven source is refused exactly as the
     // scalar helper refuses one; there is no animated branch, because no command in the surface can
-    // put a color parameter on a curve (CreateAnimationForParameter accepts only the position and
-    // opacity schemas, and SetKeyframeAtTime has no Color4d overload).
+    // put a color parameter on a curve (CreateAnimationForParameter accepts only the animatable
+    // transform and opacity schemas, and SetKeyframeAtTime has no Color4d overload).
     [[nodiscard]] bool setSelectionColorParameter(std::string_view role, core::Color4d color,
                                                   const QString& commandLabel);
     // The one command-selection decision for writing a position value (constant source ->

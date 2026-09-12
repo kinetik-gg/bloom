@@ -909,15 +909,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     },
                     [&](const CompiledText& text) {
                         // A text source produces a full-frame image exactly like a solid, so the
-                        // Layer Output stage translates and fades it with the same primitive and
-                        // the same position/opacity semantics. The difference is only what is
-                        // inside the frame: transparent black everywhere except where glyph
-                        // coverage lands.
+                        // Layer Output stage transforms and fades it with the same primitive and
+                        // the same five transform parameters. The difference is only what is inside
+                        // the frame: transparent black everywhere except where glyph coverage
+                        // lands.
                         //
                         // Placement: the text origin is the frame's own data-window origin, so the
                         // first line's ascender is flush with the top edge and its pen starts at
-                        // the left edge. Position then moves the whole layer from there, which is
-                        // why nothing here reads the position parameter.
+                        // the left edge. The layer transform then moves, turns, and scales the
+                        // whole layer from there, which is why nothing here reads any of it.
                         const auto pixel =
                             render::solidPixelFromStraightLinearRec709Scene(text.color);
                         if (!pixel) {

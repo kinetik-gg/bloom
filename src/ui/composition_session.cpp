@@ -719,8 +719,9 @@ bool CompositionSession::setSelectionColorParameter(const std::string_view role,
         // Position/Opacity's driven-parameter refusal, mirrored here for a driven color source.
         // Reached defensively rather than in practice: today nothing in the command surface can
         // put a solid color parameter into an AnimationCurveSource
-        // (CreateAnimationForParameter rejects every schema but position/opacity, and
-        // SetKeyframeAtTime has no Color4d overload to write one even if it existed), so an
+        // (CreateAnimationForParameter rejects every schema but the animatable transform and
+        // opacity ones, and SetKeyframeAtTime has no Color4d overload to write one even if it
+        // existed), so an
         // AnimationCurveSource here would itself be a pre-existing document inconsistency, not
         // something this command created.
         reportUnavailable(QStringLiteral("Disconnect the driven color before editing its value"));
