@@ -1,6 +1,7 @@
 #ifndef BLOOM_RENDER_CPU_IMAGE_PRIMITIVES_HPP
 #define BLOOM_RENDER_CPU_IMAGE_PRIMITIVES_HPP
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/render/image.hpp>
 
@@ -10,6 +11,13 @@
 
 namespace bloom::render {
 
+// Bumped to 5 by the blend-mode slice: the Layer Stack stage now folds each layer with
+// blendLinearRec709SceneRow() instead of sourceOverLinearRec709SceneRow() directly. A Normal layer
+// is bit-identical -- the Normal case IS a call to the retained source-over kernel, not a
+// re-derivation of it -- but the primitive that produced any published frame is a different one and
+// the reachable picture space is strictly larger, so previously published frames must still be
+// invalidated.
+//
 // Bumped to 4 by the layer transform breadth slice (task S4): layerTransformBilinearRow() below
 // replaces translateOpacityBilinearRow() in the Layer Output stage, so a layer's pixels are now
 // produced by an inverse-mapped affine resample rather than a translate-only one. Scale 1 /
@@ -20,7 +28,7 @@ namespace bloom::render {
 // ProcessFrameIdentity carries for every CPU pixel primitive (imagePrimitiveSemanticsVersion); the
 // text rasterizer deliberately does not define a second version of its own, which could drift out
 // of that identity.
-inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 4;
+inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 5;
 
 // Checked authored layer parameters for the RETAINED pre-S4 translate-only primitive. Translation
 // remains Float64 pixel-center displacement; opacity is deliberately rounded once to the Float32
@@ -216,8 +224,28 @@ class LayerTransform final {
 // Composites source over destination in lin_rec709_scene process space. Destination is the
 // in-place output. Source storage must not overlap destination storage. Both spans contain
 // premultiplied pixels; process RGB is never clamped.
+//
+// This is exactly the Normal blend mode, and blendLinearRec709SceneRow() below CALLS it for that
+// mode rather than reproducing its arithmetic, which is what makes a Normal layer bit-identical to
+// every version before blend modes existed.
 [[nodiscard]] ImageStatus sourceOverLinearRec709SceneRow(std::span<const Rgba32f> source,
                                                          std::span<Rgba32f> destination) noexcept;
+
+// Composites source onto destination in lin_rec709_scene process space under one blend mode, with
+// the same span contract sourceOverLinearRec709SceneRow() has. ALPHA compositing is source-over for
+// every mode -- only the colour combination changes -- so a blend mode never makes a layer cover
+// more or less of what is beneath it than its own alpha says, and Normal is the case where the
+// colour combination is source-over too.
+//
+// The formulas, and why each one is evaluated where it is, are in
+// docs/architecture/color-management.md, "Blend modes". In brief: Add is premultiplied addition,
+// which the general compositing formula reduces to exactly, so it needs no round trip; every other
+// non-Normal mode is a separable function of UN-premultiplied colour, so the kernel divides both
+// pixels by their own alpha, applies the mode, and re-premultiplies through the general formula.
+// Process RGB is never clamped, at either end.
+[[nodiscard]] ImageStatus blendLinearRec709SceneRow(core::BlendMode mode,
+                                                    std::span<const Rgba32f> source,
+                                                    std::span<Rgba32f> destination) noexcept;
 
 // Writes one run of rasterized text as premultiplied lin_rec709_scene process pixels: output[i] is
 // `pixel` with every component scaled by coverage[i] / 255. `pixel` is the already-premultiplied

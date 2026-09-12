@@ -1,7 +1,9 @@
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/display_buffer.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cfenv>
 #include <cmath>
@@ -11,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <ranges>
 #include <source_location>
 #include <span>
 #include <stdexcept>
@@ -47,6 +50,7 @@ using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::Rgba32fImageView;
 using bloom::render::Rgba8;
 using bloom::render::solidPixelFromStraightLinearRec709Scene;
+using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::sourceOverLinearRec709SceneRow;
 using bloom::render::translateOpacityBilinearRow;
 using bloom::render::TranslationOpacity;
@@ -228,7 +232,8 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 4,
+    // ADAPTED (blend modes): the Layer Stack stage folds through the blend kernel now.
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 5,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});
@@ -665,6 +670,129 @@ void testSourceOver(Expectations& expectations) {
         "source-over reports finite-input RGB overflow without clamping");
 }
 
+// The blend-mode goldens, on ONE 2x2 premultiplied fixture carrying every awkward case the process
+// representation allows: partial alpha on both sides, an opaque source over a translucent backdrop,
+// an HDR channel above 1 on both sides, and a negative channel.
+//
+// Every fixture value and every expected value here is dyadic -- exactly representable in binary32
+// -- so the goldens are exact algebra rather than a particular rounding, and they were derived from
+// the documented formulas (docs/architecture/color-management.md, "Blend modes") independently of
+// the implementation rather than captured from its output.
+struct BlendGolden final {
+    bloom::core::BlendMode mode;
+    std::array<Rgba32f, 4> expected;
+};
+
+void testBlendModes(Expectations& expectations) {
+    using bloom::core::BlendMode;
+    const std::array blendSource{
+        pixel(0.5F, 0.25F, 0.125F, 0.5F),    // straight (1, 0.5, 0.25) at half alpha
+        pixel(2.0F, 0.5F, -0.25F, 1.0F),     // opaque, HDR red, negative blue
+        pixel(0.125F, 0.375F, 0.25F, 0.25F), // straight (0.5, 1.5, 1) at quarter alpha
+        pixel(0.75F, 0.0F, 0.75F, 0.75F),    // straight (1, 0, 1) at three-quarter alpha
+    };
+    const std::array blendDestination{
+        pixel(0.25F, 0.5F, 0.75F, 1.0F),        // opaque backdrop
+        pixel(0.375F, 0.125F, 0.625F, 0.5F),    // straight (0.75, 0.25, 1.25): HDR backdrop blue
+        pixel(0.5F, 0.5F, 0.5F, 1.0F),          // opaque mid grey
+        pixel(0.0625F, 0.125F, 0.1875F, 0.25F), // straight (0.25, 0.5, 0.75) at quarter alpha
+    };
+    const std::array<BlendGolden, 8> goldens{{
+        {BlendMode::Normal,
+         {pixel(0.625F, 0.5F, 0.5F, 1.0F), pixel(2.0F, 0.5F, -0.25F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.765625F, 0.03125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Add,
+         {pixel(0.75F, 0.75F, 0.875F, 1.0F), pixel(2.375F, 0.625F, 0.375F, 1.0F),
+          pixel(0.625F, 0.875F, 0.75F, 1.0F), pixel(0.8125F, 0.125F, 0.9375F, 0.8125F)}},
+        {BlendMode::Multiply,
+         {pixel(0.25F, 0.375F, 0.46875F, 1.0F), pixel(1.75F, 0.3125F, -0.28125F, 1.0F),
+          pixel(0.4375F, 0.5625F, 0.5F, 1.0F), pixel(0.625F, 0.03125F, 0.75F, 0.8125F)}},
+        {BlendMode::Screen,
+         {pixel(0.625F, 0.625F, 0.78125F, 1.0F), pixel(1.625F, 0.5625F, 0.53125F, 1.0F),
+          pixel(0.5625F, 0.6875F, 0.625F, 1.0F), pixel(0.765625F, 0.125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Overlay,
+         {pixel(0.375F, 0.5F, 0.6875F, 1.0F), pixel(1.75F, 0.375F, 0.6875F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.671875F, 0.03125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Darken,
+         {pixel(0.25F, 0.5F, 0.5F, 1.0F), pixel(1.375F, 0.375F, -0.25F, 1.0F),
+          pixel(0.5F, 0.5F, 0.5F, 1.0F), pixel(0.625F, 0.03125F, 0.75F, 0.8125F)}},
+        {BlendMode::Lighten,
+         {pixel(0.625F, 0.5F, 0.75F, 1.0F), pixel(2.0F, 0.5F, 0.5F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.765625F, 0.125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Difference,
+         {pixel(0.5F, 0.25F, 0.625F, 1.0F), pixel(1.625F, 0.375F, 0.625F, 1.0F),
+          pixel(0.375F, 0.625F, 0.5F, 1.0F), pixel(0.71875F, 0.125F, 0.65625F, 0.8125F)}},
+    }};
+    expectations.expect(goldens.size() == bloom::core::kBlendModes.size(),
+                        "every implemented blend mode has a golden row");
+    for (const auto& golden : goldens) {
+        auto destination = blendDestination;
+        const auto status = blendLinearRec709SceneRow(golden.mode, blendSource, destination);
+        expectations.expect(!status.has_value() &&
+                                std::ranges::equal(destination, golden.expected),
+                            "a blend mode reproduces its documented formula exactly on "
+                            "premultiplied alpha < 1 and HDR > 1 pixels");
+    }
+
+    // The old behaviour, bit for bit: Normal is not merely algebraically source-over, it IS the
+    // retained source-over kernel, so the two must agree on identical storage with no tolerance.
+    auto blended = blendDestination;
+    auto composited = blendDestination;
+    expectations.expect(
+        !blendLinearRec709SceneRow(BlendMode::Normal, blendSource, blended).has_value() &&
+            !sourceOverLinearRec709SceneRow(blendSource, composited).has_value() &&
+            blended == composited,
+        "Normal is bit-exactly the pre-blend-mode source-over result");
+
+    // Alpha compositing is source-over under EVERY mode: a mode changes a layer's colour, never how
+    // much of the backdrop it covers.
+    for (const auto mode : bloom::core::kBlendModes) {
+        auto modeDestination = blendDestination;
+        auto overDestination = blendDestination;
+        const bool ok =
+            !blendLinearRec709SceneRow(mode, blendSource, modeDestination).has_value() &&
+            !sourceOverLinearRec709SceneRow(blendSource, overDestination).has_value();
+        expectations.expect(
+            ok && std::ranges::equal(modeDestination, overDestination,
+                                     [](const Rgba32f left, const Rgba32f right) {
+                                         return left.alpha() == right.alpha();
+                                     }),
+            "every mode composites alpha as source-over");
+    }
+
+    // The two alpha endpoints, under a mode that is nowhere near source-over in colour.
+    const std::array endpointSource{Rgba32f::transparent(), pixel(0.5F, 0.25F, 0.125F, 0.5F)};
+    std::array endpointDestination{pixel(0.25F, 0.5F, 0.75F, 1.0F), Rgba32f::transparent()};
+    const auto untouchedBackdrop = endpointDestination[0];
+    expectations.expect(
+        !blendLinearRec709SceneRow(BlendMode::Difference, endpointSource, endpointDestination)
+                .has_value() &&
+            endpointDestination[0] == untouchedBackdrop &&
+            endpointDestination[1] == endpointSource[1],
+        "a transparent source leaves the backdrop alone and a transparent backdrop takes the "
+        "source exactly, under every mode");
+
+    std::array<Rgba32f, 1> wrongSize{Rgba32f::transparent()};
+    expectations.expect(hasError(blendLinearRec709SceneRow(BlendMode::Screen, blendSource,
+                                                           wrongSize),
+                                 ImageErrorCode::InvalidStorageSize),
+                        "blending rejects unequal row sizes");
+    auto aliased = blendDestination;
+    expectations.expect(hasError(blendLinearRec709SceneRow(
+                                    BlendMode::Screen, std::span<const Rgba32f>(aliased), aliased),
+                                ImageErrorCode::InvalidParameter),
+                        "blending rejects source storage that aliases its in-place destination");
+
+    const auto maximum = std::numeric_limits<float>::max();
+    const std::array overflowingSource{pixel(maximum, 0.0F, 0.0F, 1.0F)};
+    std::array overflowingDestination{pixel(maximum, 0.0F, 0.0F, 1.0F)};
+    expectations.expect(
+        hasError(blendLinearRec709SceneRow(BlendMode::Add, overflowingSource,
+                                           overflowingDestination),
+                 ImageErrorCode::NonFiniteResult),
+        "blending reports finite-input RGB overflow without clamping");
+}
+
 void testReferenceDisplayMapping(Expectations& expectations) {
     const auto dataWindow = window(-1, 4, 3, 1);
     const auto displayWindow = window(-2, 4, 5, 1);
@@ -775,6 +903,7 @@ int main() {
         testLayerTransformScaleAndBounds(expectations);
         testLayerTransformProxyAndRejections(expectations);
         testSourceOver(expectations);
+        testBlendModes(expectations);
         testReferenceDisplayMapping(expectations);
         testFloatingPointEnvironment(expectations);
         return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

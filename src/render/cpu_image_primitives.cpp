@@ -239,6 +239,45 @@ struct ClampedSpan final {
     return {static_cast<std::int64_t>(first), static_cast<std::int64_t>(last)};
 }
 
+// One separable blend function B(Cb, Cs), on UN-premultiplied channel values, in the W3C
+// Compositing and Blending Level 1 sense. `backdrop` is Cb and `source` is Cs.
+//
+// The function is TOTAL over the mode vocabulary, Normal and Add included, because those two really
+// are separable blend functions (Cs, and Cb + Cs) -- blendLinearRec709SceneRow() below reaches them
+// through exact shortcuts instead, but the shortcuts are specializations of this same algebra, not a
+// different rule. See docs/architecture/color-management.md, "Blend modes", for each formula and for
+// what the unit references in Screen and Overlay mean in a scene-referred space.
+//
+// Nothing is clamped. Screen's and Overlay's `1` is the reference white of lin_rec709_scene, not a
+// ceiling, so an HDR or negative channel extrapolates the formula rather than being clipped; the
+// process contract forbids clamping before the display boundary.
+[[nodiscard]] double separableBlend(const bloom::core::BlendMode mode, const double backdrop,
+                                    const double source) noexcept {
+    switch (mode) {
+    case bloom::core::BlendMode::Normal:
+        return source;
+    case bloom::core::BlendMode::Add:
+        return backdrop + source;
+    case bloom::core::BlendMode::Multiply:
+        return backdrop * source;
+    case bloom::core::BlendMode::Screen:
+        return backdrop + source - backdrop * source;
+    case bloom::core::BlendMode::Overlay:
+        // Hard Light with the operands exchanged, spelled out rather than composed, so the pivot
+        // test reads on the BACKDROP -- which is what makes Overlay "the backdrop decides" and Hard
+        // Light "the source decides".
+        return backdrop <= 0.5 ? 2.0 * backdrop * source
+                               : 1.0 - 2.0 * (1.0 - backdrop) * (1.0 - source);
+    case bloom::core::BlendMode::Darken:
+        return std::min(backdrop, source);
+    case bloom::core::BlendMode::Lighten:
+        return std::max(backdrop, source);
+    case bloom::core::BlendMode::Difference:
+        return std::abs(backdrop - source);
+    }
+    return source;
+}
+
 [[nodiscard]] std::uint8_t displayChannelByte(const float premultiplied,
                                               const float alpha) noexcept {
     if (premultiplied <= 0.0F) {
@@ -639,6 +678,96 @@ ImageStatus sourceOverLinearRec709SceneRow(const std::span<const Rgba32f> source
             std::fma(inverseSourceAlpha, destinationPixel.blue(), sourcePixel.blue()),
             std::fma(inverseSourceAlpha, destinationPixel.alpha(), sourcePixel.alpha()),
         };
+        const auto pixel = checkedProcessPixel(composited);
+        if (!pixel) {
+            return *pixel.error();
+        }
+        destination[index] = *pixel.value();
+    }
+    return std::nullopt;
+}
+
+ImageStatus blendLinearRec709SceneRow(const core::BlendMode mode,
+                                      const std::span<const Rgba32f> source,
+                                      const std::span<Rgba32f> destination) noexcept {
+    // Normal is the retained kernel itself, not a re-derivation of it: every frame published before
+    // blend modes existed came out of that exact code, and delegating is what keeps a Normal layer
+    // bit-identical rather than merely equal in algebra.
+    if (mode == core::BlendMode::Normal) {
+        return sourceOverLinearRec709SceneRow(source, destination);
+    }
+    if (source.size() != destination.size()) {
+        return ImageError::storageSizeMismatch(source.size_bytes(), destination.size_bytes());
+    }
+    if (spansOverlap(source, destination)) {
+        return codeError(ImageErrorCode::InvalidParameter);
+    }
+    if (!supportedEnvironment()) {
+        return codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment);
+    }
+
+    for (std::size_t index = 0; index < source.size(); ++index) {
+        const auto sourcePixel = source[index];
+        if (sourcePixel.alpha() == 0.0F) {
+            continue;
+        }
+        const auto destinationPixel = destination[index];
+        // Nothing underneath: the general fold below collapses to exactly the source pixel when the
+        // backdrop alpha is zero, under every mode, so writing it through is both right and exact.
+        //
+        // Source-over's OTHER shortcut -- an opaque source replaces the destination -- is
+        // deliberately absent. It holds only when B(Cb, Cs) is Cs; every other mode still reads the
+        // backdrop's colour at full source alpha, which is the whole point of blending.
+        if (destinationPixel.alpha() == 0.0F) {
+            destination[index] = sourcePixel;
+            continue;
+        }
+        // Alpha compositing is source-over for every mode, computed with the EXACT expression the
+        // source-over kernel uses, so a mode changes a layer's colour and never its coverage.
+        const auto inverseSourceAlpha = 1.0F - sourcePixel.alpha();
+        const auto blendedAlpha =
+            std::fma(inverseSourceAlpha, destinationPixel.alpha(), sourcePixel.alpha());
+        const auto sourceAlpha = static_cast<double>(sourcePixel.alpha());
+        const auto backdropAlpha = static_cast<double>(destinationPixel.alpha());
+        const auto sourceComponents = rawPixel(sourcePixel);
+        const auto backdropComponents = rawPixel(destinationPixel);
+        RawPixel composited{0.0F, 0.0F, 0.0F, blendedAlpha};
+        bool representable = true;
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            if (mode == core::BlendMode::Add) {
+                // Add needs no round trip at all: substituting B(Cb, Cs) = Cb + Cs into the general
+                // fold cancels both alpha weightings and leaves premultiplied addition, co = cs +
+                // cb. Doing the division anyway would only add two roundings to an exact answer.
+                const auto sum = static_cast<double>(sourceComponents[channel]) +
+                                 static_cast<double>(backdropComponents[channel]);
+                const auto value = checkedFloat(sum);
+                representable = representable && value.has_value();
+                composited[channel] = value.value_or(0.0F);
+                continue;
+            }
+            // The general W3C Compositing and Blending Level 1 fold with source-over as the
+            // compositing operator, on un-premultiplied channels, producing a PREMULTIPLIED result:
+            //
+            //   co = as*(1 - ab)*Cs + as*ab*B(Cb, Cs) + (1 - as)*ab*Cb
+            //
+            // Both alphas are strictly positive here, so the two divisions are defined. Every
+            // product and sum is Float64 and the result is rounded to Float32 exactly once, so the
+            // three terms never accumulate Float32 error against each other.
+            const auto straightSource =
+                static_cast<double>(sourceComponents[channel]) / sourceAlpha;
+            const auto straightBackdrop =
+                static_cast<double>(backdropComponents[channel]) / backdropAlpha;
+            const auto blended = separableBlend(mode, straightBackdrop, straightSource);
+            const auto premultiplied = sourceAlpha * (1.0 - backdropAlpha) * straightSource +
+                                       sourceAlpha * backdropAlpha * blended +
+                                       (1.0 - sourceAlpha) * backdropAlpha * straightBackdrop;
+            const auto value = checkedFloat(premultiplied);
+            representable = representable && value.has_value();
+            composited[channel] = value.value_or(0.0F);
+        }
+        if (!representable) {
+            return codeError(ImageErrorCode::NonFiniteResult);
+        }
         const auto pixel = checkedProcessPixel(composited);
         if (!pixel) {
             return *pixel.error();
