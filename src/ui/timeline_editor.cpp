@@ -12,6 +12,7 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
 
@@ -35,6 +36,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWheelEvent>
 
 #include <algorithm>
