@@ -326,3 +326,19 @@ silently replace Bloom's global visual language.
 Project documents never store an interface font or icon choice as render-affecting state. Fonts
 selected by artists for composition content are project assets and follow a separate media,
 licensing, substitution, and missing-dependency workflow.
+
+
+### Node socket kinds
+
+| Socket kind | Palette token |
+| --- | --- |
+| Image | `DataImage` |
+| Color | `DataSequence` |
+| Scalar | `Muted` |
+| Vector2 | `DataComposition` |
+| String | `DataAudio` |
+
+Color uses the existing red `DataSequence`, not `DataClip`; the non-Image choices avoid
+`Accent` and `AccentHover`. Socket labels must still identify the kind. Kit-owner gap:
+`DataImage` and `AccentHover` already share `#3AA5F0`; this pre-existing collision remains
+unchanged pending the kit owner's palette decision.

@@ -6,6 +6,7 @@
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/node_layout.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
 
@@ -21,7 +22,7 @@ class Composition final {
     Composition(CompositionId id, std::string name, core::RationalTime duration,
                 CanonicalGraph graph, CompositionFormat format = {})
         : id_(id), name_(std::move(name)), duration_(duration), format_(format),
-          graph_(std::move(graph)) {}
+          graph_(std::move(graph)), nodeLayout_(defaultNodeLayout(graph_.nodes())) {}
 
     [[nodiscard]] CompositionId id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
@@ -35,6 +36,9 @@ class Composition final {
     [[nodiscard]] AnimationCurveStore& animationCurves() noexcept { return animationCurves_; }
     [[nodiscard]] const CanonicalGraph& graph() const noexcept { return graph_; }
     [[nodiscard]] CanonicalGraph& graph() noexcept { return graph_; }
+
+    [[nodiscard]] const NodeLayout& nodeLayout() const noexcept { return nodeLayout_; }
+    [[nodiscard]] NodeLayout& nodeLayout() noexcept { return nodeLayout_; }
 
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool setDuration(core::RationalTime duration) noexcept;
@@ -50,6 +54,7 @@ class Composition final {
     ParameterStore parameters_;
     AnimationCurveStore animationCurves_;
     CanonicalGraph graph_;
+    NodeLayout nodeLayout_;
 };
 
 class Project final {

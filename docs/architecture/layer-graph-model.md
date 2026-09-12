@@ -204,3 +204,21 @@ The first document/runtime slice should prove:
 Full effects, masks, mattes, parenting, folders and groups, nested compositions, arbitrary
 graph-to-layer conversion, and multi-selection editing remain deferred. Their contracts are
 reserved here so the first proof does not create incompatible shortcuts.
+
+
+## Node Layout
+
+Compositions own `NodeLayoutRecord{position, width, collapsed, muted}` keyed by `NodeId`,
+separately from the canonical graph; `NodeRecord` is unchanged. Position, positive finite width,
+and collapsed state are durable presentation only. Mute is the explicit evaluation control in
+this record and is interpreted during compilation; moving or collapsing a node never changes its
+result. Missing records use the original four-column placement (origin 32, column pitch 256,
+row pitch 180, width 128). Unknown-node layout entries are preserved with warning diagnostics,
+not document errors. Zoom, framing, grouping, and transient gestures remain session state.
+
+Node definitions and their socket schemas now belong to the Qt-free document module so graph
+validation, commands, and compilation share one schema vocabulary without a document-to-runtime
+dependency. The runtime header retains source-compatible aliases. Graph add/validate accept an
+explicit registry for contributed schemas, defaulting to immutable built-ins; unknown schemas
+remain preservable. Existing ports are Image. Known incompatible socket kinds are rejected with
+`SocketKindMismatch`. Primitive lowering remains in runtime.

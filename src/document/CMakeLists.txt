@@ -8,6 +8,8 @@ target_sources(
         document.cpp
         extension_records.cpp
         graph.cpp
+        node_definition_registry.cpp
+        node_layout.cpp
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
@@ -23,6 +25,8 @@ target_sources(
             include/bloom/document/document.hpp
             include/bloom/document/extension_records.hpp
             include/bloom/document/graph.hpp
+            include/bloom/document/node_definition_registry.hpp
+            include/bloom/document/node_layout.hpp
             include/bloom/document/ids.hpp
             include/bloom/document/layer_stack.hpp
             include/bloom/document/new_project.hpp
@@ -39,6 +43,11 @@ bloom_enable_warnings(bloom_document)
 
 if(BUILD_TESTING)
     include(BloomTesting)
+    add_executable(bloom_document_node_model_test tests/node_model_tests.cpp)
+    target_link_libraries(bloom_document_node_model_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_node_model_test)
+    bloom_add_test(NAME bloom.document.node-model COMMAND bloom_document_node_model_test LABELS unit)
+
 
     add_executable(bloom_document_model_test tests/document_model_tests.cpp)
     target_link_libraries(bloom_document_model_test PRIVATE bloom_document)

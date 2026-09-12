@@ -2,6 +2,7 @@
 
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_stack.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
 
@@ -110,11 +111,20 @@ class CanonicalGraph final {
     }
 
     [[nodiscard]] bool addNode(NodeRecord node);
-    [[nodiscard]] bool addEdge(EdgeRecord edge);
+    [[nodiscard]] bool addEdge(EdgeRecord edge,
+                               const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+    [[nodiscard]] std::optional<SocketValueKind>
+    outputKind(const OutputPortRef& output,
+               const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
+    [[nodiscard]] std::optional<SocketValueKind>
+    inputKind(const InputPortRef& input,
+              const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
     void setCompositionOutput(OutputPortRef output) { compositionOutput_ = std::move(output); }
 
-    [[nodiscard]] ValidationResult validate(const ParameterStore& parameters) const;
+    [[nodiscard]] ValidationResult
+    validate(const ParameterStore& parameters,
+             const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
 
   private:
     std::vector<NodeRecord> nodes_;

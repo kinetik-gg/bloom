@@ -151,7 +151,12 @@ bool CanonicalGraph::addNode(NodeRecord node) {
     return true;
 }
 
-bool CanonicalGraph::addEdge(EdgeRecord edge) {
+bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& registry) {
+    const auto sourceKind = outputKind(edge.source, registry);
+    const auto targetKind = inputKind(edge.destination, registry);
+    if (sourceKind && targetKind && sourceKind != targetKind) {
+        return false;
+    }
     if (!edge.id.isValid() || !edge.source.nodeId.isValid() ||
         !isValidStructuralText(edge.source.port) || !validDestination(edge.destination)) {
         return false;
@@ -189,7 +194,8 @@ bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
     return true;
 }
 
-ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) const {
+ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
+                                          const NodeDefinitionRegistry& registry) const {
     ValidationResult result;
     result.append("layerStack", layerStack_.validate());
 
@@ -297,6 +303,12 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
             continue;
         }
 
+        const auto sourceKind = outputKind(edge.source, registry);
+        const auto targetKind = inputKind(edge.destination, registry);
+        if (sourceKind && targetKind && sourceKind != targetKind) {
+            result.add(ValidationCode::SocketKindMismatch, path,
+                       "Connected socket kinds do not match");
+        }
         const auto inputKey = destinationKey(edge.destination);
         if (!destinations.insert(inputKey).second) {
             result.add(ValidationCode::DuplicateInput, path + ".destination",
@@ -393,6 +405,38 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
     }
 
     return result;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::outputKind(const OutputPortRef& output,
+                           const NodeDefinitionRegistry& registry) const {
+    const auto* node = findNode(output.nodeId);
+    const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
+    if (definition) {
+        for (const auto& port : definition->outputs) {
+            if (port.name == output.port)
+                return port.valueKind;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistry& registry) const {
+    const auto* node = findNode(destinationNode(input));
+    const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
+    if (definition == nullptr)
+        return std::nullopt;
+    if (const auto* fixed = std::get_if<NodeInputRef>(&input)) {
+        for (const auto& port : definition->inputs) {
+            if (port.name == fixed->port)
+                return port.valueKind;
+        }
+    } else if (definition->layerSlotInput &&
+               definition->layerSlotInput->role == std::get<LayerStackInputRef>(input).role) {
+        return definition->layerSlotInput->valueKind;
+    }
+    return std::nullopt;
 }
 
 } // namespace bloom::document

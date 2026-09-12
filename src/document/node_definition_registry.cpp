@@ -1,4 +1,4 @@
-#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -13,14 +13,14 @@
 
 namespace {
 
-using bloom::runtime::InputPortDefinition;
-using bloom::runtime::LayerSlotInputDefinition;
-using bloom::runtime::NodeDefinition;
-using bloom::runtime::NodeLoweringKind;
-using bloom::runtime::OutputPortDefinition;
-using bloom::runtime::ParameterDefinition;
-using bloom::runtime::ParameterValueKind;
-using bloom::runtime::SocketValueKind;
+using bloom::document::InputPortDefinition;
+using bloom::document::LayerSlotInputDefinition;
+using bloom::document::NodeDefinition;
+using bloom::document::NodeLoweringKind;
+using bloom::document::OutputPortDefinition;
+using bloom::document::ParameterDefinition;
+using bloom::document::ParameterValueKind;
+using bloom::document::SocketValueKind;
 
 struct NodeLookupKey {
     std::string_view typeId;
@@ -142,7 +142,7 @@ template <typename Definition>
             {},
             {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
             {{std::string(kSolidColorParameterRole), std::string(kSolidColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true}},
+              ParameterValueKind::Color4d, true, false, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
             std::nullopt};
 }
 
@@ -153,9 +153,9 @@ template <typename Definition>
             {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, true}},
             {{std::string(kLayerOutputOutputPort), SocketValueKind::Image}},
             {{std::string(kPositionParameterRole), std::string(kPositionParameterSchemaKey),
-              ParameterValueKind::Vec2d, true, true},
+              ParameterValueKind::Vec2d, true, true, Vec2d{}},
              {std::string(kOpacityParameterRole), std::string(kOpacityParameterSchemaKey),
-              ParameterValueKind::Float64, true, true}},
+              ParameterValueKind::Float64, true, true, 1.0}},
             std::nullopt};
 }
 
@@ -187,13 +187,13 @@ template <typename Definition>
             {},
             {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
             {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
-              ParameterValueKind::String, true}},
+              ParameterValueKind::String, true, false, std::string{}}},
             std::nullopt};
 }
 
 } // namespace
 
-namespace bloom::runtime {
+namespace bloom::document {
 
 NodeRegistrationStatus NodeDefinitionRegistry::registerDefinition(NodeDefinition definition) {
     if (frozen_) {
@@ -271,4 +271,16 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     return true;
 }
 
-} // namespace bloom::runtime
+const NodeDefinitionRegistry& builtInNodeDefinitions() {
+    struct BuiltIns final {
+        NodeDefinitionRegistry registry;
+        BuiltIns() {
+            (void)registerBuiltInNodeDefinitions(registry);
+            registry.freeze();
+        }
+    };
+    static const BuiltIns builtIns;
+    return builtIns.registry;
+}
+
+} // namespace bloom::document

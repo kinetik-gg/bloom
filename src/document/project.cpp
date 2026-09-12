@@ -55,6 +55,7 @@ ValidationResult Composition::validate() const {
     result.append("animationCurves", animationCurves_.validate());
     result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));
     result.append("graph", graph_.validate(parameters_));
+    result.append("", validateNodeLayout(nodeLayout_, graph_));
     return result;
 }
 
