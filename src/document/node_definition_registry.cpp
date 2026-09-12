@@ -94,6 +94,21 @@ template <typename Definition>
                hasParameter(definition, 0, kSolidColorParameterRole, kSolidColorParameterSchemaKey,
                             ParameterValueKind::Color4d) &&
                !definition.layerSlotInput.has_value();
+    case NodeLoweringKind::Text:
+        // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
+        // then color. The font is not a parameter -- this lowering has exactly one face
+        // (src/render's embedded DejaVu Sans), so a font parameter would promise a selection the
+        // renderer cannot honor.
+        return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
+               definition.inputs.empty() && hasImageOutput(definition, kTextSourceOutputPort) &&
+               definition.parameters.size() == 3 &&
+               hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
+                            ParameterValueKind::String) &&
+               hasParameter(definition, 1, kTextSizeParameterRole, kTextSizeParameterSchemaKey,
+                            ParameterValueKind::Float64) &&
+               hasParameter(definition, 2, kTextColorParameterRole, kTextColorParameterSchemaKey,
+                            ParameterValueKind::Color4d) &&
+               !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasImageInput(definition, kLayerOutputContentInputPort) &&
@@ -183,11 +198,15 @@ template <typename Definition>
 [[nodiscard]] NodeDefinition textDefinition() {
     using namespace bloom::document;
     return {{std::string(kTextSourceNodeType), kTextSourceNodeSchemaVersion},
-            NodeLoweringKind::Unsupported,
+            NodeLoweringKind::Text,
             {},
             {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
             {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
-              ParameterValueKind::String, true, false, std::string{}}},
+              ParameterValueKind::String, true, false, std::string{}},
+             {std::string(kTextSizeParameterRole), std::string(kTextSizeParameterSchemaKey),
+              ParameterValueKind::Float64, true, false, kDefaultTextSizePixels},
+             {std::string(kTextColorParameterRole), std::string(kTextColorParameterSchemaKey),
+              ParameterValueKind::Color4d, true, false, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
             std::nullopt};
 }
 

@@ -59,6 +59,17 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kTextParameterSchemaKey) {
         return std::holds_alternative<std::string>(constant.value);
     }
+    if (schemaKey == kTextSizeParameterSchemaKey) {
+        const auto* size = std::get_if<double>(&constant.value);
+        return size != nullptr && std::isfinite(*size) && *size > 0.0 &&
+               *size <= kMaximumTextSizePixels;
+    }
+    if (schemaKey == kTextColorParameterSchemaKey) {
+        // Exactly the solid color rule: a finite straight RGBA authoring value with alpha in [0,
+        // 1], unbounded in RGB so an HDR or negative channel survives a round trip.
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid();
+    }
     return true;
 }
 

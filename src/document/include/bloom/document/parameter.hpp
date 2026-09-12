@@ -16,12 +16,27 @@ namespace bloom::document {
 
 inline constexpr std::string_view kSolidColorParameterSchemaKey = "bloom.solid.color";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
+inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
+inline constexpr std::string_view kTextColorParameterSchemaKey = "bloom.text.color";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
 inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opacity";
 
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
-// Evaluation converts them to the canonical premultiplied image representation.
+// Evaluation converts them to the canonical premultiplied image representation. The text color
+// schema (kTextColorParameterSchemaKey) authors in exactly this same encoding with exactly the same
+// straight-alpha meaning -- a text color is a solid color that glyph coverage then scales -- so it
+// reuses this one constant rather than declaring a second, identical encoding name.
 inline constexpr std::string_view kSolidColorEncoding = "bloom.reference.linear-srgb";
+
+// Text size bounds, in pixels per em, owned by the text size parameter schema. The lower bound is
+// exclusive (a zero or negative em size has no meaning); the upper bound is inclusive and is the
+// same value render::kMaximumTextPixelSize imposes on the rasterizer, so a document the schema
+// accepts is always a document the reference rasterizer can draw. src/runtime, the one module that
+// sees both headers, static_asserts the two equal rather than leaving them to drift -- see
+// src/runtime/cpu_composition_evaluator.cpp.
+inline constexpr double kMaximumTextSizePixels = 4096.0;
+// The size a newly authored text layer starts at.
+inline constexpr double kDefaultTextSizePixels = 72.0;
 
 struct Vec2d {
     double x = 0.0;

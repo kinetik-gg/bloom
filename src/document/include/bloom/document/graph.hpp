@@ -39,6 +39,14 @@ inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 
 inline constexpr std::string_view kSolidColorParameterRole = "color";
 inline constexpr std::string_view kTextParameterRole = "text";
+inline constexpr std::string_view kTextSizeParameterRole = "size";
+// Deliberately the same role string as kSolidColorParameterRole. A role is node-local -- it names
+// which binding of THIS node a parameter fills -- while the schema key is the global identity of
+// the value's meaning, and a text source's color means what a solid source's color means. Keeping
+// the role spelling identical is what lets one properties row, one node-card color chip, and one
+// session write path serve both sources without a second branch; the two distinct schema keys are
+// what keep their validation and defaults separate.
+inline constexpr std::string_view kTextColorParameterRole = "color";
 inline constexpr std::string_view kPositionParameterRole = "position";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
 

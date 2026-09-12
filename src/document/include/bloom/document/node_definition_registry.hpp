@@ -70,6 +70,7 @@ struct LayerSlotInputDefinition {
 
 enum class NodeLoweringKind {
     Solid,
+    Text,
     LayerOutput,
     LayerStack,
     CompositionOutput,
