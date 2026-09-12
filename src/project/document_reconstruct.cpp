@@ -130,6 +130,7 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         }
 
         composition.nodeLayout() = std::move(decodedComposition.nodeLayout);
+        composition.nodeGroups() = std::move(decodedComposition.nodeGroups);
 
         if (!project.addComposition(std::move(composition))) {
             return ReconstructDocumentResult::failure({.stage = ReconstructionStage::CompositionAdd,

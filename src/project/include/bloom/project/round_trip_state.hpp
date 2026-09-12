@@ -51,6 +51,7 @@ enum class RoundTripCollectionKind : std::uint8_t {
     LayerOutput,      // identity: LayerId
     LayerStackEntry,  // identity: LayerSlotId
     HostReference,    // identity: UTF-8 key, scoped to its owning extension record
+    NodeGroup,        // identity: NodeGroupId
 };
 
 // One segment of an attachment path: either a named singleton member (schema path) or one

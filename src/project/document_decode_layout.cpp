@@ -86,4 +86,76 @@ bool decodeNodeLayout(const JsonValue& node, DecodeState& state, const std::stri
     }
     return true;
 }
+
+bool decodeNodeGroups(const JsonValue& node, DecodeState& state, const std::string& path,
+                      document::NodeGroups& out) {
+    if (node.kind() != JsonValueKind::Array) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    document::NodeGroupId previous;
+    std::size_t index = 0;
+    for (const auto& element : node.arrayElements()) {
+        const auto recordPath = joinPathIndex(path, index++);
+        static constexpr std::array<std::string_view, 4> keys{"groupId", "name", "members",
+                                                              "padding"};
+        std::vector<const JsonValue*> members;
+        std::vector<RetainedJsonMember> trailing;
+        if (!matchOrderedMembers(element, keys, true, state, recordPath, members, trailing))
+            return false;
+        document::NodeGroupId id;
+        if (!decodeObjectId(*members[0], state, joinPath(recordPath, "groupId"), id))
+            return false;
+        if (id <= previous) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(recordPath, "groupId"));
+            return false;
+        }
+        previous = id;
+        const AttachmentScope recordScope(state, RoundTripCollectionKind::NodeGroup,
+                                          std::to_string(id.value()));
+        if (!trailing.empty() && state.roundTrip)
+            state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+        document::NodeGroupRecord record;
+        record.id = id;
+        std::string_view nameText;
+        if (!decodeStringMember(*members[1], state, joinPath(recordPath, "name"), nameText))
+            return false;
+        record.name = std::string(nameText);
+        const auto membersPath = joinPath(recordPath, "members");
+        if (members[2]->kind() != JsonValueKind::Array) {
+            state.fail(DocumentDecodeError::WrongValueKind, membersPath);
+            return false;
+        }
+        document::NodeId previousMember;
+        std::size_t memberIndex = 0;
+        for (const auto& memberElement : members[2]->arrayElements()) {
+            const auto memberPath = joinPathIndex(membersPath, memberIndex++);
+            document::NodeId member;
+            if (!decodeObjectId(memberElement, state, memberPath, member))
+                return false;
+            if (member <= previousMember) {
+                state.fail(DocumentDecodeError::DomainViolation, memberPath);
+                return false;
+            }
+            previousMember = member;
+            record.members.insert(member);
+        }
+        {
+            const AttachmentScope paddingScope(state, "padding");
+            static constexpr std::array<std::string_view, 2> paddingKeys{"x", "y"};
+            std::vector<const JsonValue*> padding;
+            const auto paddingPath = joinPath(recordPath, "padding");
+            if (!matchOrderedMembers(*members[3], paddingKeys, true, state, paddingPath, padding) ||
+                !number(*padding[0], state, joinPath(paddingPath, "x"), record.padding.x) ||
+                !number(*padding[1], state, joinPath(paddingPath, "y"), record.padding.y))
+                return false;
+        }
+        if (record.padding.x < 0.0 || record.padding.y < 0.0) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(recordPath, "padding"));
+            return false;
+        }
+        out.emplace(id, std::move(record));
+    }
+    return true;
+}
 } // namespace bloom::project::detail

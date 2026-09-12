@@ -113,10 +113,22 @@ bool layout(const JsonValue& composition, Buffer& output) {
     return true;
 }
 
-enum class Scope { Root, Project, Composition };
-bool transform(const JsonValue& value, const Scope scope, Buffer& output) {
-    if (value.kind() != JsonValueKind::Object ||
-        (scope == Scope::Composition && value.findMember("nodeLayout")))
+// Both steps are the same walk: copy every member verbatim, rewrite the root schema version, and
+// append exactly one new member to each object the step adds one to. A new member is appended LAST
+// in its object, which is canonical precisely because a strictly-decodable source document of the
+// step's own version carries no trailing unknown members to be pushed behind -- an unknown member
+// at a supported minor is a decode error, not retained data, so there is nothing to order against.
+enum class Step { NodeLayout, NodeGroups };
+enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
+
+[[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
+    if (scope == Scope::Composition)
+        return value.findMember(step == Step::NodeLayout ? "nodeLayout" : "nodeGroups") != nullptr;
+    return scope == Scope::HighestIssued && value.findMember("nodeGroup") != nullptr;
+}
+
+bool transform(const JsonValue& value, const Scope scope, const Step step, Buffer& output) {
+    if (value.kind() != JsonValueKind::Object || alreadyMigrated(value, scope, step))
         return false;
     append(output, "{");
     bool first = true;
@@ -127,10 +139,21 @@ bool transform(const JsonValue& value, const Scope scope, Buffer& output) {
         if (!quoted(output, member.key()))
             return false;
         append(output, ":");
+        const auto descend = [&](const Scope child) {
+            return transform(member.value(), child, step, output);
+        };
         if (scope == Scope::Root && member.key() == "schemaVersion") {
-            append(output, "{\"major\":1,\"minor\":1}");
+            append(output, step == Step::NodeLayout ? "{\"major\":1,\"minor\":1}"
+                                                    : "{\"major\":1,\"minor\":2}");
         } else if (scope == Scope::Root && member.key() == "project") {
-            if (!transform(member.value(), Scope::Project, output))
+            if (!descend(Scope::Project))
+                return false;
+        } else if (scope == Scope::Root && member.key() == "idAllocation" &&
+                   step == Step::NodeGroups) {
+            if (!descend(Scope::IdAllocation))
+                return false;
+        } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
+            if (!descend(Scope::HighestIssued))
                 return false;
         } else if (scope == Scope::Project && member.key() == "compositions") {
             if (member.value().kind() != JsonValueKind::Array)
@@ -141,7 +164,7 @@ bool transform(const JsonValue& value, const Scope scope, Buffer& output) {
                 if (!firstComposition)
                     append(output, ",");
                 firstComposition = false;
-                if (!transform(composition, Scope::Composition, output))
+                if (!transform(composition, Scope::Composition, step, output))
                     return false;
             }
             append(output, "]");
@@ -149,25 +172,46 @@ bool transform(const JsonValue& value, const Scope scope, Buffer& output) {
             return false;
     }
     if (scope == Scope::Composition) {
-        append(output, ",\"nodeLayout\":");
-        if (!layout(value, output))
-            return false;
+        if (step == Step::NodeLayout) {
+            append(output, ",\"nodeLayout\":");
+            if (!layout(value, output))
+                return false;
+        } else {
+            // A 1.1 file has no groups: the feature did not exist, so there is nothing to infer.
+            append(output, ",\"nodeGroups\":[]");
+        }
     }
+    if (scope == Scope::HighestIssued)
+        append(output, ",\"nodeGroup\":\"0\"");
     append(output, "}");
     return true;
+}
+
+[[nodiscard]] bool sourceVersionIs(const JsonValue& root, const std::string_view minorToken) {
+    const auto* version = root.findMember("schemaVersion");
+    const auto* major = version ? version->findMember("major") : nullptr;
+    const auto* minor = version ? version->findMember("minor") : nullptr;
+    return major && minor && major->asNumberToken() == "1" &&
+           minor->asNumberToken() == minorToken && version->objectMembers().size() == 2;
 }
 } // namespace
 
 MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
                                            std::pmr::memory_resource* /*resource*/,
                                            Buffer& output) {
-    const auto* version = root.findMember("schemaVersion");
-    const auto* major = version ? version->findMember("major") : nullptr;
-    const auto* minor = version ? version->findMember("minor") : nullptr;
-    if (!major || !minor || major->asNumberToken() != "1" || minor->asNumberToken() != "0" ||
-        version->objectMembers().size() != 2)
+    if (!sourceVersionIs(root, "0"))
         return MigrationStepOutcome::failure("/schemaVersion");
-    if (!transform(root, Scope::Root, output))
+    if (!transform(root, Scope::Root, Step::NodeLayout, output))
+        return MigrationStepOutcome::failure("/project/compositions");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateNodeGroupsV1_1(const JsonValue& root,
+                                           std::pmr::memory_resource* /*resource*/,
+                                           Buffer& output) {
+    if (!sourceVersionIs(root, "1"))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    if (!transform(root, Scope::Root, Step::NodeGroups, output))
         return MigrationStepOutcome::failure("/project/compositions");
     return MigrationStepOutcome::success();
 }

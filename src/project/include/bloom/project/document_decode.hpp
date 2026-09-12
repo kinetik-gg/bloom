@@ -31,8 +31,9 @@
 //
 // Scope (R2): the document envelope and every durable value inside a composition -- schemaVersion,
 // project id/name/colorSettings, and per-composition id/name/duration/format/parameters/
-// animationCurves/graph/nodeLayout. Known-schema compositions contain these eight members in
-// order (legacy 1.0 has seven and receives default layout). Unknown trailing members are retained
+// animationCurves/graph/nodeLayout/nodeGroups. Known-schema compositions contain these nine
+// members in order (legacy 1.0 has seven and receives default layout; 1.1 has eight and no
+// groups). Unknown trailing members are retained
 // only for a compatible newer minor. Within a
 // composition, cross-references are checked against records decoded elsewhere in that same
 // composition -- a parameter binding's parameterId, an animation-curve source's curveId, and every
@@ -40,7 +41,8 @@
 // itself decoded; an unresolved reference is DanglingReference. Cross-composition and
 // project-level references (e.g. a future extension-record subject) remain out of scope.
 // idAllocation.highestIssued and every extension record are also fully decoded (R3): the closed
-// ten-member highestIssued object into document::IdAllocatorHighWater, and the extensions array --
+// highestIssued object into document::IdAllocatorHighWater -- eleven members from 1.2, ten
+// before it -- and the extensions array --
 // sorted, duplicate-free by numeric ExtensionRecordId -- into document::ExtensionRecord values
 // (typed subject/target kinds, all three reference-policy shapes, and the base64 payload decoded
 // through canonical_base64.hpp). This module still deliberately does not construct
@@ -133,6 +135,7 @@ struct DecodedComposition final {
     std::vector<document::AnimationCurveRecord> animationCurves;
     DecodedGraph graph;
     document::NodeLayout nodeLayout;
+    document::NodeGroups nodeGroups;
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };

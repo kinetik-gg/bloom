@@ -571,16 +571,20 @@ using document::SchemaVersion;
     return true;
 }
 
-// A composition object is closed: exactly id/name/duration/format/parameters/animationCurves/graph
-// in exact order (see docs/architecture/project-format.md, "Project And Composition"). The
+// A composition object is closed: exactly id/name/duration/format/parameters/animationCurves/
+// graph/nodeLayout/nodeGroups in exact order (see docs/architecture/project-format.md, "Project And
+// Composition"); legacy 1.0 stops after graph and 1.1 after nodeLayout. The
 // composition interior -- parameters, animationCurves, and the graph, plus the cross-reference
 // checks that span them -- is decoded by detail::decodeCompositionInterior in
 // document_decode_composition.cpp.
 [[nodiscard]] bool decodeComposition(const JsonValue& node, DecodeState& state,
                                      const std::string& path, DecodedComposition& out) {
-    static constexpr std::array<std::string_view, 8> kKeys{
-        "id", "name", "duration", "format", "parameters", "animationCurves", "graph", "nodeLayout"};
-    const auto keys = std::span(kKeys).first(state.documentMinor == 0 ? 7U : 8U);
+    static constexpr std::array<std::string_view, 9> kKeys{
+        "id",    "name",       "duration",  "format", "parameters", "animationCurves",
+        "graph", "nodeLayout", "nodeGroups"};
+    const auto keys = std::span(kKeys).first(state.documentMinor == 0   ? 7U
+                                             : state.documentMinor == 1 ? 8U
+                                                                        : 9U);
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -629,9 +633,18 @@ using document::SchemaVersion;
         out.nodeLayout = document::defaultNodeLayout(out.graph.nodes);
         return true;
     }
-    const AttachmentScope layoutScope(state, "nodeLayout");
-    return detail::decodeNodeLayout(*members[7], state, joinPath(path, "nodeLayout"),
-                                    out.nodeLayout);
+    {
+        const AttachmentScope layoutScope(state, "nodeLayout");
+        if (!detail::decodeNodeLayout(*members[7], state, joinPath(path, "nodeLayout"),
+                                      out.nodeLayout))
+            return false;
+    }
+    if (state.documentMinor == 1) {
+        return true;
+    }
+    const AttachmentScope groupsScope(state, "nodeGroups");
+    return detail::decodeNodeGroups(*members[8], state, joinPath(path, "nodeGroups"),
+                                    out.nodeGroups);
 }
 
 [[nodiscard]] bool decodeLocator(const JsonValue& node, DecodeState& state, const std::string& path,
@@ -953,17 +966,19 @@ using document::SchemaVersion;
     return true;
 }
 
-// The closed ten-member highestIssued object in exact order (see
-// docs/architecture/project-format.md, "Inclusive Allocator State"):
-// composition/node/edge/layer/layerSlot/parameter/animationCurve/
-// keyframe/driverBinding/extensionRecord.
+// The closed highestIssued object in exact order (see docs/architecture/project-format.md,
+// "Inclusive Allocator State"): composition/node/edge/layer/layerSlot/parameter/animationCurve/
+// keyframe/driverBinding/extensionRecord, and -- from document 1.2 -- nodeGroup. An older minor
+// has no nodeGroup member at all and leaves that namespace at zero; a 1.1 file whose groups do
+// not exist has never issued a group id.
 [[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
                                        const std::string& path, IdAllocatorHighWater& out) {
-    static constexpr std::array<std::string_view, 10> kKeys{
-        "composition", "node",           "edge",     "layer",         "layerSlot",
-        "parameter",   "animationCurve", "keyframe", "driverBinding", "extensionRecord"};
+    static constexpr std::array<std::string_view, 11> kKeys{
+        "composition",    "node",     "edge",          "layer",           "layerSlot", "parameter",
+        "animationCurve", "keyframe", "driverBinding", "extensionRecord", "nodeGroup"};
+    const auto keys = std::span(kKeys).first(state.documentMinor <= 1 ? 10U : 11U);
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
     }
     if (!decodeAllocatorHighWaterMember(*members[0], state, joinPath(path, "composition"),
@@ -983,8 +998,15 @@ using document::SchemaVersion;
                                         out.driverBinding)) {
         return false;
     }
-    return decodeAllocatorHighWaterMember(*members[9], state, joinPath(path, "extensionRecord"),
-                                          out.extensionRecord);
+    if (!decodeAllocatorHighWaterMember(*members[9], state, joinPath(path, "extensionRecord"),
+                                        out.extensionRecord)) {
+        return false;
+    }
+    if (state.documentMinor <= 1) {
+        return true;
+    }
+    return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
+                                          out.nodeGroup);
 }
 
 [[nodiscard]] bool decodeIdAllocation(const JsonValue& node, DecodeState& state,

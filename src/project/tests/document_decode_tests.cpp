@@ -92,7 +92,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":1})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":2})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -154,7 +154,7 @@ constexpr std::string_view kMinimalGraphJson =
     result += frameRateDenominator;
     result += "\"}},\"parameters\":[],\"animationCurves\":[],\"graph\":";
     result += kMinimalGraphJson;
-    result += R"(,"nodeLayout":[]})";
+    result += R"(,"nodeLayout":[],"nodeGroups":[]})";
     return result;
 }
 
@@ -177,7 +177,7 @@ constexpr std::string_view kMinimalGraphJson =
     result += animationCurvesJson;
     result += R"(,"graph":)";
     result += graphJson;
-    result += R"(,"nodeLayout":[]})";
+    result += R"(,"nodeLayout":[],"nodeGroups":[]})";
     return result;
 }
 
@@ -198,7 +198,7 @@ constexpr std::string_view kMinimalGraphJson =
     result += compositionsArrayBody;
     result += R"(]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
               R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-              R"("driverBinding":"0","extensionRecord":"0"}},"extensions":[]})";
+              R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}},"extensions":[]})";
     return result;
 }
 
@@ -225,7 +225,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":2})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":3})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -255,7 +255,7 @@ documentWithColorSettingsFutureMinor(const std::string_view colorSettingsJsonTex
               R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
               R"("driverBinding":"0","extensionRecord":")";
     result += extensionRecordHighWater;
-    result += R"("}},"extensions":[)";
+    result += R"(","nodeGroup":"0"}},"extensions":[)";
     result += extensionsArrayBody;
     result += "]}";
     return result;
@@ -701,7 +701,7 @@ void testRejectsFormatMemberOrder(Expectations& expectations) {
         R"("format":{"height":1080,"width":1920,"pixelAspect":{"numerator":"1","denominator":"1"},)"
         R"("frameRate":{"numerator":"24","denominator":"1"}},"parameters":[],)"
         R"("animationCurves":[],"graph":)" +
-        std::string(kMinimalGraphJson) + R"(,"nodeLayout":[]})";
+        std::string(kMinimalGraphJson) + R"(,"nodeLayout":[],"nodeGroups":[]})";
     expectDecodeFailure(expectations, documentWithComposition(composition),
                         DocumentDecodeError::MemberOutOfOrder,
                         "/project/compositions/0/format/height",
@@ -739,26 +739,26 @@ void testAcceptsSchemaVersionFutureMinorWithoutUnknownMembers(Expectations& expe
     const auto decoded = decodeText(json);
     expectations.expect(decoded.outcome() == bloom::project::DocumentDecodeOutcome::Decoded &&
                             static_cast<bool>(decoded) && decoded.value() != nullptr,
-                        "document schemaVersion 1.2 with no unknown members decodes");
+                        "document schemaVersion 1.3 with no unknown members decodes");
     expectations.expect(decoded.classification() ==
                             bloom::project::DocumentClassification::EditableWithRoundTrip,
-                        "document schemaVersion 1.2 classifies EditableWithRoundTrip");
+                        "document schemaVersion 1.3 classifies EditableWithRoundTrip");
     expectations.expect(decoded.roundTrip() != nullptr && decoded.roundTrip()->empty(),
-                        "document schemaVersion 1.2 with no unknown members has an empty "
+                        "document schemaVersion 1.3 with no unknown members has an empty "
                         "RoundTripState");
 }
 
-// Exact current schema 1.1 keeps strict known-member decoding and produces no RoundTripState.
+// Exact current schema 1.2 keeps strict known-member decoding and produces no RoundTripState.
 // ExactSchemaV1_0 is the retained historical API name for this classification.
 void testExactCurrentSchemaProducesNoRoundTripState(Expectations& expectations) {
     const auto decoded = decodeText(baselineDocument());
     expectations.expect(static_cast<bool>(decoded) && decoded.value() != nullptr,
-                        "the exact-1.1 baseline document decodes");
+                        "the exact-1.2 baseline document decodes");
     expectations.expect(decoded.classification() ==
                             bloom::project::DocumentClassification::ExactSchemaV1_0,
-                        "the exact-1.1 baseline document classifies ExactSchemaV1_0");
+                        "the exact-1.2 baseline document classifies ExactSchemaV1_0");
     expectations.expect(decoded.roundTrip() == nullptr,
-                        "the exact-1.1 baseline document produces no RoundTripState");
+                        "the exact-1.2 baseline document produces no RoundTripState");
 }
 
 void testRejectsSchemaVersionMajor2(Expectations& expectations) {
@@ -1615,7 +1615,7 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
     const std::string compositionJsonText =
         R"({"id":"1","name":"Comp","duration":{"numerator":"10","denominator":"1"},"format":)" +
         formatJson + R"(,"parameters":[],"animationCurves":[],"graph":)" + graphJson +
-        R"(,"nodeLayout":[],"zzzCompExtra":true})";
+        R"(,"nodeLayout":[],"nodeGroups":[],"zzzCompExtra":true})";
 
     std::string document = "{\"schemaVersion\":";
     document += schemaVersionJson;
@@ -1627,7 +1627,7 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
         R"(],"zzzProjectExtra":"hello world"},)"
         R"("idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
         R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-        R"("driverBinding":"0","extensionRecord":"1"}},)"
+        R"("driverBinding":"0","extensionRecord":"1","nodeGroup":"0"}},)"
         R"("extensions":[)";
     document += extensionRecordJson;
     document += R"(],"zzzFutureField":42})";
@@ -1638,10 +1638,10 @@ void testAcceptsFutureMinorWithUnknownMembersEverywhere(Expectations& expectatio
     const auto decoded = decodeText(everywhereUnknownsDocument(kFutureSchemaVersion));
     expectations.expect(decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                             static_cast<bool>(decoded) && decoded.value() != nullptr,
-                        "a 1.2 document with unknown trailing members everywhere still decodes");
+                        "a 1.3 document with unknown trailing members everywhere still decodes");
     expectations.expect(
         decoded.classification() == DocumentClassification::EditableWithRoundTrip,
-        "a 1.2 document with unknown trailing members classifies EditableWithRoundTrip");
+        "a 1.3 document with unknown trailing members classifies EditableWithRoundTrip");
     if (decoded.roundTrip() == nullptr) {
         expectations.expect(false, "RoundTripState is present for the everywhere-unknowns fixture");
         return;
@@ -1793,7 +1793,7 @@ void testAcceptsFutureMinorWithUnknownMembersEverywhere(Expectations& expectatio
 void testRejectsCurrentSchemaWithSameUnknownMembersEverywhere(Expectations& expectations) {
     expectDecodeFailure(expectations, everywhereUnknownsDocument(kCurrentSchemaVersion),
                         DocumentDecodeError::UnknownMember, "/zzzFutureField",
-                        "the same everywhere-unknowns fixture at exact schemaVersion 1.1 is "
+                        "the same everywhere-unknowns fixture at exact schemaVersion 1.2 is "
                         "rejected at its first unknown member");
 }
 
@@ -1823,27 +1823,29 @@ void testRejectsUnknownMemberBeforeOrBetweenKnownMembersInFutureMinor(Expectatio
                                         R"("pixelAspect":{"numerator":"1","denominator":"1"},)"
                                         R"("frameRate":{"numerator":"24","denominator":"1"}},)"
                                         R"("parameters":[],"animationCurves":[],"graph":)" +
-                                        std::string(kMinimalGraphJson) + R"(,"nodeLayout":[]})";
+                                        std::string(kMinimalGraphJson) +
+                                        R"(,"nodeLayout":[],"nodeGroups":[]})";
         expectDecodeFailure(expectations, documentWithCompositionFutureMinor(composition),
                             DocumentDecodeError::UnknownMember, "/project/compositions/0/aaa",
                             "an unknown member before every known composition member is "
-                            "rejected in a 1.2 document");
+                            "rejected in a 1.3 document");
     }
     // between two known root members (project, then idAllocation)
     {
         const std::string project =
             std::string("{\"id\":\"1\",\"name\":\"Untitled\",\"colorSettings\":") +
             defaultColorSettingsJson() + ",\"compositions\":[" + defaultCompositionJson() + "]}";
-        const std::string json = std::string("{\"schemaVersion\":") +
-                                 std::string(kFutureSchemaVersion) + ",\"project\":" + project +
-                                 R"(,"unknownMid":null,"idAllocation":{"highestIssued":)"
-                                 R"({"composition":"0","node":"0","edge":"0","layer":"0",)"
-                                 R"("layerSlot":"0","parameter":"0","animationCurve":"0",)"
-                                 R"("keyframe":"0","driverBinding":"0","extensionRecord":"0"}},)"
-                                 R"("extensions":[]})";
+        const std::string json =
+            std::string("{\"schemaVersion\":") + std::string(kFutureSchemaVersion) +
+            ",\"project\":" + project +
+            R"(,"unknownMid":null,"idAllocation":{"highestIssued":)"
+            R"({"composition":"0","node":"0","edge":"0","layer":"0",)"
+            R"("layerSlot":"0","parameter":"0","animationCurve":"0",)"
+            R"("keyframe":"0","driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}},)"
+            R"("extensions":[]})";
         expectDecodeFailure(expectations, json, DocumentDecodeError::UnknownMember, "/unknownMid",
                             "an unknown member between two known root members is rejected in a "
-                            "1.2 document");
+                            "1.3 document");
     }
 }
 
@@ -1860,7 +1862,7 @@ void testRejectsUnsortedTrailingUnknownMembers(Expectations& expectations) {
     expectDecodeFailure(expectations, documentWithCompositionFutureMinor(composition),
                         DocumentDecodeError::UnsortedUnknownMember, "/project/compositions/0/zzzA",
                         "two trailing unknown composition members out of ascending key order "
-                        "are rejected in a 1.2 document");
+                        "are rejected in a 1.3 document");
 }
 
 // A context-variable array element has no member in the contract's fixed collection identity
@@ -1874,7 +1876,7 @@ void testRejectsContextVariableTrailingMemberEvenAtFutureMinor(Expectations& exp
                         DocumentDecodeError::UnknownMember,
                         "/project/colorSettings/ocioConfig/contextVariables/0/extra",
                         "a trailing unknown member on a context-variable entry is rejected even "
-                        "in a 1.2 document, because context variables have no declared identity");
+                        "in a 1.3 document, because context variables have no declared identity");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1894,7 +1896,7 @@ void testUnknownOcioLocatorKindIsPreservedReadOnlyAtFutureMinor(Expectations& ex
     expectPreservedReadOnly(expectations, documentWithColorSettingsFutureMinor(colorSettings),
                             RoundTripPreservationReason::UnknownDiscriminatorKind,
                             "/project/colorSettings/ocioConfig/locator/kind",
-                            "an unrecognized OCIO locator kind in a 1.2 document is "
+                            "an unrecognized OCIO locator kind in a 1.3 document is "
                             "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1908,7 +1910,7 @@ void testUnknownParameterSourceKindIsPreservedReadOnlyAtFutureMinor(Expectations
             compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/parameters/0/source/kind",
-        "the deferred 'driver-binding' parameter source kind in a 1.2 document is "
+        "the deferred 'driver-binding' parameter source kind in a 1.3 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1922,7 +1924,7 @@ void testUnknownConstantValueKindIsPreservedReadOnlyAtFutureMinor(Expectations& 
             compositionWithInterior(parameters, "[]", std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/parameters/0/source/value/kind",
-        "an unrecognized constant value kind in a 1.2 document is PreservedReadOnlyRequired "
+        "an unrecognized constant value kind in a 1.3 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1934,7 +1936,7 @@ void testUnknownAnimationCurveKindIsPreservedReadOnlyAtFutureMinor(Expectations&
             compositionWithInterior("[]", curves, std::string(kMinimalGraphJson))),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/animationCurves/0/kind",
-        "an unrecognized animation curve kind in a 1.2 document is PreservedReadOnlyRequired "
+        "an unrecognized animation curve kind in a 1.3 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1953,7 +1955,7 @@ void testUnknownEdgeDestinationKindIsPreservedReadOnlyAtFutureMinor(Expectations
         documentWithCompositionFutureMinor(compositionWithInterior("[]", "[]", graph)),
         RoundTripPreservationReason::UnknownDiscriminatorKind,
         "/project/compositions/0/graph/edges/0/destination/kind",
-        "an unrecognized edge destination kind in a 1.2 document is PreservedReadOnlyRequired "
+        "an unrecognized edge destination kind in a 1.3 document is PreservedReadOnlyRequired "
         "rather than a hard error");
 }
 
@@ -1966,7 +1968,7 @@ void testUnknownReferencePolicyKindIsPreservedReadOnlyAtFutureMinor(Expectations
     expectPreservedReadOnly(
         expectations, documentWithExtensions(kFutureSchemaVersion, extensionRecordJson, "1"),
         RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/referencePolicy/kind",
-        "an unrecognized extension reference-policy kind in a 1.2 document is "
+        "an unrecognized extension reference-policy kind in a 1.3 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1979,7 +1981,7 @@ void testUnknownExtensionSubjectKindIsPreservedReadOnlyAtFutureMinor(Expectation
     expectPreservedReadOnly(
         expectations, documentWithExtensions(kFutureSchemaVersion, extensionRecordJson, "1"),
         RoundTripPreservationReason::UnknownDiscriminatorKind, "/extensions/0/subject/kind",
-        "an unrecognized extension subject target kind in a 1.2 document is "
+        "an unrecognized extension subject target kind in a 1.3 document is "
         "PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -1995,7 +1997,7 @@ void testUnknownNumberOverflowIsPreservedReadOnlyAtFutureMinor(Expectations& exp
     expectPreservedReadOnly(expectations, documentWithCompositionFutureMinor(composition),
                             RoundTripPreservationReason::UnknownNumberOutOfSubset,
                             "/project/compositions/0/zzzBigNumber",
-                            "an unknown trailing member number that overflows binary64 in a 1.2 "
+                            "an unknown trailing member number that overflows binary64 in a 1.3 "
                             "document is PreservedReadOnlyRequired rather than a hard error");
 }
 
@@ -2010,7 +2012,7 @@ void testUnknownNumberNonCanonicalSpellingIsPreservedReadOnlyAtFutureMinor(
                             RoundTripPreservationReason::UnknownNumberOutOfSubset,
                             "/project/compositions/0/zzzOddNumber",
                             "an unknown trailing member number with a non-canonical exponent "
-                            "spelling in a 1.2 document is PreservedReadOnlyRequired rather than "
+                            "spelling in a 1.3 document is PreservedReadOnlyRequired rather than "
                             "a hard error");
 }
 

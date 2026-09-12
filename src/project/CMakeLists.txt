@@ -326,6 +326,11 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_node_layout_test)
     bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
 
+    add_executable(bloom_project_node_group_test tests/node_group_persistence_tests.cpp)
+    target_link_libraries(bloom_project_node_group_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_node_group_test)
+    bloom_add_test(NAME bloom.project.node-groups COMMAND bloom_project_node_group_test LABELS unit persistence)
+
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)
     target_include_directories(
         bloom_project_open_archive_test

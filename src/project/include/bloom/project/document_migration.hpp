@@ -40,9 +40,11 @@
 // bytes-out shape this module already establishes.
 //
 // Registry: kProductionDocumentMigrationSteps upgrades document 1.0 to 1.1 by assigning the
-// original four-column node layout. Same-major newer minors bypass migration and retain their
-// additive members; unknown majors follow the existing rejection/preservation route. The generic
-// runner remains injectable for deterministic chain, failure, and resource-budget tests.
+// original four-column node layout, then 1.1 to 1.2 by giving every composition an empty node
+// group collection and the allocator its nodeGroup high water. Same-major newer minors bypass
+// migration and retain their additive members; unknown majors follow the existing rejection/
+// preservation route. The generic runner remains injectable for deterministic chain, failure, and
+// resource-budget tests.
 //
 // Version detection is not this module's job: the caller already lexically reads the document
 // root's schemaVersion before trusted decode, as part of its own existing version-agreement check
@@ -125,15 +127,19 @@ struct MigrationStepDescriptor final {
     MigrationStepTransform transform = nullptr;
 };
 
-// v1 ships no real migration steps -- see this file's own top comment. Kept as the fixed
-// production table so the registration mechanism (a std::span<const MigrationStepDescriptor>
-// parameter on migrateDocumentDom(), never a compiled-in global) has exactly one production
-// caller, matching its real future shape once a schema bump adds the first real step.
+// The production chain, one entry per shipped minor. The table stays a
+// std::span<const MigrationStepDescriptor> parameter on migrateDocumentDom() rather than a
+// compiled-in global, so the runner has exactly one production caller and remains testable with a
+// synthetic chain.
 [[nodiscard]] MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
                                                          std::pmr::memory_resource* resource,
                                                          std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateNodeGroupsV1_1(const JsonValue& root,
+                                                         std::pmr::memory_resource* resource,
+                                                         std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
-    MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0}};
+    MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
+    MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

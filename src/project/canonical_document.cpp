@@ -1152,6 +1152,43 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endArray());
 }
 
+// The group frames, ascending by NodeGroupId because NodeGroups is keyed by it, each with its
+// members ascending by NodeId for the same reason.
+[[nodiscard]] bool emitNodeGroups(EmitState& state, const Composition& composition) noexcept {
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("nodeGroups")) || !state.ok(writer.beginArray()))
+        return false;
+    const PathScope groupsScope(state, "nodeGroups");
+    for (const auto& [id, record] : composition.nodeGroups()) {
+        const auto idText = bloom::project::formatCanonicalUInt64(id.value());
+        const PathScope recordScope(state, RoundTripCollectionKind::NodeGroup, idText.view());
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "groupId", id.value()) ||
+            !state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(record.name)) ||
+            !state.ok(writer.memberName("members")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto member : record.members) {
+            const auto memberText = bloom::project::formatCanonicalUInt64(member.value());
+            if (!state.ok(writer.stringValue(memberText.view())))
+                return false;
+        }
+        if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("padding")) ||
+            !state.ok(writer.beginObject()))
+            return false;
+        {
+            const PathScope paddingScope(state, "padding");
+            if (!state.ok(writer.memberName("x")) ||
+                !state.ok(writer.float64Value(record.padding.x)) ||
+                !state.ok(writer.memberName("y")) ||
+                !state.ok(writer.float64Value(record.padding.y)) || !emitRetainedTrailing(state))
+                return false;
+        }
+        if (!state.ok(writer.endObject()) || !emitRetainedTrailing(state) ||
+            !state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitComposition(EmitState& state, const Composition& composition,
                                    const std::size_t compositionIndex) noexcept {
     auto& writer = state.writer;
@@ -1226,7 +1263,8 @@ emitInterpolation(EmitState& state,
     if (!emitAnimationCurves(state, composition, compositionIndex)) {
         return false;
     }
-    if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition)) {
+    if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition) ||
+        !emitNodeGroups(state, composition)) {
         return false;
     }
     if (!emitRetainedTrailing(state)) {
@@ -1639,7 +1677,8 @@ emitInterpolation(EmitState& state,
                 !emitHighWaterMember(state, "animationCurve", water.animationCurve) ||
                 !emitHighWaterMember(state, "keyframe", water.keyframe) ||
                 !emitHighWaterMember(state, "driverBinding", water.driverBinding) ||
-                !emitHighWaterMember(state, "extensionRecord", water.extensionRecord)) {
+                !emitHighWaterMember(state, "extensionRecord", water.extensionRecord) ||
+                !emitHighWaterMember(state, "nodeGroup", water.nodeGroup)) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {

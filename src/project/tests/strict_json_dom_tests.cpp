@@ -350,7 +350,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         }
         if (const auto* minor =
                 expectChild(expectations, *schemaVersion, "minor", "minor exists")) {
-            expectNumber(expectations, *minor, "1", "the document schema minor is preserved");
+            expectNumber(expectations, *minor, "2", "the document schema minor is preserved");
         }
     }
 
@@ -437,7 +437,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
                 const auto& composition = compositions->arrayElements().front();
                 expectKeyOrder(expectations, composition,
                                {"id", "name", "duration", "format", "parameters", "animationCurves",
-                                "graph", "nodeLayout"},
+                                "graph", "nodeLayout", "nodeGroups"},
                                "the composition keeps its exact member order");
                 if (const auto* name =
                         expectChild(expectations, composition, "name", "composition.name exists")) {
@@ -576,7 +576,8 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         if (highestIssued != nullptr) {
             expectKeyOrder(expectations, *highestIssued,
                            {"composition", "node", "edge", "layer", "layerSlot", "parameter",
-                            "animationCurve", "keyframe", "driverBinding", "extensionRecord"},
+                            "animationCurve", "keyframe", "driverBinding", "extensionRecord",
+                            "nodeGroup"},
                            "highestIssued keeps its exact member order across every namespace");
             if (const auto* composition = expectChild(expectations, *highestIssued, "composition",
                                                       "highestIssued.composition exists")) {

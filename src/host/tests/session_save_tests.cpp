@@ -379,7 +379,7 @@ void testEndToEndSaveAs(Expectations& expectations) {
     if (!decodedSnapshot) {
         return;
     }
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &decodedSnapshot.snapshot(),
                                             .colorSettings = &colorSettings};
     const auto oracleEntries = buildOracleEntries(expectations, manifest, documentInput);
@@ -523,14 +523,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 1\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 2\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 1").size(), "\"minor\": 2");
+    text.replace(anchorPos, std::string_view("\"minor\": 2").size(), "\"minor\": 3");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -574,7 +574,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 2,
+                         .schemaMinor = 3,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -622,7 +622,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 2},
+                    bloom::document::SchemaVersion{1, 3},
             "round-tripped newer minor: the published manifest declares document schema {1,2}");
     }
 
@@ -1021,7 +1021,7 @@ void testBudgetExhaustionPassThrough(Expectations& expectations) {
         return;
     }
 
-    const CanonicalManifestV1 probeManifest{.documentSchemaVersion = {1, 1},
+    const CanonicalManifestV1 probeManifest{.documentSchemaVersion = {1, 2},
                                             .requirements = fixture->requirements};
     const CanonicalDocumentV1 probeDocument{.snapshot = &decodedSnapshot.snapshot(),
                                             .colorSettings = &fixture->colorSettings};
