@@ -275,7 +275,10 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         break;
     case NodeInteraction::Mode::Resize:
         if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(gesture.resized)))
-            card->setPreviewWidth(std::max(128.0, gesture.width + delta.x()));
+            // Clamped against the card's OWN content floor, not a spelled 128: a card whose label
+            // column and narrowest field need more than that cannot be dragged narrower than the
+            // content it carries (task S1, item 2).
+            card->setPreviewWidth(std::max(card->minimumCardWidth(), gesture.width + delta.x()));
         break;
     case NodeInteraction::Mode::Box:
         gesture.box->setRect(QRectF(gesture.origin, event->scenePos()).normalized());

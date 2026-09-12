@@ -92,6 +92,10 @@ class SocketItem final : public QGraphicsItem {
     [[nodiscard]] QRectF boundingRect() const override { return {-16, -16, 32, 32}; }
     [[nodiscard]] QPainterPath shape() const override;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
+    // How much vertical room this socket claims on an expanded card. One ordinary port is one
+    // kSocketRowHeight row; the card sums these rather than multiplying by the socket count, so a
+    // socket that is taller than a row can exist without the card's body landing on top of it.
+    [[nodiscard]] qreal rowHeight() const;
     [[nodiscard]] bool draggable() const {
         return !structural_ && kind == document::SocketValueKind::Image;
     }
@@ -171,6 +175,17 @@ class NodeItem final : public QGraphicsObject {
     [[nodiscard]] const std::vector<SocketItem*>& sockets() const { return sockets_; }
     void setPreviewWidth(qreal width);
     [[nodiscard]] qreal cardWidth() const { return width_; }
+    // The narrowest this card can be drawn without clipping its own content (task S1, item 2):
+    // recomputed by every relayout() from the live label column, the narrowest usable control and
+    // the widest socket name. A resize gesture clamps against it and a persisted width is raised to
+    // it, so there is no width at which the card hides what it carries.
+    [[nodiscard]] qreal minimumCardWidth() const { return minimumWidth_; }
+    // The shared row-label column the card paints its row names into, and the pitch of one
+    // parameter row. Diagnostic accessors: the card's own layout is private, and a test that wants
+    // to state "no label is clipped at the minimum width" has to be able to say how wide the label
+    // column actually is rather than re-deriving it from a font.
+    [[nodiscard]] qreal labelColumnWidth() const { return labelColumnWidth_; }
+    [[nodiscard]] qreal parameterRowHeight() const { return rowHeight_; }
     void setPrimary(bool primary) {
         primary_ = primary;
         update();
@@ -263,7 +278,21 @@ class NodeItem final : public QGraphicsObject {
         (void)session_->setSelectedOpacity(opacity_->value() / 100.0);
     }
 
+    // A widget handed to a QGraphicsProxyWidget becomes a window, and Qt fills a window's own
+    // rectangle with the palette's background before the widget paints. Inside a card that fill is
+    // an opaque plate behind a control that only paints its own rounded cell, so the corners and
+    // every pixel outside the cell read as a darker clipped band. WA_TranslucentBackground is the
+    // one attribute that stops it, and it is set here -- once, for every hosted widget -- rather
+    // than inside each kit control, because being hosted on a canvas is this card's business and
+    // not the control's.
+    static void hostTranslucent(QWidget& widget) {
+        widget.setAttribute(Qt::WA_TranslucentBackground, true);
+        widget.setAttribute(Qt::WA_NoSystemBackground, true);
+        widget.setAutoFillBackground(false);
+    }
+
     void addProxy(QWidget* widget) {
+        hostTranslucent(*widget);
         auto* proxy = new QGraphicsProxyWidget(this);
         proxy->setWidget(widget);
     }
@@ -468,8 +497,28 @@ class NodeItem final : public QGraphicsObject {
 
         const auto rowCount = static_cast<qreal>(valueRows_.size() + readOnlyRows_.size() +
                                                  (colorChip_ != nullptr ? 1 : 0));
-        const qreal width = layout_.width;
-        const qreal socketHeight = static_cast<qreal>(sockets_.size()) * kSocketRowHeight;
+        // The card's own floor, measured from what it actually carries (task S1, item 2): the
+        // shared label column, the narrowest usable control beside it, and the widest socket name,
+        // each inside the card's padding. A persisted or dragged width never goes below it, so no
+        // label, field or socket name is ever clipped by the card that owns it -- which is also why
+        // no proxy below needs scaling down any more.
+        qreal socketColumn = 0.0;
+        for (const auto* socket : sockets_) {
+            socketColumn = std::max(socketColumn, rowMetrics.horizontalAdvance(socket->name));
+        }
+        minimumWidth_ = kCardMinimumWidth;
+        if (rowCount > 0.0) {
+            minimumWidth_ = std::max(minimumWidth_, kCardPadding + labelColumn + kCardLabelGap +
+                                                        controlColumn + kCardPadding);
+        }
+        if (socketColumn > 0.0) {
+            minimumWidth_ = std::max(minimumWidth_, 2.0 * kCardPadding + socketColumn);
+        }
+        const qreal width = std::max(layout_.width, minimumWidth_);
+        qreal socketHeight = 0.0;
+        for (const auto* socket : sockets_) {
+            socketHeight += socket->rowHeight();
+        }
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
         const qreal height = layout_.collapsed
@@ -488,7 +537,10 @@ class NodeItem final : public QGraphicsObject {
         rowHeight_ = rowHeight;
 
         const qreal controlLeft = kCardPadding + labelColumn + kCardLabelGap;
-        const qreal controlSpan = std::max(1.0, width_ - kCardPadding - controlLeft);
+        // CEIL, never truncate: a fractional span rounded down leaves the control a pixel short of
+        // the card's own padding, and at a fractional row pitch that gap is exactly the sliver of
+        // card surface that made a full-width field look inset.
+        const qreal controlSpan = std::max(1.0, std::ceil(width_ - kCardPadding - controlLeft));
         qreal y = kCardHeaderHeight + socketHeight;
         for (const auto& row : valueRows_) {
             row.field->resize(static_cast<int>(controlSpan), row.field->sizeHint().height());
@@ -520,24 +572,28 @@ class NodeItem final : public QGraphicsObject {
             }
             proxy->setVisible(!layout_.collapsed && !linked);
             proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
-            const qreal available = std::max(1.0, width_ - kCardPadding - proxy->pos().x());
-            proxy->setScale(std::min(1.0, available / std::max(1, widget->width())));
+            // Exactly 1, always. A fractional scale resampled a control's own hairlines, padding
+            // and text into a blurred, visibly smaller copy of itself -- and it only ever existed
+            // to squeeze a control into a card too narrow for it, which minimumWidth_ above now
+            // makes impossible.
+            proxy->setScale(1.0);
         }
         const auto inputCount = std::ranges::count_if(
             sockets_, [](const auto* socket) { return socket->input.has_value(); });
         const auto outputCount = static_cast<std::ptrdiff_t>(sockets_.size()) - inputCount;
         int inputIndex = 0;
         int outputIndex = 0;
-        for (std::size_t index = 0; index < sockets_.size(); ++index) {
-            auto* socket = sockets_[index];
+        qreal socketY = kCardHeaderHeight;
+        for (auto* socket : sockets_) {
             const bool input = socket->input.has_value();
             const int edgeIndex = input ? inputIndex++ : outputIndex++;
+            const qreal rowExtent = socket->rowHeight();
             socket->setPos(input ? 0 : width_,
                            layout_.collapsed
                                ? kCardHeaderHeight * static_cast<qreal>(edgeIndex + 1) /
                                      static_cast<qreal>((input ? inputCount : outputCount) + 1)
-                               : kCardHeaderHeight +
-                                     (static_cast<qreal>(index) + 0.5) * kSocketRowHeight);
+                               : socketY + rowExtent / 2.0);
+            socketY += rowExtent;
         }
         update();
     }
@@ -559,6 +615,7 @@ class NodeItem final : public QGraphicsObject {
     qreal height_ = kCardHeaderHeight + kCardPadding;
     qreal labelColumnWidth_ = 0.0;
     qreal rowHeight_ = kit::px(kit::Size::Control);
+    qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool primary_ = false;
     bool authoringEnabled_ = false;

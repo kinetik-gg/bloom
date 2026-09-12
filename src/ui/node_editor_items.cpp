@@ -186,8 +186,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
     for (const auto* socket : sockets_) {
-        const QRectF row(kCardPadding, socket->pos().y() - kSocketRowHeight / 2,
-                         std::max(0.0, width_ - 2 * kCardPadding), kSocketRowHeight);
+        const qreal rowExtent = socket->rowHeight();
+        const QRectF row(kCardPadding, socket->pos().y() - rowExtent / 2,
+                         std::max(0.0, width_ - 2 * kCardPadding), rowExtent);
         painter->drawText(
             row,
             static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
@@ -310,6 +311,8 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
     description_ = tip;
     setAuthoringEnabled(true);
 }
+
+qreal SocketItem::rowHeight() const { return kSocketRowHeight; }
 
 QPainterPath SocketItem::shape() const {
     QPainterPath hit;
@@ -445,7 +448,9 @@ void NodeItem::startRename() {
     field->setObjectName(QStringLiteral("nodeRenameEditor"));
     field->setAccessibleName(tr("Layer name"));
     field->setFont(kit::font(kit::TypeRole::UiSmall));
-    field->resize(static_cast<int>(width_ - 2 * kCardPadding), static_cast<int>(kCardHeaderHeight));
+    field->resize(static_cast<int>(std::ceil(width_ - 2 * kCardPadding)),
+                  static_cast<int>(kCardHeaderHeight));
+    hostTranslucent(*field);
     renameProxy_ = new QGraphicsProxyWidget(this);
     renameProxy_->setWidget(field);
     renameProxy_->setPos(kCardPadding, 0);
