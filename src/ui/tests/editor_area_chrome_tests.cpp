@@ -10,7 +10,9 @@
 #include <QCoreApplication>
 #include <QFont>
 #include <QIcon>
+#include <QImage>
 #include <QMenu>
+#include <QPixmap>
 #include <QPoint>
 #include <QSignalSpy>
 #include <QSize>
@@ -18,6 +20,7 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -339,6 +342,63 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
                         "the switcher field is ControlRoomy (32) tall");
 }
 
+// task C1, item C5 (owner: "panels should have header and footer that self contain them"): every
+// EditorArea now has a footer strip mirroring the header -- Size::Control tall, its own objectName
+// -- even though it stays empty for every editor today (see this task's final report for why the
+// viewer's status bar and the timeline's transport are not moved into it yet).
+void testTheFooterStripExistsAndIsSizeControlTall(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    auto* footer = area.findChild<QWidget*>(QStringLiteral("editorFooter"));
+    expectations.expect(footer != nullptr, "the footer strip exists and carries its objectName");
+    if (footer == nullptr) {
+        return;
+    }
+    expectations.expect(footer->height() == kit::px(kit::Size::Control),
+                        "the footer is exactly Size::Control tall, matching the header's own "
+                        "Surface-chrome sizing convention");
+}
+
+// task C1, item C5 (owner: "cut rounded corners because the background is not clipped by the
+// panel"): an offscreen grab of a real EditorArea -- header, content, and footer all painting
+// their own full-bleed Surface/Background rectangles -- still shows exactly the window Background
+// color at all four corners, never a header/footer/content square corner bleeding past the
+// Radius::Panel curve.
+void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    area.resize(240, 160);
+    QCoreApplication::processEvents();
+
+    const QImage image = area.grab().toImage();
+    expectations.expect(!image.isNull(), "the panel renders offscreen");
+    if (image.isNull()) {
+        return;
+    }
+
+    const QColor background = kit::color(kit::Color::Background);
+    const qreal dpr = image.devicePixelRatio();
+    const int w = image.width();
+    const int h = image.height();
+    const int last = static_cast<int>(std::lround(dpr)) - 1;
+    const std::array<QPoint, 4> corners = {
+        QPoint(0, 0),
+        QPoint(w - 1 - last, 0),
+        QPoint(0, h - 1 - last),
+        QPoint(w - 1 - last, h - 1 - last),
+    };
+    // Background (#111111) and Surface (#141414, the header/footer's own fill) differ by only 3
+    // per channel, so this checks exact equality rather than a tolerant "near" match -- a loose
+    // tolerance would pass even if a header/footer/content corner bled straight through.
+    for (const auto& corner : corners) {
+        expectations.expect(image.pixelColor(corner) == background,
+                            "the panel corner at (" + std::to_string(corner.x()) + ", " +
+                                std::to_string(corner.y()) +
+                                ") shows the window background, not a header/footer/content "
+                                "corner bleeding past the rounded curve");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -355,5 +415,7 @@ int main(int argc, char** argv) {
     testThePanelSwitcherPinsTheIconMapping(expectations);
     testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(expectations);
     testHeaderProportionsMatchTheDesignCrops(expectations);
+    testTheFooterStripExistsAndIsSizeControlTall(expectations);
+    testTheFourCornersAreClippedToWindowBackground(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

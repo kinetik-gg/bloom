@@ -2,6 +2,7 @@
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -13,8 +14,9 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenu>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPainterPath>
-#include <QRegion>
 #include <QResizeEvent>
 #include <QSize>
 #include <QSizePolicy>
@@ -26,6 +28,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -66,6 +69,85 @@ constexpr auto kHeaderIconSize = kit::Size::IconMedium;
 // 10, and A9 explicitly reverts the button's own extent to Size::Control while leaving
 // Spacing::PanelHeader governing the header row's own padding (below), not the button.
 constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
+
+// Panel self-containment (task C1, item C5; owner: "panels should have header and footer that
+// self contain them"). A footer strip mirroring the header's own chrome exactly: Size::Control
+// tall, Surface background, and the SAME Border hairline the header draws, just on its top edge
+// instead of its bottom. Painted directly (rather than through kit::kinetikStyleSheet(), which
+// this task's ownership scopes to the menu bar only) so this container owns its own chrome
+// end-to-end, the same way its rounded corners below are painted rather than styled.
+class PanelFooterStrip final : public QWidget {
+  public:
+    explicit PanelFooterStrip(QWidget* parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("editorFooter"));
+        setFixedHeight(kit::px(kit::Size::Control));
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), kit::color(kit::Color::Surface));
+        kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
+        const qreal y = painter.pen().widthF() / 2.0;
+        painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(width()), y));
+    }
+};
+
+// The real clip a bordered, rounded container needs (task C1, item C5; owner: "cut rounded
+// corners because the background is not clipped by the panel"). QFrame#editorArea's own QSS
+// border-radius already paints THIS widget's own background/border with correctly rounded
+// corners -- but the header, content, and footer are ordinary rectangular children stacked on top
+// of that paint, and each one's own square corner would otherwise overwrite it. A QWidget::mask()
+// bitmap region was tried and rejected: building it from an integer QPolygon
+// (QPainterPath::toFillPolygon().toPolygon()) rounds the rounded-rect's vertices to whole logical
+// pixels before any HiDPI scaling happens, so the clip can drift or step at 125%/150% scale, and a
+// mask set on an ancestor is not guaranteed to reach every kind of child window on every platform.
+// Painting the correction directly is immune to both: one small, always-on-top widget per corner
+// fills exactly the wedge outside the panel's own Radius::Panel arc with Color::Background -- the
+// one color a rounded panel's corner always reveals in this design language -- leaving the arc's
+// interior untouched so whatever is legitimately there (the header/footer's own rounded paint, or
+// content within the curve) still shows through normally.
+class PanelCornerMask final : public QWidget {
+  public:
+    enum class Corner : std::uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
+
+    PanelCornerMask(const Corner corner, QWidget* parent) : QWidget(parent), corner_(corner) {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setFocusPolicy(Qt::NoFocus);
+        const int extent = kit::radiusPx(kit::Radius::Panel, 0);
+        setFixedSize(extent, extent);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const qreal r = width();
+        QPointF center;
+        switch (corner_) {
+        case Corner::TopLeft:
+            center = QPointF(r, r);
+            break;
+        case Corner::TopRight:
+            center = QPointF(0.0, r);
+            break;
+        case Corner::BottomLeft:
+            center = QPointF(r, 0.0);
+            break;
+        case Corner::BottomRight:
+            center = QPointF(0.0, 0.0);
+            break;
+        }
+        QPainterPath square;
+        square.addRect(rect());
+        QPainterPath arc;
+        arc.addEllipse(center, r, r);
+        painter.fillPath(square.subtracted(arc), kit::color(kit::Color::Background));
+    }
+
+  private:
+    Corner corner_;
+};
 
 } // namespace
 
@@ -114,7 +196,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     content->setObjectName("editorContent");
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentLayout_ = new QVBoxLayout(content);
-    contentLayout_->setContentsMargins(0, 0, 0, 0);
+    // Content inset inside the 1px border (task C1, item C5): the editor content itself stops one
+    // hairline short of the frame's own left/right/bottom edge (the top edge is already bounded by
+    // the header), so its own background never draws directly on top of the frame's border stroke.
+    // The actual rounded-corner clipping is a separate concern, handled by the always-on-top
+    // PanelCornerMask overlays below rather than by this inset alone.
+    const int hairlineInset = static_cast<int>(kit::kHairlineWidth);
+    contentLayout_->setContentsMargins(hairlineInset, 0, hairlineInset, hairlineInset);
     contentLayout_->setSpacing(0);
 
     // The single chokepoint every header control is built through (task U1, issue #117): the
@@ -178,6 +266,16 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     layout->addWidget(header_);
     layout->addWidget(content, 1);
 
+    // The footer slot (task C1, item C5): reserved and empty for every editor today. The owner's
+    // ask was for the viewer's status bar and the timeline's transport to move into this slot when
+    // an editor already has one of its own -- both are painted as an internal part of a single
+    // custom-painted widget in viewer_editor.cpp/timeline_editor.cpp rather than as a separable
+    // child widget, and this task's ownership permits only a sanctioned COMMENT-only edit to
+    // viewer_editor.cpp and no edit at all to timeline_editor.cpp, so extracting either bar into
+    // this slot is out of reach here. Reported as blocked in this task's final report.
+    footer_ = new PanelFooterStrip(this);
+    layout->addWidget(footer_);
+
     connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
     connect(maximizeButton_, &QToolButton::clicked, this, [this] { emit maximizeRequested(this); });
@@ -190,6 +288,18 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     if (editorWidget_ == nullptr) {
         rebuildEditor(editorPicker_->currentIndex());
     }
+
+    // The four corner-mask overlays (task C1, item C5): created last, after every layout-managed
+    // child, so Qt's default stacking order already puts them on top; raise() is only a defensive
+    // guarantee against a future reordering of the constructor above.
+    cornerMasks_ = {new PanelCornerMask(PanelCornerMask::Corner::TopLeft, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::TopRight, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::BottomLeft, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::BottomRight, this)};
+    for (auto* mask : cornerMasks_) {
+        mask->raise();
+    }
+    layoutCornerMasks();
 
     watchForActivation(this);
     setAreaActive(false);
@@ -348,21 +458,18 @@ void EditorArea::watchForActivation(QWidget* widget) {
 
 void EditorArea::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
-    updateRoundedMask();
+    layoutCornerMasks();
 }
 
-void EditorArea::updateRoundedMask() {
-    // Rounded corners over the Background gutter (task U2, issue #118, decision 4; shrunk to
-    // Radius::Small by task U8, issue #131, fix 2; moved to its own Radius::Panel = 4 by formal
-    // amendment 1, A3): a real clip rather than only the stylesheet's own border-radius, so the
-    // header's Surface background and whatever the active editor draws never overhang the
-    // panel's rounded corners -- the QFrame's own CSS border-radius (kinetikStyleSheet()'s
-    // QFrame#editorArea rule) only ever paints the frame's OWN background/border, never its
-    // children.
-    QPainterPath path;
-    const int radius = kit::radiusPx(kit::Radius::Panel, 0);
-    path.addRoundedRect(rect(), radius, radius);
-    setMask(QRegion(path.toFillPolygon().toPolygon()));
+void EditorArea::layoutCornerMasks() {
+    // Repositions the four PanelCornerMask overlays (task C1, item C5) to this frame's current
+    // four corners -- each is a fixed Radius::Panel square, so only its position ever needs to
+    // change on resize, never its size.
+    const int extent = kit::radiusPx(kit::Radius::Panel, 0);
+    cornerMasks_[0]->move(0, 0);
+    cornerMasks_[1]->move(width() - extent, 0);
+    cornerMasks_[2]->move(0, height() - extent);
+    cornerMasks_[3]->move(width() - extent, height() - extent);
 }
 
 } // namespace bloom::ui

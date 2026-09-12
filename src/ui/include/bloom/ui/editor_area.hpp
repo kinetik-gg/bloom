@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringView>
 
+#include <array>
 #include <string>
 #include <string_view>
 
@@ -54,7 +55,7 @@ class EditorArea final : public QFrame {
     void rebuildEditor(int editorIndex);
     int addUnavailableEditor(std::string_view editorId);
     void watchForActivation(QWidget* widget);
-    void updateRoundedMask();
+    void layoutCornerMasks();
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
@@ -65,6 +66,20 @@ class EditorArea final : public QFrame {
     // (contextMenuEvent, routed through EditorArea's own eventFilter -- see watchForActivation());
     // there is no longer a dedicated button that owns the menu.
     QWidget* header_ = nullptr;
+    // Self-containment (task C1, item C5): a footer strip mirroring the header -- Size::Control
+    // tall, Surface background, the same Border hairline -- so every panel has both a header AND
+    // a footer that belong to it, not just a header. Empty for now: see layoutCornerMasks()'s own
+    // comment and this task's final report for why an existing editor's own bottom bar (the
+    // viewer's status bar, the timeline's transport) is not moved into this slot yet.
+    QWidget* footer_ = nullptr;
+    // The real clip this container needs (task C1, item C5; owner: "cut rounded corners because
+    // the background is not clipped by the panel"): four small overlay widgets, one per corner,
+    // stacked on top of the header/content/footer children and painted last. Each one fills the
+    // little wedge outside the frame's own Radius::Panel curve with Color::Background -- the one
+    // color every rounded panel corner always reveals -- so a header/content/footer's own square
+    // corner can never bleed past the curve, regardless of resize, HiDPI, or what a given editor's
+    // content widget paints. See editor_area.cpp's anonymous-namespace PanelCornerMask.
+    std::array<QWidget*, 4> cornerMasks_{};
     QMenu* contextMenu_ = nullptr;
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;
