@@ -48,12 +48,19 @@ using namespace std::chrono_literals;
 
 // An independent byte-oriented oracle assembled every frozen field with explicit big-endian
 // packing. These lengths and SHA-256 values cover the complete tiny PNG and EXR preimages.
+// Re-derived for the task S3 semantics-version bumps (CPU composition evaluator 2 -> 3, CPU image
+// primitive 2 -> 3). Both are frozen fields of the process-frame semantic identity these preimages
+// embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
+// from the same kind of independent byte-oriented oracle that produced the originals -- a
+// standalone script that packs each frozen field itself with explicit big-endian integers and
+// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing the
+// PREVIOUS goldens byte for byte when fed the previous version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "a032aec2ed0b51e7d76120fa6229f720650ef2dab557968c776b0dfd03f4c6a6";
+    "c98edd8af56e7cfc02272f9c9f04bbae7775a6ff41dd264e4e791ba7311e751d";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "cbef24efb48761fde472cd7ff1d6fbea2206420bf0fc27e84fe75d263b34e1c0";
+    "84b9c3cbb26aa07dd04e556d9d64070f833e13f52012d234255130585c48e3ab";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "2645132e8d63892ed500119e27ed6a1ff6d93ea8d58a5e51a3bfc23aab7ec375";
+    "01145046b0c891b3a1f77c034d01263d4914f32a322ebfdd873da4a2fe00b3f5";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
