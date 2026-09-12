@@ -75,8 +75,8 @@ state recipes below step along exactly this ladder and nothing else.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `Small` | `3` | Controls, chips, and a dropdown popup's own frame -- the frame rounds, never the rows inside it |
-| `Medium` | `6` | Menus and cards |
+| `Small` | `3` | Controls, chips, and a dropdown or menu popup's own frame -- the frame rounds, never the rows inside it |
+| `Medium` | `6` | Cards |
 | `Panel` | `4` | Panel bodies and their rounded-corner mask -- its own step, not a reuse of `Small` |
 | `Large` | `12` | Dialogs |
 | `XLarge` | `16` | Full-screen surfaces |
@@ -117,10 +117,14 @@ carry focus at all.
 | `XXL` | `32` |
 | `Gutter` | `6` |
 | `PanelHeader` | `10` |
+| `MenuItemY` | `6` |
+| `MenuItemX` | `10` |
 
 `Gutter` is the visible `Background` gap between panels. Panels float on the window; they do not
 share edges. `PanelHeader` is the panel header's own vertical padding -- deliberately off the
-base-4 scale, not rounded to a nearby step.
+base-4 scale, not rounded to a nearby step. `MenuItemY` and `MenuItemX` are a menu row's own
+padding, off the base scale for the same reason: a menu row is denser vertically and roomier
+horizontally than the scale offers.
 
 ### Size
 
@@ -180,6 +184,7 @@ read oversized in dense chrome once the family changed.
 | --- | --- |
 | Hover | One surface step up, plus `BorderHover`. At the top of the ladder the step clamps and the border change carries the state alone |
 | Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; the frame's own rounded corners clip the bar, so only the frame is ever rounded |
+| Menu row | A reserved icon column so text aligns with or without an icon, the shortcut in `Faint`, and the submenu caret as the Phosphor `CaretRight` glyph. Painted by `kit::AltUnderlineProxyStyle`, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
 | Selected | An `Accent` fill, or a 2px inset accent edge where a fill would hide content |
 | Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline |

@@ -105,6 +105,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Spacing::Gutter) == 6, "Spacing::Gutter is 6");
     // task U8, issue #131, formal amendment 1, A4: deliberately off the base-4 scale, not rounded.
     expectations.expect(kit::px(kit::Spacing::PanelHeader) == 10, "Spacing::PanelHeader is 10");
+    expectations.expect(kit::px(kit::Spacing::MenuItemY) == 6, "Spacing::MenuItemY is 6");
+    expectations.expect(kit::px(kit::Spacing::MenuItemX) == 10, "Spacing::MenuItemX is 10");
 
     expectations.expect(kit::px(kit::Size::ControlCompact) == 22, "ControlCompact is 22");
     expectations.expect(kit::px(kit::Size::Control) == 26, "Control is 26");
