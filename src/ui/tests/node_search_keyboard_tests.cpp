@@ -199,7 +199,7 @@ void testSearchKeyboardAndMenus() {
     // Item 4: the reason is in the tooltip and NOWHERE else. A refusal appended to the label would
     // make the list's widest row an error message and read as part of the node's name.
     expect(textRow.data().toString() ==
-                   node_editor::displayTypeName(document::kTextSourceNodeType) &&
+                   node_editor::nodeTypeDisplayName(document::kTextSourceNodeType) &&
                !textRow.data().toString().contains(QStringLiteral("CPU")),
            "and its label is the node's name alone");
     expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources")},

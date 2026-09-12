@@ -60,6 +60,22 @@ QString displayTypeName(const std::string_view typeId) {
     return name;
 }
 
+// Task S1, item 7. displayTypeName() above spells a name out of an identifier, which is the right
+// answer for a parameter role and the wrong one for a node the artist reads on a card: "Solid
+// source" names the implementation, "Solid" names the thing. Four built-ins are therefore named
+// here. Type ids are untouched -- this is vocabulary, not identity.
+QString nodeTypeDisplayName(const std::string_view typeId) {
+    if (typeId == document::kSolidSourceNodeType)
+        return QCoreApplication::translate("node_editor", "Solid");
+    if (typeId == document::kLayerOutputNodeType)
+        return QCoreApplication::translate("node_editor", "Layer");
+    if (typeId == document::kLayerStackNodeType)
+        return QCoreApplication::translate("node_editor", "Merge");
+    if (typeId == document::kCompositionOutputNodeType)
+        return QCoreApplication::translate("node_editor", "Output");
+    return displayTypeName(typeId);
+}
+
 // A layer boundary node's display name is the layer's own durable name (the exact string the
 // timeline row shows); every other node is named by its type. Both are the node's real name, read
 // from document truth -- neither is invented here.
@@ -70,7 +86,16 @@ QString nodeDisplayName(const document::Composition& composition,
             return QString::fromStdString(boundary.name);
         }
     }
-    return displayTypeName(node.typeId);
+    return nodeTypeDisplayName(node.typeId);
+}
+
+// A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
+// of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
+QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node) {
+    for (const auto& boundary : composition.graph().layerOutputs())
+        if (boundary.nodeId == node.id && !boundary.name.empty())
+            return nodeTypeDisplayName(document::kLayerOutputNodeType);
+    return {};
 }
 
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
@@ -189,10 +214,23 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Foreground));
-    const QRectF titleRect(kCardPadding, 0.0,
-                           bounds.width() - 2.0 * kCardPadding -
-                               (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
-                           kCardHeaderHeight);
+    QRectF titleRect(kCardPadding, 0.0,
+                     bounds.width() - 2.0 * kCardPadding -
+                         (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
+                     kCardHeaderHeight);
+    if (!eyebrow_.isEmpty()) {
+        // A layer card is named after its LAYER, so the eyebrow is the line that still says what
+        // kind of node it is. Faint ink above the name, and the name keeps the lower half of the
+        // header.
+        const qreal eyebrowHeight = QFontMetricsF(painter->font()).height();
+        const QRectF eyebrowRect(titleRect.left(), 0.0, titleRect.width(), eyebrowHeight);
+        painter->setPen(kit::color(kit::Color::Faint));
+        painter->drawText(eyebrowRect, Qt::AlignVCenter | Qt::AlignLeft,
+                          QFontMetricsF(painter->font())
+                              .elidedText(eyebrow_, Qt::ElideRight, eyebrowRect.width()));
+        painter->setPen(kit::color(kit::Color::Foreground));
+        titleRect.setTop(eyebrowHeight);
+    }
     painter->drawText(
         titleRect, Qt::AlignVCenter | Qt::AlignLeft,
         QFontMetricsF(painter->font()).elidedText(title_, Qt::ElideRight, titleRect.width()));
@@ -339,12 +377,66 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
     setAuthoringEnabled(true);
 }
 
-qreal SocketItem::rowHeight() const { return kSocketRowHeight; }
+qreal SocketItem::pillLength() const {
+    if (!multiInput())
+        return kSocketDiameter;
+    // At least one ordinary row tall, then one pitch per ordered slot: the pill's length is the
+    // stack's depth, read straight off the slot model.
+    return std::max(kSocketRowHeight, static_cast<qreal>(orderedInputs_.size()) * kStackSlotPitch);
+}
+
+qreal SocketItem::rowHeight() const { return std::max(kSocketRowHeight, pillLength()); }
+
+QRectF SocketItem::boundingRect() const {
+    const qreal half = pillLength() / 2.0 + kSocketDiameter / 2.0 + kSocketHitSlop;
+    return {-16.0, -half, 32.0, half * 2.0};
+}
 
 QPainterPath SocketItem::shape() const {
     QPainterPath hit;
-    hit.addEllipse(boundingRect());
+    if (!multiInput()) {
+        hit.addEllipse(boundingRect());
+        return hit;
+    }
+    // A pill's hit shape is a pill: the same 12px of slop the round socket gets, around a longer
+    // body, rather than one ellipse stretched over the whole of it.
+    const QRectF bounds = boundingRect();
+    hit.addRoundedRect(bounds, bounds.width() / 2.0, bounds.width() / 2.0);
     return hit;
+}
+
+void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
+    prepareGeometryChange();
+    orderedInputs_ = std::move(inputs);
+    if (multiInput()) {
+        description_ += QStringLiteral("\nOrdered multi-input: %1 in stack order, topmost first")
+                            .arg(orderedInputs_.size());
+    }
+    setToolTip(description_);
+    update();
+}
+
+bool SocketItem::accepts(const document::InputPortRef& ref) const {
+    return (input.has_value() && *input == ref) ||
+           std::ranges::find(orderedInputs_, ref) != orderedInputs_.end();
+}
+
+void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {
+    if (dropIndicator_ == slotIndex)
+        return;
+    dropIndicator_ = slotIndex;
+    update();
+}
+
+std::optional<std::size_t> SocketItem::slotIndexAt(const QPointF localPoint) const {
+    if (!multiInput() || !shape().contains(localPoint))
+        return std::nullopt;
+    const qreal length = pillLength();
+    const qreal pitch = length / static_cast<qreal>(orderedInputs_.size());
+    const auto index = static_cast<std::ptrdiff_t>(
+        std::floor((localPoint.y() + length / 2.0) / std::max(pitch, 0.001)));
+    return static_cast<std::size_t>(std::clamp(
+        index, std::ptrdiff_t{0}, static_cast<std::ptrdiff_t>(orderedInputs_.size()) - 1));
 }
 
 QColor SocketItem::paintedInk() const {
@@ -372,7 +464,32 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
     painter->setPen(QPen(kit::color(kit::Color::Surface), kit::kHairlineWidth));
     painter->setBrush(paintedInk());
     const qreal radius = hovered_ ? 6.0 : kSocketDiameter / 2;
-    painter->drawEllipse(QPointF(), radius, radius);
+    if (!multiInput()) {
+        painter->drawEllipse(QPointF(), radius, radius);
+        return;
+    }
+    // The Merge node's one ordered multi-input: a vertical pill, divided into one segment per stack
+    // slot so the port itself shows how many layers it carries and in what order. The segment
+    // divisions are drawn in the card's own Surface ink, the same hairline that rings every socket.
+    const qreal length = pillLength();
+    const QRectF pill(-radius, -length / 2.0, radius * 2.0, length);
+    painter->drawRoundedRect(pill, radius, radius);
+    // Not named `slots`: Qt's moc keyword macro takes that identifier.
+    const auto slotCount = static_cast<qreal>(orderedInputs_.size());
+    kit::applyHairlinePen(*painter, kit::color(kit::Color::Surface));
+    for (std::size_t division = 1; division < orderedInputs_.size(); ++division) {
+        const qreal y = pill.top() + length * static_cast<qreal>(division) / slotCount;
+        painter->drawLine(QPointF(pill.left(), y), QPointF(pill.right(), y));
+    }
+    if (dropIndicator_.has_value()) {
+        // The position the pointer is at in the order. Muted, not Accent: a stack slot is
+        // structural, so this marks where the pointer IS and never promises that releasing there
+        // lands a link -- the pill is dimmed as incompatible at the same moment.
+        const qreal pitch = length / slotCount;
+        const qreal y = pill.top() + pitch * (static_cast<qreal>(*dropIndicator_) + 0.5);
+        painter->setPen(QPen(kit::color(kit::Color::Muted), 2.0, Qt::SolidLine, Qt::RoundCap));
+        painter->drawLine(QPointF(pill.left() - radius, y), QPointF(pill.right() + radius, y));
+    }
 }
 void SocketItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
     hovered_ = true;
@@ -409,12 +526,20 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                                           port.valueKind, input, std::nullopt, false, this));
     }
     if (definition->layerSlotInput && node.id == composition.graph().layerStack().nodeId()) {
-        for (const auto& slot : composition.graph().layerStack().entries()) {
-            const auto& port = *definition->layerSlotInput;
-            sockets_.push_back(
-                new SocketItem(node.id, QString::fromStdString(port.role), port.valueKind,
-                               document::LayerStackInputRef{node.id, slot.slotId, port.role},
-                               std::nullopt, true, this));
+        // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
+        // slot. The slot model underneath is exactly as it was -- these are its own slots, in its
+        // own order -- and every edge that terminates on any of them terminates on this one socket.
+        const auto& port = *definition->layerSlotInput;
+        const auto entries = composition.graph().layerStack().entries();
+        if (!entries.empty()) {
+            std::vector<document::InputPortRef> ordered;
+            ordered.reserve(entries.size());
+            for (const auto& slot : entries)
+                ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
+            auto* pill = new SocketItem(node.id, QString::fromStdString(port.role), port.valueKind,
+                                        ordered.front(), std::nullopt, true, this);
+            pill->setOrderedInputs(std::move(ordered));
+            sockets_.push_back(pill);
         }
     }
     for (const auto& port : definition->outputs)

@@ -305,6 +305,40 @@ set uses Accent outlines and its primary uses Foreground. The set and primary fl
 `CompositionSession::selectNodes`, `toggleNodeSelection` and `clearSelection`; Properties and
 Timeline retain their existing primary/context contracts.
 
+### Artist-Facing Node Names
+
+Type ids are unchanged. The names the node editor shows are not spelled out of them:
+
+| Type id | Name shown |
+| --- | --- |
+| `bloom.solid-source` | `Solid` |
+| `bloom.layer-output` | the layer's own name, with a small `Layer` eyebrow above it |
+| `bloom.layer-stack` | `Merge` |
+| `bloom.composition-output` | `Output` |
+
+Anything else falls back to the spelled-out identifier. A parameter ROLE still spells out the same
+way it always has -- that fallback is what `node_editor::displayTypeName()` is for, and
+`nodeTypeDisplayName()` is the node-type layer above it.
+
+A layer boundary card is named after its layer, so the card alone would no longer say what kind of
+node it is; the eyebrow is the one line that still says so.
+
+### Merge's Ordered Multi-Input
+
+The Merge node renders ONE socket for the whole layer stack -- a vertical pill, divided into one
+segment per ordered slot, topmost first -- instead of one repeated `content` row per layer. Its length
+grows by one pitch per slot, so the port itself shows how deep the stack is.
+
+The slot model underneath is exactly as it was. The socket carries the stack's own slot references in
+the stack's own order, and an edge finds the socket that terminates it by asking whether the socket
+accepts that reference, so every slot edge is still projected as its own wire. No slot, edge, or
+ordering record changes shape.
+
+While a link drag is in flight over the pill, a caret marks which position in the order the pointer is
+at. Stack slots remain structural, so the pill is dimmed as incompatible at the same moment and a
+release publishes nothing: the caret reports a position, never a landing. A gesture that could
+actually reorder or reconnect a slot needs a command that does not exist yet.
+
 ### Node Categories
 
 `NodeDefinition::category` declares which Add-surface section a node type is listed under:

@@ -66,11 +66,23 @@ inline constexpr auto kCardRadius = kit::Radius::Medium;
 inline constexpr qreal kCardMinimumWidth = 128.0;
 inline constexpr qreal kSocketDiameter = 8.0;
 inline constexpr qreal kSocketRowHeight = kit::px(kit::Size::ControlCompact);
+// One ordered slot's worth of the Merge node's multi-input pill (task S1, item 7): the pill grows
+// by this much per layer it carries, so its length IS the stack's depth.
+inline constexpr qreal kStackSlotPitch = kit::px(kit::Spacing::M);
+// The pointer slop around a socket, beyond its own painted extent.
+inline constexpr qreal kSocketHitSlop = 16.0 - kSocketDiameter / 2.0;
 inline constexpr qreal kNodeSceneMargin = kit::px(kit::Spacing::XXL) * 2;
 inline constexpr qreal kSelectionEdgeWidth = 2.0;
 class NodeEdgeItem;
 class NodeItem;
 QString displayTypeName(std::string_view typeId);
+// The artist-facing name of a node TYPE (task S1, item 7). Four built-ins are named rather than
+// spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
+// displayTypeName(). Type ids themselves are unchanged; this is vocabulary, not identity.
+QString nodeTypeDisplayName(std::string_view typeId);
+// The small label above a card's own name, or empty. A layer boundary card is named after its
+// layer, so the eyebrow is what still says the node is a Layer.
+QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node);
 // The artist-facing heading a node category is listed under in an Add surface (task S1, item 4).
 QString nodeCategoryName(document::NodeCategory category);
 // The order the headings appear in: the pipeline's own order, from what makes an image to what
@@ -96,9 +108,34 @@ class SocketItem final : public QGraphicsItem {
                std::optional<document::InputPortRef> input,
                std::optional<document::OutputPortRef> output, bool structural,
                QGraphicsItem* parent);
-    [[nodiscard]] QRectF boundingRect() const override { return {-16, -16, 32, 32}; }
+    [[nodiscard]] QRectF boundingRect() const override;
     [[nodiscard]] QPainterPath shape() const override;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
+
+    // The Merge node's ONE ordered multi-input (task S1, item 7). The layer stack's slot model is
+    // untouched underneath: these are its slots, in stack order, and this single socket is the port
+    // that stands for all of them -- instead of one repeated "content" row per layer.
+    void setOrderedInputs(std::vector<document::InputPortRef> inputs);
+    [[nodiscard]] const std::vector<document::InputPortRef>& orderedInputs() const noexcept {
+        return orderedInputs_;
+    }
+    [[nodiscard]] bool multiInput() const noexcept { return !orderedInputs_.empty(); }
+    // True when `ref` is this socket's own input, or -- for the ordered multi-input -- any of the
+    // slots it stands for. This is how an edge finds the socket that terminates it.
+    [[nodiscard]] bool accepts(const document::InputPortRef& ref) const;
+    // The slot position the pointer is over during a drag, drawn as a caret across the pill. The
+    // pill is dimmed as incompatible at the same time (stack slots are structural and accept no
+    // drop), so the caret says "this is the position you are at", never "release here and it will
+    // land".
+    void setDropIndicator(std::optional<std::size_t> slotIndex);
+    [[nodiscard]] std::optional<std::size_t> dropIndicator() const noexcept {
+        return dropIndicator_;
+    }
+    // Which ordered slot a point in this socket's own coordinates falls on.
+    [[nodiscard]] std::optional<std::size_t> slotIndexAt(QPointF localPoint) const;
+    // The pill's painted extent along the card's edge; kSocketDiameter for an ordinary round
+    // socket.
+    [[nodiscard]] qreal pillLength() const;
     // How much vertical room this socket claims on an expanded card. One ordinary port is one
     // kSocketRowHeight row; the card sums these rather than multiplying by the socket count, so a
     // socket that is taller than a row can exist without the card's body landing on top of it.
@@ -132,6 +169,8 @@ class SocketItem final : public QGraphicsItem {
     bool structural_;
     bool hovered_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
+    std::vector<document::InputPortRef> orderedInputs_;
+    std::optional<std::size_t> dropIndicator_;
 };
 
 class NodeItem final : public QGraphicsObject {
@@ -174,8 +213,9 @@ class NodeItem final : public QGraphicsObject {
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
+        eyebrow_ = nodeEyebrow(composition, node);
         setToolTip(QStringLiteral("%1\n%2\nNode %3")
-                       .arg(title_, displayTypeName(node.typeId))
+                       .arg(title_, nodeTypeDisplayName(node.typeId))
                        .arg(id_.value()));
         ensureFields(node);
         buildSockets(node, composition, registry);
@@ -630,6 +670,7 @@ class NodeItem final : public QGraphicsObject {
     document::NodeId id_;
     CompositionSession* session_ = nullptr;
     QString title_;
+    QString eyebrow_;
     qreal width_ = kCardMinimumWidth;
     qreal height_ = kCardHeaderHeight + kCardPadding;
     qreal labelColumnWidth_ = 0.0;

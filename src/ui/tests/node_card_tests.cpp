@@ -146,6 +146,123 @@ void testSocketsBrightenAndDimDuringALinkDrag() {
                input->paintedInk() == resting,
            "ending the drag puts every socket back to its resting ink");
 }
+// Item 7, terminology. The four renamed types read as what they are, and their ids are untouched.
+void testNodeTypesAreNamedForWhatTheyAre() {
+    expect(node_editor::nodeTypeDisplayName(document::kSolidSourceNodeType) ==
+               QStringLiteral("Solid"),
+           "Solid Source is just Solid");
+    expect(node_editor::nodeTypeDisplayName(document::kLayerOutputNodeType) ==
+               QStringLiteral("Layer"),
+           "a Layer Output is a Layer");
+    expect(node_editor::nodeTypeDisplayName(document::kLayerStackNodeType) ==
+               QStringLiteral("Merge"),
+           "the Layer Stack is Merge");
+    expect(node_editor::nodeTypeDisplayName(document::kCompositionOutputNodeType) ==
+               QStringLiteral("Output"),
+           "the Composition Output is Output");
+    // Anything unnamed still falls back to the spelled-out identifier, and a parameter role --
+    // which is what displayTypeName() is for -- is untouched by any of this.
+    expect(node_editor::nodeTypeDisplayName(document::kTextSourceNodeType) ==
+               node_editor::displayTypeName(document::kTextSourceNodeType),
+           "an unnamed type keeps the spelled-out fallback");
+    expect(document::kLayerStackNodeType == std::string_view{"bloom.layer-stack"} &&
+               document::kCompositionOutputNodeType == std::string_view{"bloom.composition-output"},
+           "and the type ids themselves are unchanged: this is vocabulary, not identity");
+
+    Fixture f;
+    expect(f.session.addSolidLayer(QStringLiteral("Backdrop"), core::Color4d{1, 0, 0, 1}),
+           "layer fixture");
+    const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
+    const auto boundary = f.session.boundaryNodeForLayer(layerId);
+    const auto* record = boundary ? f.session.composition()->graph().findNode(*boundary) : nullptr;
+    expect(record != nullptr, "the layer resolves its boundary node");
+    if (record == nullptr)
+        return;
+    expect(node_editor::nodeDisplayName(*f.session.composition(), *record) ==
+               QStringLiteral("Backdrop"),
+           "a layer card is named after its layer, not after its node type");
+    expect(node_editor::nodeEyebrow(*f.session.composition(), *record) == QStringLiteral("Layer"),
+           "so the eyebrow is what still says it is a Layer");
+    const auto* stack = f.session.composition()->graph().findNode(
+        f.session.composition()->graph().layerStack().nodeId());
+    expect(node_editor::nodeEyebrow(*f.session.composition(), *stack).isEmpty(),
+           "and a node named after its own type carries no eyebrow");
+}
+
+// Item 7, Merge. One ordered multi-input for the whole stack, with the slot model untouched
+// beneath.
+void testMergeRendersOneOrderedMultiInput() {
+    Fixture f;
+    expect(f.session.addSolidLayer(QStringLiteral("Lower"), core::Color4d{1, 0, 0, 1}) &&
+               f.session.addSolidLayer(QStringLiteral("Upper"), core::Color4d{0, 1, 0, 1}),
+           "two layer fixtures");
+    const auto stackId = f.session.composition()->graph().layerStack().nodeId();
+    const auto entries = f.session.composition()->graph().layerStack().entries();
+    expect(entries.size() == 2, "the stack really holds two slots");
+    auto* card = f.card(stackId);
+    expect(card != nullptr, "the Merge card exists");
+    if (card == nullptr || entries.size() != 2)
+        return;
+
+    std::vector<node_editor::SocketItem*> inputs;
+    for (auto* socket : card->sockets())
+        if (socket->input.has_value())
+            inputs.push_back(socket);
+    expect(inputs.size() == 1, "two layers are ONE port on Merge, not two repeated content rows");
+    if (inputs.size() != 1)
+        return;
+    auto* pill = inputs.front();
+    expect(pill->multiInput() && pill->orderedInputs().size() == entries.size(),
+           "and that port stands for every slot the stack holds");
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        const document::InputPortRef expected = document::LayerStackInputRef{
+            stackId, entries[index].slotId, std::string(document::kLayerStackContentInputRole)};
+        expect(pill->orderedInputs().at(index) == expected,
+               "in the stack's own order, read straight off the slot model");
+        expect(pill->accepts(expected),
+               "and every one of those slots' edges terminates on this one socket");
+    }
+    expect(pill->pillLength() ==
+               std::max(node_editor::kSocketRowHeight,
+                        static_cast<qreal>(entries.size()) * node_editor::kStackSlotPitch),
+           "the pill's length is the stack's depth");
+    expect(pill->rowHeight() >= pill->pillLength(),
+           "and the card gives that port a row tall enough to hold it");
+    expect(pill->toolTip().contains(QStringLiteral("Ordered multi-input")),
+           "the port says it is ordered");
+
+    // Every stack edge is still projected, and still lands on this socket.
+    int wires = 0;
+    for (const auto* item : f.scene()->items())
+        if (dynamic_cast<const node_editor::NodeEdgeItem*>(item) != nullptr)
+            ++wires;
+    expect(wires == static_cast<int>(f.session.composition()->graph().edges().size()),
+           "collapsing the rows loses no link: one wire per graph edge, as before");
+
+    // A link drag over the pill names the position in the order the pointer is at, while the pill
+    // itself is dimmed -- a stack slot is structural and accepts no drop.
+    const auto solid = f.session.directSourceNodeForLayer(entries.front().layerId);
+    expect(solid.has_value(), "the lower layer resolves its source node");
+    if (!solid.has_value())
+        return;
+    auto* output = f.socket(*solid, false);
+    expect(output != nullptr, "the drag fixture has a draggable output");
+    if (output == nullptr)
+        return;
+    f.press(output->scenePos());
+    const QPointF overSecond =
+        pill->scenePos() +
+        QPointF(0, pill->pillLength() / 2.0 - node_editor::kStackSlotPitch / 2.0);
+    f.move(overSecond);
+    expect(pill->dropIndicator().has_value() &&
+               *pill->dropIndicator() == pill->orderedInputs().size() - 1,
+           "the indicator names the slot under the pointer");
+    expect(pill->dragAffinity() == node_editor::SocketItem::DragAffinity::Incompatible,
+           "while the pill stays dimmed: the caret reports a position, never a landing");
+    f.release(overSecond);
+    expect(!pill->dropIndicator().has_value(),
+           "and ending the drag clears the indicator with the gesture");
+}
 } // namespace bloom::ui::test
 
 int main(int argc, char** argv) {
@@ -154,6 +271,8 @@ int main(int argc, char** argv) {
         bloom::ui::test::testHostedFieldsAreFullWidthAndUnscaled();
         bloom::ui::test::testCardMinimumWidthIsItsContent();
         bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
+        bloom::ui::test::testNodeTypesAreNamedForWhatTheyAre();
+        bloom::ui::test::testMergeRendersOneOrderedMultiInput();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

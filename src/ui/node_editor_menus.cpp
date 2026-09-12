@@ -170,7 +170,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
     auto* addMenu = scene_->canSubmit() ? new QMenu(menu) : menu->addMenu(tr("Add"));
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
     for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
-        auto* item = addMenu->addAction(displayTypeName(definition.key.typeId));
+        auto* item = addMenu->addAction(nodeTypeDisplayName(definition.key.typeId));
         item->setObjectName(addActionName(definition.key.typeId));
         if (!scene_->canSubmit()) {
             const bool solid = definition.key.typeId == document::kSolidSourceNodeType;
@@ -239,7 +239,7 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
             if (definition.category == category)
                 section.push_back(&definition);
         std::ranges::sort(section, [](const auto* left, const auto* right) {
-            return displayTypeName(left->key.typeId) < displayTypeName(right->key.typeId);
+            return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
         });
         ordered.insert(ordered.end(), section.begin(), section.end());
     }
@@ -266,7 +266,7 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType)
             refusal = tr("Node command submission is unavailable");
         entries.push_back({QString::fromStdString(definition.key.typeId),
-                           displayTypeName(definition.key.typeId), keywords, refusal,
+                           nodeTypeDisplayName(definition.key.typeId), keywords, refusal,
                            nodeCategoryName(definition.category)});
     }
     search_->setEntries(std::move(entries));

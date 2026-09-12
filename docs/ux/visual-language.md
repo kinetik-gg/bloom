@@ -371,6 +371,8 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
 | Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
+| Ordered multi-input | Merge's one stack port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, while the pill stays dimmed |
+| Card eyebrow | A layer card's `UiSmall`/`Faint` "Layer" line above its own name, because the name is the layer's |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
 | Selected node | 2px inset Accent outline, painted above the card/header surfaces |
 | Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |

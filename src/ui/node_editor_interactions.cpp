@@ -83,9 +83,25 @@ void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
 }
 
 void clearLinkAffinity(QGraphicsScene& scene) {
-    for (auto* item : scene.items())
-        if (auto* socket = dynamic_cast<SocketItem*>(item))
+    for (auto* item : scene.items()) {
+        if (auto* socket = dynamic_cast<SocketItem*>(item)) {
             socket->setDragAffinity(SocketItem::DragAffinity::Idle);
+            socket->setDropIndicator(std::nullopt);
+        }
+    }
+}
+
+// Marks, on the Merge node's ordered multi-input, which position in the stack order the pointer is
+// currently at (task S1, item 7). The pill is simultaneously dimmed as incompatible by
+// markLinkAffinity() above -- a stack slot is structural and accepts no drop -- so the caret
+// reports the pointer's position in the order and never promises a landing.
+void updateOrderedDropIndicator(QGraphicsScene& scene, const QPointF cursor) {
+    for (auto* item : scene.items()) {
+        auto* socket = dynamic_cast<SocketItem*>(item);
+        if (socket == nullptr || !socket->multiInput())
+            continue;
+        socket->setDropIndicator(socket->slotIndexAt(socket->mapFromScene(cursor)));
+    }
 }
 
 void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
@@ -332,6 +348,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
             kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)), 2));
         gesture.line->setPath(gesture.output ? linkPath(gesture.origin, event->scenePos())
                                              : linkPath(event->scenePos(), gesture.origin));
+        updateOrderedDropIndicator(*this, event->scenePos());
         break;
     }
     case NodeInteraction::Mode::Idle:

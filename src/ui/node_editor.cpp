@@ -205,7 +205,9 @@ void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
                 if (socket->output == edge.source)
                     output = socket;
             for (auto* socket : destination->sockets())
-                if (socket->input == edge.destination)
+                // accepts(), not an equality test: the Merge node's one ordered multi-input stands
+                // for every stack slot, so every edge terminating on any of them terminates here.
+                if (socket->accepts(edge.destination))
                     input = socket;
             if (output && input)
                 addItem(new NodeEdgeItem(*source, *destination, *output, *input, edge,
