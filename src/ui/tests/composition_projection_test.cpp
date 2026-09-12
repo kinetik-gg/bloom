@@ -28,7 +28,6 @@
 #include <QLabel>
 #include <QMenu>
 #include <QToolButton>
-#include <QTreeWidget>
 
 #include <algorithm>
 #include <chrono>
@@ -199,7 +198,7 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto layerStackNodeId = session.composition()->graph().layerStack().nodeId();
     if (!require(nodes.graphScene()->findNodeItem(layerStackNodeId) != nullptr,
                  "node projection includes the layer stack") ||
-        !require(timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItemCount() == 0,
+        !require(timeline.layerStackForTest()->rowCount() == 0,
                  "empty document starts with no layer rows") ||
         !require(addButton != nullptr && addButton->menu() == addMenu && addMenu != nullptr &&
                      !addButton->accessibleName().isEmpty() && !addMenu->accessibleName().isEmpty(),
@@ -239,15 +238,16 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto layerId = *layerIdPtr;
     const auto boundaryNode = session.boundaryNodeForLayer(layerId);
     const auto directTextSource = session.directSourceNodeForLayer(layerId);
-    auto* layerRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(0);
+    auto* layerStack = timeline.layerStackForTest();
     if (!boundaryNode.has_value()) {
         (void)require(false, "layer resolves to its graph boundary");
         return false;
     }
     if (!require(directTextSource.has_value() && *directTextSource != *boundaryNode,
                  "layer resolves only its direct content source") ||
-        !require(layerRow != nullptr && layerRow->text(0) == QStringLiteral("Text 1") &&
-                     layerRow->text(1) == QStringLiteral("Text"),
+        !require(layerStack != nullptr && layerStack->rowCount() == 1 &&
+                     layerStack->entries()[0].name == QStringLiteral("Text 1") &&
+                     layerStack->entries()[0].kind == QStringLiteral("Text"),
                  "timeline reads the durable name and derives Text from the direct source") ||
         !require(nodes.graphScene()->findNodeItem(*boundaryNode) != nullptr,
                  "node scene refreshes with the same boundary") ||
@@ -273,7 +273,7 @@ parameterForRole(const bloom::document::Composition& composition,
                  "internal node remains the primary selection") ||
         !require(session.selection().contextualLayer == layerId,
                  "internal node resolves its unique owning layer context") ||
-        !require(layerRow->isSelected(),
+        !require(timeline.layerStackForTest()->currentRow() == 0,
                  "timeline reflects contextual layer selection without replacing the node")) {
         return false;
     }
@@ -343,13 +343,14 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     const auto solidLayerId = *solidLayerIdPtr;
     const auto solidSourceNodeId = session.directSourceNodeForLayer(solidLayerId);
-    auto* solidRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(1);
+    layerStack = timeline.layerStackForTest();
     if (!solidSourceNodeId.has_value()) {
         (void)require(false, "solid layer has one exact direct source node");
         return false;
     }
-    if (!require(solidRow != nullptr && solidRow->text(0) == QStringLiteral("Solid 1") &&
-                     solidRow->text(1) == QStringLiteral("Solid"),
+    if (!require(layerStack != nullptr && layerStack->rowCount() == 2 &&
+                     layerStack->entries()[1].name == QStringLiteral("Solid 1") &&
+                     layerStack->entries()[1].kind == QStringLiteral("Solid"),
                  "timeline derives Solid kind and default numbered name from project truth")) {
         return false;
     }
@@ -394,12 +395,11 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     nodes.graphScene()->clearSelection();
     solidNodeItem->setSelected(true);
-    solidRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(1);
     if (!require(session.selection().primary == ui::SelectionTarget{*solidSourceNodeId},
                  "clicking a layer-owned node preserves NodeId as primary selection") ||
         !require(session.selection().contextualLayer == solidLayerId,
                  "node selection retains its contextual layer") ||
-        !require(solidRow != nullptr && solidRow->isSelected(),
+        !require(timeline.layerStackForTest()->currentRow() == 1,
                  "timeline highlights node context without replacing primary selection")) {
         return false;
     }

@@ -1,7 +1,7 @@
-// Task U7 (issue #122): Kinetik restyle tests for TimelineEditor's track rows and transport,
-// covering the decisions timeline_ruler_tests.cpp does not (that file owns the ruler/keyframe-panel
-// interaction contract; this file owns the layer-row chrome and transport restyle). Offscreen,
-// matching every other widget test in this suite.
+// Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
+// chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
+// ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching
+// every other widget test in this suite.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -22,26 +22,33 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/timeline_frame_math.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPixmap>
+#include <QRect>
+#include <QScrollBar>
 #include <QString>
+#include <QTableView>
 #include <QToolButton>
-#include <QTreeWidget>
-#include <QTreeWidgetItem>
+#include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
 #include <string>
+#include <variant>
 
 namespace {
 
@@ -88,8 +95,9 @@ bloom::document::CompositionFormat smallFormat() {
     return *format;
 }
 
-[[nodiscard]] bloom::core::RationalTime time(const std::int64_t numerator) {
-    const auto value = bloom::core::RationalTime::create(numerator, 1);
+[[nodiscard]] bloom::core::RationalTime time(const std::int64_t numerator,
+                                             const std::int64_t denominator = 1) {
+    const auto value = bloom::core::RationalTime::create(numerator, denominator);
     if (!value.has_value()) {
         std::abort();
     }
@@ -101,9 +109,9 @@ bloom::document::NewProject makeTestProject(std::string projectName) {
 }
 
 // Mirrors timeline_ruler_tests.cpp's own PipelineFixture/SessionFixture exactly -- no shared test
-// fixture header exists in this suite (every widget test file in src/ui/tests owns a private copy,
-// e.g. composition_projection_test.cpp, playback_controller_tests.cpp), so this duplication follows
-// the established per-file idiom rather than inventing a new cross-file dependency.
+// fixture header exists in this suite (every widget test file in src/ui/tests owns a private copy),
+// so this duplication follows the established per-file idiom rather than inventing a new cross-file
+// dependency.
 struct PipelineFixture final {
     bloom::runtime::NodeDefinitionRegistry definitions;
     bloom::runtime::SnapshotCompiler compiler;
@@ -148,86 +156,484 @@ void finishFixture(SessionFixture& fixture) {
     }
 }
 
-// Forces the tree's real item-widget/column geometry to materialize (setItemWidget() sizes are
-// only assigned once the view actually lays itself out), the same "show a real top-level window,
-// pump events" idiom playback_controller_tests.cpp's tree-focus test already uses.
-void layoutTree(QWidget& host) {
-    host.resize(720, 320);
+// Forces the panel's real geometry to materialize (a fixed-width column, an expanding lane region,
+// and a pooled set of row widgets only acquire real rects once the window actually lays itself
+// out), the same "show a real top-level window, pump events" idiom playback_controller_tests.cpp
+// already uses for its focus test. The width is comfortably wider than the layer column plus its
+// gutter so the lane region is never degenerate.
+void layoutEditor(QWidget& host, const int width = 1200, const int height = 420) {
+    host.resize(width, height);
     host.show();
     host.activateWindow();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 }
 
-// Decision 1's honesty rule: no user-facing layer-visibility command exists anywhere in
-// src/commands (verified by reading operations.hpp), so the eye column must render a permanently
-// dimmed, non-interactive icon with a tooltip that says exactly why -- never a toggle that would
-// silently do nothing.
-void testVisibilityColumnRendersDisabledWithHonestTooltip(Expectations& expectations) {
-    using namespace bloom;
-    SessionFixture fixture(makeTestProject("Visibility Column Test"));
-    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-
-    ui::TimelineEditor editor(fixture.session, fixture.controller);
-    auto* tree = editor.findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1, "the layer row exists");
-    if (tree == nullptr || tree->topLevelItemCount() != 1) {
-        finishFixture(fixture);
-        return;
+[[nodiscard]] bool waitUntilReady(SessionFixture& fixture) {
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 4'000) {
+        if (fixture.controller.state().activity == bloom::ui::PreviewActivity::Ready) {
+            return true;
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
-    auto* row = tree->topLevelItem(0);
-
-    const auto dimmedIcon = ui::kit::iconPixmap(
-        ui::kit::IconId::Visible, ui::kit::Size::IconSmall,
-        ui::kit::withOpacity(ui::kit::color(ui::kit::Color::Muted), ui::kit::kDisabledOpacity));
-    const auto brightIcon = ui::kit::iconPixmap(ui::kit::IconId::Visible, ui::kit::Size::IconSmall,
-                                                ui::kit::color(ui::kit::Color::Muted));
-    expectations.expect(dimmedIcon.toImage() != brightIcon.toImage(),
-                        "the fixture's own dimmed/bright renderings are genuinely different (test "
-                        "sanity)");
-
-    const auto rowIcon = row->icon(ui::TimelineEditor::kVisibilityColumn);
-    expectations.expect(!rowIcon.isNull(), "the visibility column carries an icon");
-    expectations.expect(
-        rowIcon.pixmap(dimmedIcon.size()).toImage() == dimmedIcon.toImage(),
-        "the visibility icon is the SAME permanently dimmed rendering, not the bright/active one");
-
-    const auto toolTip = row->toolTip(ui::TimelineEditor::kVisibilityColumn);
-    expectations.expect(!toolTip.isEmpty() &&
-                            toolTip.contains(QStringLiteral("no command"), Qt::CaseInsensitive),
-                        "the tooltip honestly explains there is no visibility command yet");
-
-    finishFixture(fixture);
+    return false;
 }
 
-// Decision 1: Blending shows "Normal" disabled, Parent shows "None" disabled -- one honest value,
-// no fake choices, because neither feature exists.
-void testBlendingAndParentColumnsAreDisabledPlaceholders(Expectations& expectations) {
+void sendMouse(QWidget& widget, const QEvent::Type type, const qreal pixelX, const qreal pixelY) {
+    const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+    const QPointF local(pixelX, pixelY);
+    QMouseEvent event(type, local, widget.mapToGlobal(local), button, Qt::LeftButton,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(&widget, &event);
+}
+
+// The centre x of the Accent-colored run on scanline `row` of `image`, or -1 when there is none. A
+// 1px playhead line gives a one-pixel run whose centre IS its x; the triangular head marker gives a
+// wider run centred on the same x, which is exactly what "the marker heads the line" has to mean.
+[[nodiscard]] int accentRunCenter(const QImage& image, const int row) {
+    const QColor accent = bloom::ui::kit::color(bloom::ui::kit::Color::Accent);
+    int first = -1;
+    int last = -1;
+    for (int x = 0; x < image.width(); ++x) {
+        if (near(image.pixelColor(x, row), accent, 10)) {
+            if (first < 0) {
+                first = x;
+            }
+            last = x;
+        }
+    }
+    return first < 0 ? -1 : (first + last) / 2;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The pinned geometry: ONE x origin for the ruler, the lanes, and the work-area strip, and that
+// origin is the layer column's own width -- the owner's "the tick where the playhead is playing
+// needs to be indented to the right and shows 0 after the layer properties section".
+void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
     using namespace bloom;
-    SessionFixture fixture(makeTestProject("Blending Parent Column Test"));
+    SessionFixture fixture(makeTestProject("Ruler Origin Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
     layout->addWidget(editor);
-    layoutTree(host);
+    layoutEditor(host);
 
-    auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 1, "the layer row exists");
-    if (tree == nullptr || tree->topLevelItemCount() != 1) {
+    auto* stack = editor->layerStackForTest();
+    auto* lanes = editor->laneRegionForTest();
+    auto* ruler = editor->rulerForTest();
+    auto* workArea = editor->findChild<ui::TimelineWorkAreaRow*>("timelineWorkAreaRow");
+    expectations.expect(stack != nullptr && lanes != nullptr && ruler != nullptr &&
+                            workArea != nullptr,
+                        "the layer column, the lane region, the ruler and the work-area row all "
+                        "exist");
+    if (stack == nullptr || lanes == nullptr || ruler == nullptr || workArea == nullptr) {
+        delete editor;
         finishFixture(fixture);
         return;
     }
-    auto* row = tree->topLevelItem(0);
 
-    auto* blending = qobject_cast<ui::kit::KDropdown*>(
-        tree->itemWidget(row, ui::TimelineEditor::kBlendingColumn));
-    auto* parent =
-        qobject_cast<ui::kit::KDropdown*>(tree->itemWidget(row, ui::TimelineEditor::kParentColumn));
+    const int columnWidth = ui::TimelineEditor::layerColumnWidth();
+    expectations.expect(stack->width() == columnWidth,
+                        "the layer column paints at its own fixed width");
+    expectations.expect(lanes->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+                        "the lane region starts exactly at the layer column's right edge");
+    expectations.expect(ruler->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+                        "the RULER starts at the same x -- it never extends over the left column");
+    expectations.expect(workArea->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+                        "the work-area strip above them starts at the same x");
+    expectations.expect(ruler->width() == lanes->width() && ruler->width() == workArea->width(),
+                        "all three share one extent too, so one frame is one x for all of them");
+    expectations.expect(ruler->width() > 0, "the lane region is not degenerate (test sanity)");
+
+    // Frame 0's own label: inside the ruler it sits at the ruler's left edge, and mapped into the
+    // editor it lands at or after the layer column's width -- never over the column.
+    const auto labels = ruler->majorTickLabelRectsForTest();
+    expectations.expect(!labels.empty(), "the ruler labels at least one major tick");
+    if (!labels.empty()) {
+        const QRectF first = labels.front();
+        expectations.expect(first.left() >= 0.0,
+                            "the frame-0 label starts at the ruler's own left edge");
+        expectations.expect(
+            ruler->mapTo(editor, QPoint(static_cast<int>(first.left()), 0)).x() >= columnWidth,
+            "the frame-0 label is indented past the layer column, never painted over it");
+    }
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// The playhead is ONE 1px Accent line at ONE x, through the ruler and through every lane, with its
+// single head marker in the work-area row above.
+void testPlayheadSpansRulerAndEveryLane(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Playhead Span Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* lanes = editor->laneRegionForTest();
+    auto* ruler = editor->rulerForTest();
+    auto* workArea = editor->findChild<ui::TimelineWorkAreaRow*>("timelineWorkAreaRow");
+    if (lanes == nullptr || ruler == nullptr || workArea == nullptr) {
+        expectations.expect(false, "the time-axis widgets exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    // Mid-composition, so the line cannot accidentally coincide with either edge.
+    expectations.expect(fixture.session.setCurrentTime(time(5)), "session time moves to 5s");
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    const QImage rulerImage = ruler->grab().toImage();
+    const QImage laneImage = lanes->grab().toImage();
+    const QImage workAreaImage = workArea->grab().toImage();
+
+    const int rulerX = accentRunCenter(rulerImage, rulerImage.height() - 2);
+    const int rowHeight = ui::kTimelineRowHeight;
+    const int firstLaneX = accentRunCenter(laneImage, rowHeight / 2);
+    const int secondLaneX = accentRunCenter(laneImage, rowHeight + rowHeight / 2);
+    const int belowLastLaneX = accentRunCenter(laneImage, 2 * rowHeight + rowHeight / 2);
+    const int markerX = accentRunCenter(workAreaImage, workAreaImage.height() - 5);
+
+    expectations.expect(rulerX >= 0, "the ruler paints the Accent playhead line");
+    expectations.expect(firstLaneX >= 0 && secondLaneX >= 0,
+                        "every lane paints the playhead line, not just the first");
+    expectations.expect(belowLastLaneX >= 0,
+                        "the line continues through the empty lane area below the last layer -- it "
+                        "spans the whole region, not only the occupied rows");
+    expectations.expect(rulerX == firstLaneX && firstLaneX == secondLaneX &&
+                            secondLaneX == belowLastLaneX,
+                        "the ruler and every lane put the line at exactly the same x");
+    expectations.expect(markerX == rulerX,
+                        "the head marker above the ruler sits at the same x as the line it heads");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// Row height, flat rows, hairline separators.
+void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Row Height Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("C"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* stack = editor->layerStackForTest();
+    auto* lanes = editor->laneRegionForTest();
+    if (stack == nullptr || lanes == nullptr) {
+        expectations.expect(false, "the two halves exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    expectations.expect(ui::kTimelineRowHeight == 32,
+                        "the row pitch is the 32px the design mock specifies");
+    expectations.expect(stack->rowCount() == 3, "all three layers have rows");
+    expectations.expect(stack->rowTop(1) - stack->rowTop(0) == 32 &&
+                            lanes->rowTop(1) - lanes->rowTop(0) == 32,
+                        "both halves step by exactly 32px per row");
+    expectations.expect(stack->rowTop(0) == lanes->rowTop(0),
+                        "row 0 starts at the same y in both halves");
+
+    const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
+    expectations.expect(!rows.isEmpty(), "the column materializes real row widgets");
+    for (auto* row : rows) {
+        if (!row->isVisible()) {
+            continue;
+        }
+        expectations.expect(row->height() == 32, "every visible row widget is 32px tall");
+        expectations.expect(row->width() == ui::TimelineEditor::layerColumnWidth(),
+                            "every row spans the whole layer column");
+    }
+
+    // Flat, not striped: two adjacent UNSELECTED rows paint the same background. Row 2 is the
+    // selected one (addSolidLayer selects what it adds), so rows 0 and 1 are the honest pair.
+    const QImage laneImage = lanes->grab().toImage();
+    const QColor background = ui::kit::color(ui::kit::Color::Background);
+    const int sampleX = laneImage.width() - 4;
+    expectations.expect(near(laneImage.pixelColor(sampleX, 1), background, 2) &&
+                            near(laneImage.pixelColor(sampleX, 32 + 1), background, 2),
+                        "unselected lanes are FLAT Background -- no alternating stripe");
+
+    // The hairline separator closes each row, in Border.
+    const QColor border = ui::kit::color(ui::kit::Color::Border);
+    expectations.expect(near(laneImage.pixelColor(sampleX, 31), border, 6),
+                        "a Border hairline closes the row at its last pixel row");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// ONE scrollbar moves both halves by exactly the same amount: shared scroll is structural here.
+void testOneScrollbarMovesBothHalvesTogether(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Shared Scroll Test"));
+    for (int index = 0; index < 20; ++index) {
+        (void)fixture.session.addSolidLayer(QStringLiteral("L%1").arg(index),
+                                            core::Color4d{0.2, 0.3, 0.4, 1.0});
+    }
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host, 1200, 260);
+
+    auto* stack = editor->layerStackForTest();
+    auto* lanes = editor->laneRegionForTest();
+    auto* bar = editor->verticalScrollBarForTest();
+    if (stack == nullptr || lanes == nullptr || bar == nullptr) {
+        expectations.expect(false, "the two halves and their shared scrollbar exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    expectations.expect(stack->rowCount() == 20, "all twenty layers have rows");
+    expectations.expect(bar->maximum() > 0,
+                        "twenty 32px rows do not fit the viewport, so the scrollbar has range");
+    expectations.expect(stack->contentHeight() == 20 * 32 && lanes->contentHeight() == 20 * 32,
+                        "both halves agree on the content height");
+
+    // The twentieth layer is the selected one, so the panel has already scrolled it into view --
+    // start from a known offset rather than assuming zero.
+    bar->setValue(0);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(stack->rowTop(5) == 5 * 32 && lanes->rowTop(5) == 5 * 32,
+                        "at offset zero both halves put row 5 at its unscrolled y");
+
+    const int offset = std::min(bar->maximum(), 3 * 32);
+    expectations.expect(offset == 3 * 32, "the fixture really can scroll three rows (sanity)");
+    bar->setValue(offset);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(stack->rowTop(5) == 5 * 32 - offset && lanes->rowTop(5) == 5 * 32 - offset,
+                        "ONE scrollbar value moved BOTH halves by exactly the same amount");
+    expectations.expect(stack->rowTop(5) == lanes->rowTop(5),
+                        "the two halves stay in step after scrolling -- shared scroll, not synced "
+                        "scroll");
+
+    expectations.expect(stack->rowTop(3) == 0 && lanes->rowTop(3) == 0,
+                        "row 3 is now the row at the very top of both halves");
+    const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
+    bool sawRowAtTop = false;
+    for (auto* row : rows) {
+        if (row->isVisible() && row->y() == 0) {
+            sawRowAtTop = true;
+        }
+    }
+    expectations.expect(sawRowAtTop,
+                        "a pooled row widget really moved to the top -- the left column scrolled, "
+                        "it did not merely report a new offset");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// The clip bar: rounded, on its lane, spanning the composition range (there is no trim feature, so
+// that IS the honest extent), in the documented data-type color.
+void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Clip Bar Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* lanes = editor->laneRegionForTest();
+    if (lanes == nullptr) {
+        expectations.expect(false, "the lane region exists");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    const QImage laneImage = lanes->grab().toImage();
+    const QColor expected = ui::kit::color(ui::kit::Color::DataComposition);
+    for (int row = 0; row < 2; ++row) {
+        const auto bar = lanes->clipBarRect(row);
+        expectations.expect(bar.has_value(), "the row has a clip bar rect");
+        if (!bar.has_value()) {
+            continue;
+        }
+        expectations.expect(bar->left() == 0 && bar->right() >= lanes->width() - 2,
+                            "the bar spans the whole composition range on its lane -- no trim "
+                            "feature exists, so a partial bar would be a fiction");
+        expectations.expect(bar->height() == 32 - 2 * ui::kit::px(ui::kit::Spacing::XXS),
+                            "the bar is inset inside its 32px lane rather than filling it edge to "
+                            "edge");
+        const int sampleY = bar->top() + bar->height() / 2;
+        const int sampleX = bar->left() + bar->width() / 2;
+        expectations.expect(
+            near(laneImage.pixelColor(sampleX, sampleY), expected, 6),
+            "the bar paints the documented DataComposition color, for a Solid and a Text layer "
+            "alike (one uniform honest mapping -- see layerClipColorToken()'s disclosure)");
+    }
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// The selected row is a SurfaceRaised ROW FILL across both halves -- never the accent-outlined
+// cells the owner rejected.
+void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Selection Fill Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* stack = editor->layerStackForTest();
+    auto* lanes = editor->laneRegionForTest();
+    if (stack == nullptr || lanes == nullptr) {
+        expectations.expect(false, "the two halves exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+    // addSolidLayer selects what it adds, so row 1 is selected and row 0 is not.
+    expectations.expect(stack->currentRow() == 1, "row 1 is the selected row (test precondition)");
+
+    const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
+    const QColor background = ui::kit::color(ui::kit::Color::Background);
+    const QColor accent = ui::kit::color(ui::kit::Color::Accent);
+
+    const QImage laneImage = lanes->grab().toImage();
+    // Sampled near the right edge (away from the playhead sitting at time 0 on the left edge) and
+    // in the lane's own 2px vertical inset, ABOVE the clip bar -- the bar spans the whole
+    // composition range, so every x inside the bar's own band shows the bar, not the row fill.
+    const int sampleX = laneImage.width() - 3;
+    const QColor selectedLane = laneImage.pixelColor(sampleX, 32 + 1);
+    const QColor unselectedLane = laneImage.pixelColor(sampleX, 1);
+    expectations.expect(near(selectedLane, raised, 4),
+                        "the selected row's lane is a SurfaceRaised fill");
+    expectations.expect(near(unselectedLane, background, 4),
+                        "an unselected row's lane stays Background");
+    expectations.expect(!near(selectedLane, accent, 24),
+                        "the selected row is NOT accent-filled or accent-outlined");
+
+    const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
+    bool sawRaisedRow = false;
+    bool sawPlainRow = false;
+    for (auto* row : rows) {
+        if (!row->isVisible()) {
+            continue;
+        }
+        const QImage rowImage = row->grab().toImage();
+        // Between the toggle strip and the Name cell: no glyph, no text, just the row's own fill.
+        const QColor fill = rowImage.pixelColor(rowImage.width() - 3, 16);
+        if (near(fill, raised, 4)) {
+            sawRaisedRow = true;
+        }
+        if (near(fill, background, 4)) {
+            sawPlainRow = true;
+        }
+        expectations.expect(!near(fill, accent, 24),
+                            "no row paints an Accent fill or edge in the left column either");
+    }
+    expectations.expect(sawRaisedRow && sawPlainRow,
+                        "the left column shows exactly the same selected/unselected fills as the "
+                        "lane beside it, so one row reads as one row");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// The four reserved toggle columns, and the honesty rule they exist under.
+void testReservedToggleColumnsAreDisabledWithHonestTooltips(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Toggle Honesty Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* stack = editor->layerStackForTest();
+    auto* headers = editor->findChild<ui::TimelineColumnHeaders*>("timelineColumnHeaders");
+    if (stack == nullptr || headers == nullptr) {
+        expectations.expect(false, "the layer column and its column headers exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    // The cell table is shared by the headers and the rows, so one x answers for both.
+    const int toggleWidth =
+        ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS);
+    const int padding = ui::kit::px(ui::kit::Spacing::XS);
+    static constexpr std::array<const char*, 4> kFragments{"no command", "audio", "solo", "lock"};
+    for (int index = 0; index < 4; ++index) {
+        const int x = padding + index * toggleWidth + toggleWidth / 2;
+        const QString headerTip = ui::TimelineColumnHeaders::toolTipAtX(x);
+        const QString rowTip = stack->toolTipAt(QPoint(x, 16));
+        expectations.expect(headerTip == rowTip,
+                            "a toggle column explains itself identically in the header and in a "
+                            "row -- one table, one reason");
+        expectations.expect(!headerTip.isEmpty(), "a toggle column explains itself");
+        expectations.expect(
+            headerTip.contains(QLatin1StringView(kFragments[static_cast<std::size_t>(index)]),
+                               Qt::CaseInsensitive),
+            "a toggle column names the exact feature that does not exist yet");
+    }
+
+    // None of the four is an interactive control: there is no command behind any of them, so the
+    // panel must not contain a clickable widget for them at all.
+    expectations.expect(
+        editor->findChildren<QToolButton*>(QStringLiteral("layerVisibilityToggle")).isEmpty(),
+        "no clickable visibility toggle exists -- there is no visibility command in "
+        "src/commands to wire one to");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// Blending and Parent are real KDropdowns, disabled, each carrying its single honest value.
+void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Blending Parent Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* blending = editor->findChild<ui::kit::KDropdown*>("layerBlendingDropdown");
+    auto* parent = editor->findChild<ui::kit::KDropdown*>("layerParentDropdown");
     expectations.expect(blending != nullptr && parent != nullptr,
-                        "the Blending and Parent columns each carry a KDropdown");
+                        "the row carries a Blending and a Parent KDropdown");
     if (blending == nullptr || parent == nullptr) {
+        delete editor;
         finishFixture(fixture);
         return;
     }
@@ -239,16 +645,17 @@ void testBlendingAndParentColumnsAreDisabledPlaceholders(Expectations& expectati
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
                         "Parent shows the one honest value \"None\", disabled");
     expectations.expect(!parent->toolTip().isEmpty(), "Parent's disabled state is explained");
+    expectations.expect(blending->height() <= 32 && parent->height() <= 32,
+                        "both fit inside the 32px row rather than forcing it taller");
 
+    delete editor;
     finishFixture(fixture);
 }
 
-// Decision 2: the lane bar's color comes from the ONE documented data-type-palette mapping
-// (layerLaneColorToken() in composition_editors.cpp: DataComposition, for every layer kind that
-// exists today).
-void testLaneBarUsesTheDocumentedDataTypeColor(Expectations& expectations) {
+// No Kind column -- and kind is still readable, through the row's own tooltip.
+void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
     using namespace bloom;
-    SessionFixture fixture(makeTestProject("Lane Bar Color Test"));
+    SessionFixture fixture(makeTestProject("Kind Readability Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
     (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
 
@@ -256,39 +663,189 @@ void testLaneBarUsesTheDocumentedDataTypeColor(Expectations& expectations) {
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
     layout->addWidget(editor);
-    layoutTree(host);
+    layoutEditor(host);
 
-    auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 2, "both layer rows exist");
-    if (tree == nullptr || tree->topLevelItemCount() != 2) {
+    auto* stack = editor->layerStackForTest();
+    if (stack == nullptr || stack->rowCount() != 2) {
+        expectations.expect(false, "both layers have rows");
+        delete editor;
         finishFixture(fixture);
         return;
     }
 
-    const QColor expected = ui::kit::color(ui::kit::Color::DataComposition);
-    for (int index = 0; index < 2; ++index) {
-        auto* row = tree->topLevelItem(index);
-        auto* bar = tree->itemWidget(row, ui::TimelineEditor::kLaneColumn);
-        expectations.expect(bar != nullptr && bar->width() > 4 && bar->height() > 4,
-                            "the lane bar widget exists with real geometry");
-        if (bar == nullptr || bar->width() <= 4 || bar->height() <= 4) {
-            continue;
-        }
-        const QImage image = bar->grab().toImage();
-        const QColor sampled = image.pixelColor(bar->width() / 2, bar->height() / 2);
-        expectations.expect(near(sampled, expected, 6),
-                            "the lane bar's interior paints the documented DataComposition color, "
-                            "for both a Solid and a Text layer alike (one uniform honest mapping)");
-    }
+    expectations.expect(stack->entries()[0].kind == QStringLiteral("Solid") &&
+                            stack->entries()[1].kind == QStringLiteral("Text"),
+                        "the stack still derives each layer's kind from project truth");
+    // The Name cell's own x: past the four toggle cells.
+    const int nameX =
+        ui::kit::px(ui::kit::Spacing::XS) +
+        4 * (ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS)) +
+        ui::kit::px(ui::kit::Spacing::XS) + 8;
+    expectations.expect(stack->toolTipAt(QPoint(nameX, 16)).contains(QStringLiteral("Solid")),
+                        "the Solid row names its kind in the tooltip, so removing the Kind COLUMN "
+                        "never removed the information");
+    expectations.expect(stack->toolTipAt(QPoint(nameX, 32 + 16)).contains(QStringLiteral("Text")),
+                        "the Text row does the same");
 
+    delete editor;
     finishFixture(fixture);
 }
 
-// Decision 1: "selection = Accent inset edge per States" -- a 2px Accent border on the selected
-// row, not a full fill (a fill would hide the row's own name/kind text).
-void testSelectedRowPaintsAccentInsetEdgeNotAFill(Expectations& expectations) {
+// The primitive itself: the stack is no longer an item view, and its objectName survives the
+// change.
+void testLayerStackIsNoLongerAnItemView(Expectations& expectations) {
     using namespace bloom;
-    SessionFixture fixture(makeTestProject("Selection Edge Test"));
+    SessionFixture fixture(makeTestProject("Primitive Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    expectations.expect(editor->findChildren<QTreeView*>().isEmpty(),
+                        "the panel contains no QTreeView/QTreeWidget at all");
+    expectations.expect(editor->findChildren<QTableView*>().isEmpty(),
+                        "nor a QTableView/QTableWidget");
+    expectations.expect(editor->findChild<QWidget*>("layerStackView") != nullptr,
+                        "the layerStackView objectName still resolves -- same role, new primitive");
+    expectations.expect(editor->findChild<QWidget*>("layerStackView") ==
+                            editor->layerStackForTest(),
+                        "and it resolves to the layer stack itself");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// Hundreds of rows: the widget count stays bounded by the viewport, and moving the playhead never
+// relayouts a single row.
+void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Many Rows Test"));
+    constexpr int kLayerCount = 120;
+    for (int index = 0; index < kLayerCount; ++index) {
+        (void)fixture.session.addSolidLayer(QStringLiteral("L%1").arg(index),
+                                            core::Color4d{0.2, 0.3, 0.4, 1.0});
+    }
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host, 1200, 300);
+
+    auto* stack = editor->layerStackForTest();
+    if (stack == nullptr) {
+        expectations.expect(false, "the layer column exists");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    expectations.expect(stack->rowCount() == kLayerCount, "every layer has a row");
+    const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
+    const int bound = stack->height() / 32 + 2;
+    expectations.expect(rows.size() <= bound, "the row widget pool is bounded by the viewport (" +
+                                                  std::to_string(rows.size()) + " widgets for " +
+                                                  std::to_string(kLayerCount) + " layers, bound " +
+                                                  std::to_string(bound) + ")");
+    expectations.expect(rows.size() >= 2, "the pool is not empty either (test sanity)");
+    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size(),
+                        "two KDropdowns per pooled row -- not two per LAYER, which is the whole "
+                        "reason the pool exists");
+
+    // A fixed buffer rather than a growing container: the pool is bounded by the viewport, so the
+    // count is known to be small, and main() in this suite must stay non-throwing.
+    static constexpr int kMaxSampledRows = 64;
+    std::array<QRect, kMaxSampledRows> before{};
+    const int sampled = static_cast<int>(std::min<qsizetype>(rows.size(), kMaxSampledRows));
+    for (int index = 0; index < sampled; ++index) {
+        before[static_cast<std::size_t>(index)] = rows[index]->geometry();
+    }
+    expectations.expect(fixture.session.setCurrentTime(time(3)), "the playhead moves");
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(fixture.session.setCurrentTime(time(7)), "and moves again");
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    bool unchanged = true;
+    for (int index = 0; index < sampled; ++index) {
+        if (rows[index]->geometry() != before[static_cast<std::size_t>(index)]) {
+            unchanged = false;
+        }
+    }
+    expectations.expect(unchanged,
+                        "moving the playhead relayouts nothing -- it is one repaint of the lane "
+                        "region, never a per-frame row relayout");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// Dragging a lane scrubs, through the ruler's own scrub path and therefore its exact frame math.
+void testDraggingALaneScrubsThroughTheRulerScrubPath(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Lane Scrub Test"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
+    auto* lanes = editor->laneRegionForTest();
+    const auto* composition = fixture.session.composition();
+    if (lanes == nullptr || composition == nullptr) {
+        expectations.expect(false, "the lane region and the composition exist");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    const auto axis = ui::TimelineAxis::create(*composition, lanes->width());
+    expectations.expect(axis.has_value(), "the lane region resolves the shared time axis");
+    if (!axis.has_value()) {
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    const int pressX = lanes->width() / 3;
+    const auto pressTime =
+        ui::frameTimeForIndex(axis->frameRate, axis->duration, axis->frameIndexForPixel(pressX));
+    const int moveX = lanes->width() / 2;
+    const auto moveTime =
+        ui::frameTimeForIndex(axis->frameRate, axis->duration, axis->frameIndexForPixel(moveX));
+    expectations.expect(pressTime.has_value() && moveTime.has_value() && *pressTime != *moveTime,
+                        "the two sample pixels map to two different exact frame times (sanity)");
+    if (!pressTime.has_value() || !moveTime.has_value()) {
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    sendMouse(*lanes, QEvent::MouseButtonPress, pressX, 16.0);
+    expectations.expect(fixture.session.currentTime() == *pressTime,
+                        "pressing a lane lands on that pixel's EXACT frame time, the same mapping "
+                        "the ruler scrub uses");
+    sendMouse(*lanes, QEvent::MouseMove, moveX, 16.0);
+    expectations.expect(fixture.session.currentTime() == *moveTime,
+                        "dragging across the lanes keeps scrubbing");
+    sendMouse(*lanes, QEvent::MouseButtonRelease, moveX, 16.0);
+    expectations.expect(fixture.session.currentTime() == *moveTime,
+                        "releasing leaves the scrubbed time in place");
+    expectations.expect(waitUntilReady(fixture), "scrub-end still reaches a ready preview frame -- "
+                                                 "the lane drag armed and disarmed the SAME "
+                                                 "interactive cadence the ruler arms");
+
+    delete editor;
+    finishFixture(fixture);
+}
+
+// Clicking a row in the LEFT column selects that layer; clicking below the last row clears it.
+void testClickingTheLeftColumnSelectsAndClears(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Row Selection Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
     (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
 
@@ -296,52 +853,36 @@ void testSelectedRowPaintsAccentInsetEdgeNotAFill(Expectations& expectations) {
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
     layout->addWidget(editor);
-    layoutTree(host);
+    layoutEditor(host);
 
-    auto* tree = editor->findChild<QTreeWidget*>("layerStackView");
-    expectations.expect(tree != nullptr && tree->topLevelItemCount() == 2, "both rows exist");
-    if (tree == nullptr || tree->topLevelItemCount() != 2) {
-        finishFixture(fixture);
-        return;
-    }
-    // addSolidLayer selects the newly added layer, so row 1 ("B") is already selected; row 0 ("A")
-    // is not.
-    const auto selectedRect = tree->visualItemRect(tree->topLevelItem(1));
-    const auto unselectedRect = tree->visualItemRect(tree->topLevelItem(0));
-    expectations.expect(tree->topLevelItem(1)->isSelected() && !tree->topLevelItem(0)->isSelected(),
-                        "row 1 is selected, row 0 is not (test precondition)");
-    expectations.expect(selectedRect.height() > 4 && unselectedRect.height() > 4,
-                        "both rows have real painted geometry");
-    if (selectedRect.height() <= 4 || unselectedRect.height() <= 4) {
+    auto* stack = editor->layerStackForTest();
+    if (stack == nullptr || stack->rowCount() != 2) {
+        expectations.expect(false, "both layers have rows");
+        delete editor;
         finishFixture(fixture);
         return;
     }
 
-    const QImage viewport = tree->viewport()->grab().toImage();
-    const QColor accent = ui::kit::color(ui::kit::Color::Accent);
-    const int sampleX = selectedRect.left() + 12;
-    const QColor selectedTopEdge = viewport.pixelColor(sampleX, selectedRect.top() + 1);
-    const QColor unselectedTopEdge =
-        viewport.pixelColor(unselectedRect.left() + 12, unselectedRect.top() + 1);
-    expectations.expect(near(selectedTopEdge, accent, 24),
-                        "the selected row's top edge paints the Accent inset border");
-    expectations.expect(!near(unselectedTopEdge, accent, 24),
-                        "an unselected row's own top edge does NOT paint the Accent border");
+    sendMouse(*stack, QEvent::MouseButtonPress, 200.0, 16.0);
+    const auto* selectedLayer =
+        std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    expectations.expect(stack->currentRow() == 0, "clicking row 0 makes it the current row");
+    expectations.expect(selectedLayer != nullptr && *selectedLayer == stack->entries()[0].layerId,
+                        "and selects that layer in the ONE shared session selection");
 
-    // The interior (well below the 2px edge) is the striped background, never a full Accent fill --
-    // this is what "inset edge, not a fill" means concretely.
-    const QColor selectedInterior =
-        viewport.pixelColor(sampleX, selectedRect.top() + selectedRect.height() / 2);
-    expectations.expect(
-        !near(selectedInterior, accent, 24),
-        "the selected row's INTERIOR is not accent-filled -- only the inset edge is");
+    sendMouse(*stack, QEvent::MouseButtonPress, 200.0, static_cast<qreal>(2 * 32 + 16));
+    expectations.expect(stack->currentRow() == -1 &&
+                            std::get_if<document::LayerId>(&fixture.session.selection().primary) ==
+                                nullptr,
+                        "clicking the empty area below the last row clears the selection, exactly "
+                        "as clicking a QTreeWidget's blank area did");
 
+    delete editor;
     finishFixture(fixture);
 }
 
 // Decision 5: the play/pause button's ICON swaps alongside its already-pinned text()/isChecked()
-// contract (playback_controller_tests.cpp owns that contract byte-for-byte; this test adds the
-// icon assertion on top of the SAME public API/idiom rather than duplicating the whole contract).
+// contract (playback_controller_tests.cpp owns that contract byte-for-byte).
 void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Play Pause Icon Test"));
@@ -376,9 +917,7 @@ void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {
     finishFixture(fixture);
 }
 
-// Non-goal guard (decision 5): the loop indicator is a status glyph, never a clickable control --
-// playback always loops with no command to disable it, so a QToolButton here would dishonestly
-// imply a toggle that does not exist.
+// Non-goal guard (decision 5): the loop indicator is a status glyph, never a clickable control.
 void testLoopIndicatorIsNonInteractiveAndHonest(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Loop Indicator Test"));
@@ -399,17 +938,21 @@ void testLoopIndicatorIsNonInteractiveAndHonest(Expectations& expectations) {
     finishFixture(fixture);
 }
 
-// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons (Add, the transport's Step
-// Back/Play-Pause/Step Forward) are audited alongside the header maximize button and title bar
-// buttons -- all size to controlExtent square.
-void testTransportAndAddButtonsAreSquare(Expectations& expectations) {
+// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons all size to controlExtent
+// square, and (task T1) the whole transport cluster lives inside the LEFT column's own width.
+void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectations) {
     using namespace bloom;
-    SessionFixture fixture(makeTestProject("Transport Squareness Test"));
+    SessionFixture fixture(makeTestProject("Transport Cluster Test"));
 
-    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+
     for (const char* objectName : {"addLayerButton", "timelineStepBackButton", "playPauseButton",
                                    "timelineStepForwardButton"}) {
-        auto* button = editor.findChild<QToolButton*>(QString::fromLatin1(objectName));
+        auto* button = editor->findChild<QToolButton*>(QString::fromLatin1(objectName));
         expectations.expect(button != nullptr, std::string{objectName} + " is reachable by name");
         if (button == nullptr) {
             continue;
@@ -420,6 +963,18 @@ void testTransportAndAddButtonsAreSquare(Expectations& expectations) {
                             std::string{objectName} + " is exactly Size::Control square");
     }
 
+    auto* controls = editor->findChild<QWidget*>("timelineControls");
+    expectations.expect(
+        controls != nullptr && controls->width() == ui::TimelineEditor::layerColumnWidth(),
+        "the transport/readout cluster occupies exactly the LEFT column's width, so "
+        "nothing in it overhangs the lane region");
+    auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
+    expectations.expect(readout != nullptr && controls != nullptr && readout->isVisible() &&
+                            readout->mapTo(editor, QPoint(0, 0)).x() + readout->width() <=
+                                ui::TimelineEditor::layerColumnWidth(),
+                        "the frame/time readout fits inside that width too");
+
+    delete editor;
     finishFixture(fixture);
 }
 
@@ -429,12 +984,21 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
-    testVisibilityColumnRendersDisabledWithHonestTooltip(expectations);
-    testBlendingAndParentColumnsAreDisabledPlaceholders(expectations);
-    testLaneBarUsesTheDocumentedDataTypeColor(expectations);
-    testSelectedRowPaintsAccentInsetEdgeNotAFill(expectations);
+    testRulerAndLanesShareTheLaneRegionOrigin(expectations);
+    testPlayheadSpansRulerAndEveryLane(expectations);
+    testRowsAreFlatThirtyTwoPixelRows(expectations);
+    testOneScrollbarMovesBothHalvesTogether(expectations);
+    testClipBarSpansTheCompositionRangeInItsDataTypeColor(expectations);
+    testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
+    testReservedToggleColumnsAreDisabledWithHonestTooltips(expectations);
+    testBlendingAndParentAreDisabledKDropdowns(expectations);
+    testKindHasNoColumnButStaysReadable(expectations);
+    testLayerStackIsNoLongerAnItemView(expectations);
+    testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);
+    testDraggingALaneScrubsThroughTheRulerScrubPath(expectations);
+    testClickingTheLeftColumnSelectsAndClears(expectations);
     testPlayPauseButtonIconSwapsWithState(expectations);
     testLoopIndicatorIsNonInteractiveAndHonest(expectations);
-    testTransportAndAddButtonsAreSquare(expectations);
+    testTransportClusterIsSquareAndInsideTheLeftColumn(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -139,7 +139,7 @@ horizontally than the scale offers.
 | `TitleBar` | `34` | The application title bar |
 | `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
 | `EditorHeader` | `48` | An editor panel's header row |
-| `TimelineRow` | `34` | One timeline row |
+| `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 
 ### Elevation
