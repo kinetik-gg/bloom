@@ -5,10 +5,19 @@ namespace bloom::ui {
 using namespace node_editor;
 namespace {
 SocketItem* socketAt(QGraphicsScene& scene, const QPointF point) {
-    for (auto* item : scene.items(point))
-        if (auto* socket = dynamic_cast<SocketItem*>(item))
-            return socket;
-    return nullptr;
+    SocketItem* closest = nullptr;
+    qreal distance = 1e30;
+    for (auto* item : scene.items(point)) {
+        auto* socket = dynamic_cast<SocketItem*>(item);
+        if (!socket)
+            continue;
+        const qreal candidate = QLineF(point, socket->scenePos()).length();
+        if (candidate < distance) {
+            closest = socket;
+            distance = candidate;
+        }
+    }
+    return closest;
 }
 NodeItem* cardAt(QGraphicsScene& scene, const QPointF point) {
     for (auto* item : scene.items(point))
@@ -77,7 +86,12 @@ void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
 } // namespace
 
 NodeGraphicsScene::~NodeGraphicsScene() { cancelGesture(); }
-void NodeGraphicsScene::setSubmit(Submit submit) { submit_ = std::move(submit); }
+void NodeGraphicsScene::setSubmit(Submit submit) {
+    submit_ = std::move(submit);
+    for (auto* item : items())
+        if (auto* card = dynamic_cast<NodeItem*>(item))
+            card->setAuthoringEnabled(canSubmit());
+}
 commands::CommandResult NodeGraphicsScene::submit(commands::Transaction&& transaction) {
     if (submit_)
         return submit_(std::move(transaction));
@@ -163,7 +177,8 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         QGraphicsScene::mousePressEvent(event);
         return;
     }
-    if (!fieldAt(*this, event->scenePos())) clearFocus();
+    if (!fieldAt(*this, event->scenePos()))
+        clearFocus();
     if (auto* socket = socketAt(*this, event->scenePos())) {
         event->accept();
         if (!submit_ || !socket->draggable())
@@ -267,6 +282,10 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         break;
     case NodeInteraction::Mode::Cut: {
         auto path = gesture.line->path();
+        // QGraphicsPathItem may coalesce a move-only path with its empty default. Restore the
+        // press point before the first segment so a cut never starts at the scene origin.
+        if (path.isEmpty())
+            path.moveTo(gesture.origin);
         path.lineTo(event->scenePos());
         gesture.line->setPath(path);
         break;
@@ -336,7 +355,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         const auto cut = stroke.createStroke(gesture.line->path());
         for (auto* item : items())
             if (const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
-                edge && !edge->structural && cut.intersects(edge->path()))
+                edge && !edge->structural && cut.intersects(edge->shape()))
                 transaction.emplace<commands::DisconnectInput>(compositionId,
                                                                edge->edge.destination);
     } else if (gesture.mode == NodeInteraction::Mode::Link) {

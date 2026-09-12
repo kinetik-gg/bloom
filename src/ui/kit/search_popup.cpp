@@ -131,12 +131,21 @@ bool KSearchPopup::eventFilter(QObject* watched, QEvent* event) {
             if (event->type() == QEvent::ShortcutOverride)
                 return true;
             switch (key->key()) {
-            case Qt::Key_Escape: close(); break;
+            case Qt::Key_Escape:
+                close();
+                break;
             case Qt::Key_Return:
-            case Qt::Key_Enter: choose(dropdown_->view()->currentIndex().row()); break;
-            case Qt::Key_Up: step(-1); break;
-            case Qt::Key_Down: step(1); break;
-            default: break;
+            case Qt::Key_Enter:
+                choose(dropdown_->view()->currentIndex().row());
+                break;
+            case Qt::Key_Up:
+                step(-1);
+                break;
+            case Qt::Key_Down:
+                step(1);
+                break;
+            default:
+                break;
             }
             return true;
         }

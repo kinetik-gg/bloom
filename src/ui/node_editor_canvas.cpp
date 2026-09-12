@@ -191,6 +191,9 @@ void NodeGraphicsView::mousePressEvent(QMouseEvent* event) {
 void NodeGraphicsView::mouseMoveEvent(QMouseEvent* event) {
     if (!panActive_) {
         QGraphicsView::mouseMoveEvent(event);
+        if (const auto* graph = qobject_cast<NodeGraphicsScene*>(scene());
+            graph && graph->gestureActive())
+            viewAdjusted_ = true;
         return;
     }
     // TOTAL displacement from the press point applied to the transform frozen there -- never a

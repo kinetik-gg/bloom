@@ -109,7 +109,8 @@ void testValidityQuery(TestContext& test) {
     Fixture fixture;
     const auto before = fixture.document.snapshot();
     const auto history = fixture.stack.size();
-    test.expect(canApplyNodeOperation(before, DuplicateNodes(kCompositionId, {kFirstLayerNodeId}, {24, 24})),
+    test.expect(canApplyNodeOperation(
+                    before, DuplicateNodes(kCompositionId, {kFirstLayerNodeId}, {24, 24})),
                 "menu query accepts a valid duplicate without issuing IDs");
     test.expect(!canApplyNodeOperation(before, RemoveNodes(kCompositionId, {kLayerStackNodeId})),
                 "menu query refuses protected removal");
@@ -117,7 +118,8 @@ void testValidityQuery(TestContext& test) {
                 "menu query refuses participating Layer Output dissolve");
     const auto after = fixture.document.snapshot();
     test.expect(sameTruth(before, after) && before.revision() == after.revision() &&
-                    before.ids().highWater() == after.ids().highWater() && fixture.stack.size() == history,
+                    before.ids().highWater() == after.ids().highWater() &&
+                    fixture.stack.size() == history,
                 "queries leave all live truth, allocator, revision and history untouched");
 }
 

@@ -46,9 +46,8 @@ inline constexpr int kNodeStructuralRole = Qt::UserRole + 8;
 // Socket schema kinds use the N1 palette mapping, including presently nonlinkable kinds.
 [[nodiscard]] kit::Color socketColorToken(runtime::SocketValueKind kind) noexcept;
 
-// Which ends of a card's header line carry a port dot: an input on the left, an output on the
-// right. Both accumulate from the edges that actually touch the node, so a card in the middle of
-// the chain carries both.
+// Which declared socket directions a card exposes, including unconnected ports. Input items live
+// on its left edge and output items on its right edge.
 struct NodeSockets final {
     bool hasInput = false;
     bool hasOutput = false;
@@ -95,8 +94,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // findChild() cannot reach it.
     [[nodiscard]] QWidget* nodeFieldForTest(document::NodeId nodeId,
                                             const QString& fieldObjectName) const;
-    // Likewise: the port dots are painted, not separate items, so this is the only way to assert
-    // that a mid-chain card carries BOTH ends rather than only whichever edge was visited last.
+    // Direction summary of the actual per-port child items, retained as a diagnostic contract.
     [[nodiscard]] NodeSockets nodeSocketsForTest(document::NodeId nodeId) const;
 
   protected:

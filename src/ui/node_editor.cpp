@@ -149,6 +149,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         const auto& layout = foundLayout == composition->nodeLayout().end() ? defaults.at(node.id)
                                                                             : foundLayout->second;
         item->refresh(node, *composition, layout);
+        item->setAuthoringEnabled(canSubmit());
         item->setPos(layout.position.x, layout.position.y);
         present.push_back(node.id.value());
     }

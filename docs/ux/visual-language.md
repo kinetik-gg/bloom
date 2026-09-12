@@ -342,3 +342,32 @@ Color uses the existing red `DataSequence`, not `DataClip`; the non-Image choice
 `Accent` and `AccentHover`. Socket labels must still identify the kind. Kit-owner gap:
 `DataImage` and `AccentHover` already share `#3AA5F0`; this pre-existing collision remains
 unchanged pending the kit owner's palette decision.
+
+### Node editor interaction states
+
+These use design pixels in graph space at 100% zoom. They scale with the canvas transform.
+
+| Surface/state | Rendering or interaction contract |
+| --- | --- |
+| Port socket | 8px circle in its schema kind's palette token; inputs left, outputs right; one expanded row per port |
+| Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
+| Selected node | 2px inset Accent outline, painted above the card/header surfaces |
+| Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |
+| Muted node | Body and in-node controls at 50% opacity; normal header and existing Phosphor `Hidden`/eye-slash badge, without strikethrough |
+| Collapsed node | Header-only `Radius::Full` pill; sockets distributed along the header edges; parameter controls hidden |
+| Link | Schema kind ink, widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink and 2px stroke |
+| Incompatible drag | Error link ink; release publishes nothing |
+| Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
+| Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
+| Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field; disabled results show their refusal using DisabledInk |
+| Unavailable command adapter | Cards have an arrow cursor and sockets a forbidden cursor with explanation; application offers only its existing working authoring paths |
+
+`KSearchPopup` object names are `kSearchPopup` and `kSearchFilter`; its reused dropdown subtree
+retains `kDropdownPopup`, `kDropdownSurface` and `kDropdownList`. Node interaction additions are
+`nodeContextMenu`, `nodeAddSearchAction`, `nodeAddLayerOutputAction`, `nodeAddLayerStackAction`,
+`nodeAddCompositionOutputAction`, `nodeSelectAllAction`, `nodeDuplicateAction`, `nodeDissolveAction`,
+`nodeMuteAction`, `nodeCollapseAction`, `nodeRenameAction`, `nodeDeleteAction` and `nodeRenameEditor`.
+Existing scene/view/editor, canvas/Add menu, Add Solid/Text, navigation action, color-chip and
+position-field object names are unchanged. The legacy named Add actions remain routable contracts
+when Add… replaces the visible submenu. The architecture's application-integration limit determines
+which authoring affordances can currently be offered.

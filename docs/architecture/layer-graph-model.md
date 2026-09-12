@@ -294,3 +294,91 @@ selection replaces the set; layer selection keeps its LayerId primary and select
 Parameter/keyframe selection keeps its existing tagged semantics and clears the node set.
 Publication prunes missing nodes, clear and rebind clear the set, and selection never creates a
 document revision or history entry. Editor gestures and command wiring remain a separate phase.
+
+## Node Editor Interaction
+
+The editor projects `NodeLayoutRecord` position, width, collapse and mute state. Missing records
+use `defaultNodeLayout`, including the 128px width. Each registered input/output is a graphics item;
+stable stack-slot inputs have separate items too. Expanded cards place each port on its own row,
+inputs left and outputs right. Collapsed cards keep their sockets on the header edges. The selected
+set uses Accent outlines and its primary uses Foreground. The set and primary flow through
+`CompositionSession::selectNodes`, `toggleNodeSelection` and `clearSelection`; Properties and
+Timeline retain their existing primary/context contracts.
+
+### Application Integration Limit
+
+The interaction implementation accepts a `NodeGraphicsScene::Submit` transaction adapter. The
+current application editor factory constructs `NodeGraphEditor` with only `CompositionSession`,
+whose command execution and result publication remain private. No production adapter is installed.
+Consequently **node command authoring is not enabled in the application yet**. Persisted projection,
+sockets, session click/Shift/box selection, Ctrl+A, Home/F/Z, zoom/pan, existing in-node parameter
+edits and legacy Add Solid work. Command gestures show no draggable cursor without an adapter;
+command-only node menus and cursor-positioned Add search are not offered. The legacy Add menu
+keeps Solid creation and a disabled Text row. Keyboard authoring requests report unavailability
+through the existing session status signal.
+
+Enabling the following command interactions requires one public session submission method which
+executes a transaction, passes its result through the existing snapshot/history/refusal publication,
+and returns created IDs to the editor for selection. No additional selection API is needed. This
+is an integration gap, not permission for the UI to own a document or another command history.
+Offscreen interaction tests supply an explicit adapter to the real command stack and publish the
+snapshot through public session rebinding; they do not establish application wiring readiness.
+
+### Transaction Adapter Contracts
+
+With that adapter supplied, the following behavior is implemented and covered by event tests:
+
+- A card drag previews every selected card and publishes one `MoveNodes` on release. Its right edge
+  previews a width change and publishes `SetNodeWidth` on release, with a 128px gesture minimum.
+  Persisted positive widths are read exactly. Preview movement does not issue per-pixel commands.
+  Escape, focus loss, or a replacement snapshot cancels the transient gesture. Canvas manipulation
+  retains the current view instead of reframing it during command publication.
+- Socket dragging draws a live cubic Bezier. Opposite Image sockets connect with `ConnectPorts`;
+  an occupied input rewires while retaining its edge ID. An incompatible socket is Error red and
+  release changes nothing. Graph-cycle and other command refusals use `commandRejected`, the
+  application's existing transient status path, without dialogs.
+- Picking up an occupied ordinary input hides its old link during the preview and carries its
+  source. Dropping on another input transfers the link in one transaction. Dropping on empty
+  canvas executes `DisconnectInput`; Escape restores the preview without changing the document.
+  Other socket drags released on empty canvas open search with that socket armed.
+- Links have a widened hit shape, hover emphasis and brighter ink when either endpoint is selected.
+  Ctrl+right-drag cuts every crossed ordinary wire with several `DisconnectInput` operations in
+  one transaction. A moved single node with an unconnected first Image input and a first Image
+  output highlights a wire under the cursor and inserts with two `ConnectPorts` operations in the
+  same transaction as the move. Any command refusal rolls the entire transaction back.
+- Shift+A and canvas Add… open `KSearchPopup` at the cursor. Case-insensitive word filtering matches
+  readable node type names and socket-kind names. Enter, arrows, pointer selection and Escape use
+  the kit popup machinery. Every built-in registry kind is listed. Text retains the actual
+  `AddTextLayer` refusal in a disabled row. Solid uses `AddSolidLayer`; other kinds use `AddNode`.
+  Creation, cursor layout and the first compatible armed-port connection share one transaction.
+  The editor's compound operation delegates all durable writes to existing commands and only reads
+  the returned IDs to resolve subsequent operations.
+- X/Delete remove the selection; Shift+D duplicates with a 24px offset, selects returned IDs, and
+  starts floating placement. Escape cancels placement while keeping the undoable copies at their
+  initial offset. Ctrl+X dissolves a single selection. M and H toggle mute and collapse in one
+  transaction for the entire selection (a mixed selection becomes uniformly enabled for that
+  state). Empty and protected targets report refusal. F/Home fit, Z is 100%, and Ctrl+A selects all.
+  `ShortcutOverride` claims only canvas commands; focused proxy field widgets retain text editing.
+- Canvas menus offer Add…, Fit, 100%, Zoom In/Out and Select All. Node menus offer only accepted
+  Duplicate, Dissolve, Mute/Unmute, Collapse/Expand, Rename and Delete operations. Rename appears
+  only for a single participating Layer Output and edits its header through `RenameLayer`.
+  `canApplyNodeOperation` is needed because commands have no dry-run surface: it checks the actual
+  operation and final validation on an isolated draft, without publishing or advancing live IDs,
+  revisions or history. Menus do not maintain a second set of command eligibility rules.
+- Muted bodies and their proxy controls use 50% opacity; the header retains normal opacity and the
+  existing vendored Phosphor eye-slash badge. Collapsed cards are header-only pills. A linked
+  parameter-role input hides its corresponding widget; today's Image ports do not correspond to
+  numeric/color parameter roles, so connecting an Image input leaves those controls visible. No
+  parameter-socket data flow or evaluator behavior is introduced.
+
+### Structural Edges
+
+Stack-slot content edges and participating Layer Output boundary outputs are structural. They are
+projected with explanatory tooltips but cannot start or receive a drag, be cut, or be auto-insertion
+targets. Removing a layer uses `RemoveNodes`, which can remove its boundary and slot together.
+Disconnecting a mandatory slot or dissolving its participating Layer Output would violate the
+canonical graph. Driver duplication still refuses because there is no durable driver record to
+copy; duplication of incompatible canonical-stack topology still refuses through command validation.
+
+These are Qt scene/widget interactions without platform-specific input code. The same implementation
+and offscreen event tests apply to Linux, macOS and Windows; this change's executed gates are Linux.

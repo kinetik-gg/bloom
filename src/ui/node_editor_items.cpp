@@ -127,7 +127,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                             kit::color(kit::Color::Border), radiusToken);
     painter->setOpacity(1.0);
     const auto selectionOutline = [&] {
-        if (!selected) return;
+        if (!selected)
+            return;
         painter->setOpacity(1.0);
         const qreal inset = kSelectionEdgeWidth / 2.0;
         painter->setBrush(Qt::NoBrush);
@@ -161,7 +162,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Foreground));
-    const QRectF titleRect(kCardPadding, 0.0, bounds.width() - 2.0 * kCardPadding,
+    const QRectF titleRect(kCardPadding, 0.0,
+                           bounds.width() - 2.0 * kCardPadding -
+                               (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
                            kCardHeaderHeight);
     painter->drawText(
         titleRect, Qt::AlignVCenter | Qt::AlignLeft,
@@ -175,7 +178,10 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                     (kCardHeaderHeight - badge.height() / badge.devicePixelRatio()) / 2.0),
             badge);
     }
-    if (layout_.collapsed) { selectionOutline(); return; }
+    if (layout_.collapsed) {
+        selectionOutline();
+        return;
+    }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
@@ -301,7 +307,8 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
                               "to remove this connection");
     else if (kind != document::SocketValueKind::Image)
         tip += QStringLiteral("\nOnly Image ports are linkable in this editor");
-    setToolTip(tip);
+    description_ = tip;
+    setAuthoringEnabled(true);
 }
 
 QPainterPath SocketItem::shape() const {
@@ -331,13 +338,13 @@ void SocketItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
 }
 
 void NodeItem::buildSockets(const document::NodeRecord& node,
-                            const document::Composition& composition) {
+                            const document::Composition& composition,
+                            const document::NodeDefinitionRegistry& registry) {
     for (auto* socket : sockets_)
         delete socket;
     sockets_.clear();
     linkedInputs_.clear();
-    const auto* definition =
-        document::builtInNodeDefinitions().find(node.typeId, node.schemaVersion);
+    const auto* definition = registry.find(node.typeId, node.schemaVersion);
     if (!definition)
         return;
     const bool boundary =
@@ -377,7 +384,7 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     setAcceptedMouseButtons(Qt::NoButton);
     setZValue(-1);
     if (structural)
-        setToolTip(input.toolTip());
+        setToolTip(output.draggable() ? input.toolTip() : output.toolTip());
     source_.addEdge(*this);
     destination_.addEdge(*this);
     updatePath();
@@ -468,5 +475,13 @@ void NodeItem::startRename() {
     });
     field->setFocus(Qt::OtherFocusReason);
     field->selectAll();
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+void SocketItem::setAuthoringEnabled(const bool enabled) {
+    setCursor(enabled && draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
+    setToolTip(enabled ? description_
+                       : description_ + QStringLiteral("\nNode command submission is unavailable"));
 }
 } // namespace bloom::ui::node_editor

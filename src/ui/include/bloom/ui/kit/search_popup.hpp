@@ -1,7 +1,7 @@
 #pragma once
 
-#include <QWidget>
 #include <QString>
+#include <QWidget>
 #include <vector>
 
 class QLineEdit;

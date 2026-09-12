@@ -95,6 +95,7 @@ class SocketItem final : public QGraphicsItem {
     [[nodiscard]] bool draggable() const {
         return !structural_ && kind == document::SocketValueKind::Image;
     }
+    void setAuthoringEnabled(bool enabled);
     QString name;
     document::SocketValueKind kind;
     std::optional<document::InputPortRef> input;
@@ -105,6 +106,7 @@ class SocketItem final : public QGraphicsItem {
     void hoverLeaveEvent(QGraphicsSceneHoverEvent* event) override;
 
   private:
+    QString description_;
     bool structural_;
     bool hovered_ = false;
 };
@@ -115,7 +117,8 @@ class NodeItem final : public QGraphicsObject {
         setData(kNodeItemKindRole, QStringLiteral("node"));
         setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
         setFlags(ItemIsSelectable | ItemSendsGeometryChanges);
-        setCursor(Qt::OpenHandCursor);
+        setAcceptHoverEvents(true);
+        setCursor(Qt::ArrowCursor);
 
         // Elevation on drag (decision 2). kit::applyElevation() takes a QWidget, and a node card is
         // a QGraphicsItem, so the token's own offset/blur/color are read here and handed to the
@@ -140,8 +143,10 @@ class NodeItem final : public QGraphicsObject {
     // first refresh that sees a given set of parameter roles, and afterwards only reconfigured --
     // exactly the discipline PropertiesEditor::rebuild() already follows, and what lets a card's
     // own field survive the snapshot change its edit produced.
-    void refresh(const document::NodeRecord& node, const document::Composition& composition,
-                 const document::NodeLayoutRecord& layout) {
+    void
+    refresh(const document::NodeRecord& node, const document::Composition& composition,
+            const document::NodeLayoutRecord& layout,
+            const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
@@ -150,7 +155,7 @@ class NodeItem final : public QGraphicsObject {
                        .arg(title_, displayTypeName(node.typeId))
                        .arg(id_.value()));
         ensureFields(node);
-        buildSockets(node, composition);
+        buildSockets(node, composition, registry);
         refreshValues(node, composition);
         relayout();
     }
@@ -175,6 +180,12 @@ class NodeItem final : public QGraphicsObject {
             dragShadow_->setEnabled(dragging);
     }
     void startRename();
+    void setAuthoringEnabled(bool enabled) {
+        authoringEnabled_ = enabled;
+        setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        for (auto* socket : sockets_)
+            socket->setAuthoringEnabled(enabled);
+    }
 
     void addEdge(NodeEdgeItem& edge) { edges_.push_back(&edge); }
     void clearEdges() { edges_.clear(); }
@@ -205,9 +216,16 @@ class NodeItem final : public QGraphicsObject {
 
   protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
+    void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
+        if (authoringEnabled_)
+            setCursor(std::abs(event->pos().x() - width_) <= 6 ? Qt::SizeHorCursor
+                                                               : Qt::OpenHandCursor);
+        QGraphicsObject::hoverMoveEvent(event);
+    }
 
   private:
-    void buildSockets(const document::NodeRecord& node, const document::Composition& composition);
+    void buildSockets(const document::NodeRecord& node, const document::Composition& composition,
+                      const document::NodeDefinitionRegistry& registry);
 
     struct ValueRow final {
         QString label;
@@ -505,6 +523,9 @@ class NodeItem final : public QGraphicsObject {
             const qreal available = std::max(1.0, width_ - kCardPadding - proxy->pos().x());
             proxy->setScale(std::min(1.0, available / std::max(1, widget->width())));
         }
+        const auto inputCount = std::ranges::count_if(
+            sockets_, [](const auto* socket) { return socket->input.has_value(); });
+        const auto outputCount = static_cast<std::ptrdiff_t>(sockets_.size()) - inputCount;
         int inputIndex = 0;
         int outputIndex = 0;
         for (std::size_t index = 0; index < sockets_.size(); ++index) {
@@ -513,7 +534,8 @@ class NodeItem final : public QGraphicsObject {
             const int edgeIndex = input ? inputIndex++ : outputIndex++;
             socket->setPos(input ? 0 : width_,
                            layout_.collapsed
-                               ? kCardHeaderHeight / 2.0 + static_cast<qreal>(edgeIndex) * 6.0
+                               ? kCardHeaderHeight * static_cast<qreal>(edgeIndex + 1) /
+                                     static_cast<qreal>((input ? inputCount : outputCount) + 1)
                                : kCardHeaderHeight +
                                      (static_cast<qreal>(index) + 0.5) * kSocketRowHeight);
         }
@@ -539,6 +561,7 @@ class NodeItem final : public QGraphicsObject {
     qreal rowHeight_ = kit::px(kit::Size::Control);
     document::NodeLayoutRecord layout_;
     bool primary_ = false;
+    bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;
     QGraphicsProxyWidget* renameProxy_ = nullptr;
@@ -563,6 +586,7 @@ class NodeEdgeItem final : public QGraphicsPathItem {
     void updatePath();
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
     [[nodiscard]] QPainterPath shape() const override;
+    [[nodiscard]] QRectF boundingRect() const override { return shape().boundingRect(); }
     void emphasize(bool enabled) {
         hovered_ = enabled;
         update();

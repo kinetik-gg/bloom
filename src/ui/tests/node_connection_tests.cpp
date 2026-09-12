@@ -1,0 +1,176 @@
+#include "node_interaction_test_support.hpp"
+#include <QImage>
+#include <QPainter>
+
+namespace bloom::ui::test {
+namespace {
+const document::EdgeRecord* incoming(Fixture& fixture, const document::NodeId id) {
+    const auto edges = fixture.session.composition()->graph().edges();
+    const auto found = std::ranges::find_if(edges, [&](const auto& edge) {
+        return edge.destination == document::InputPortRef(document::NodeInputRef{id, "image"});
+    });
+    return found == edges.end() ? nullptr : &*found;
+}
+node_editor::NodeEdgeItem* edgeItem(Fixture& fixture, const document::NodeId destination) {
+    for (auto* item : fixture.scene()->items())
+        if (auto* edge = dynamic_cast<node_editor::NodeEdgeItem*>(item);
+            edge && node_editor::destinationNodeId(edge->edge.destination) == destination)
+            return edge;
+    throw std::runtime_error("fixture link item");
+}
+} // namespace
+void testConnectionsCutAndInsertion() {
+    Fixture f;
+    const auto source = f.add(document::kSolidSourceNodeType, {100, 100});
+    const auto second = f.add(document::kSolidSourceNodeType, {100, 350});
+    const auto target = f.add(document::kLayerOutputNodeType, {700, 100});
+    const auto pass = f.add(document::kLayerOutputNodeType, {350, 350});
+    auto history = f.stack.size();
+    auto start = f.socket(source, false)->scenePos();
+    auto end = f.socket(target, true)->scenePos();
+    f.press(start);
+    f.move(end);
+    auto* preview = static_cast<QGraphicsPathItem*>(nullptr);
+    for (auto* item : f.scene()->items())
+        if (item->data(kNodeItemKindRole) == QStringLiteral("link-preview"))
+            preview = dynamic_cast<QGraphicsPathItem*>(item);
+    expect(preview && !preview->path().isEmpty() && !incoming(f, target),
+           "socket drag draws a live Bezier without publishing an edge");
+    f.release(end);
+    expect(incoming(f, target) && incoming(f, target)->source.nodeId == source &&
+               f.stack.size() == history + 1,
+           "socket release connects through one real command");
+    if (!incoming(f, target))
+        return;
+    const auto wireImage = [&] {
+        QImage image(1000, 600, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        edgeItem(f, target)->paint(&painter, nullptr, nullptr);
+        painter.end();
+        return image;
+    };
+    f.session.clearSelection();
+    const auto idleWire = wireImage();
+    f.session.selectNode(source);
+    expect(wireImage() != idleWire, "links brighten when either endpoint is selected");
+    f.session.clearSelection();
+    QGraphicsSceneHoverEvent linkHover(QEvent::GraphicsSceneHoverEnter);
+    f.scene()->sendEvent(edgeItem(f, target), &linkHover);
+    expect(wireImage() != idleWire && edgeItem(f, target)->data(kNodeHoveredRole).toBool(),
+           "wire hover changes its rendered emphasis and hit state");
+    QGraphicsSceneHoverEvent linkLeave(QEvent::GraphicsSceneHoverLeave);
+    f.scene()->sendEvent(edgeItem(f, target), &linkLeave);
+    const auto edgeId = incoming(f, target)->id;
+    f.drag(f.socket(second, false)->scenePos(), f.socket(target, true)->scenePos());
+    expect(incoming(f, target) && incoming(f, target)->source.nodeId == second &&
+               incoming(f, target)->id == edgeId,
+           "occupied input rewires and retains its edge ID");
+    history = f.stack.size();
+    QSignalSpy refusals(&f.session, &CompositionSession::commandRejected);
+    f.drag(f.socket(target, false)->scenePos(), f.socket(target, true)->scenePos());
+    expect(f.stack.size() == history && !refusals.empty() &&
+               incoming(f, target)->source.nodeId == second,
+           "cycle refusal preserves the prior link and surfaces a transient session status");
+    // Current registry ports are all Image. A fixture-only Scalar socket pins the UI's future-kind
+    // refusal; the command suite separately tests all 25 registry kind pairings.
+    auto* scalar = new node_editor::SocketItem(
+        target, QStringLiteral("scalar"), document::SocketValueKind::Scalar,
+        document::NodeInputRef{target, "image"}, {}, false, f.card(target));
+    scalar->setPos(0, 100);
+    scalar->setZValue(20);
+    end = scalar->scenePos();
+    f.press(f.socket(source, false)->scenePos());
+    f.move(end);
+    for (auto* item : f.scene()->items())
+        if (item->data(kNodeItemKindRole) == QStringLiteral("link-preview"))
+            preview = dynamic_cast<QGraphicsPathItem*>(item);
+    expect(preview && preview->pen().color() == kit::color(kit::Color::Error),
+           "incompatible kind hover paints the link Error red");
+    f.release(end);
+    expect(f.stack.size() == history && incoming(f, target)->source.nodeId == second,
+           "incompatible release leaves graph unchanged");
+    delete scalar;
+    f.press(f.socket(target, true)->scenePos());
+    f.move({850, 500});
+    expect(!edgeItem(f, target)->isVisible() && incoming(f, target),
+           "input pickup detaches only the preview until release");
+    f.key(Qt::Key_Escape);
+    expect(edgeItem(f, target)->isVisible() && f.stack.size() == history,
+           "Escape restores a picked-up link without commands");
+    f.release({850, 500});
+    f.drag(f.socket(target, true)->scenePos(), {900, 600});
+    expect(!incoming(f, target) && f.stack.size() == history + 1,
+           "input pickup dropped on empty canvas disconnects once");
+    expect(f.session.undo() && incoming(f, target), "picked-up disconnect restores in one undo");
+    f.drag(f.socket(target, true)->scenePos(), f.socket(pass, true)->scenePos());
+    expect(!incoming(f, target) && incoming(f, pass) && incoming(f, pass)->source.nodeId == second,
+           "input pickup can transfer its source to another input atomically");
+    expect(f.session.undo() && incoming(f, target) && !incoming(f, pass),
+           "one undo restores both ends of pickup transfer");
+    f.drag(f.socket(source, false)->scenePos(), f.socket(target, true)->scenePos());
+    auto midpoint = edgeItem(f, target)->path().pointAtPercent(0.5);
+    history = f.stack.size();
+    const QPointF press = f.card(pass)->pos() + QPointF(20, 15);
+    f.press(press);
+    f.move(midpoint);
+    f.release(midpoint);
+    expect(incoming(f, pass) && incoming(f, pass)->source.nodeId == source && incoming(f, target) &&
+               incoming(f, target)->source.nodeId == pass && f.stack.size() == history + 1,
+           "dropping a single unconnected Image pair on a wire inserts it in the move transaction");
+    expect(f.session.undo() && !incoming(f, pass) && incoming(f, target)->source.nodeId == source,
+           "one undo restores layout and both insertion connections");
+    const auto cutTarget = f.add(document::kLayerOutputNodeType, {700, 350});
+    f.drag(f.socket(second, false)->scenePos(), f.socket(cutTarget, true)->scenePos());
+    history = f.stack.size();
+    f.press({480, 100}, Qt::ControlModifier, Qt::RightButton);
+    f.move({480, 700}, Qt::RightButton, Qt::ControlModifier);
+    for (auto* candidate : f.scene()->items()) {
+        if (candidate->data(kNodeItemKindRole) == QStringLiteral("cut-preview")) {
+            const auto path = static_cast<QGraphicsPathItem*>(candidate)->path();
+            expect(path.elementCount() == 2 && path.elementAt(0).x == 480 &&
+                       path.elementAt(0).y == 100,
+                   "first cut segment starts at the press point rather than the scene origin");
+        }
+    }
+    f.release({480, 700}, Qt::ControlModifier, Qt::RightButton);
+    expect(!incoming(f, target) && !incoming(f, cutTarget) && f.stack.size() == history + 1,
+           "Ctrl RMB cut disconnects every crossed ordinary link in one transaction");
+    expect(f.session.undo() && incoming(f, target) && incoming(f, cutTarget),
+           "one cut undo restores all crossed links");
+    history = f.stack.size();
+    const auto addRevision = f.session.snapshot().revision();
+    f.drag(f.socket(source, false)->scenePos(), {950, 650});
+    auto* popup = f.editor.findChild<kit::KSearchPopup*>();
+    expect(popup && popup->isVisible() && f.stack.size() == history,
+           "output released on empty canvas arms Add search without a premature command");
+    if (popup) {
+        auto* field = popup->findChild<QLineEdit*>();
+        field->setText(QStringLiteral("layer output"));
+        QTest::keyClick(field, Qt::Key_Return);
+        const auto* selected = f.session.selectedNode();
+        expect(selected && incoming(f, selected->id) &&
+                   incoming(f, selected->id)->source.nodeId == source &&
+                   f.session.snapshot().revision().value() == addRevision.value() + 1,
+               "choosing from drag-armed search adds and connects one first-compatible port "
+               "transaction");
+    }
+    expect(f.session.addSolidLayer(QStringLiteral("Boundary"), core::Color4d{1, 0, 0, 1}),
+           "structural layer fixture");
+    auto* structural = static_cast<node_editor::NodeEdgeItem*>(nullptr);
+    for (auto* item : f.scene()->items())
+        if (auto* edge = dynamic_cast<node_editor::NodeEdgeItem*>(item); edge && edge->structural)
+            structural = edge;
+    expect(structural && structural->toolTip().contains(QStringLiteral("Structural")),
+           "structural boundary edges explain why they cannot be dragged");
+    if (structural) {
+        const auto record = structural->edge;
+        midpoint = structural->path().pointAtPercent(0.5);
+        f.drag(midpoint - QPointF(0, 20), midpoint + QPointF(0, 20), Qt::ControlModifier,
+               Qt::RightButton);
+        expect(std::ranges::find(f.session.composition()->graph().edges(), record) !=
+                   f.session.composition()->graph().edges().end(),
+               "cut never disconnects a structural Layer Output / stack-slot edge");
+    }
+}
+} // namespace bloom::ui::test

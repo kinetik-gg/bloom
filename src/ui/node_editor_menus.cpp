@@ -158,17 +158,27 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu) {
                    [this] { handleCanvasKey(Qt::Key_Delete, Qt::NoModifier); });
         return menu;
     }
-    action(tr("Add…"), QStringLiteral("nodeAddSearchAction"), [this] {
-        openAddSearch(addPosition_,
-                      view_->viewport()->mapToGlobal(view_->mapFromScene(addPosition_)));
-    })->setEnabled(session_.composition() != nullptr);
-    // Preserve existing action objectNames as programmatic contracts. The visible entry is Add…;
-    // the same named actions route to the search's actual add handler.
-    auto* addMenu = new QMenu(menu);
+    if (scene_->canSubmit()) {
+        action(tr("Add…"), QStringLiteral("nodeAddSearchAction"), [this] {
+            openAddSearch(addPosition_,
+                          view_->viewport()->mapToGlobal(view_->mapFromScene(addPosition_)));
+        })->setEnabled(session_.composition() != nullptr);
+    }
+    // Preserve existing action names. Without an application submission adapter, only the existing
+    // session Add Solid path is offered; a search promising cursor placement would be misleading.
+    auto* addMenu = scene_->canSubmit() ? new QMenu(menu) : menu->addMenu(tr("Add"));
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
     for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
         auto* item = addMenu->addAction(displayTypeName(definition.key.typeId));
         item->setObjectName(addActionName(definition.key.typeId));
+        if (!scene_->canSubmit()) {
+            const bool solid = definition.key.typeId == document::kSolidSourceNodeType;
+            const bool text = definition.key.typeId == document::kTextSourceNodeType;
+            item->setVisible(solid || text);
+            item->setEnabled(solid && session_.composition() != nullptr);
+            if (text)
+                item->setToolTip(tr("Text requires a portable CPU font pipeline"));
+        }
         connect(item, &QAction::triggered, this,
                 [this, type = QString::fromStdString(definition.key.typeId)] { addNode(type); });
     }
@@ -195,7 +205,7 @@ void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     addInput_.reset();
     addOutput_.reset();
     addRevision_ = session_.snapshot().revision();
-    const QPointer<QMenu> menu = buildContextMenu(view_, card != nullptr);
+    const QPointer<QMenu> menu = buildContextMenu(view_, card != nullptr && scene_->canSubmit());
     // Nonblocking popup: selecting Duplicate must let the canvas receive the following move.
     menu->setAttribute(Qt::WA_DeleteOnClose);
     menu->popup(view_->viewport()->mapToGlobal(viewportPosition));
@@ -206,6 +216,11 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
                                     std::optional<document::OutputPortRef> output) {
     if (!session_.composition())
         return;
+    if (!scene_->canSubmit()) {
+        showStatus(
+            tr("Node command submission is unavailable; Add > Solid can still create a layer"));
+        return;
+    }
     addPosition_ = scenePosition;
     addInput_ = std::move(input);
     addOutput_ = std::move(output);
