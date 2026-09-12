@@ -429,11 +429,11 @@ int testMainWindow(const EditorRegistry& registry,
     if (!require(window.workspaceHost() != nullptr, 40)) {
         return 40;
     }
-    // Window title (decision 5): "name[*] — Bloom" via Qt's windowModified pattern, wired to the
-    // host's dirty signal and display path; a fresh untouched project shows "Untitled" and is not
-    // modified.
-    if (!require(window.windowTitle().contains("Bloom") &&
-                     window.windowTitle().contains("Untitled") && !window.isWindowModified(),
+    // Window title (task C1, item C1: native chrome only, no "Bloom — " prefix -- the OS window
+    // title is exactly the document title, via Qt's windowModified "[*]" pattern): a fresh
+    // untouched project shows "Untitled" alone and is not modified.
+    if (!require(window.windowTitle() == QStringLiteral("Untitled[*]") &&
+                     !window.isWindowModified(),
                  71)) {
         return 71;
     }

@@ -145,13 +145,10 @@ int main(int argc, char* argv[]) {
 
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
-    // Read BEFORE MainWindow is constructed (decision 1): MainWindow's window flags and menu-bar
-    // hosting must be right from the very first construction, not patched in afterward -- the
-    // documented ctor-order trap -- so the chrome mode is a constructor argument, not something
-    // MainWindow discovers for itself post-construction.
-    const auto chromeMode = bloom::ui::chromeModeFromSettings(settings);
+    // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
+    // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController, chromeMode);
+                                 frameExportController);
     (void)window.restoreApplicationState(settings);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,
