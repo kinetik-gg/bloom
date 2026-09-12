@@ -39,7 +39,9 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     if (card == nullptr)
         return;
     const auto hosted = hostedControls(*card);
-    expect(hosted.size() == 3, "the layer output card hosts its X, Y and opacity fields");
+    // ADAPTED (task S4): the Layer Output card now hosts position X/Y, anchor X/Y, scale X/Y,
+    // rotation and opacity -- eight fields, one per transform component plus opacity.
+    expect(hosted.size() == 8, "the layer output card hosts its transform and opacity fields");
     for (const auto& [proxy, widget] : hosted) {
         expect(proxy->scale() == 1.0,
                "a hosted control is never scaled: a fractional scale resampled its hairlines, "
