@@ -215,9 +215,19 @@ WorkspaceHost::WorkspaceHost(const EditorRegistry& editorRegistry, QWidget* pare
     : QFrame(parent), editorRegistry_(editorRegistry) {
     setObjectName("workspaceHost");
     setFrameShape(QFrame::NoFrame);
+    // Window inner padding (task C1, item C4; owner: "panels inside window is overlapping with
+    // actual window border at the edges; window needs inner padding"): autoFillBackground() paints
+    // this frame's own QPalette::Window role, which kinetikPalette() already sets to
+    // Color::Background -- the exact color the Gutter inset below must reveal on every side.
+    setAutoFillBackground(true);
 
     rootLayout_ = new QVBoxLayout(this);
-    rootLayout_->setContentsMargins(0, 0, 0, 0);
+    // A uniform Spacing::Gutter (6px) inset on all four sides, so the window's own Background is
+    // visible around the outermost panels the same way it already shows BETWEEN panels (the
+    // splitter handle width just below): no panel touches the window edge, and the visible gutter
+    // is identical on every side.
+    const int gutter = kit::px(kit::Spacing::Gutter);
+    rootLayout_->setContentsMargins(gutter, gutter, gutter, gutter);
     rootLayout_->setSpacing(0);
 
     rootWidget_ = createArea();
