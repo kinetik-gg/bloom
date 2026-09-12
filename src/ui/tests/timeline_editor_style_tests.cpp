@@ -1,7 +1,7 @@
-// Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row chrome,
-// the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the ruler's own
-// tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching every other
-// widget test in this suite.
+// Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
+// chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
+// ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching
+// every other widget test in this suite.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -96,7 +96,7 @@ bloom::document::CompositionFormat smallFormat() {
 }
 
 [[nodiscard]] bloom::core::RationalTime time(const std::int64_t numerator,
-                                            const std::int64_t denominator = 1) {
+                                             const std::int64_t denominator = 1) {
     const auto value = bloom::core::RationalTime::create(numerator, denominator);
     if (!value.has_value()) {
         std::abort();
@@ -126,7 +126,7 @@ struct PipelineFixture final {
         }
         definitions.freeze();
         pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
-                                                            qualifiedProcessorProvider);
+                                                             qualifiedProcessorProvider);
     }
 };
 
@@ -157,10 +157,10 @@ void finishFixture(SessionFixture& fixture) {
 }
 
 // Forces the panel's real geometry to materialize (a fixed-width column, an expanding lane region,
-// and a pooled set of row widgets only acquire real rects once the window actually lays itself out),
-// the same "show a real top-level window, pump events" idiom playback_controller_tests.cpp already
-// uses for its focus test. The width is comfortably wider than the layer column plus its gutter so
-// the lane region is never degenerate.
+// and a pooled set of row widgets only acquire real rects once the window actually lays itself
+// out), the same "show a real top-level window, pump events" idiom playback_controller_tests.cpp
+// already uses for its focus test. The width is comfortably wider than the layer column plus its
+// gutter so the lane region is never degenerate.
 void layoutEditor(QWidget& host, const int width = 1200, const int height = 420) {
     host.resize(width, height);
     host.show();
@@ -182,8 +182,7 @@ void layoutEditor(QWidget& host, const int width = 1200, const int height = 420)
 }
 
 void sendMouse(QWidget& widget, const QEvent::Type type, const qreal pixelX, const qreal pixelY) {
-    const Qt::MouseButton button =
-        type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+    const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
     const QPointF local(pixelX, pixelY);
     QMouseEvent event(type, local, widget.mapToGlobal(local), button, Qt::LeftButton,
                       Qt::NoModifier);
@@ -425,8 +424,7 @@ void testOneScrollbarMovesBothHalvesTogether(Expectations& expectations) {
     expectations.expect(offset == 3 * 32, "the fixture really can scroll three rows (sanity)");
     bar->setValue(offset);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    expectations.expect(stack->rowTop(5) == 5 * 32 - offset &&
-                            lanes->rowTop(5) == 5 * 32 - offset,
+    expectations.expect(stack->rowTop(5) == 5 * 32 - offset && lanes->rowTop(5) == 5 * 32 - offset,
                         "ONE scrollbar value moved BOTH halves by exactly the same amount");
     expectations.expect(stack->rowTop(5) == lanes->rowTop(5),
                         "the two halves stay in step after scrolling -- shared scroll, not synced "
@@ -497,8 +495,8 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
     finishFixture(fixture);
 }
 
-// The selected row is a SurfaceRaised ROW FILL across both halves -- never the accent-outlined cells
-// the owner rejected.
+// The selected row is a SurfaceRaised ROW FILL across both halves -- never the accent-outlined
+// cells the owner rejected.
 void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Selection Fill Test"));
@@ -527,9 +525,9 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
 
     const QImage laneImage = lanes->grab().toImage();
-    // Sampled near the right edge (away from the playhead sitting at time 0 on the left edge) and in
-    // the lane's own 2px vertical inset, ABOVE the clip bar -- the bar spans the whole composition
-    // range, so every x inside the bar's own band shows the bar, not the row fill.
+    // Sampled near the right edge (away from the playhead sitting at time 0 on the left edge) and
+    // in the lane's own 2px vertical inset, ABOVE the clip bar -- the bar spans the whole
+    // composition range, so every x inside the bar's own band shows the bar, not the row fill.
     const int sampleX = laneImage.width() - 3;
     const QColor selectedLane = laneImage.pixelColor(sampleX, 32 + 1);
     const QColor unselectedLane = laneImage.pixelColor(sampleX, 1);
@@ -589,7 +587,8 @@ void testReservedToggleColumnsAreDisabledWithHonestTooltips(Expectations& expect
     }
 
     // The cell table is shared by the headers and the rows, so one x answers for both.
-    const int toggleWidth = ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS);
+    const int toggleWidth =
+        ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS);
     const int padding = ui::kit::px(ui::kit::Spacing::XS);
     static constexpr std::array<const char*, 4> kFragments{"no command", "audio", "solo", "lock"};
     for (int index = 0; index < 4; ++index) {
@@ -608,10 +607,10 @@ void testReservedToggleColumnsAreDisabledWithHonestTooltips(Expectations& expect
 
     // None of the four is an interactive control: there is no command behind any of them, so the
     // panel must not contain a clickable widget for them at all.
-    expectations.expect(editor->findChildren<QToolButton*>(QStringLiteral("layerVisibilityToggle"))
-                            .isEmpty(),
-                        "no clickable visibility toggle exists -- there is no visibility command in "
-                        "src/commands to wire one to");
+    expectations.expect(
+        editor->findChildren<QToolButton*>(QStringLiteral("layerVisibilityToggle")).isEmpty(),
+        "no clickable visibility toggle exists -- there is no visibility command in "
+        "src/commands to wire one to");
 
     delete editor;
     finishFixture(fixture);
@@ -639,7 +638,8 @@ void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
         return;
     }
 
-    expectations.expect(!blending->isEnabled() && blending->currentText() == QStringLiteral("Normal"),
+    expectations.expect(!blending->isEnabled() &&
+                            blending->currentText() == QStringLiteral("Normal"),
                         "Blending shows the one honest value \"Normal\", disabled");
     expectations.expect(!blending->toolTip().isEmpty(), "Blending's disabled state is explained");
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
@@ -677,10 +677,10 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
                             stack->entries()[1].kind == QStringLiteral("Text"),
                         "the stack still derives each layer's kind from project truth");
     // The Name cell's own x: past the four toggle cells.
-    const int nameX = ui::kit::px(ui::kit::Spacing::XS) +
-                      4 * (ui::kit::px(ui::kit::Size::IconMedium) +
-                           ui::kit::px(ui::kit::Spacing::XS)) +
-                      ui::kit::px(ui::kit::Spacing::XS) + 8;
+    const int nameX =
+        ui::kit::px(ui::kit::Spacing::XS) +
+        4 * (ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS)) +
+        ui::kit::px(ui::kit::Spacing::XS) + 8;
     expectations.expect(stack->toolTipAt(QPoint(nameX, 16)).contains(QStringLiteral("Solid")),
                         "the Solid row names its kind in the tooltip, so removing the Kind COLUMN "
                         "never removed the information");
@@ -691,7 +691,8 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
     finishFixture(fixture);
 }
 
-// The primitive itself: the stack is no longer an item view, and its objectName survives the change.
+// The primitive itself: the stack is no longer an item view, and its objectName survives the
+// change.
 void testLayerStackIsNoLongerAnItemView(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Primitive Test"));
@@ -745,14 +746,12 @@ void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expec
     expectations.expect(stack->rowCount() == kLayerCount, "every layer has a row");
     const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
     const int bound = stack->height() / 32 + 2;
-    expectations.expect(rows.size() <= bound,
-                        "the row widget pool is bounded by the viewport (" +
-                            std::to_string(rows.size()) + " widgets for " +
-                            std::to_string(kLayerCount) + " layers, bound " +
-                            std::to_string(bound) + ")");
+    expectations.expect(rows.size() <= bound, "the row widget pool is bounded by the viewport (" +
+                                                  std::to_string(rows.size()) + " widgets for " +
+                                                  std::to_string(kLayerCount) + " layers, bound " +
+                                                  std::to_string(bound) + ")");
     expectations.expect(rows.size() >= 2, "the pool is not empty either (test sanity)");
-    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() ==
-                            2 * rows.size(),
+    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size(),
                         "two KDropdowns per pooled row -- not two per LAYER, which is the whole "
                         "reason the pool exists");
 
@@ -835,10 +834,9 @@ void testDraggingALaneScrubsThroughTheRulerScrubPath(Expectations& expectations)
     sendMouse(*lanes, QEvent::MouseButtonRelease, moveX, 16.0);
     expectations.expect(fixture.session.currentTime() == *moveTime,
                         "releasing leaves the scrubbed time in place");
-    expectations.expect(
-        waitUntilReady(fixture),
-        "scrub-end still reaches a ready preview frame -- the lane drag armed and disarmed the SAME "
-        "interactive cadence the ruler arms");
+    expectations.expect(waitUntilReady(fixture), "scrub-end still reaches a ready preview frame -- "
+                                                 "the lane drag armed and disarmed the SAME "
+                                                 "interactive cadence the ruler arms");
 
     delete editor;
     finishFixture(fixture);
@@ -874,8 +872,8 @@ void testClickingTheLeftColumnSelectsAndClears(Expectations& expectations) {
 
     sendMouse(*stack, QEvent::MouseButtonPress, 200.0, static_cast<qreal>(2 * 32 + 16));
     expectations.expect(stack->currentRow() == -1 &&
-                            std::get_if<document::LayerId>(
-                                &fixture.session.selection().primary) == nullptr,
+                            std::get_if<document::LayerId>(&fixture.session.selection().primary) ==
+                                nullptr,
                         "clicking the empty area below the last row clears the selection, exactly "
                         "as clicking a QTreeWidget's blank area did");
 
@@ -940,8 +938,8 @@ void testLoopIndicatorIsNonInteractiveAndHonest(Expectations& expectations) {
     finishFixture(fixture);
 }
 
-// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons all size to controlExtent square,
-// and (task T1) the whole transport cluster lives inside the LEFT column's own width.
+// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons all size to controlExtent
+// square, and (task T1) the whole transport cluster lives inside the LEFT column's own width.
 void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Transport Cluster Test"));
@@ -966,14 +964,13 @@ void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectatio
     }
 
     auto* controls = editor->findChild<QWidget*>("timelineControls");
-    expectations.expect(controls != nullptr &&
-                            controls->width() == ui::TimelineEditor::layerColumnWidth(),
-                        "the transport/readout cluster occupies exactly the LEFT column's width, so "
-                        "nothing in it overhangs the lane region");
+    expectations.expect(
+        controls != nullptr && controls->width() == ui::TimelineEditor::layerColumnWidth(),
+        "the transport/readout cluster occupies exactly the LEFT column's width, so "
+        "nothing in it overhangs the lane region");
     auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
     expectations.expect(readout != nullptr && controls != nullptr && readout->isVisible() &&
-                            readout->mapTo(editor, QPoint(0, 0)).x() +
-                                    readout->width() <=
+                            readout->mapTo(editor, QPoint(0, 0)).x() + readout->width() <=
                                 ui::TimelineEditor::layerColumnWidth(),
                         "the frame/time readout fits inside that width too");
 

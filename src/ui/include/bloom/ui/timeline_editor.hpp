@@ -32,9 +32,9 @@ class TimelineRuler;
 class TimelineWorkAreaRow;
 
 // One row of the timeline's layer stack, resolved once per rebuild from the snapshot and then read
-// by both halves of the row (task T1). The left layer-stack column and the right lane region are two
-// widgets painting one logical row, so they read one immutable description of it rather than each
-// walking the graph and risking a different answer about a layer's name, kind, or color.
+// by both halves of the row (task T1). The left layer-stack column and the right lane region are
+// two widgets painting one logical row, so they read one immutable description of it rather than
+// each walking the graph and risking a different answer about a layer's name, kind, or color.
 struct TimelineLayerEntry final {
     document::LayerId layerId;
     document::LayerSlotId slotId;
@@ -48,9 +48,9 @@ struct TimelineLayerEntry final {
 };
 
 // The After Effects-style timeline panel (task T1): a fixed-width LEFT layer-stack column and a
-// RIGHT lane region sharing one vertical scrollbar, under a transport header row and a column-header
-// row whose right half is the ruler. Frame 0 is at the lane region's left edge, never under the
-// layer column.
+// RIGHT lane region sharing one vertical scrollbar, under a transport header row and a
+// column-header row whose right half is the ruler. Frame 0 is at the lane region's left edge, never
+// under the layer column.
 class TimelineEditor final : public QWidget {
     Q_OBJECT
 
@@ -58,15 +58,16 @@ class TimelineEditor final : public QWidget {
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
                    QWidget* parent = nullptr);
     // Exists only to drop the application-wide focusChanged subscription BEFORE Qt starts deleting
-    // this panel's children. QWidget's own destructor clears focus from each child as it goes, and a
-    // child losing focus re-enters that subscription -- which reads sibling widgets that deleteChildren
-    // may already have destroyed. Disconnecting here is the one place that ordering can be fixed;
-    // QObject's automatic disconnection happens far too late, in ~QObject, after every child is gone.
+    // this panel's children. QWidget's own destructor clears focus from each child as it goes, and
+    // a child losing focus re-enters that subscription -- which reads sibling widgets that
+    // deleteChildren may already have destroyed. Disconnecting here is the one place that ordering
+    // can be fixed; QObject's automatic disconnection happens far too late, in ~QObject, after
+    // every child is gone.
     ~TimelineEditor() override;
 
-    // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the ruler,
-    // of every lane, and of the work-area strip above them. Exposed so a test can assert that
-    // alignment against one number instead of re-deriving the cell table.
+    // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the
+    // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
+    // that alignment against one number instead of re-deriving the cell table.
     [[nodiscard]] static int layerColumnWidth();
 
     // Test seams (mirroring TimelineRuler::majorTickLabelRectsForTest()'s precedent): the three
@@ -119,9 +120,9 @@ class TimelineEditor final : public QWidget {
     // stepBackwardAction_/stepForwardAction_ QActions the Left/Right shortcuts already trigger --
     // wired by connecting the button's clicked() straight to the action's trigger() rather than
     // QToolButton::setDefaultAction(), so this button's own icon/tooltip/objectName stay under this
-    // class's control instead of mirroring the action's text. Their enabled state is kept in lockstep
-    // with the actions by the SAME focusChanged reconciliation lambda that already disables the
-    // actions while the layer stack holds keyboard focus (see the constructor).
+    // class's control instead of mirroring the action's text. Their enabled state is kept in
+    // lockstep with the actions by the SAME focusChanged reconciliation lambda that already
+    // disables the actions while the layer stack holds keyboard focus (see the constructor).
     QToolButton* stepBackButton_ = nullptr;
     QToolButton* stepForwardButton_ = nullptr;
     QToolButton* playPauseButton_ = nullptr;
@@ -142,15 +143,16 @@ class TimelineEditor final : public QWidget {
 };
 
 // The LEFT layer-stack column (task T1), replacing the QTreeWidget this panel used to be: a painted
-// row grid whose only real child widgets are the per-row Blending/Parent KDropdowns, recycled from a
-// pool bounded by the viewport so widget count is independent of layer count.
+// row grid whose only real child widgets are the per-row Blending/Parent KDropdowns, recycled from
+// a pool bounded by the viewport so widget count is independent of layer count.
 //
 // objectName "layerStackView" is deliberately unchanged -- same role, same name, new primitive.
 class TimelineLayerStack final : public QWidget {
     Q_OBJECT
 
   public:
-    TimelineLayerStack(CompositionSession& session, QScrollBar& scrollBar, QWidget* parent = nullptr);
+    TimelineLayerStack(CompositionSession& session, QScrollBar& scrollBar,
+                       QWidget* parent = nullptr);
 
     void setEntries(std::vector<TimelineLayerEntry> entries);
     void setScrollOffset(int offset);
@@ -167,13 +169,14 @@ class TimelineLayerStack final : public QWidget {
     // navigation still ran while the step shortcuts were suppressed).
     [[nodiscard]] int currentRow() const noexcept { return currentRow_; }
     void setCurrentRow(int row);
-    // The y of row `row` in this widget's own coordinates, scroll offset included. Exposed so a test
-    // can prove the left column and the lane region move by exactly the same amount.
+    // The y of row `row` in this widget's own coordinates, scroll offset included. Exposed so a
+    // test can prove the left column and the lane region move by exactly the same amount.
     [[nodiscard]] int rowTop(int row) const noexcept;
-    // The tooltip this column shows at `position`: the honest reason one of the four reserved toggle
-    // cells is inert, or the row's own kind/layer/slot line. Rows are transparent for mouse events so
-    // that this -- and the hit test, and the keyboard -- all live in ONE place; it doubles as the test
-    // seam for the honesty tooltips (the precedent being TimelineRuler::majorTickLabelRectsForTest()).
+    // The tooltip this column shows at `position`: the honest reason one of the four reserved
+    // toggle cells is inert, or the row's own kind/layer/slot line. Rows are transparent for mouse
+    // events so that this -- and the hit test, and the keyboard -- all live in ONE place; it
+    // doubles as the test seam for the honesty tooltips (the precedent being
+    // TimelineRuler::majorTickLabelRectsForTest()).
     [[nodiscard]] QString toolTipAt(QPoint position) const;
 
   Q_SIGNALS:

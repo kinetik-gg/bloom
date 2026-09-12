@@ -51,8 +51,8 @@ std::uint64_t TimelineAxis::frameIndexForPixel(const int pixelX) const noexcept 
     const auto position = static_cast<std::uint64_t>(clamped);
     if (position != 0 && maxIndex > std::numeric_limits<std::uint64_t>::max() / position) {
         const double fraction = static_cast<double>(clamped) / static_cast<double>(span);
-        const double approximate =
-            std::clamp(fraction * static_cast<double>(maxIndex), 0.0, static_cast<double>(maxIndex));
+        const double approximate = std::clamp(fraction * static_cast<double>(maxIndex), 0.0,
+                                              static_cast<double>(maxIndex));
         return static_cast<std::uint64_t>(approximate);
     }
     const auto product = position * maxIndex;

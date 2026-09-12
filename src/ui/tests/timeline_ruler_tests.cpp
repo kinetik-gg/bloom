@@ -978,10 +978,10 @@ void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations)
 }
 
 // Task T1: the playhead is a 1px Accent line (it was 2px before, and its head marker now lives once
-// in the work-area row above the ruler rather than on the ruler's own top edge). Playhead PIXEL MATH
-// itself is unchanged (pinned by testRulerScrubLandsOnExactFrameTimesIncludingATie above via
-// scrubbing); this pins the RESTYLED presentation -- the line is Accent, exactly one pixel wide, and
-// at the column the SHARED TimelineAxis puts the current time in, not at an assumed midpoint.
+// in the work-area row above the ruler rather than on the ruler's own top edge). Playhead PIXEL
+// MATH itself is unchanged (pinned by testRulerScrubLandsOnExactFrameTimesIncludingATie above via
+// scrubbing); this pins the RESTYLED presentation -- the line is Accent, exactly one pixel wide,
+// and at the column the SHARED TimelineAxis puts the current time in, not at an assumed midpoint.
 void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Playhead Color Test", time(1)));

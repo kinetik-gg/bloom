@@ -69,11 +69,11 @@ constexpr int kBlendingCellX = kNameCellX + kNameCellWidth + kCellGap;
 constexpr int kParentCellX = kBlendingCellX + kBlendingCellWidth + kCellGap;
 constexpr int kLayerColumnWidthPx = kParentCellX + kParentCellWidth + kColumnPadding;
 
-// The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent, not
-// its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar to
-// Size::ScrollBarHover, and if that growth came out of the lane region's own width the ruler above it
-// would stop agreeing with the lanes about where a frame is the instant the pointer touched the
-// scrollbar. Reserving the larger extent once means the time axis never moves.
+// The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent,
+// not its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar
+// to Size::ScrollBarHover, and if that growth came out of the lane region's own width the ruler
+// above it would stop agreeing with the lanes about where a frame is the instant the pointer
+// touched the scrollbar. Reserving the larger extent once means the time axis never moves.
 constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
 
 [[nodiscard]] int toggleCellX(const int index) { return kToggleStripX + index * kToggleCellWidth; }
@@ -89,8 +89,8 @@ constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
 // vocabulary -- and src/document, which has no per-layer visibility, audio, solo, or lock field
 // anywhere (document::LayerStackEntry is a slot id and a layer id, nothing else). The task package
 // describes the eye as wired to an "existing command"; there is no such command in this repository,
-// so the repository's own honesty rule applies verbatim: a permanently dimmed, non-interactive glyph
-// that says why, never a toggle that would silently do nothing.
+// so the repository's own honesty rule applies verbatim: a permanently dimmed, non-interactive
+// glyph that says why, never a toggle that would silently do nothing.
 enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
 
 [[nodiscard]] kit::IconId toggleIcon(const int index) {
@@ -139,7 +139,8 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
 
 // ---------------------------------------------------------------------------------------------
 
-[[nodiscard]] QString layerKind(const CompositionSession& session, const document::LayerId layerId) {
+[[nodiscard]] QString layerKind(const CompositionSession& session,
+                                const document::LayerId layerId) {
     const auto* sourceNode = directSourceNode(session, layerId);
     if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
                       document::kSolidSourceNodeSchemaVersion)) {
@@ -157,17 +158,17 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
 // BLOCKED SUB-ITEM, disclosed in this task's raw report. The task removes the Kind column and says
 // kind is expressed by the clip color instead. The data-type palette cannot express Bloom's kinds:
 // every one of its five roles names a kind of REFERENCED MEDIA (docs/ux/visual-language.md: image
-// sequences, clips, compositions, still images, audio), and Bloom has no media import pipeline and no
-// media-backed layer type at all -- its only kinds are Solid and Text, both generated in-project.
-// DataComposition is the single role whose stated meaning is in-project authored content rather than
-// a referenced asset, so it is the only honest choice for both; the others would claim a kind of
-// media this project cannot even open.
+// sequences, clips, compositions, still images, audio), and Bloom has no media import pipeline and
+// no media-backed layer type at all -- its only kinds are Solid and Text, both generated
+// in-project. DataComposition is the single role whose stated meaning is in-project authored
+// content rather than a referenced asset, so it is the only honest choice for both; the others
+// would claim a kind of media this project cannot even open.
 //
-// The one role that would have given a second distinct color to a generated raster plane, DataImage,
-// is additionally unusable on its own terms: its value (#3AA5F0) is byte-identical to AccentHover and
-// one step from Accent (#0C8CE9), so a solid's clip bar would read as an accent/selected surface and
-// would swallow the 1px Accent playhead crossing it. Adding a DataSolid/DataText role is a kit edit,
-// outside this task's fence.
+// The one role that would have given a second distinct color to a generated raster plane,
+// DataImage, is additionally unusable on its own terms: its value (#3AA5F0) is byte-identical to
+// AccentHover and one step from Accent (#0C8CE9), so a solid's clip bar would read as an
+// accent/selected surface and would swallow the 1px Accent playhead crossing it. Adding a
+// DataSolid/DataText role is a kit edit, outside this task's fence.
 //
 // So this is ONE mapping for every kind that exists, exactly as task U7 reviewed it -- and kind is
 // NOT lost with the column: TimelineLayerStack::toolTipAt() names it on every row. An unrecognized
@@ -186,9 +187,9 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
     return kit::Color::Muted;
 }
 
-// The layer the session currently points at: the primary selection when it IS a layer, otherwise the
-// contextual layer a node/parameter selection carries. Exactly the resolution order the QTreeWidget
-// stack used before this task.
+// The layer the session currently points at: the primary selection when it IS a layer, otherwise
+// the contextual layer a node/parameter selection carries. Exactly the resolution order the
+// QTreeWidget stack used before this task.
 [[nodiscard]] std::optional<document::LayerId> selectedLayer(const CompositionSession& session) {
     if (const auto* direct = std::get_if<document::LayerId>(&session.selection().primary)) {
         return *direct;
@@ -208,8 +209,8 @@ QToolButton* makeToolButton(const QString& text, const QString& accessibleName, 
 // "plain QToolButton + kit::icon()" idiom EditorArea's own header chrome already uses
 // (editor_area.cpp's makeHeaderButton) -- not kit::KButton, which is not a QToolButton and would
 // break every existing findChild<QToolButton*>("playPauseButton") test contract. An icon never
-// replaces an accessible name (ADR 0010; docs/ux/visual-language.md's Iconography section), so every
-// call site still sets both a tooltip and setAccessibleName().
+// replaces an accessible name (ADR 0010; docs/ux/visual-language.md's Iconography section), so
+// every call site still sets both a tooltip and setAccessibleName().
 QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip,
                                 const QString& accessibleName, const QString& objectName,
                                 QWidget* parent) {
@@ -227,9 +228,10 @@ QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip
 }
 
 // Blending/Parent: one always-disabled KDropdown per row, each carrying its single honest value
-// ("Normal" / "None"). No blend-mode vocabulary and no parenting feature exist in the document model
-// or the command vocabulary, so there is nothing else to offer, and the tooltip says so rather than
-// the control merely looking unresponsive. Compact control size so a real dropdown fits the 32px row.
+// ("Normal" / "None"). No blend-mode vocabulary and no parenting feature exist in the document
+// model or the command vocabulary, so there is nothing else to offer, and the tooltip says so
+// rather than the control merely looking unresponsive. Compact control size so a real dropdown fits
+// the 32px row.
 kit::KDropdown* makeDisabledPlaceholderDropdown(const QString& value, const QString& toolTip,
                                                 const QString& objectName, QWidget* parent) {
     auto* dropdown = new kit::KDropdown(parent);
@@ -250,10 +252,11 @@ void paintRowSeparator(QPainter& painter, const int top, const int widthPixels) 
     painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(widthPixels), y));
 }
 
-// The selected row's own fill, in both halves. SurfaceRaised FILL rather than a BorderActive outline
-// (the task allows either): a fill is one rectangle per half that reads as a single continuous row
-// across the column/lane boundary, where an outline would have to be stitched out of three edges in
-// one widget and three in the other and would break wherever the two halves' widths disagreed.
+// The selected row's own fill, in both halves. SurfaceRaised FILL rather than a BorderActive
+// outline (the task allows either): a fill is one rectangle per half that reads as a single
+// continuous row across the column/lane boundary, where an outline would have to be stitched out of
+// three edges in one widget and three in the other and would break wherever the two halves' widths
+// disagreed.
 void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixels) {
     painter.fillRect(QRect(0, top, widthPixels, kTimelineRowHeight),
                      kit::color(kit::Color::SurfaceRaised));
@@ -265,14 +268,15 @@ void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixel
 // One pooled row of the left layer-stack column.
 //
 // Deliberately not exposed via the header -- TimelineLayerStack owns it exclusively and
-// forward-declares it (`class TimelineLayerRow*`) purely to type its pool -- so this definition must
-// live directly in bloom::ui rather than in an anonymous namespace (which would make it a distinct,
-// unrelated type from that forward declaration). It declares no Q_OBJECT: it has no signals, and it
-// never connects to anything, so it stays free of moc, exactly like TimelineKeyframeRow.
+// forward-declares it (`class TimelineLayerRow*`) purely to type its pool -- so this definition
+// must live directly in bloom::ui rather than in an anonymous namespace (which would make it a
+// distinct, unrelated type from that forward declaration). It declares no Q_OBJECT: it has no
+// signals, and it never connects to anything, so it stays free of moc, exactly like
+// TimelineKeyframeRow.
 //
-// It is WA_TransparentForMouseEvents: selection, keyboard navigation, and tooltips all belong to the
-// column as a whole, so there is exactly one hit-test and one tooltip table instead of one per row.
-// The attribute applies only to this widget, never to its children, so its two dropdowns still
+// It is WA_TransparentForMouseEvents: selection, keyboard navigation, and tooltips all belong to
+// the column as a whole, so there is exactly one hit-test and one tooltip table instead of one per
+// row. The attribute applies only to this widget, never to its children, so its two dropdowns still
 // receive their own events.
 class TimelineLayerRow final : public QWidget {
   public:
@@ -281,17 +285,15 @@ class TimelineLayerRow final : public QWidget {
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setFixedHeight(kTimelineRowHeight);
         blending_ = makeDisabledPlaceholderDropdown(
-            TimelineEditor::tr("Normal"),
-            TimelineEditor::tr("Blend modes are not implemented yet"),
+            TimelineEditor::tr("Normal"), TimelineEditor::tr("Blend modes are not implemented yet"),
             QStringLiteral("layerBlendingDropdown"), this);
         parentDropdown_ = makeDisabledPlaceholderDropdown(
-            TimelineEditor::tr("None"),
-            TimelineEditor::tr("Layer parenting does not exist yet"),
+            TimelineEditor::tr("None"), TimelineEditor::tr("Layer parenting does not exist yet"),
             QStringLiteral("layerParentDropdown"), this);
     }
 
-    // Re-points this pooled row at another layer. No widget is created or destroyed and no layout is
-    // invalidated -- only the painted content and the two dropdowns' geometry, which is why a
+    // Re-points this pooled row at another layer. No widget is created or destroyed and no layout
+    // is invalidated -- only the painted content and the two dropdowns' geometry, which is why a
     // composition with hundreds of layers costs the same handful of widgets as one with three.
     void bind(const TimelineLayerEntry& entry, const bool selected) {
         name_ = entry.name;
@@ -315,8 +317,8 @@ class TimelineLayerRow final : public QWidget {
         Q_UNUSED(event)
         QPainter painter(this);
         // Flat rows: no alternating stripe at all. The selected row takes SurfaceRaised.
-        painter.fillRect(rect(), kit::color(selected_ ? kit::Color::SurfaceRaised
-                                                     : kit::Color::Background));
+        painter.fillRect(
+            rect(), kit::color(selected_ ? kit::Color::SurfaceRaised : kit::Color::Background));
         paintRowSeparator(painter, 0, width());
 
         // The four reserved toggle glyphs, every one of them disabled ink (see toggleToolTip()).
@@ -363,7 +365,7 @@ void TimelineColumnHeaders::paintEvent(QPaintEvent* event) {
 
     for (int index = 0; index < kToggleCellCount; ++index) {
         const auto glyph = kit::iconPixmap(toggleIcon(index), kit::Size::IconSmall,
-                                          kit::Color::Muted, kit::State::Disabled);
+                                           kit::Color::Muted, kit::State::Disabled);
         const int glyphExtent = kit::px(kit::Size::IconSmall);
         const int x = toggleCellX(index) + (kToggleCellWidth - glyphExtent) / 2;
         const int y = (height() - glyphExtent) / 2;
@@ -471,7 +473,8 @@ void TimelineLayerStack::setCurrentRow(const int row) {
 
 void TimelineLayerStack::relayoutRows() {
     const int viewportRows = (height() + kTimelineRowHeight - 1) / kTimelineRowHeight + 1;
-    const int first = std::clamp(scrollOffset_ / kTimelineRowHeight, 0, std::max(0, rowCount() - 1));
+    const int first =
+        std::clamp(scrollOffset_ / kTimelineRowHeight, 0, std::max(0, rowCount() - 1));
     const int needed = std::clamp(rowCount() - first, 0, viewportRows);
     while (static_cast<int>(rowPool_.size()) < needed) {
         rowPool_.push_back(new TimelineLayerRow(this));
@@ -514,7 +517,8 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
         return;
     }
     setFocus(Qt::MouseFocusReason);
-    const int index = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
+    const int index =
+        (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
     if (index < 0 || index >= rowCount()) {
         // Clicking the empty area below the last row clears the selection, exactly as clicking the
         // blank area of the QTreeWidget this column replaces did.
@@ -569,8 +573,8 @@ QString TimelineLayerStack::toolTipAt(const QPoint position) const {
     if (index < 0 || index >= rowCount()) {
         return {};
     }
-    // The row's kind lives here: task T1 removes the Kind COLUMN, and this is where that information
-    // keeps reaching the artist rather than being silently dropped with the column.
+    // The row's kind lives here: task T1 removes the Kind COLUMN, and this is where that
+    // information keeps reaching the artist rather than being silently dropped with the column.
     const auto& entry = entries_[static_cast<std::size_t>(index)];
     return tr("%1 · Layer %2 · Slot %3")
         .arg(entry.kind)
@@ -655,10 +659,10 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     if (!axis.has_value()) {
         return std::nullopt;
     }
-    // No trim exists anywhere in the document model (document::LayerStackEntry carries a slot id and
-    // a layer id, and no in/out point exists on a layer at all), so the honest extent is the WHOLE
-    // composition range -- derived from the axis rather than assumed to be the full widget width, so
-    // the day a trim feature lands this is already asking the right question.
+    // No trim exists anywhere in the document model (document::LayerStackEntry carries a slot id
+    // and a layer id, and no in/out point exists on a layer at all), so the honest extent is the
+    // WHOLE composition range -- derived from the axis rather than assumed to be the full widget
+    // width, so the day a trim feature lands this is already asking the right question.
     const qreal left = axis->pixelForTime(core::RationalTime::fromInteger(0));
     const qreal right = axis->pixelForTime(composition->duration());
     const int inset = kit::px(kit::Spacing::XXS);
@@ -758,7 +762,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playback_ = new PlaybackController(session_, previewController, &std::chrono::steady_clock::now,
                                        std::chrono::milliseconds{16}, this);
 
-    // ---- Header row: the transport/readout cluster on the left, the work area on the right -------
+    // ---- Header row: the transport/readout cluster on the left, the work area on the right
+    // -------
     auto* headerRow = new QWidget(this);
     headerRow->setObjectName("timelineHeaderRow");
     headerRow->setFixedHeight(kit::px(kit::Size::Control));
@@ -848,8 +853,9 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     headerLayout->addWidget(headerGutter);
 
     // ---- Column-header row: the icon/name/blending/parent headers, then the RULER ---------------
-    // This is what puts frame 0 at the lane region's left edge: the ruler is the RIGHT member of this
-    // row, so its own x origin IS the left column's width, and it never paints over that column.
+    // This is what puts frame 0 at the lane region's left edge: the ruler is the RIGHT member of
+    // this row, so its own x origin IS the left column's width, and it never paints over that
+    // column.
     auto* columnHeaderRow = new QWidget(this);
     columnHeaderRow->setObjectName("timelineColumnHeaderRow");
     columnHeaderRow->setFixedHeight(kit::px(kit::Size::Control));
@@ -883,8 +889,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     gutterLayout->setContentsMargins(0, 0, 0, 0);
     gutterLayout->setSpacing(0);
     // The scrollbar sits inside a gutter of the scrollbar's own HOVER extent, so the kit
-    // stylesheet's hover growth happens INSIDE the reserved width and the lane region's own width --
-    // and therefore the time axis -- never moves under the pointer.
+    // stylesheet's hover growth happens INSIDE the reserved width and the lane region's own width
+    // -- and therefore the time axis -- never moves under the pointer.
     gutterLayout->addWidget(scrollBar_, 0, Qt::AlignRight);
     bodyLayout->addWidget(stack_);
     bodyLayout->addWidget(lanes_, 1);
@@ -925,22 +931,21 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             &TimelineEditor::updatePlaybackButton);
     updatePlaybackButton(playback_->state());
 
-    // ONE scrollbar drives both halves of the grid: left/right scroll sync is structural here, not a
-    // pair of handlers keeping two scroll areas in step.
+    // ONE scrollbar drives both halves of the grid: left/right scroll sync is structural here, not
+    // a pair of handlers keeping two scroll areas in step.
     connect(scrollBar_, &QScrollBar::valueChanged, this, [this](const int value) {
         stack_->setScrollOffset(value);
         lanes_->setScrollOffset(value);
     });
-    connect(stack_, &TimelineLayerStack::viewportResized, this,
-            &TimelineEditor::updateScrollRange);
+    connect(stack_, &TimelineLayerStack::viewportResized, this, &TimelineEditor::updateScrollRange);
 
-    // Spacebar application shortcut (decision 4), gated against stealing Space from text-entry focus
-    // using the SAME idiom main_window.cpp's own window-level shortcuts use (QAction +
+    // Spacebar application shortcut (decision 4), gated against stealing Space from text-entry
+    // focus using the SAME idiom main_window.cpp's own window-level shortcuts use (QAction +
     // setShortcutContext(Qt::WindowShortcut)): Qt::WindowShortcut fires whenever this widget's
-    // top-level window is active, independent of which descendant currently holds focus, EXCEPT that
-    // a focused text-entry widget accepts the ShortcutOverride event for an ordinary printable key
-    // like Space itself first -- the standard Qt mechanism for exactly this gating, not a bespoke
-    // focus check.
+    // top-level window is active, independent of which descendant currently holds focus, EXCEPT
+    // that a focused text-entry widget accepts the ShortcutOverride event for an ordinary printable
+    // key like Space itself first -- the standard Qt mechanism for exactly this gating, not a
+    // bespoke focus check.
     auto* playPauseAction = new QAction(tr("Play/Pause"), this);
     playPauseAction->setObjectName("playPauseAction");
     playPauseAction->setShortcut(QKeySequence(Qt::Key_Space));
@@ -952,8 +957,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // WindowShortcut idiom exactly. Issue #120 (task U5) replaced PropertiesEditor's Position X/Y
     // QDoubleSpinBoxes with kit::KValueField, which has no line edit and does NOT accept
     // ShortcutOverride for Left/Right/Home/End -- so those keys typed while a Position field has
-    // focus ALSO fire these actions. Still flagged rather than fixed here: the fix belongs to whoever
-    // next owns kit::KValueField's key handling.
+    // focus ALSO fire these actions. Still flagged rather than fixed here: the fix belongs to
+    // whoever next owns kit::KValueField's key handling.
     stepBackwardAction_ = new QAction(tr("Step Back One Frame"), this);
     stepBackwardAction_->setObjectName("stepBackwardAction");
     stepBackwardAction_->setShortcut(QKeySequence(Qt::Key_Left));
@@ -989,19 +994,21 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // to be (issue #108's own investigation): the layer stack consumes Up/Down/Home/End for its OWN
     // row navigation but, unlike a text-entry widget, does not claim the ShortcutOverride event for
     // them, so a same-key WindowShortcut action would silently swallow that navigation. The frozen
-    // rule -- widget focus wins, the step action fires otherwise -- is implemented by disabling these
-    // four actions outright while the stack holds keyboard focus: a disabled QAction never claims
-    // ShortcutOverride, so the key event reaches the stack and its navigation runs unchanged.
+    // rule -- widget focus wins, the step action fires otherwise -- is implemented by disabling
+    // these four actions outright while the stack holds keyboard focus: a disabled QAction never
+    // claims ShortcutOverride, so the key event reaches the stack and its navigation runs
+    // unchanged.
     focusConnection_ =
         connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
-        const bool stackFocused = now != nullptr && (now == stack_ || stack_->isAncestorOf(now));
-        stepBackwardAction_->setEnabled(!stackFocused);
-        stepForwardAction_->setEnabled(!stackFocused);
-        stepToStartAction_->setEnabled(!stackFocused);
-        stepToEndAction_->setEnabled(!stackFocused);
-        // The visible step buttons mirror their action's enabled state exactly, so the same
-        // reconciliation is visible on the mouse affordance too rather than showing a clickable
-        // button that would silently do nothing.
+            const bool stackFocused =
+                now != nullptr && (now == stack_ || stack_->isAncestorOf(now));
+            stepBackwardAction_->setEnabled(!stackFocused);
+            stepForwardAction_->setEnabled(!stackFocused);
+            stepToStartAction_->setEnabled(!stackFocused);
+            stepToEndAction_->setEnabled(!stackFocused);
+            // The visible step buttons mirror their action's enabled state exactly, so the same
+            // reconciliation is visible on the mouse affordance too rather than showing a clickable
+            // button that would silently do nothing.
             stepBackButton_->setEnabled(!stackFocused);
             stepForwardButton_->setEnabled(!stackFocused);
         });
@@ -1012,10 +1019,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             &TimelineEditor::updateSelection);
     connect(&session_, &CompositionSession::historyChanged, this,
             &TimelineEditor::updateHistoryActions);
-    // Readout updates on every session-time change and on a composition switch (which resets session
-    // time to exact zero -- docs/architecture/animation-and-time.md, "Session Time And Scrubbing"),
-    // so the label always reflects the SAME time compositionChanged's reset already produced rather
-    // than momentarily showing the previous composition's stale frame/time.
+    // Readout updates on every session-time change and on a composition switch (which resets
+    // session time to exact zero -- docs/architecture/animation-and-time.md, "Session Time And
+    // Scrubbing"), so the label always reflects the SAME time compositionChanged's reset already
+    // produced rather than momentarily showing the previous composition's stale frame/time.
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &TimelineEditor::updateTimeReadout);
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -1087,8 +1094,8 @@ void TimelineEditor::updateHistoryActions() {
 void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
     const bool playing = state == PlaybackState::Playing;
     playPauseButton_->setChecked(playing);
-    // text()/isChecked() stay the pinned test contract verbatim (playback_controller_tests.cpp); the
-    // icon swap (task U7, issue #122, decision 5: "Play/Pause swap") is purely additive.
+    // text()/isChecked() stay the pinned test contract verbatim (playback_controller_tests.cpp);
+    // the icon swap (task U7, issue #122, decision 5: "Play/Pause swap") is purely additive.
     playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
     playPauseButton_->setIcon(
         kit::icon(playing ? kit::IconId::Pause : kit::IconId::Play, kit::Size::IconMedium));
@@ -1108,12 +1115,12 @@ void TimelineEditor::stepFrame(const int delta) {
     if (!nearest.has_value()) {
         return;
     }
-    // Stepping while playing pauses playback FIRST through PlaybackController's own public transport
-    // API (design decision 1) -- composing with pause() explicitly here rather than relying on
-    // handleCurrentTimeChanged()'s existing "any external setCurrentTime() while playing pauses" side
-    // effect, so this call site is honest about what it does and the transport state change is never a
-    // coincidental side effect of the time write below. Called unconditionally (idempotent no-op if
-    // already Stopped), not only when the step actually moves the playhead.
+    // Stepping while playing pauses playback FIRST through PlaybackController's own public
+    // transport API (design decision 1) -- composing with pause() explicitly here rather than
+    // relying on handleCurrentTimeChanged()'s existing "any external setCurrentTime() while playing
+    // pauses" side effect, so this call site is honest about what it does and the transport state
+    // change is never a coincidental side effect of the time write below. Called unconditionally
+    // (idempotent no-op if already Stopped), not only when the step actually moves the playhead.
     playback_->pause();
 
     // Left/Right move exactly one frame index from the nearest index to the CURRENT (possibly
@@ -1128,8 +1135,8 @@ void TimelineEditor::stepFrame(const int delta) {
     const auto targetTime = frameTimeForIndex(context->frameRate, context->duration, target);
     if (targetTime.has_value()) {
         // A clamped step that lands back on the CURRENT exact time (e.g. Left at frame 0) is a true
-        // no-op through CompositionSession::setCurrentTime()'s own early-return-on-equal-time guard --
-        // no currentTimeChanged signal churn.
+        // no-op through CompositionSession::setCurrentTime()'s own early-return-on-equal-time guard
+        // -- no currentTimeChanged signal churn.
         (void)session_.setCurrentTime(*targetTime);
     }
 }

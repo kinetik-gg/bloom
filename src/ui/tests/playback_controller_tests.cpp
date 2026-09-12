@@ -846,17 +846,19 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
 }
 
 // Arrow-key conflict finding (issue #108's own investigation, verified with a standalone Qt harness
-// before the reconciliation was written): the layer stack already consumes arrow/Home/End keys for its
-// OWN row navigation (Home/End jump to the first/last row), but -- unlike a text-entry widget -- does
-// not claim the ShortcutOverride event for those keys, so a same-key WindowShortcut action would
-// otherwise silently swallow that navigation the instant it existed. The reconciliation rule
-// implemented in timeline_editor.cpp: widget-focus wins -- stepping is suppressed while the stack has
-// focus, and the stack's own navigation runs completely unchanged; step fires again once focus leaves.
+// before the reconciliation was written): the layer stack already consumes arrow/Home/End keys for
+// its OWN row navigation (Home/End jump to the first/last row), but -- unlike a text-entry widget
+// -- does not claim the ShortcutOverride event for those keys, so a same-key WindowShortcut action
+// would otherwise silently swallow that navigation the instant it existed. The reconciliation rule
+// implemented in timeline_editor.cpp: widget-focus wins -- stepping is suppressed while the stack
+// has focus, and the stack's own navigation runs completely unchanged; step fires again once focus
+// leaves.
 //
-// ADAPTED for task T1 (enumerated in that task's report): the layer stack is no longer a QTreeWidget --
-// it is a painted row grid (bloom::ui::TimelineLayerStack, same "layerStackView" objectName, same
-// role) -- so the SAME assertions are made through its currentRow()/setCurrentRow()/rowCount() seam
-// instead of currentItem()/setCurrentItem()/topLevelItemCount(). Every behavioral claim below is
+// ADAPTED for task T1 (enumerated in that task's report): the layer stack is no longer a
+// QTreeWidget -- it is a painted row grid (bloom::ui::TimelineLayerStack, same "layerStackView"
+// objectName, same role) -- so the SAME assertions are made through its
+// currentRow()/setCurrentRow()/rowCount() seam instead of
+// currentItem()/setCurrentItem()/topLevelItemCount(). Every behavioral claim below is
 // byte-identical to the pre-T1 version; only the primitive the claim is read off changed.
 void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& expectations) {
     using namespace bloom;
@@ -913,9 +915,10 @@ void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& exp
 
     QTest::keyClick(stack, Qt::Key_End);
     QCoreApplication::processEvents();
-    expectations.expect(stack->currentRow() == 2,
-                        "the stack's OWN End navigation (jump to the last row) still runs unchanged "
-                        "while it has focus");
+    expectations.expect(
+        stack->currentRow() == 2,
+        "the stack's OWN End navigation (jump to the last row) still runs unchanged "
+        "while it has focus");
     expectations.expect(fixture.session.currentTime() == time(1, 25),
                         "the step-to-end action is suppressed while the stack has focus -- session "
                         "time is still untouched");

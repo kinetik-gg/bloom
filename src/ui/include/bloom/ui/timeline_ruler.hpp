@@ -29,8 +29,9 @@ class CompositionSession;
 // The ONE pixel <-> frame/time mapping every time-axis surface in the timeline panel reads (task
 // T1). It was private to timeline_ruler.cpp while the ruler was the only widget with a time axis;
 // the AE-style lane region now paints clip bars and the playhead on exactly the same axis, and the
-// work-area header row paints the playhead's head marker on it, so one shared definition is the only
-// way those three surfaces cannot drift apart by a pixel. Both directions' arithmetic moved verbatim.
+// work-area header row paints the playhead's head marker on it, so one shared definition is the
+// only way those three surfaces cannot drift apart by a pixel. Both directions' arithmetic moved
+// verbatim.
 //
 // Pixel coordinates are UI-space integers, not RationalTime values, so the reverse pixel ->
 // frame-index direction (used only for scrubbing) is a deliberately exact integer mapping using the
@@ -88,11 +89,11 @@ void paintPlayheadLine(QPainter& painter, const TimelineAxis& axis, core::Ration
                        qreal heightPixels);
 
 // The scrub ruler above the timeline's lane region (docs/architecture/animation-and-time.md,
-// "Session Time And Scrubbing"): paints frame ticks and the session's exact-time playhead, and turns
-// click/drag into session.setCurrentTime() calls that request the preview at Interactive priority
-// through the controller's trailing cadence (CompositionPreviewController::beginInteractiveScrub()/
-// notifyScrubEnded()). Projection and scrub only: no direct Viewer manipulation, no playback
-// transport, no key-editing gestures.
+// "Session Time And Scrubbing"): paints frame ticks and the session's exact-time playhead, and
+// turns click/drag into session.setCurrentTime() calls that request the preview at Interactive
+// priority through the controller's trailing cadence
+// (CompositionPreviewController::beginInteractiveScrub()/ notifyScrubEnded()). Projection and scrub
+// only: no direct Viewer manipulation, no playback transport, no key-editing gestures.
 //
 // Task T1: the ruler is laid out as the RIGHT part of the timeline's column-header row, so its x
 // origin is the lane region's left edge and its frame-0 label never paints over the layer-stack
@@ -111,10 +112,10 @@ class TimelineRuler final : public QWidget {
                   QWidget* parent = nullptr);
 
     // The ONE scrub path (task T1). The ruler's own mouse handlers call these, and so does the lane
-    // region, which shares this widget's exact x axis by construction (both are the expanding member
-    // of a row whose leading fixed-width layer column and trailing scrollbar gutter are identical),
-    // so a drag across a lane and a drag across the ruler are literally the same code -- no second
-    // scrub implementation, no second arming of the interactive preview cadence.
+    // region, which shares this widget's exact x axis by construction (both are the expanding
+    // member of a row whose leading fixed-width layer column and trailing scrollbar gutter are
+    // identical), so a drag across a lane and a drag across the ruler are literally the same code
+    // -- no second scrub implementation, no second arming of the interactive preview cadence.
     void beginScrub(int pixelX);
     void updateScrub(int pixelX);
     void endScrub(int pixelX);
