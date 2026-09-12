@@ -30,6 +30,63 @@
 #include <vector>
 
 namespace bloom::ui {
+
+std::optional<TimelineAxis> TimelineAxis::create(const document::Composition& composition,
+                                                 const int widthPixels) {
+    const auto frameRate = composition.format().frameRate();
+    const auto duration = composition.duration();
+    const auto maxIndex = ui::maxFrameIndex(frameRate, duration);
+    if (!maxIndex.has_value()) {
+        return std::nullopt;
+    }
+    return TimelineAxis{frameRate, duration, widthPixels, *maxIndex};
+}
+
+std::uint64_t TimelineAxis::frameIndexForPixel(const int pixelX) const noexcept {
+    if (widthPixels <= 1 || maxIndex == 0) {
+        return 0;
+    }
+    const int clamped = std::clamp(pixelX, 0, widthPixels - 1);
+    const auto span = static_cast<std::uint64_t>(widthPixels - 1);
+    const auto position = static_cast<std::uint64_t>(clamped);
+    if (position != 0 && maxIndex > std::numeric_limits<std::uint64_t>::max() / position) {
+        const double fraction = static_cast<double>(clamped) / static_cast<double>(span);
+        const double approximate =
+            std::clamp(fraction * static_cast<double>(maxIndex), 0.0, static_cast<double>(maxIndex));
+        return static_cast<std::uint64_t>(approximate);
+    }
+    const auto product = position * maxIndex;
+    const auto quotient = product / span;
+    const auto remainder = product % span;
+    const auto tiedUp = (remainder * 2 >= span) ? quotient + 1 : quotient;
+    return std::min(tiedUp, maxIndex);
+}
+
+qreal TimelineAxis::pixelForTime(const core::RationalTime time) const noexcept {
+    if (widthPixels <= 1) {
+        return 0.0;
+    }
+    const double durationSeconds = duration.toSeconds();
+    if (!(durationSeconds > 0.0)) {
+        return 0.0;
+    }
+    const double fraction = std::clamp(time.toSeconds() / durationSeconds, 0.0, 1.0);
+    return static_cast<qreal>(fraction * static_cast<double>(widthPixels - 1));
+}
+
+void paintPlayheadLine(QPainter& painter, const TimelineAxis& axis, const core::RationalTime time,
+                       const qreal heightPixels) {
+    // Snapped to the centre of one whole pixel column: a 1px pen on an integer x straddles the
+    // boundary between two columns at some device pixel ratios and reads as two half-lit columns,
+    // which is exactly the lie docs/ux/visual-language.md's Motion section forbids for a playhead.
+    const qreal x = std::floor(axis.pixelForTime(time)) + 0.5;
+    const bool wasAntialiased = painter.renderHints().testFlag(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setPen(QPen(kit::color(kit::Color::Accent), kPlayheadLineWidth));
+    painter.drawLine(QPointF(x, 0.0), QPointF(x, heightPixels));
+    painter.setRenderHint(QPainter::Antialiasing, wasAntialiased);
+}
+
 namespace {
 
 // Ruler/lane extents (task U7, issue #122, decisions 1/3): TimelineRow (34px) is the token every
@@ -37,7 +94,9 @@ namespace {
 // "ruler height" token exists) but is still resolved from Control (26px) rather than a bare
 // literal, matching this file's own prior 26px value exactly.
 const int kRulerHeight = kit::px(kit::Size::Control);
-const int kKeyframeRowHeight = kit::px(kit::Size::TimelineRow);
+// Task T1: the key lanes step by the panel's shared row pitch, so a key row lines up with the layer
+// rows and clip lanes above it instead of being two pixels taller than all of them.
+const int kKeyframeRowHeight = kTimelineRowHeight;
 // The honest work-area strip (decision 3): thin, using the smallest spacing token rather than an
 // invented pixel gap.
 const int kWorkAreaStripHeight = kit::px(kit::Spacing::XS);
@@ -54,74 +113,6 @@ constexpr qreal kMajorLabelGapPixels = 10.0;
 constexpr qreal kTickLabelInsetPixels = 3.0;
 constexpr qreal kMinorTickHeight = 4.0;
 constexpr qreal kMajorTickHeight = 8.0;
-// "Accent 2px line" (decision 4), shared by the ruler's own playhead and every keyframe lane row's
-// playhead segment so the line reads as one continuous stroke down through the whole panel.
-constexpr qreal kPlayheadLineWidth = 2.0;
-
-// Maps this widget's pixel-space x axis onto composition frame indices/time using
-// bloom::ui::maxFrameIndex()/frameTimeForIndex() (src/ui/include/bloom/ui/timeline_frame_math.hpp),
-// which delegate to bloom::core::FrameTimeMapping's checked, exact-rational contract math. Pixel
-// coordinates are UI-space integers, not RationalTime values, so the reverse pixel -> frame-index
-// direction below (used only for scrubbing) is a separate, deliberately exact integer mapping using
-// the same tie-to-greater rule as the time-domain contract, kept local to this file since it is not
-// part of that contract. The forward frame/time -> pixel direction (used only for painting) is
-// ordinary presentational arithmetic, not a clamp/tie/mapping decision.
-struct TimelineAxis final {
-    document::FrameRate frameRate;
-    core::RationalTime duration;
-    int widthPixels = 0;
-    std::uint64_t maxIndex = 0;
-
-    [[nodiscard]] static std::optional<TimelineAxis>
-    create(const document::Composition& composition, const int widthPixels) {
-        const auto frameRate = composition.format().frameRate();
-        const auto duration = composition.duration();
-        const auto maxIndex = ui::maxFrameIndex(frameRate, duration);
-        if (!maxIndex.has_value()) {
-            return std::nullopt;
-        }
-        return TimelineAxis{frameRate, duration, widthPixels, *maxIndex};
-    }
-
-    // Exact pixel -> frame index, clamped into the widget bounds, with an exact halfway pixel tie
-    // going to the greater index (checked integer arithmetic). Falls back to a defensively clamped
-    // floating approximation only if the exact product would overflow std::uint64_t -- unreachable
-    // for any realistic composition duration/frame rate combined with a practical widget width, but
-    // kept safe rather than UB, matching FrameTimeMapping's own defensive-clamp precedent.
-    [[nodiscard]] std::uint64_t frameIndexForPixel(const int pixelX) const noexcept {
-        if (widthPixels <= 1 || maxIndex == 0) {
-            return 0;
-        }
-        const int clamped = std::clamp(pixelX, 0, widthPixels - 1);
-        const auto span = static_cast<std::uint64_t>(widthPixels - 1);
-        const auto position = static_cast<std::uint64_t>(clamped);
-        if (position != 0 && maxIndex > std::numeric_limits<std::uint64_t>::max() / position) {
-            const double fraction = static_cast<double>(clamped) / static_cast<double>(span);
-            const double approximate = std::clamp(fraction * static_cast<double>(maxIndex), 0.0,
-                                                  static_cast<double>(maxIndex));
-            return static_cast<std::uint64_t>(approximate);
-        }
-        const auto product = position * maxIndex;
-        const auto quotient = product / span;
-        const auto remainder = product % span;
-        const auto tiedUp = (remainder * 2 >= span) ? quotient + 1 : quotient;
-        return std::min(tiedUp, maxIndex);
-    }
-
-    // Presentational time -> pixel (not a contract decision): clamps into [0, duration] so a key or
-    // playhead fractionally outside the composition's range still paints at a visible edge.
-    [[nodiscard]] qreal pixelForTime(const core::RationalTime time) const noexcept {
-        if (widthPixels <= 1) {
-            return 0.0;
-        }
-        const double durationSeconds = duration.toSeconds();
-        if (!(durationSeconds > 0.0)) {
-            return 0.0;
-        }
-        const double fraction = std::clamp(time.toSeconds() / durationSeconds, 0.0, 1.0);
-        return static_cast<qreal>(fraction * static_cast<double>(widthPixels - 1));
-    }
-};
 
 // The dense, unlabeled minor grid (decision 3: "minors as subtle ticks"): the smallest frame step
 // whose pixel spacing is still at least kMinimumPixelsPerMinorTick apart.
@@ -274,11 +265,9 @@ class TimelineKeyframeRow final : public QWidget {
             return;
         }
 
-        // Decision 4: the SAME Accent 2px line the ruler paints, continuing this row's own segment
-        // of it (no head marker here -- that lives once, in the ruler).
-        const qreal playheadX = axis->pixelForTime(session_.currentTime());
-        painter.setPen(QPen(kit::color(kit::Color::Accent), kPlayheadLineWidth));
-        painter.drawLine(QPointF(playheadX, 0.0), QPointF(playheadX, height()));
+        // The SAME 1px Accent stroke the ruler and the lane region paint, continuing this row's own
+        // segment of it (no head marker here -- that lives once, in the work-area header row).
+        paintPlayheadLine(painter, *axis, session_.currentTime(), height());
 
         const auto* keySelection = std::get_if<KeyframeSelection>(&session_.selection().primary);
         const qreal centerY = height() / 2.0;
@@ -630,19 +619,10 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
                          QString::number(label.index));
     }
 
-    // Playhead (decision 4): an Accent 2px line with a head marker, shared visually with every
-    // keyframe lane row's own playhead segment below (TimelineKeyframeRow::paintEvent) so the line
-    // reads as one continuous stroke down through the whole panel.
-    const qreal playheadX = axis->pixelForTime(session_.currentTime());
-    const QColor playheadColor = kit::color(kit::Color::Accent);
-    painter.setPen(QPen(playheadColor, kPlayheadLineWidth));
-    painter.drawLine(QPointF(playheadX, 0.0), QPointF(playheadX, height()));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(playheadColor);
-    QPolygonF marker;
-    marker << QPointF(playheadX - 5.0, 0.0) << QPointF(playheadX + 5.0, 0.0)
-           << QPointF(playheadX, 6.0);
-    painter.drawPolygon(marker);
+    // Playhead (task T1): the shared 1px Accent stroke, continuing down through every lane below.
+    // Its single head marker is painted once by TimelineWorkAreaRow, the row directly above this
+    // one -- two stacked markers (one here, one there) would read as two playheads.
+    paintPlayheadLine(painter, *axis, session_.currentTime(), height());
 }
 
 std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
@@ -662,14 +642,34 @@ std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
     return rects;
 }
 
+void TimelineRuler::beginScrub(const int pixelX) {
+    scrubbing_ = true;
+    previewController_.beginInteractiveScrub();
+    scrubToPixel(pixelX);
+}
+
+void TimelineRuler::updateScrub(const int pixelX) {
+    if (!scrubbing_) {
+        return;
+    }
+    scrubToPixel(pixelX);
+}
+
+void TimelineRuler::endScrub(const int pixelX) {
+    if (!scrubbing_) {
+        return;
+    }
+    scrubbing_ = false;
+    scrubToPixel(pixelX);
+    previewController_.notifyScrubEnded();
+}
+
 void TimelineRuler::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
         return;
     }
-    scrubbing_ = true;
-    previewController_.beginInteractiveScrub();
-    scrubToPixel(static_cast<int>(event->position().x()));
+    beginScrub(static_cast<int>(event->position().x()));
 }
 
 void TimelineRuler::mouseMoveEvent(QMouseEvent* event) {
@@ -677,7 +677,7 @@ void TimelineRuler::mouseMoveEvent(QMouseEvent* event) {
         QWidget::mouseMoveEvent(event);
         return;
     }
-    scrubToPixel(static_cast<int>(event->position().x()));
+    updateScrub(static_cast<int>(event->position().x()));
 }
 
 void TimelineRuler::mouseReleaseEvent(QMouseEvent* event) {
@@ -685,9 +685,7 @@ void TimelineRuler::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
-    scrubbing_ = false;
-    scrubToPixel(static_cast<int>(event->position().x()));
-    previewController_.notifyScrubEnded();
+    endScrub(static_cast<int>(event->position().x()));
 }
 
 void TimelineRuler::scrubToPixel(const int pixelX) {
@@ -736,6 +734,57 @@ void TimelineWorkAreaStrip::paintEvent(QPaintEvent* event) {
     // inventing a new opacity literal.
     painter.fillRect(rect(),
                      kit::withOpacity(kit::color(kit::Color::Accent), kit::kDisabledOpacity));
+}
+
+TimelineWorkAreaRow::TimelineWorkAreaRow(CompositionSession& session, QWidget* parent)
+    : QWidget(parent), session_(session) {
+    setObjectName("timelineWorkAreaRow");
+    setAccessibleName(tr("Work area and playhead"));
+    setFixedHeight(kit::px(kit::Size::Control));
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    // The strip keeps its own fixed thin height and its own objectName/role; this row only centres
+    // it inside the header row's height and paints the playhead's head marker over the remainder.
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addStretch(1);
+    strip_ = new TimelineWorkAreaStrip(session_, this);
+    layout->addWidget(strip_);
+    layout->addStretch(1);
+
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            qOverload<>(&TimelineWorkAreaRow::update));
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            qOverload<>(&TimelineWorkAreaRow::update));
+    connect(&session_, &CompositionSession::snapshotChanged, this,
+            qOverload<>(&TimelineWorkAreaRow::update));
+}
+
+void TimelineWorkAreaRow::paintEvent(QPaintEvent* event) {
+    Q_UNUSED(event)
+    QPainter painter(this);
+    painter.fillRect(rect(), kit::color(kit::Color::Surface));
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return;
+    }
+    const auto axis = TimelineAxis::create(*composition, width());
+    if (!axis.has_value()) {
+        return;
+    }
+    // The playhead's single head marker, at the very top of the stroke that continues through the
+    // ruler and every lane below: a small Accent triangle pointing down toward the line it heads.
+    const qreal x = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;
+    const auto bottom = static_cast<qreal>(height());
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(kit::color(kit::Color::Accent));
+    QPolygonF marker;
+    marker << QPointF(x - kPlayheadMarkerHalfWidth, bottom - kPlayheadMarkerHeight)
+           << QPointF(x + kPlayheadMarkerHalfWidth, bottom - kPlayheadMarkerHeight)
+           << QPointF(x, bottom);
+    painter.drawPolygon(marker);
 }
 
 TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidget* parent)

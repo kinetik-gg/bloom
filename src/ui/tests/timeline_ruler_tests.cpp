@@ -977,11 +977,12 @@ void testRulerMajorTickLabelsNeverCollideAtTwoWidths(Expectations& expectations)
                         "the density fixture reaches asynchronous scheduler quiescence");
 }
 
-// Decision 4: "Accent 2px line with a head marker... spanning ruler + lanes." Playhead PIXEL MATH
+// Task T1: the playhead is a 1px Accent line (it was 2px before, and its head marker now lives once
+// in the work-area row above the ruler rather than on the ruler's own top edge). Playhead PIXEL MATH
 // itself is unchanged (pinned by testRulerScrubLandsOnExactFrameTimesIncludingATie above via
-// scrubbing); this pins the RESTYLED presentation -- the line at the playhead's exact pixel is
-// Accent-colored across the ruler's full height.
-void testRulerPlayheadPaintsAnAccentLine(Expectations& expectations) {
+// scrubbing); this pins the RESTYLED presentation -- the line is Accent, exactly one pixel wide, and
+// at the column the SHARED TimelineAxis puts the current time in, not at an assumed midpoint.
+void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Ruler Playhead Color Test", time(1)));
     expectations.expect(waitUntil([&] {
@@ -995,8 +996,24 @@ void testRulerPlayheadPaintsAnAccentLine(Expectations& expectations) {
     sendClick(ruler, 100.0);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
+    const auto* composition = fixture.session.composition();
+    expectations.expect(composition != nullptr, "the composition is live");
+    if (composition == nullptr) {
+        fixture.controller.beginShutdown();
+        fixture.bridge.beginShutdown();
+        return;
+    }
+    const auto axis = ui::TimelineAxis::create(*composition, ruler.width());
+    expectations.expect(axis.has_value(), "the ruler's own shared axis resolves");
+    if (!axis.has_value()) {
+        fixture.controller.beginShutdown();
+        fixture.bridge.beginShutdown();
+        return;
+    }
+    const int playheadX =
+        static_cast<int>(std::floor(axis->pixelForTime(fixture.session.currentTime())));
+
     const QImage image = ruler.grab().toImage();
-    const int playheadX = image.width() / 2;
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
     bool sawAccent = false;
     for (int y = ruler.height() / 3; y < ruler.height(); ++y) {
@@ -1006,6 +1023,17 @@ void testRulerPlayheadPaintsAnAccentLine(Expectations& expectations) {
         }
     }
     expectations.expect(sawAccent, "the playhead paints an Accent-colored line at its exact pixel");
+
+    const int sampleY = ruler.height() / 2;
+    int accentColumns = 0;
+    for (int x = 0; x < image.width(); ++x) {
+        if (near(image.pixelColor(x, sampleY), accent, 24)) {
+            ++accentColumns;
+        }
+    }
+    expectations.expect(accentColumns == 1,
+                        "and it is exactly ONE pixel column wide -- the 1px stroke task T1 "
+                        "specifies, not the 2px one it replaced");
 
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
@@ -1061,7 +1089,7 @@ int main(int argc, char** argv) {
     testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(expectations);
     testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(expectations);
     testRulerMajorTickLabelsNeverCollideAtTwoWidths(expectations);
-    testRulerPlayheadPaintsAnAccentLine(expectations);
+    testRulerPlayheadPaintsAOnePixelAccentLine(expectations);
     testWorkAreaStripSpansFullWidthWithDimAccentBand(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
