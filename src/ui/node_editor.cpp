@@ -227,6 +227,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     switch (kind) {
     case runtime::SocketValueKind::Image:
         return kit::Color::DataImage;
+    default:
+        break;
     }
     return kit::Color::DataImage;
 }

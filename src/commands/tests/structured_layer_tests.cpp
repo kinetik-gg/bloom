@@ -154,68 +154,28 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
            left.graph().compositionOutput() == right.graph().compositionOutput();
 }
 
-void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
+void testAddTextLayerRefusesUntilRenderable(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
-    const auto original = document.snapshot();
-    const auto& originalComposition = composition(original);
-    const auto originalNodeCount = originalComposition.graph().nodes().size();
-    const auto originalEdgeCount = originalComposition.graph().edges().size();
-    const auto originalParameterCount = originalComposition.parameters().records().size();
-
-    Transaction add("Add text layer", original.revision());
-    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960.0, 540.0}, 0.75);
+    const auto before = document.snapshot();
+    Transaction add("Add text layer", before.revision());
+    add.emplace<SetProjectName>("Must not publish");
+    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960, 540}, 0.75);
     const auto result = stack.execute(std::move(add));
-    test.expect(result.status == CommandStatus::Succeeded && result.outputs.size() == 9,
-                "AddTextLayer should commit one topology edit and report every durable ID");
-
-    const auto layerId = result.outputId<LayerId>(kAddTextLayerLayerOutput);
-    const auto slotId = result.outputId<LayerSlotId>(kAddTextLayerSlotOutput);
-    const auto textNodeId = result.outputId<NodeId>(kAddTextLayerTextNodeOutput);
-    const auto layerOutputNodeId = result.outputId<NodeId>(kAddTextLayerLayerOutputNodeOutput);
-    const auto textParameterId = result.outputId<ParameterId>(kAddTextLayerTextParameterOutput);
-    const auto positionParameterId =
-        result.outputId<ParameterId>(kAddTextLayerPositionParameterOutput);
-    const auto opacityParameterId =
-        result.outputId<ParameterId>(kAddTextLayerOpacityParameterOutput);
-    test.expect(layerId && slotId && textNodeId && layerOutputNodeId && textParameterId &&
-                    positionParameterId && opacityParameterId,
-                "AddTextLayer should return every typed object identity");
-    if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !textParameterId ||
-        !positionParameterId || !opacityParameterId) {
-        return;
-    }
-
-    const auto added = document.snapshot();
-    const auto& addedComposition = composition(added);
-    test.expect(addedComposition.graph().nodes().size() == originalNodeCount + 2 &&
-                    addedComposition.graph().edges().size() == originalEdgeCount + 2 &&
-                    addedComposition.parameters().records().size() == originalParameterCount + 3 &&
-                    added.project().validate().ok(),
-                "AddTextLayer should create one valid source-to-boundary-to-stack topology");
-    const auto* textParameter = addedComposition.parameters().find(*textParameterId);
-    const auto* textConstant = textParameter == nullptr
-                                   ? nullptr
-                                   : std::get_if<ConstantValueSource>(&textParameter->source);
-    const auto* text =
-        textConstant == nullptr ? nullptr : std::get_if<std::string>(&textConstant->value);
-    test.expect(text != nullptr && *text == "Hello, Bloom!",
-                "created text parameter should preserve its exact text");
-
-    test.expect(stack.undo().changed(), "AddTextLayer should undo as one history entry");
-    const auto undone = document.snapshot();
-    test.expect(composition(undone).graph().nodes().size() == originalNodeCount &&
-                    composition(undone).graph().edges().size() == originalEdgeCount &&
-                    composition(undone).parameters().records().size() == originalParameterCount,
-                "AddTextLayer undo should remove its complete topology exactly");
-    test.expect(stack.redo().changed(), "AddTextLayer should redo as one history entry");
-    const auto boundaries = composition(document.snapshot()).graph().layerOutputs();
-    test.expect(std::ranges::find_if(boundaries,
-                                     [&](const auto& item) {
-                                         return item.layerId == *layerId &&
-                                                item.nodeId == *layerOutputNodeId;
-                                     }) != boundaries.end(),
-                "AddTextLayer redo should restore the exact layer identity");
+    test.expect(result.status == CommandStatus::Rejected && result.outputs.empty() &&
+                    result.operationFailures.size() == 1 &&
+                    result.operationFailures.front().issue.code ==
+                        OperationIssueCode::Unsupported &&
+                    result.operationFailures.front().issue.message.find("CPU text rendering") !=
+                        std::string::npos,
+                "text creation refuses clearly until CPU text rendering exists");
+    const auto after = document.snapshot();
+    test.expect(after.revision() == before.revision() &&
+                    after.project().name() == before.project().name() &&
+                    after.ids().highWater() == before.ids().highWater() &&
+                    hasSameTruth(composition(after), composition(before)) && stack.size() == 0 &&
+                    !stack.canUndo() && !stack.canRedo(),
+                "text refusal is atomic including IDs and history");
 }
 
 void testCompositionFormatCommand(TestContext& test) {
@@ -348,7 +308,7 @@ void testAddSolidLayerRejectsInvalidInputs(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
-        bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
+        bloom::commands::test::testAddTextLayerRefusesUntilRenderable(test);
         bloom::commands::test::testCompositionFormatCommand(test);
         bloom::commands::test::testAddSolidLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testPublishedSolidBranchIdsAreNeverReused(test);

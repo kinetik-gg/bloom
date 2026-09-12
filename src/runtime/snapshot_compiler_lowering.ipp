@@ -66,6 +66,7 @@
         if (cancelled()) {
             return std::nullopt;
         }
+        if (isMuted(node->id) || emptyImages_.contains(node->id)) continue;
         for (const auto& binding : node->parameters) {
             if (cancelled()) {
                 return std::nullopt;
@@ -125,6 +126,25 @@
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 lower(const std::vector<document::NodeId>& order) {
+    // Empty image values need no fake parameter IDs or evaluator operations. Propagate them
+    // through bypasses and transparent-preserving boundaries before compiling curve tables.
+    for (const auto id : order) {
+        if (cancelled()) return {};
+        const auto* node = findNode(id);
+        if (!node) continue;
+        const auto* definition = registry_.find(node->typeId, node->schemaVersion);
+        if (!definition || definition->lowering == runtime::NodeLoweringKind::LayerStack ||
+            definition->lowering == runtime::NodeLoweringKind::CompositionOutput) continue;
+        if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput) continue;
+        const auto input = firstImageInput(*node);
+        const auto edge = input ? std::ranges::find_if(reachableEdges_, [&](const auto* candidate) {
+            return candidate->destination == *input;
+        }) : reachableEdges_.end();
+        if ((edge == reachableEdges_.end() && isMuted(id)) ||
+            (edge != reachableEdges_.end() && emptyImages_.contains((*edge)->source.nodeId))) {
+            emptyImages_.insert(id);
+        }
+    }
     auto curveTables = compileReachableCurves();
     if (!curveTables.has_value()) {
         return {};
@@ -142,6 +162,36 @@ lower(const std::vector<document::NodeId>& order) {
         if (node == nullptr || definition == definitions_.end()) {
             addTopologyFailure(nodeId, "A reachable node lost its registered definition.");
             return {};
+        }
+        if (emptyImages_.contains(nodeId)) continue;
+        if (isMuted(nodeId) && definition->second->lowering != runtime::NodeLoweringKind::LayerStack &&
+            definition->second->lowering != runtime::NodeLoweringKind::CompositionOutput) {
+            const auto input = firstImageInput(*node);
+            const auto edge = input ? std::ranges::find_if(reachableEdges_, [&](const auto* candidate) {
+                return candidate->destination == *input;
+            }) : reachableEdges_.end();
+            if (edge != reachableEdges_.end()) {
+                const auto source = indices.find((*edge)->source.nodeId);
+                if (source == indices.end()) {
+                    addTopologyFailure(nodeId, "Muted node input was not lowered.");
+                    return {};
+                }
+                indices.emplace(nodeId, source->second);
+            } else {
+                addTopologyFailure(nodeId, "Muted empty image was not classified.");
+                return {};
+            }
+            continue;
+        }
+        const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
+        if (definition->second->lowering == runtime::NodeLoweringKind::CompositionOutput &&
+            ((isMuted(nodeId) && outputEdge == nullptr) ||
+             (outputEdge && emptyImages_.contains(outputEdge->source.nodeId)))) {
+            const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledLayerStack{nodeId, {}});
+            indices.emplace(nodeId, runtime::OperationIndex::fromRaw(operations.size()));
+            operations.emplace_back(runtime::CompiledCompositionOutput{nodeId, empty});
+            continue;
         }
         const auto operation = lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
@@ -237,7 +287,9 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
     const auto& layerSlotInput = *definition.layerSlotInput;
     std::vector<runtime::CompiledLayerStackEntry> entries;
     entries.reserve(composition_->graph().layerStack().entries().size());
-    for (const auto& entry : composition_->graph().layerStack().entries()) {
+    const auto slots = composition_->graph().layerStack().entries();
+    for (const auto& entry : slots) {
+        if ((isMuted(node.id) && entry.slotId != slots.front().slotId) || mutedLayer(entry)) continue;
         if (cancelled()) {
             return std::nullopt;
         }
@@ -246,6 +298,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
             addTopologyFailure(node.id, "Validated Layer Stack input could not be lowered.");
             return std::nullopt;
         }
+        if (emptyImages_.contains(edge->source.nodeId)) continue;
         const auto source = indices.find(edge->source.nodeId);
         if (source == indices.end()) {
             addTopologyFailure(node.id, "Layer Stack input operation is unavailable.");

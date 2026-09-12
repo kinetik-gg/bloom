@@ -926,11 +926,15 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
                         "large-registry cancellation stops before further definition resolution");
 }
 
+#include "snapshot_compiler_mute_tests.ipp"
+
 } // namespace
 
 int main() {
     Expectations expectations;
     try {
+        testMuteKindsAndPixels(expectations);
+        testMuteFirstImageInput(expectations);
         testRegistryMustBeFrozen(expectations);
         testDeterministicTypedPlan(expectations);
         testCustomSolidLoweringRemainsSupported(expectations);

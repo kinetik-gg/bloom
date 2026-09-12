@@ -1,3 +1,5 @@
+#include "legacy_text_fixture.hpp"
+
 // Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
 // chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
 // ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching
@@ -453,7 +455,8 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Clip Bar Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-    (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
+    ui::test::installLegacyTextLayer(fixture.document, fixture.commands, fixture.session, "B",
+                                     "Text");
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;
@@ -657,7 +660,8 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Kind Readability Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
-    (void)fixture.session.addTextLayer(QStringLiteral("B"), QStringLiteral("Text"));
+    ui::test::installLegacyTextLayer(fixture.document, fixture.commands, fixture.session, "B",
+                                     "Text");
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;

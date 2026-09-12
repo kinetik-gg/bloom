@@ -71,8 +71,8 @@ an editorial sequence.
 The first useful Bloom should demonstrate this complete workflow:
 
 1. Create a project and composition.
-2. Add a deterministic solid source. Text remains authorable, but its portable font pipeline is not
-   part of the first evaluator.
+2. Add a deterministic solid source. Text source records remain preservable; adding text layers is refused
+   until a portable CPU font pipeline is implemented.
 3. Represent it coherently in the layer timeline and canonical node graph.
 4. Synchronize selection across viewer, timeline, graph, and properties.
 5. Edit transform and opacity through properties and direct viewer manipulation.

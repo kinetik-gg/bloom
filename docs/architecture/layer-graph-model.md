@@ -222,3 +222,18 @@ dependency. The runtime header retains source-compatible aliases. Graph add/vali
 explicit registry for contributed schemas, defaulting to immutable built-ins; unknown schemas
 remain preservable. Existing ports are Image. Known incompatible socket kinds are rejected with
 `SocketKindMismatch`. Primitive lowering remains in runtime.
+
+
+### Text And Mute Lowering
+
+Text source records remain readable, but `AddTextLayer` refuses creation with an explicit message
+until portable CPU text rendering exists. A reachable unmuted text source produces a scoped
+`UnsupportedNode` diagnostic. The repository has no Qt-free glyph rasterization facility;
+UI font assets and Qt painting are not a portable document evaluator.
+
+Mute lowers in the compiler: the first Image input passes to the first Image output, or an
+unconnected/source image becomes transparent. A muted Layer Output is omitted from stack
+participation; other graph consumers can still receive its bypassed input. A muted stack uses
+only its first stable slot, and a muted composition endpoint passes through its input (empty
+when disconnected). Unused branches and bypassed parameter sources are not evaluated. The CPU
+evaluator primitives are unchanged.

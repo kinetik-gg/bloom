@@ -1,3 +1,5 @@
+#include "legacy_text_fixture.hpp"
+
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -210,7 +212,16 @@ parameterForRole(const bloom::document::Composition& composition,
                  "Solid action names the built-in proof palette encoding")) {
         return false;
     }
+    const auto beforeText = session.snapshot().revision();
+    QString textRefusal;
+    QObject::connect(&session, &ui::CompositionSession::commandRejected, &session,
+                     [&textRefusal](const QString& message) { textRefusal = message; });
     addTextAction->trigger();
+    if (!require(session.snapshot().revision() == beforeText &&
+                     textRefusal.contains(QStringLiteral("CPU text rendering")),
+                 "text action refuses without creating an invisible layer"))
+        return false;
+    ui::test::installLegacyTextLayer(document, commands, session, "Text 1", "Text");
 
     if (!require(waitUntil([&] {
                      return previewController.state().activity == ui::PreviewActivity::Unsupported;

@@ -148,6 +148,10 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                                          "Layer topology could not be inserted");
     }
 
+    const auto defaults = document::defaultNodeLayout(graph.nodes());
+    composition.nodeLayout().try_emplace(ids->sourceNodeId, defaults.at(ids->sourceNodeId));
+    composition.nodeLayout().try_emplace(ids->layerOutputNodeId,
+                                         defaults.at(ids->layerOutputNodeId));
     return OperationResult::applied({
         {std::string(outputNames.layer), DurableObjectId{ids->layerId}},
         {std::string(outputNames.slot), DurableObjectId{ids->slotId}},
@@ -220,16 +224,9 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
                                          "Text layer opacity must be between zero and one");
     }
 
-    return addStructuredLayer(
-        draft, *composition, name_,
-        {document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion,
-         document::kTextSourceOutputPort, document::kTextParameterSchemaKey,
-         document::kTextParameterRole, text_},
-        position_, opacity_,
-        {kAddTextLayerLayerOutput, kAddTextLayerSlotOutput, kAddTextLayerTextNodeOutput,
-         kAddTextLayerLayerOutputNodeOutput, kAddTextLayerTextParameterOutput,
-         kAddTextLayerPositionParameterOutput, kAddTextLayerOpacityParameterOutput,
-         kAddTextLayerTextToLayerEdgeOutput, kAddTextLayerLayerToStackEdgeOutput});
+    return OperationResult::rejected(
+        OperationIssueCode::Unsupported,
+        "Text layers are unavailable until portable CPU text rendering is implemented");
 }
 
 std::string_view SetProjectName::typeId() const noexcept { return "bloom.project.set-name"; }

@@ -207,6 +207,8 @@ class CompilePass final {
         hasUnsupported_ = true;
     }
 
+#include "snapshot_compiler_mute.ipp"
+
     [[nodiscard]] bool collectReachableGraph() {
         const auto& graph = composition_->graph();
         if (!graph.compositionOutput().has_value()) {
@@ -259,6 +261,8 @@ class CompilePass final {
                     if (cancelled()) {
                         return false;
                     }
+                    if (!consumesEdge(*node, *edge))
+                        continue;
                     reachableEdges.emplace(edge->id, edge);
                     pending.push_back(edge->source.nodeId);
                 }
@@ -367,7 +371,8 @@ class CompilePass final {
                 continue;
             }
             definitions_.emplace(node->id, definition);
-            if (definition->lowering == runtime::NodeLoweringKind::Unsupported) {
+            if (definition->lowering == runtime::NodeLoweringKind::Unsupported &&
+                !(isMuted(node->id) && hasImageOutput(*definition))) {
                 addUnsupported(
                     runtime::CompileDiagnosticCode::UnsupportedNode, subject(node->id, "typeId"),
                     "Node cannot be evaluated yet",
@@ -469,6 +474,8 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
+            if (isMuted(node->id))
+                continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
                 continue;
@@ -497,6 +504,8 @@ class CompilePass final {
                 continue;
             }
             for (const auto& entry : graph.layerStack().entries()) {
+                if (mutedLayer(entry))
+                    continue;
                 if (cancelled()) {
                     return;
                 }
@@ -519,6 +528,8 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
+            if (isMuted(node->id))
+                continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
                 continue;
@@ -782,6 +793,7 @@ class CompilePass final {
     std::unordered_map<document::AnimationCurveId, runtime::ScalarCurveIndex> scalarCurveIndices_;
     std::unordered_map<document::AnimationCurveId, runtime::Vec2CurveIndex> vec2CurveIndices_;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
+    std::unordered_set<document::NodeId> emptyImages_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;
 };

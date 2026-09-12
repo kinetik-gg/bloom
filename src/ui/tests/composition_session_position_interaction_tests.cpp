@@ -506,7 +506,7 @@ void testInvalidationOnCompositionSwitchAndStaleRevision() {
     require(session.setComposition(firstCompositionId), "session switches back");
     session.selectLayer(ids.layer);
     require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds again");
-    require(session.addTextLayer(QStringLiteral("Unrelated"), QStringLiteral("Unrelated")),
+    require(session.addSolidLayer(QStringLiteral("Unrelated"), {1, 1, 1, 1}),
             "an unrelated edit advances the document revision");
     require(!session.positionInteractionActive(),
             "a snapshot change that breaks the frozen base revision cancels the interaction");
