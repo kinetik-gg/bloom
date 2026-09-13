@@ -140,6 +140,15 @@ enum class KeyframeDiamondState : std::uint8_t {
     AnimatedWithKey,
 };
 
+// Which object a value write authors (task FIX2). Empty means the CURRENT SELECTION -- what the
+// Properties panel and the timeline row mean when they write. A node id names THAT node's own
+// parameter instead, which is what a node CARD means: a card authors the card it is drawn on, and
+// selecting itself first (as it used to, so a selection-driven write would find it) collapsed every
+// other selected card and moved the panel off whatever the artist was looking at. Both forms travel
+// the same function bodies below, so the two surfaces cannot drift on units, domains, keyframe
+// branching, or refusal wording.
+using AuthoringTarget = std::optional<document::NodeId>;
+
 class CompositionSession final : public QObject {
     Q_OBJECT
 
@@ -215,22 +224,22 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool addTextLayer(const QString& name, const QString& text,
                                     double size = document::kDefaultTextSizePixels,
                                     core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0});
-    [[nodiscard]] bool setSelectedPosition(double x, double y);
+    [[nodiscard]] bool setSelectedPosition(double x, double y, AuthoringTarget target = {});
     // The rest of the Layer Output transform. Anchor and scale are authored exactly as position is
     // (full-resolution composition pixels for the anchor, a unitless factor for the scale),
     // rotation in degrees clockwise on screen, and each is one undoable command that writes a
     // constant or a keyframe at the session time depending on the parameter's source.
-    [[nodiscard]] bool setSelectedAnchor(double x, double y);
-    [[nodiscard]] bool setSelectedScale(double x, double y);
-    [[nodiscard]] bool setSelectedRotation(double degrees);
-    [[nodiscard]] bool setSelectedOpacity(double opacity);
+    [[nodiscard]] bool setSelectedAnchor(double x, double y, AuthoringTarget target = {});
+    [[nodiscard]] bool setSelectedScale(double x, double y, AuthoringTarget target = {});
+    [[nodiscard]] bool setSelectedRotation(double degrees, AuthoringTarget target = {});
+    [[nodiscard]] bool setSelectedOpacity(double opacity, AuthoringTarget target = {});
     // The properties panel's editable RGBA cells write through this, exactly mirroring
     // setSelectedOpacity()'s shape -- resolve the selection's document::kSolidColorParameterRole
     // parameter, then one transaction. Task S5 gave it Position's full branch set: a constant
     // source takes commands::SetParameterSource, an ANIMATED one takes commands::SetKeyframeAtTime
     // at the session time (a colour parameter can be animated now), and a driven one is refused the
     // way setSelectionScalarParameter()'s driven branch is.
-    [[nodiscard]] bool setSelectedSolidColor(core::Color4d color);
+    [[nodiscard]] bool setSelectedSolidColor(core::Color4d color, AuthoringTarget target = {});
     // Task S3: the three text parameters, written through exactly the paths their solid/opacity
     // counterparts already use -- one commands::SetParameterSource per call, one transaction, one
     // undo step. Content goes through its own method rather than setSelectionScalarParameter()
@@ -239,9 +248,9 @@ class CompositionSession final : public QObject {
     // and a solid color cannot drift apart. Each is a no-op returning false (with the usual
     // commandRejected() message) when the selection exposes no such parameter, and a committing
     // no-op returning true when the value is already what was asked for.
-    [[nodiscard]] bool setSelectedTextContent(const QString& content);
-    [[nodiscard]] bool setSelectedTextSize(double size);
-    [[nodiscard]] bool setSelectedTextColor(core::Color4d color);
+    [[nodiscard]] bool setSelectedTextContent(const QString& content, AuthoringTarget target = {});
+    [[nodiscard]] bool setSelectedTextSize(double size, AuthoringTarget target = {});
+    [[nodiscard]] bool setSelectedTextColor(core::Color4d color, AuthoringTarget target = {});
     // The blend mode, by explicit LayerId. This is the primitive the timeline row needs: a row
     // knows which layer it draws and must not have to move the selection to change that layer's
     // blending. One commands::SetParameterSource carrying the mode's stored integer, one
@@ -431,19 +440,26 @@ class CompositionSession final : public QObject {
     nodeForSelection(const CompositionSelection& selection) const noexcept;
     [[nodiscard]] const document::ParameterRecord*
     parameterForNode(const document::NodeRecord& node, std::string_view role) const noexcept;
+    // The one resolution every value write goes through: the selection's parameter for `role`, or
+    // the named node's own. See AuthoringTarget.
+    [[nodiscard]] const document::ParameterRecord*
+    parameterForTarget(std::string_view role, AuthoringTarget target) const noexcept;
     [[nodiscard]] bool setSelectionScalarParameter(std::string_view role, double value,
-                                                   const QString& commandLabel);
+                                                   const QString& commandLabel,
+                                                   AuthoringTarget target);
     // The Vec2d counterpart of setSelectionScalarParameter(), shared by every Vec2d transform row.
     // It routes through executePositionCommand() deliberately: the constant/keyframe/driven
     // decision is identical for position, anchor, and scale, so one write path serves all three.
     [[nodiscard]] bool setSelectionVec2Parameter(std::string_view role, double x, double y,
-                                                 const QString& commandLabel);
+                                                 const QString& commandLabel,
+                                                 AuthoringTarget target);
     // The one command-selection decision for writing a Color4d-valued parameter, shared by
     // setSelectedSolidColor() and setSelectedTextColor(). Identical in shape to the scalar and Vec2
     // helpers since task S5: constant source -> SetParameterSource, animation source ->
     // SetKeyframeAtTime at the session time, driver source -> refused.
     [[nodiscard]] bool setSelectionColorParameter(std::string_view role, core::Color4d color,
-                                                  const QString& commandLabel);
+                                                  const QString& commandLabel,
+                                                  AuthoringTarget target);
     // The one command-selection decision for writing a position value (constant source ->
     // SetParameterSource; animation source -> SetKeyframeAtTime at `time`; driver source ->
     // rejected), executed as exactly one transaction. setSelectedPosition() calls this with its

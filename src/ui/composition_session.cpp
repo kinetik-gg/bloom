@@ -543,16 +543,28 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text, 
     return true;
 }
 
+const document::ParameterRecord*
+CompositionSession::parameterForTarget(const std::string_view role,
+                                       const AuthoringTarget target) const noexcept {
+    if (!target.has_value()) {
+        return parameterForSelection(role);
+    }
+    const auto* current = composition();
+    const auto* node = current == nullptr ? nullptr : current->graph().findNode(*target);
+    return node == nullptr ? nullptr : parameterForNode(*node, role);
+}
+
 bool CompositionSession::setSelectionScalarParameter(const std::string_view role,
                                                      const double value,
-                                                     const QString& commandLabel) {
+                                                     const QString& commandLabel,
+                                                     const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!std::isfinite(value)) {
         reportUnavailable(QStringLiteral("The parameter value must be finite"));
         return false;
     }
 
-    const auto* parameter = parameterForSelection(role);
+    const auto* parameter = parameterForTarget(role, target);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
@@ -578,9 +590,10 @@ bool CompositionSession::setSelectionScalarParameter(const std::string_view role
     return execute(std::move(transaction));
 }
 
-bool CompositionSession::setSelectedPosition(const double x, const double y) {
+bool CompositionSession::setSelectedPosition(const double x, const double y,
+                                             const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
-    const auto* position = parameterForSelection(document::kPositionParameterRole);
+    const auto* position = parameterForTarget(document::kPositionParameterRole, target);
     if (position == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose a position"));
         return false;
@@ -627,9 +640,10 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
 }
 
 bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, const double x,
-                                                   const double y, const QString& commandLabel) {
+                                                   const double y, const QString& commandLabel,
+                                                   const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
-    const auto* parameter = parameterForSelection(role);
+    const auto* parameter = parameterForTarget(role, target);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
@@ -688,40 +702,43 @@ bool CompositionSession::setParameterValue(const document::ParameterId parameter
     return execute(std::move(transaction));
 }
 
-bool CompositionSession::setSelectedAnchor(const double x, const double y) {
+bool CompositionSession::setSelectedAnchor(const double x, const double y,
+                                           const AuthoringTarget target) {
     return setSelectionVec2Parameter(document::kAnchorParameterRole, x, y,
-                                     QStringLiteral("Set Anchor"));
+                                     QStringLiteral("Set Anchor"), target);
 }
 
-bool CompositionSession::setSelectedScale(const double x, const double y) {
+bool CompositionSession::setSelectedScale(const double x, const double y,
+                                          const AuthoringTarget target) {
     return setSelectionVec2Parameter(document::kScaleParameterRole, x, y,
-                                     QStringLiteral("Set Scale"));
+                                     QStringLiteral("Set Scale"), target);
 }
 
-bool CompositionSession::setSelectedRotation(const double degrees) {
+bool CompositionSession::setSelectedRotation(const double degrees, const AuthoringTarget target) {
     // No domain clamp: rotation is authored in degrees and may wind past a full turn in either
     // direction. Only finiteness is required, which setSelectionScalarParameter already enforces.
     return setSelectionScalarParameter(document::kRotationParameterRole, degrees,
-                                       QStringLiteral("Set Rotation"));
+                                       QStringLiteral("Set Rotation"), target);
 }
 
-bool CompositionSession::setSelectedOpacity(const double opacity) {
+bool CompositionSession::setSelectedOpacity(const double opacity, const AuthoringTarget target) {
     if (opacity < 0.0 || opacity > 1.0) {
         reportUnavailable(QStringLiteral("Opacity must be between zero and one"));
         return false;
     }
     return setSelectionScalarParameter(document::kOpacityParameterRole, opacity,
-                                       QStringLiteral("Set Opacity"));
+                                       QStringLiteral("Set Opacity"), target);
 }
 
-bool CompositionSession::setSelectedTextContent(const QString& content) {
+bool CompositionSession::setSelectedTextContent(const QString& content,
+                                                const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto utf8 = content.toStdString();
     if (!core::isValidUtf8(utf8)) {
         reportUnavailable(QStringLiteral("The text content must be valid UTF-8"));
         return false;
     }
-    const auto* parameter = parameterForSelection(document::kTextParameterRole);
+    const auto* parameter = parameterForTarget(document::kTextParameterRole, target);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose text content"));
         return false;
@@ -744,19 +761,20 @@ bool CompositionSession::setSelectedTextContent(const QString& content) {
     return execute(std::move(transaction));
 }
 
-bool CompositionSession::setSelectedTextSize(const double size) {
+bool CompositionSession::setSelectedTextSize(const double size, const AuthoringTarget target) {
     if (!std::isfinite(size) || size <= 0.0 || size > document::kMaximumTextSizePixels) {
         reportUnavailable(QStringLiteral("The text size must be between zero and %1 pixels")
                               .arg(document::kMaximumTextSizePixels));
         return false;
     }
     return setSelectionScalarParameter(document::kTextSizeParameterRole, size,
-                                       QStringLiteral("Set Text Size"));
+                                       QStringLiteral("Set Text Size"), target);
 }
 
-bool CompositionSession::setSelectedTextColor(const core::Color4d color) {
+bool CompositionSession::setSelectedTextColor(const core::Color4d color,
+                                              const AuthoringTarget target) {
     return setSelectionColorParameter(document::kTextColorParameterRole, color,
-                                      QStringLiteral("Set Text Color"));
+                                      QStringLiteral("Set Text Color"), target);
 }
 
 std::optional<core::BlendMode>
@@ -824,21 +842,23 @@ bool CompositionSession::setSelectedBlendMode(const core::BlendMode mode) {
     return setLayerBlendMode(*layerId, mode);
 }
 
-bool CompositionSession::setSelectedSolidColor(const core::Color4d color) {
+bool CompositionSession::setSelectedSolidColor(const core::Color4d color,
+                                               const AuthoringTarget target) {
     return setSelectionColorParameter(document::kSolidColorParameterRole, color,
-                                      QStringLiteral("Set Solid Color"));
+                                      QStringLiteral("Set Solid Color"), target);
 }
 
 bool CompositionSession::setSelectionColorParameter(const std::string_view role,
                                                     const core::Color4d color,
-                                                    const QString& commandLabel) {
+                                                    const QString& commandLabel,
+                                                    const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!std::isfinite(color.red) || !std::isfinite(color.green) || !std::isfinite(color.blue) ||
         !std::isfinite(color.alpha)) {
         reportUnavailable(QStringLiteral("Color values must be finite"));
         return false;
     }
-    const auto* parameter = parameterForSelection(role);
+    const auto* parameter = parameterForTarget(role, target);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose a color"));
         return false;

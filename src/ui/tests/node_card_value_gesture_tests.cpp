@@ -400,6 +400,30 @@ void mathOperandCells(App& app, const document::NodeId math) {
            "the second Math operand cell commits independently of the first");
 }
 
+// A card edit must not rearrange the selection. An artist who has several cards selected and reads
+// a value off one of them is not asking for the other selections to be dropped.
+void editingAValueKeepsTheSelection(App& app, const document::NodeId layer,
+                                    const document::NodeId other) {
+    app.session.selectNodes({layer, other}, layer);
+    QCoreApplication::processEvents();
+    expect(app.session.selectedNodes().size() == 2, "two cards are selected before the edit");
+    auto* rotation = field(app, layer, QStringLiteral("nodeRotationEditor"));
+    if (rotation == nullptr) {
+        return;
+    }
+    click(app, rotation);
+    type(app, QStringLiteral("15"));
+    key(app, Qt::Key_Return);
+    expect(closeTo(static_cast<float>(
+                       scalarOf(app, layer, document::kRotationParameterRole).value_or(0.0)),
+                   15.0),
+           "the edit lands while several cards are selected");
+    expect(app.session.selectedNodes().size() == 2,
+           "editing one card's value leaves the rest of the selection alone");
+    expect(app.session.selectedNodes().contains(other),
+           "the other selected card is still selected after the edit");
+}
+
 // An edit in flight has to survive the snapshot changes other surfaces produce while it is open --
 // the card is reconciled in place on every one of them.
 void anEditSurvivesAnUnrelatedSnapshotChange(App& app, const document::NodeId layer) {
@@ -536,6 +560,7 @@ int main(int argc, char** argv) {
         mathOperandCells(app, math);
         canvasHoldsStillDuringAnEdit(app, *layerNode);
         anEditSurvivesAnUnrelatedSnapshotChange(app, *layerNode);
+        editingAValueKeepsTheSelection(app, *layerNode, math);
         textCardRows(app);
         valueNodeCards(app);
     } catch (const std::exception& error) {

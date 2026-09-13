@@ -422,45 +422,44 @@ class NodeItem final : public QGraphicsObject {
         kit::KDropdown* selector = nullptr;
     };
 
-    // Selects THIS node through the session's one selection truth before any edit, because every
-    // session write path this card uses (setSelectedPosition/setSelectedOpacity) targets the
-    // session's current selection -- the same functions, on the same parameters, that
-    // PropertiesEditor calls. Returns false if the node is no longer selectable, in which case no
-    // command is issued at all.
-    [[nodiscard]] bool selectSelf() {
-        if (session_ == nullptr) {
-            return false;
-        }
-        session_->selectNode(id_);
-        const auto* selected = std::get_if<document::NodeId>(&session_->selection().primary);
-        return selected != nullptr && *selected == id_;
-    }
+    // This card's own node, named as the target of every write below. The card used to call
+    // CompositionSession::selectNode() first, because the session's write paths resolved their
+    // parameter from the current selection -- which meant editing one card's value collapsed a
+    // multi-card selection to that card and moved the Properties panel off whatever the artist was
+    // reading. Selection is the PRESS's business (NodeGraphicsScene::mousePressEvent already
+    // selects the card under the pointer, preserving a selection that contains it); a commit's
+    // business is the value. Same session functions, same parameters, same refusals as
+    // PropertiesEditor -- only the target differs.
+    [[nodiscard]] AuthoringTarget target() const noexcept { return id_; }
 
     void commitPosition() {
-        if (refreshing_ || positionX_ == nullptr || positionY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || positionX_ == nullptr || positionY_ == nullptr || session_ == nullptr) {
             return;
         }
         // Both components in one call, exactly as PropertiesEditor's own commitPosition lambda
         // does: one gesture is one SetParameterSource/SetKeyframeAtTime transaction, so it is one
         // undo step.
-        (void)session_->setSelectedPosition(positionX_->value(), positionY_->value());
+        (void)session_->setSelectedPosition(positionX_->value(), positionY_->value(), target());
     }
 
     void commitOpacity() {
-        if (refreshing_ || opacity_ == nullptr || !selectSelf()) {
+        if (refreshing_ || opacity_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedOpacity(opacity_->value() / 100.0);
+        (void)session_->setSelectedOpacity(opacity_->value() / 100.0, target());
     }
 
     void commitBlendMode(const int index) {
-        if (refreshing_ || blendMode_ == nullptr || index < 0 || !selectSelf()) {
+        if (refreshing_ || blendMode_ == nullptr || index < 0 || session_ == nullptr) {
             return;
         }
         const auto mode =
             core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
-        if (mode.has_value()) {
-            (void)session_->setSelectedBlendMode(*mode);
+        // By LAYER, never through the selection: setLayerBlendMode() is the primitive the timeline
+        // row already uses for exactly this reason, and the card knows which layer it draws.
+        const auto layerId = session_->layerForNode(id_);
+        if (mode.has_value() && layerId.has_value()) {
+            (void)session_->setLayerBlendMode(*layerId, *mode);
         }
     }
 
@@ -481,54 +480,55 @@ class NodeItem final : public QGraphicsObject {
     // PropertiesEditor's matching row calls, so the two surfaces cannot drift. Scale is authored as
     // a percentage on the card exactly as it is in the panel.
     void commitAnchor() {
-        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value());
+        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value(), target());
     }
 
     void commitScale() {
-        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
+        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0,
+                                         target());
     }
 
     void commitRotation() {
-        if (refreshing_ || rotation_ == nullptr || !selectSelf()) {
+        if (refreshing_ || rotation_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedRotation(rotation_->value());
+        (void)session_->setSelectedRotation(rotation_->value(), target());
     }
 
     // Task S3's three text writes, each through exactly the session method PropertiesEditor's own
     // Text Source row calls, so the two surfaces cannot drift.
     void commitTextContent() {
-        if (refreshing_ || textContent_ == nullptr || !selectSelf()) {
+        if (refreshing_ || textContent_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedTextContent(textContent_->text());
+        (void)session_->setSelectedTextContent(textContent_->text(), target());
     }
 
     void commitTextSize() {
-        if (refreshing_ || textSize_ == nullptr || !selectSelf()) {
+        if (refreshing_ || textSize_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedTextSize(textSize_->value());
+        (void)session_->setSelectedTextSize(textSize_->value(), target());
     }
 
     // One chip, two schemas: the role string is "color" for both a solid source and a text source
     // (see document::kTextColorParameterRole), so the card builds one control and dispatches on the
     // node's own type only to pick the honest undo label.
     void commitColor(const kit::KColor& color) {
-        if (refreshing_ || colorChip_ == nullptr || !selectSelf()) {
+        if (refreshing_ || colorChip_ == nullptr || session_ == nullptr) {
             return;
         }
         const core::Color4d value{static_cast<double>(color.red), static_cast<double>(color.green),
                                   static_cast<double>(color.blue),
                                   static_cast<double>(color.alpha)};
-        (void)(isTextSource_ ? session_->setSelectedTextColor(value)
-                             : session_->setSelectedSolidColor(value));
+        (void)(isTextSource_ ? session_->setSelectedTextColor(value, target())
+                             : session_->setSelectedSolidColor(value, target()));
     }
 
     void addProxy(QWidget* widget) {
@@ -1024,7 +1024,7 @@ class NodeItem final : public QGraphicsObject {
             }
             return std::nullopt;
         }();
-        if (!value.has_value() || !selectSelf()) {
+        if (!value.has_value()) {
             return;
         }
         // Constant or KEY, by the session's own rule (task FIX1, item G): editing an animated value

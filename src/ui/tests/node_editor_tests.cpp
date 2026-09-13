@@ -672,8 +672,11 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
                         "an in-node X edit writes the canonical position parameter");
     expectations.expect(fixture.session.undoLabel() == QStringLiteral("Set Position"),
                         "through PropertiesEditor's own \"Set Position\" command path");
-    expectations.expect(fixture.session.selection().primary == ui::SelectionTarget{*boundaryNodeId},
-                        "and the edit routed through the session's one selection truth first");
+    // Task FIX2: the card names its OWN node as the write target rather than selecting itself
+    // first, so an edit authors the card it is drawn on and leaves the selection exactly where the
+    // artist put it -- here, still the layer the fixture added.
+    expectations.expect(fixture.session.selection().primary == ui::SelectionTarget{*layerId},
+                        "and the edit leaves the selection alone");
     expectations.expect(fixture.session.undo() &&
                             fixture.session.constantVec2Value(positionId) == originalPosition,
                         "ONE undo step reverts the whole in-node edit");
