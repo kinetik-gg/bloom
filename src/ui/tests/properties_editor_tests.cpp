@@ -915,6 +915,12 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.resize(properties.sizeHint());
+    // show(), not just resize(): an invisible widget's layout is not guaranteed to activate all
+    // the way down to leaf widgets from resize() alone (testTransformRowsShowTheirOwnKeyframeIndicators
+    // and testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect's own precedent), and this
+    // test means to measure a real, laid-out label geometry.
+    properties.show();
+    QCoreApplication::processEvents();
 
     auto* positionField = properties.findChild<ui::kit::KValueField*>("positionXEditor");
     expectations.expect(positionField != nullptr, "the Position row resolves its value cell");
@@ -935,7 +941,10 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     expectations.expect(label->text() == QStringLiteral("Position"),
                         "at its preferred width the label shows the full parameter name");
 
-    label->resize(18, label->height());
+    // Narrow enough to force eliding, but wide enough to fit at least one glyph plus the ellipsis
+    // itself -- narrower than that, Qt::elidedText() gives up and returns an empty string, which
+    // would trivially (and wrongly) satisfy a "not equal to the full text" check on its own.
+    label->resize(24, label->height());
     expectations.expect(
         label->text() != QStringLiteral("Position") &&
             label->text().endsWith(QString::fromUtf8("\xE2\x80\xA6")),
