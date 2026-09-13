@@ -81,6 +81,59 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Merge");
     if (typeId == document::kCompositionOutputNodeType)
         return QCoreApplication::translate("node_editor", "Output");
+    // Task S7's library. Spelled out for the same reason the four above are: displayTypeName()
+    // reads a name out of an identifier, which gives "Value scalar" and "Separate xy" -- the
+    // implementation's spelling rather than the artist's. Type ids are untouched; this is
+    // vocabulary, not identity.
+    struct LibraryName final {
+        std::string_view typeId;
+        const char* name;
+    };
+    static const std::array kLibraryNames{
+        LibraryName{document::kIntegerValueNodeType, "Integer"},
+        LibraryName{document::kScalarValueNodeType, "Scalar"},
+        LibraryName{document::kVector2ValueNodeType, "Vector 2"},
+        LibraryName{document::kVector3ValueNodeType, "Vector 3"},
+        LibraryName{document::kStringValueNodeType, "String"},
+        LibraryName{document::kColorValueNodeType, "Color"},
+        LibraryName{document::kBooleanValueNodeType, "Boolean"},
+        LibraryName{document::kTimeValueNodeType, "Time"},
+        LibraryName{document::kScalarMathNodeType, "Math"},
+        LibraryName{document::kVector2MathNodeType, "Vector 2 Math"},
+        LibraryName{document::kVector3MathNodeType, "Vector 3 Math"},
+        LibraryName{document::kVector2ReduceNodeType, "Vector 2 Measure"},
+        LibraryName{document::kVector3ReduceNodeType, "Vector 3 Measure"},
+        LibraryName{document::kMapRangeNodeType, "Map Range"},
+        LibraryName{document::kClampNodeType, "Clamp"},
+        LibraryName{document::kMixNodeType, "Mix"},
+        LibraryName{document::kColorMixNodeType, "Mix Color"},
+        LibraryName{document::kCompareNodeType, "Compare"},
+        LibraryName{document::kScalarSwitchNodeType, "Switch Scalar"},
+        LibraryName{document::kIntegerSwitchNodeType, "Switch Integer"},
+        LibraryName{document::kBooleanSwitchNodeType, "Switch Boolean"},
+        LibraryName{document::kVector2SwitchNodeType, "Switch Vector 2"},
+        LibraryName{document::kVector3SwitchNodeType, "Switch Vector 3"},
+        LibraryName{document::kColorSwitchNodeType, "Switch Color"},
+        LibraryName{document::kStringSwitchNodeType, "Switch String"},
+        LibraryName{document::kSeparateXyNodeType, "Separate XY"},
+        LibraryName{document::kCombineXyNodeType, "Combine XY"},
+        LibraryName{document::kSeparateXyzNodeType, "Separate XYZ"},
+        LibraryName{document::kCombineXyzNodeType, "Combine XYZ"},
+        LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
+        LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
+        LibraryName{document::kRandomNodeType, "Random"},
+        LibraryName{document::kImageRerouteNodeType, "Reroute Image"},
+        LibraryName{document::kScalarRerouteNodeType, "Reroute Scalar"},
+        LibraryName{document::kIntegerRerouteNodeType, "Reroute Integer"},
+        LibraryName{document::kBooleanRerouteNodeType, "Reroute Boolean"},
+        LibraryName{document::kVector2RerouteNodeType, "Reroute Vector 2"},
+        LibraryName{document::kVector3RerouteNodeType, "Reroute Vector 3"},
+        LibraryName{document::kColorRerouteNodeType, "Reroute Color"},
+        LibraryName{document::kStringRerouteNodeType, "Reroute String"},
+    };
+    const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
+    if (match != kLibraryNames.end())
+        return QCoreApplication::translate("node_editor", match->name);
     return displayTypeName(typeId);
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
+#include <bloom/commands/operations.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -10,6 +11,7 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
@@ -18,6 +20,8 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_operations.hpp>
 
 #include <QAction>
 #include <QBrush>
@@ -230,7 +234,7 @@ class NodeItem final : public QGraphicsObject {
         setToolTip(QStringLiteral("%1\n%2\nNode %3")
                        .arg(title_, nodeTypeDisplayName(node.typeId))
                        .arg(id_.value()));
-        ensureFields(node);
+        ensureFields(node, registry);
         buildSockets(node, composition, registry);
         refreshValues(node, composition);
         relayout();
@@ -330,6 +334,28 @@ class NodeItem final : public QGraphicsObject {
         // The role this row's diamond keys, so refreshValues() can bind it to the node's own
         // parameter without re-deriving which role built which control.
         std::string_view role;
+    };
+
+    // A generic editor for one parameter, built from its declared ParameterValueKind (task S7).
+    //
+    // Every bespoke row above exists because its role carries MEANING a session method knows: an
+    // opacity is a percentage, a scale is a factor, a text size has a rasterizer bound. The value
+    // library's operands carry no meaning beyond their kind -- a Math node's "a" is an
+    // unconstrained finite scalar and nothing more -- so one editor per kind serves all forty of
+    // them, and it commits the parameter's constant through commands::SetParameterSource, the same
+    // command every other constant write already reaches.
+    struct OperandRow final {
+        document::ParameterId parameterId;
+        document::ParameterValueKind kind = document::ParameterValueKind::Float64;
+        // One to three numeric fields: a scalar or integer uses the first, a Vec2d the first two, a
+        // Vec3d all three.
+        std::array<kit::KValueField*, 3> numeric{};
+        kit::KColorChip* color = nullptr;
+        QLineEdit* text = nullptr;
+        kit::KSwitch* toggle = nullptr;
+        // The closed enumeration a selector offers, or null for an ordinary operand. A selector's
+        // stored value is its item data, so reading one back never depends on a spelling.
+        kit::KDropdown* selector = nullptr;
     };
 
     // Selects THIS node through the session's one selection truth before any edit, because every
@@ -495,7 +521,8 @@ class NodeItem final : public QGraphicsObject {
     //               setSelectedTextSize().
     //   anything else -> a painted read-only value row, because no kit primitive carries that value
     //               and no command writes it.
-    void ensureFields(const document::NodeRecord& node) {
+    void ensureFields(const document::NodeRecord& node,
+                      const document::NodeDefinitionRegistry& registry) {
         std::vector<std::string> roles;
         roles.reserve(node.parameters.size());
         for (const auto& binding : node.parameters) {
@@ -524,6 +551,7 @@ class NodeItem final : public QGraphicsObject {
         valueRows_.clear();
         readOnlyRows_.clear();
         controlRoles_.clear();
+        operandRows_.clear();
         positionX_ = nullptr;
         positionY_ = nullptr;
         anchorX_ = nullptr;
@@ -670,12 +698,339 @@ class NodeItem final : public QGraphicsObject {
                 valueRows_.push_back({tr("Size"), textSize_,
                                       makeCardDiamond(document::kTextSizeParameterRole),
                                       document::kTextSizeParameterRole});
-            } else {
+            } else if (!buildOperandRow(node, role, registry)) {
+                // Nothing registered declares this role, so there is no kind to build an editor
+                // from: a painted read-only row is the honest answer, exactly as it was before task
+                // S7.
                 readOnlyRows_.push_back({displayTypeName(role), QString{}});
             }
         }
         builtRoles_ = std::move(roles);
         fieldsBuilt_ = true;
+    }
+
+    // Builds the generic editor for `role` from the registry's declared kind, or answers false when
+    // no registered definition declares it. Operand rows join valueRows_ so the card's own label
+    // column, minimum width and layout serve them without a second path.
+    [[nodiscard]] bool buildOperandRow(const document::NodeRecord& node,
+                                       const std::string_view role,
+                                       const document::NodeDefinitionRegistry& registry) {
+        const auto* definition = registry.find(node.typeId, node.schemaVersion);
+        if (definition == nullptr) {
+            return false;
+        }
+        const auto declared =
+            std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+        const auto binding =
+            std::ranges::find(node.parameters, role, &document::ParameterBinding::role);
+        if (declared == definition->parameters.end() || binding == node.parameters.end()) {
+            return false;
+        }
+        const auto index = operandRows_.size();
+        OperandRow row;
+        row.parameterId = binding->parameterId;
+        row.kind = declared->valueKind;
+        const auto label = displayTypeName(role);
+        const auto commit = [this, index] { commitOperand(index); };
+
+        if (const auto items = selectorItems(declared->schemaKey); !items.isEmpty()) {
+            row.selector = new kit::KDropdown;
+            row.selector->setObjectName(QStringLiteral("nodeOperandSelector"));
+            row.selector->setAccessibleName(label);
+            row.selector->setControlSize(kit::KDropdown::ControlSize::Compact);
+            for (const auto& item : items) {
+                row.selector->addItem(item.first, QVariant::fromValue(item.second));
+            }
+            row.selector->resize(row.selector->sizeHint());
+            addProxy(row.selector);
+            registerControlRole(row.selector, role);
+            connect(row.selector, &kit::KDropdown::currentIndexChanged, this,
+                    [commit](int) { commit(); });
+            valueRows_.push_back({label, row.selector, nullptr, {}});
+            operandRows_.push_back(row);
+            return true;
+        }
+
+        switch (declared->valueKind) {
+        case document::ParameterValueKind::Boolean: {
+            row.toggle = new kit::KSwitch;
+            row.toggle->setObjectName(QStringLiteral("nodeOperandToggle"));
+            row.toggle->setAccessibleName(label);
+            row.toggle->setCheckable(true);
+            row.toggle->resize(row.toggle->sizeHint());
+            addProxy(row.toggle);
+            registerControlRole(row.toggle, role);
+            connect(row.toggle, &kit::KSwitch::toggled, this, [commit](bool) { commit(); });
+            valueRows_.push_back({label, row.toggle, nullptr, {}});
+            break;
+        }
+        case document::ParameterValueKind::String: {
+            row.text = new QLineEdit;
+            row.text->setObjectName(QStringLiteral("nodeOperandTextEditor"));
+            row.text->setAccessibleName(label);
+            row.text->setFont(kit::font(kit::TypeRole::Ui));
+            row.text->resize(row.text->sizeHint());
+            addProxy(row.text);
+            registerControlRole(row.text, role);
+            connect(row.text, &QLineEdit::editingFinished, this, [commit] { commit(); });
+            valueRows_.push_back({label, row.text, nullptr, {}});
+            break;
+        }
+        case document::ParameterValueKind::Color4d: {
+            row.color = new kit::KColorChip;
+            row.color->setObjectName(QStringLiteral("nodeOperandColorChip"));
+            row.color->setAccessibleName(label);
+            row.color->setControlSize(kit::KColorChip::ControlSize::Compact);
+            row.color->resize(row.color->sizeHint());
+            addProxy(row.color);
+            registerControlRole(row.color, role);
+            connect(row.color, &kit::KColorChip::colorChanged, this,
+                    [commit](const kit::KColor&) { commit(); });
+            valueRows_.push_back({label, row.color, nullptr, {}});
+            break;
+        }
+        case document::ParameterValueKind::Integer:
+        case document::ParameterValueKind::Float64:
+        case document::ParameterValueKind::Vec2d:
+        case document::ParameterValueKind::Vec3d: {
+            const bool integral = declared->valueKind == document::ParameterValueKind::Integer;
+            const int components =
+                declared->valueKind == document::ParameterValueKind::Vec3d
+                    ? 3
+                    : (declared->valueKind == document::ParameterValueKind::Vec2d ? 2 : 1);
+            static constexpr std::array kComponentSuffixes{" X", " Y", " Z"};
+            for (int component = 0; component < components; ++component) {
+                const auto componentLabel =
+                    components == 1
+                        ? label
+                        : label + QString::fromUtf8(
+                                      kComponentSuffixes[static_cast<std::size_t>(component)]);
+                // Integers get zero decimals and the whole signed range the schema admits; a scalar
+                // gets the same wide finite range every other unitless card field already uses,
+                // because a value-graph operand carries no domain beyond its kind.
+                auto* field =
+                    makeCardField(QStringLiteral("nodeOperandEditor"), componentLabel,
+                                  -1'000'000'000.0, 1'000'000'000.0, integral ? 0 : 4, QString{});
+                addProxy(field);
+                registerControlRole(field, role);
+                connect(field, &kit::KValueField::valueChanged, this, [commit] { commit(); });
+                row.numeric[static_cast<std::size_t>(component)] = field;
+                valueRows_.push_back({componentLabel, field, nullptr, {}});
+            }
+            break;
+        }
+        }
+        operandRows_.push_back(row);
+        return true;
+    }
+
+    // The closed vocabulary an inline selector offers, as display text paired with the exact
+    // integer the document stores. Empty for any schema that is not a selector, which is what tells
+    // buildOperandRow() to build an ordinary editor instead.
+    [[nodiscard]] static QList<std::pair<QString, std::int64_t>>
+    selectorItems(const std::string_view schemaKey) {
+        QList<std::pair<QString, std::int64_t>> items;
+        const auto add = [&items](const QString& text, const std::int64_t stored) {
+            items.append({text, stored});
+        };
+        if (schemaKey == document::kScalarOperationParameterSchemaKey) {
+            for (const auto operation : document::kScalarOperations) {
+                const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
+                // The frozen signature's own id is the name, with its namespace trimmed: the card
+                // must not invent a second spelling for an operation the kernel already names.
+                const auto id = signature == nullptr ? std::string_view{} : signature->id;
+                add(displayTypeName(id.substr(id.rfind('.') + 1)),
+                    document::scalarOperationStoredValue(operation));
+            }
+            return items;
+        }
+        if (schemaKey == document::kVectorOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"Add",   "Subtract",  "Multiply",     "Divide",
+                                               "Scale", "Normalize", "Cross Product"};
+            for (std::size_t index = 0; index < document::kVectorOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::vectorOperationStoredValue(document::kVectorOperations[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kVectorReductionParameterSchemaKey) {
+            static constexpr std::array kNames{"Length", "Dot Product", "Distance"};
+            for (std::size_t index = 0; index < document::kVectorReductions.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::vectorReductionStoredValue(document::kVectorReductions[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kRangeInterpolationParameterSchemaKey) {
+            static constexpr std::array kNames{"Linear", "Smoothstep", "Smootherstep"};
+            for (std::size_t index = 0; index < document::kRangeInterpolations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::rangeInterpolationStoredValue(document::kRangeInterpolations[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kCompareOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"Equal",         "Not Equal", "Less",
+                                               "Less Or Equal", "Greater",   "Greater Or Equal"};
+            for (std::size_t index = 0; index < document::kCompareOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::compareOperationStoredValue(document::kCompareOperations[index]));
+            }
+            return items;
+        }
+        return items;
+    }
+
+    // Writes one operand's authored constant. One transaction, one undo entry -- the same shape
+    // every other card commit has -- and the value is assembled from the row's own widgets, so the
+    // kind the document receives is the kind the registry declared.
+    void commitOperand(const std::size_t index) {
+        auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
+        if (refreshing_ || index >= operandRows_.size() || session_ == nullptr ||
+            graphScene == nullptr || !graphScene->canSubmit()) {
+            return;
+        }
+        const auto& row = operandRows_[index];
+        const auto value = [&]() -> std::optional<document::ParameterValue> {
+            if (row.selector != nullptr) {
+                const auto stored = row.selector->itemData(row.selector->currentIndex());
+                return stored.isValid()
+                           ? std::optional(document::ParameterValue{stored.value<std::int64_t>()})
+                           : std::nullopt;
+            }
+            switch (row.kind) {
+            case document::ParameterValueKind::Boolean:
+                return row.toggle == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{row.toggle->isChecked()});
+            case document::ParameterValueKind::String:
+                return row.text == nullptr ? std::nullopt
+                                           : std::optional(document::ParameterValue{
+                                                 row.text->text().toStdString()});
+            case document::ParameterValueKind::Color4d: {
+                if (row.color == nullptr) {
+                    return std::nullopt;
+                }
+                const auto chip = row.color->color();
+                return document::ParameterValue{
+                    core::Color4d{static_cast<double>(chip.red), static_cast<double>(chip.green),
+                                  static_cast<double>(chip.blue), static_cast<double>(chip.alpha)}};
+            }
+            case document::ParameterValueKind::Integer:
+                return row.numeric[0] == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{
+                                 static_cast<std::int64_t>(std::llround(row.numeric[0]->value()))});
+            case document::ParameterValueKind::Float64:
+                return row.numeric[0] == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{row.numeric[0]->value()});
+            case document::ParameterValueKind::Vec2d:
+                return row.numeric[0] == nullptr || row.numeric[1] == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{document::Vec2d{
+                                 row.numeric[0]->value(), row.numeric[1]->value()}});
+            case document::ParameterValueKind::Vec3d:
+                return row.numeric[0] == nullptr || row.numeric[1] == nullptr ||
+                               row.numeric[2] == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{
+                                 document::Vec3d{row.numeric[0]->value(), row.numeric[1]->value(),
+                                                 row.numeric[2]->value()}});
+            }
+            return std::nullopt;
+        }();
+        if (!value.has_value() || !selectSelf()) {
+            return;
+        }
+        commands::Transaction transaction("Set Node Value", session_->snapshot().revision());
+        transaction.emplace<commands::SetParameterSource>(
+            session_->compositionId(), row.parameterId,
+            document::ConstantValueSource{*std::move(value)});
+        (void)graphScene->submit(std::move(transaction));
+    }
+
+    // Reads every operand row back from document truth. Signals are blocked: this runs in response
+    // to the very snapshot an edit produced, and a widget that re-emitted here would commit its own
+    // readback as a second edit.
+    void refreshOperandRows(const document::Composition& composition) {
+        for (const auto& row : operandRows_) {
+            const auto* parameter = composition.parameters().find(row.parameterId);
+            const auto* constant =
+                parameter == nullptr
+                    ? nullptr
+                    : std::get_if<document::ConstantValueSource>(&parameter->source);
+            const QString tip = parameter == nullptr ? tr("This value is not exposed by this node")
+                                                     : parameterSourceDescription(*parameter);
+            const auto applyTip = [&tip](QWidget* widget) {
+                if (widget != nullptr) {
+                    widget->setToolTip(tip);
+                }
+            };
+            for (auto* field : row.numeric) {
+                applyTip(field);
+            }
+            applyTip(row.color);
+            applyTip(row.text);
+            applyTip(row.toggle);
+            applyTip(row.selector);
+            if (constant == nullptr) {
+                continue;
+            }
+            if (row.selector != nullptr) {
+                if (const auto* stored = std::get_if<std::int64_t>(&constant->value)) {
+                    const QSignalBlocker blocker(row.selector);
+                    for (int item = 0; item < row.selector->count(); ++item) {
+                        if (row.selector->itemData(item).value<std::int64_t>() == *stored) {
+                            row.selector->setCurrentIndex(item);
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            std::visit(
+                [&row](const auto& held) {
+                    using Held = std::decay_t<decltype(held)>;
+                    const auto setComponent = [&row](const std::size_t component,
+                                                     const double value) {
+                        if (row.numeric[component] != nullptr) {
+                            const QSignalBlocker blocker(row.numeric[component]);
+                            row.numeric[component]->setValue(value);
+                        }
+                    };
+                    if constexpr (std::is_same_v<Held, bool>) {
+                        if (row.toggle != nullptr) {
+                            const QSignalBlocker blocker(row.toggle);
+                            row.toggle->setChecked(held);
+                        }
+                    } else if constexpr (std::is_same_v<Held, std::int64_t>) {
+                        setComponent(0, static_cast<double>(held));
+                    } else if constexpr (std::is_same_v<Held, double>) {
+                        setComponent(0, held);
+                    } else if constexpr (std::is_same_v<Held, document::Vec2d>) {
+                        setComponent(0, held.x);
+                        setComponent(1, held.y);
+                    } else if constexpr (std::is_same_v<Held, document::Vec3d>) {
+                        setComponent(0, held.x);
+                        setComponent(1, held.y);
+                        setComponent(2, held.z);
+                    } else if constexpr (std::is_same_v<Held, core::Color4d>) {
+                        if (row.color != nullptr) {
+                            const QSignalBlocker blocker(row.color);
+                            row.color->setColor(kit::KColor::fromRgba(
+                                static_cast<float>(held.red), static_cast<float>(held.green),
+                                static_cast<float>(held.blue), static_cast<float>(held.alpha)));
+                        }
+                    } else if constexpr (std::is_same_v<Held, std::string>) {
+                        if (row.text != nullptr) {
+                            const QSignalBlocker blocker(row.text);
+                            row.text->setText(QString::fromStdString(held));
+                        }
+                    }
+                },
+                constant->value);
+        }
     }
 
     void refreshValues(const document::NodeRecord& node, const document::Composition& composition) {
@@ -884,6 +1239,7 @@ class NodeItem final : public QGraphicsObject {
             }
             ++readOnlyIndex;
         }
+        refreshOperandRows(composition);
         refreshing_ = false;
     }
 
@@ -1075,6 +1431,7 @@ class NodeItem final : public QGraphicsObject {
     bool refreshing_ = false;
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
+    std::vector<OperandRow> operandRows_;
     std::vector<std::pair<QString, QString>> readOnlyRows_;
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;

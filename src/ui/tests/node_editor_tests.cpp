@@ -6,6 +6,7 @@
 #include <bloom/ui/node_editor.hpp>
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -23,6 +24,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QGraphicsItem>
+#include <QGraphicsProxyWidget>
 #include <QKeyEvent>
 #include <QList>
 #include <QMenu>
@@ -364,10 +366,18 @@ void testSelectionFollowsTheSessionInBothDirections(Expectations& expectations) 
 // --- Decision 3: typed connectors, only for the types that exist -------------------------------
 
 void testConnectorTypingIsPinnedPerSocketKind(Expectations& expectations) {
-    // Image is the ONE transport kind runtime::SocketValueKind declares, and the only one any edge
-    // in a document::CanonicalGraph can carry today (see socketColorToken()'s comment in
-    // node_editor.hpp). Pinning the mapping here is what makes adding a second kind a deliberate
-    // decision rather than an accident: socketColorToken()'s switch stops being exhaustive.
+    // ADAPTED (task S7): Image is no longer the only transport kind, so the mapping is pinned for
+    // every kind the socket palette answers for -- including the two vector widths deliberately
+    // sharing one token, which is a decision the assertion below has to state rather than leave to
+    // the reader.
+    expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Integer) ==
+                                ui::kit::Color::SocketInteger &&
+                            ui::socketColorToken(runtime::SocketValueKind::Boolean) ==
+                                ui::kit::Color::SocketBoolean,
+                        "Integer and Boolean sockets take their own palette tokens");
+    expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Vector2) ==
+                            ui::socketColorToken(runtime::SocketValueKind::Vector3),
+                        "both vector widths share one token so they read as a family");
     //
     // Task S1, item 6 moved this off the Data* palette: a socket identifies a TRANSPORT kind, not
     // what an item in a project is, and Image had been resolving to exactly AccentHover's blue.
@@ -380,6 +390,83 @@ void testConnectorTypingIsPinnedPerSocketKind(Expectations& expectations) {
     expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) !=
                             ui::kit::color(ui::kit::Color::AccentHover),
                         "which is no longer the hovered-accent blue it used to collide with");
+}
+
+// Task S7, items 3 and 4: a value node's operands are editable inline, a driven operand hides its
+// control while keeping its socket, and one undo puts the constant back.
+void testValueNodeOperandsAreEditableAndHideWhenDriven(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Value Node Operand Test"));
+    const auto addNode = [&fixture](const std::string_view typeId, const document::Vec2d position) {
+        commands::Transaction transaction("Add node", fixture.session.snapshot().revision());
+        transaction.emplace<commands::AddNode>(fixture.session.compositionId(), std::string(typeId),
+                                               position);
+        return fixture.scene()
+            ->submit(std::move(transaction))
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    };
+    const auto scalarNode = addNode(document::kScalarValueNodeType, {64.0, 64.0});
+    const auto mathNode = addNode(document::kScalarMathNodeType, {320.0, 64.0});
+    expectations.expect(scalarNode.has_value() && mathNode.has_value(),
+                        "the canvas adds a Scalar value node and a Math node");
+    if (!scalarNode.has_value() || !mathNode.has_value()) {
+        return;
+    }
+
+    auto* valueField = qobject_cast<ui::kit::KValueField*>(
+        fixture.scene()->nodeFieldForTest(*scalarNode, QStringLiteral("nodeOperandEditor")));
+    expectations.expect(valueField != nullptr && valueField->isEnabled(),
+                        "a Scalar value node carries an editable inline field for its own value");
+    auto* selector =
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandSelector"));
+    auto* toggle =
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandToggle"));
+    expectations.expect(selector != nullptr && toggle != nullptr,
+                        "a Math node carries its operation dropdown and its clamp toggle inline");
+    if (valueField == nullptr) {
+        return;
+    }
+
+    const auto* valueParameter =
+        parameterForRole(fixture.session, *scalarNode, document::kValueParameterRole);
+    expectations.expect(valueParameter != nullptr, "the Scalar node binds its value parameter");
+    if (valueParameter == nullptr) {
+        return;
+    }
+    valueField->setValue(7.5);
+    expectations.expect(fixture.session.constantValue(valueParameter->id) == 7.5,
+                        "editing the inline field writes the parameter's own constant");
+
+    // Drive the Math node's first operand from the Scalar node, through exactly the connect command
+    // the socket gesture uses.
+    const auto* operandParameter =
+        parameterForRole(fixture.session, *mathNode, document::kFirstOperandPortName);
+    expectations.expect(operandParameter != nullptr, "the Math node binds its first operand");
+    if (operandParameter == nullptr) {
+        return;
+    }
+    const auto operandId = operandParameter->id;
+    auto* operandField = qobject_cast<ui::kit::KValueField*>(
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandEditor")));
+    expectations.expect(operandField != nullptr && operandField->graphicsProxyWidget()->isVisible(),
+                        "an unlinked operand shows its inline control");
+    commands::Transaction link("Link operand", fixture.session.snapshot().revision());
+    link.emplace<commands::ConnectPorts>(
+        fixture.session.compositionId(),
+        document::OutputPortRef{*scalarNode, std::string(document::kValuePortName)},
+        document::InputPortRef{
+            document::NodeInputRef{*mathNode, std::string(document::kFirstOperandPortName)}});
+    expectations.expect(fixture.scene()->submit(std::move(link)).changed(),
+                        "the operand socket accepts the Scalar node's output");
+    expectations.expect(operandField != nullptr &&
+                            !operandField->graphicsProxyWidget()->isVisible(),
+                        "a driven operand hides its inline control");
+    expectations.expect(std::holds_alternative<document::DriverBindingSource>(
+                            fixture.session.composition()->parameters().find(operandId)->source),
+                        "and the parameter's source is the driver binding");
+    expectations.expect(fixture.session.undo(), "the link undoes once");
+    expectations.expect(std::holds_alternative<document::ConstantValueSource>(
+                            fixture.session.composition()->parameters().find(operandId)->source),
+                        "undo restores the exact constant the link replaced");
 }
 
 void testEveryProjectedEdgeIsAPathItemBetweenTwoCards(Expectations& expectations) {
@@ -750,6 +837,7 @@ int runAll() {
     testEmptyCanvasZoomDoesNotLatchTheViewAway(expectations);
     testSelectionFollowsTheSessionInBothDirections(expectations);
     testConnectorTypingIsPinnedPerSocketKind(expectations);
+    testValueNodeOperandsAreEditableAndHideWhenDriven(expectations);
     testEveryProjectedEdgeIsAPathItemBetweenTwoCards(expectations);
     testMidChainCardsCarryBothPortDots(expectations);
     testContextMenuOffersOnlyRealCommands(expectations);
