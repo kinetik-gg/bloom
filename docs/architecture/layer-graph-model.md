@@ -64,6 +64,14 @@ A `Layer Stack` is a native graph operator with one ordered collection of stable
 entry has a stable slot ID. Graph connections target `(stack node ID, slot ID, input role)`, never an
 array index such as `input 3`.
 
+Entry ZERO is the TOPMOST layer: the stack folds from its last entry to its first, so the entry list
+reads in the order the Timeline lists its rows and the Merge pill draws its segments. A newly added
+layer therefore lands at the FRONT of the list, on top of everything already there -- `AddSolidLayer`
+and `AddTextLayer` insert it there rather than appending. Appending put every new layer underneath
+every existing one, which is why an artist who added a layer and changed its blend mode saw nothing
+change: the layer they had just made had only the composition's transparent backdrop beneath it, and
+over transparency every separable mode folds to Normal.
+
 Reordering a layer changes only the ordered entry structure. Source, matte, parent, parameter, and
 selection references use stable IDs and must not change merely because the row moved.
 
@@ -523,7 +531,9 @@ way it always has -- that fallback is what `node_editor::displayTypeName()` is f
 `nodeTypeDisplayName()` is the node-type layer above it.
 
 A layer boundary card is named after its layer, so the card alone would no longer say what kind of
-node it is; the eyebrow is the one line that still says so.
+node it is; the eyebrow is the one line that still says so -- and it names the layer's BLEND MODE
+alongside it whenever that mode is not Normal, because a blend mode is otherwise the one layer
+property with no visible trace on a card whose rows are collapsed.
 
 ### Merge's Ordered Multi-Input
 

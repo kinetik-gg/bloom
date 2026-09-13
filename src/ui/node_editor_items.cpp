@@ -153,9 +153,27 @@ QString nodeDisplayName(const document::Composition& composition,
 // A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
 // of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
 QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node) {
-    for (const auto& boundary : composition.graph().layerOutputs())
-        if (boundary.nodeId == node.id && !boundary.name.empty())
+    for (const auto& boundary : composition.graph().layerOutputs()) {
+        if (boundary.nodeId != node.id || boundary.name.empty())
+            continue;
+        const auto* parameter =
+            parameterForRole(node, composition, document::kBlendModeParameterRole);
+        const auto* constant = parameter == nullptr
+                                   ? nullptr
+                                   : std::get_if<document::ConstantValueSource>(&parameter->source);
+        const auto* stored =
+            constant == nullptr ? nullptr : std::get_if<std::int64_t>(&constant->value);
+        const auto mode =
+            stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
+        // Task FIX1, item E: the blend mode joins the eyebrow. It is the one layer property with no
+        // visible trace on the card when its widget is a dropdown among six rows, and an artist who
+        // has set a layer to Screen should be able to see that from the card rather than by opening
+        // the row.
+        if (!mode.has_value() || *mode == core::kDefaultBlendMode)
             return nodeTypeDisplayName(document::kLayerOutputNodeType);
+        return nodeTypeDisplayName(document::kLayerOutputNodeType) + QStringLiteral(" · ") +
+               blendModeDisplayName(*mode);
+    }
     return {};
 }
 

@@ -369,13 +369,14 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
                             "every row spans the whole layer column");
     }
 
-    // Flat, not striped: two adjacent UNSELECTED rows paint the same background. Row 2 is the
-    // selected one (addSolidLayer selects what it adds), so rows 0 and 1 are the honest pair.
+    // Flat, not striped: two adjacent UNSELECTED rows paint the same background. ADAPTED (task
+    // FIX1, item E): a new layer lands on TOP, so the row addSolidLayer selected is row 0 and the
+    // honest unselected pair is rows 1 and 2.
     const QImage laneImage = lanes->grab().toImage();
     const QColor background = ui::kit::color(ui::kit::Color::Background);
     const int sampleX = laneImage.width() - 4;
-    expectations.expect(near(laneImage.pixelColor(sampleX, 1), background, 2) &&
-                            near(laneImage.pixelColor(sampleX, 32 + 1), background, 2),
+    expectations.expect(near(laneImage.pixelColor(sampleX, 32 + 1), background, 2) &&
+                            near(laneImage.pixelColor(sampleX, 64 + 1), background, 2),
                         "unselected lanes are FLAT Background -- no alternating stripe");
 
     // The hairline separator closes each row, in Border.
@@ -477,10 +478,11 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
     const QImage laneImage = lanes->grab().toImage();
     // ADAPTED (task S3): task T1 painted ONE data-type color for both kinds and disclosed that as a
     // blocked sub-item, because text was not a rendering layer kind yet. It is now, so the two
-    // kinds are distinguishable on the lane: row 0 is the Solid (DataComposition), row 1 the Text
-    // (DataClip). See layerClipColorToken() for why those two roles and not the others.
-    const std::array<QColor, 2> expectedByRow{ui::kit::color(ui::kit::Color::DataComposition),
-                                              ui::kit::color(ui::kit::Color::DataClip)};
+    // kinds are distinguishable on the lane. ADAPTED again (task FIX1, item E): a new layer lands
+    // on TOP, so the Text layer added second is row 0 (DataClip) and the Solid is row 1
+    // (DataComposition). See layerClipColorToken() for why those two roles and not the others.
+    const std::array<QColor, 2> expectedByRow{ui::kit::color(ui::kit::Color::DataClip),
+                                              ui::kit::color(ui::kit::Color::DataComposition)};
     expectations.expect(expectedByRow[0] != expectedByRow[1],
                         "the two layer kinds really do get different clip colors");
     for (int row = 0; row < 2; ++row) {
@@ -528,8 +530,9 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
         finishFixture(fixture);
         return;
     }
-    // addSolidLayer selects what it adds, so row 1 is selected and row 0 is not.
-    expectations.expect(stack->currentRow() == 1, "row 1 is the selected row (test precondition)");
+    // addSolidLayer selects what it adds, and ADAPTED (task FIX1, item E) a new layer lands on TOP,
+    // so row 0 is selected and row 1 is not.
+    expectations.expect(stack->currentRow() == 0, "row 0 is the selected row (test precondition)");
 
     const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
     const QColor background = ui::kit::color(ui::kit::Color::Background);
@@ -540,8 +543,8 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     // in the lane's own 2px vertical inset, ABOVE the clip bar -- the bar spans the whole
     // composition range, so every x inside the bar's own band shows the bar, not the row fill.
     const int sampleX = laneImage.width() - 3;
-    const QColor selectedLane = laneImage.pixelColor(sampleX, 32 + 1);
-    const QColor unselectedLane = laneImage.pixelColor(sampleX, 1);
+    const QColor selectedLane = laneImage.pixelColor(sampleX, 1);
+    const QColor unselectedLane = laneImage.pixelColor(sampleX, 32 + 1);
     expectations.expect(near(selectedLane, raised, 4),
                         "the selected row's lane is a SurfaceRaised fill");
     expectations.expect(near(unselectedLane, background, 4),
@@ -766,18 +769,19 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
         return;
     }
 
-    expectations.expect(stack->entries()[0].kind == QStringLiteral("Solid") &&
-                            stack->entries()[1].kind == QStringLiteral("Text"),
+    // ADAPTED (task FIX1, item E): the Text layer added second is on TOP, so it is row 0.
+    expectations.expect(stack->entries()[0].kind == QStringLiteral("Text") &&
+                            stack->entries()[1].kind == QStringLiteral("Solid"),
                         "the stack still derives each layer's kind from project truth");
     // The Name cell's own x: past the four toggle cells.
     const int nameX =
         ui::kit::px(ui::kit::Spacing::XS) +
         4 * (ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS)) +
         ui::kit::px(ui::kit::Spacing::XS) + 8;
-    expectations.expect(stack->toolTipAt(QPoint(nameX, 16)).contains(QStringLiteral("Solid")),
+    expectations.expect(stack->toolTipAt(QPoint(nameX, 32 + 16)).contains(QStringLiteral("Solid")),
                         "the Solid row names its kind in the tooltip, so removing the Kind COLUMN "
                         "never removed the information");
-    expectations.expect(stack->toolTipAt(QPoint(nameX, 32 + 16)).contains(QStringLiteral("Text")),
+    expectations.expect(stack->toolTipAt(QPoint(nameX, 16)).contains(QStringLiteral("Text")),
                         "the Text row does the same");
 
     delete editor;
