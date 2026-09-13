@@ -71,7 +71,8 @@ class NodeHeaderMenuBar final : public QWidget {
         button->setPopupMode(QToolButton::InstantPopup);
         button->setMenu(menu);
         button->setProperty("headerMenuButton", true);
-        static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()), button);
+        static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()),
+                                                          button);
         buttons_.push_back(button);
         menus_.push_back(menu);
     }
@@ -326,8 +327,8 @@ void NodeGraphEditor::frameSelectedNodes() {
         view_->frameGraph();
         return;
     }
-    view_->frameRect(bounds.adjusted(-kNodeSceneMargin, -kNodeSceneMargin, kNodeSceneMargin,
-                                     kNodeSceneMargin));
+    view_->frameRect(
+        bounds.adjusted(-kNodeSceneMargin, -kNodeSceneMargin, kNodeSceneMargin, kNodeSceneMargin));
 }
 
 void NodeGraphEditor::selectNoneNodes() { session_.clearSelection(); }
@@ -348,8 +349,8 @@ void NodeGraphEditor::selectInvertNodes() {
         session_.selectNodes(inverted, *inverted.begin());
 }
 
-std::set<document::NodeId>
-NodeGraphEditor::linkedNodes(const std::set<document::NodeId>& seeds, const bool upstream) const {
+std::set<document::NodeId> NodeGraphEditor::linkedNodes(const std::set<document::NodeId>& seeds,
+                                                        const bool upstream) const {
     const auto* composition = session_.composition();
     if (composition == nullptr)
         return seeds;
@@ -363,8 +364,9 @@ NodeGraphEditor::linkedNodes(const std::set<document::NodeId>& seeds, const bool
         for (const auto& binding : node.parameters) {
             const auto* parameter = composition->parameters().find(binding.parameterId);
             const auto* driver =
-                parameter == nullptr ? nullptr
-                                     : std::get_if<document::DriverBindingSource>(&parameter->source);
+                parameter == nullptr
+                    ? nullptr
+                    : std::get_if<document::DriverBindingSource>(&parameter->source);
             if (driver != nullptr)
                 links.emplace_back(driver->sourceNodeId, node.id);
         }
@@ -418,7 +420,8 @@ QString NodeGraphEditor::addNodeRefusal(const std::string& typeId) const {
     const auto result =
         AddEditorNode(session_.compositionId(), typeId, {addPosition_.x(), addPosition_.y()})
             .apply(draft);
-    return result.issues.empty() ? QString{} : QString::fromStdString(result.issues.front().message);
+    return result.issues.empty() ? QString{}
+                                 : QString::fromStdString(result.issues.front().message);
 }
 
 void NodeGraphEditor::populateAddMenu(QMenu* menu,
@@ -847,19 +850,19 @@ void NodeGraphEditor::buildHeaderMenus() {
                         QKeySequence(Qt::CTRL | Qt::Key_0));
     action(headerViewMenu_, tr("Frame Selected"), QStringLiteral("nodeFrameSelectedAction"),
            [this] { frameSelectedNodes(); });
-    withDisplayShortcut(
-        action(headerViewMenu_, tr("Actual Size"), QStringLiteral("nodeActualSizeAction"),
-               [this] { view_->zoomToActualSize(); }),
-        QKeySequence(Qt::CTRL | Qt::Key_1));
+    withDisplayShortcut(action(headerViewMenu_, tr("Actual Size"),
+                               QStringLiteral("nodeActualSizeAction"),
+                               [this] { view_->zoomToActualSize(); }),
+                        QKeySequence(Qt::CTRL | Qt::Key_1));
     headerViewMenu_->addSeparator();
     action(headerViewMenu_, tr("Zoom In"), QStringLiteral("nodeZoomInAction"),
            [this] { view_->zoomStep(1); });
     action(headerViewMenu_, tr("Zoom Out"), QStringLiteral("nodeZoomOutAction"),
            [this] { view_->zoomStep(-1); });
     headerViewMenu_->addSeparator();
-    gridSnapAction_ = action(headerViewMenu_, tr("Grid Snapping"),
-                            QStringLiteral("nodeGridSnapAction"),
-                            [this] { applyGridSnap(!scene_->gridSnapEnabled()); });
+    gridSnapAction_ =
+        action(headerViewMenu_, tr("Grid Snapping"), QStringLiteral("nodeGridSnapAction"),
+               [this] { applyGridSnap(!scene_->gridSnapEnabled()); });
     gridSnapAction_->setCheckable(true);
     gridSnapAction_->setChecked(scene_->gridSnapEnabled());
     headerViewMenu_->addSeparator();
@@ -897,42 +900,43 @@ void NodeGraphEditor::buildHeaderMenus() {
     action(headerSelectMenu_, tr("Linked Upstream"),
            QStringLiteral("nodeSelectLinkedUpstreamAction"), [this] { selectLinkedUpstream(); });
     action(headerSelectMenu_, tr("Linked Downstream"),
-           QStringLiteral("nodeSelectLinkedDownstreamAction"), [this] { selectLinkedDownstream(); });
+           QStringLiteral("nodeSelectLinkedDownstreamAction"),
+           [this] { selectLinkedDownstream(); });
     connect(headerSelectMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshSelectMenuState);
 
     // --- Node: every one of these reuses the exact objectName the canvas context menu's own node
     // commands already established (deliverable 1's "reuse the existing QActions"); a persistent
     // menu cannot literally share the SAME QAction instance the transient context menu builds fresh
-    // per popup (buildContextMenu() depends on that popup-time freshness for its own honesty rule --
-    // an item that cannot apply is not merely disabled, it is absent), so this menu instead disables
-    // an applicable-but-currently-inapplicable command rather than hiding it, refreshed on every
-    // aboutToShow by refreshNodeMenuState(). ---
+    // per popup (buildContextMenu() depends on that popup-time freshness for its own honesty rule
+    // -- an item that cannot apply is not merely disabled, it is absent), so this menu instead
+    // disables an applicable-but-currently-inapplicable command rather than hiding it, refreshed on
+    // every aboutToShow by refreshNodeMenuState(). ---
     headerNodeMenu_ = new QMenu(bar);
     headerNodeMenu_->setTitle(tr("Node"));
     headerNodeMenu_->setObjectName(QStringLiteral("nodeNodeMenu"));
-    groupAction_ = withDisplayShortcut(
-        action(headerNodeMenu_, tr("Group"), QStringLiteral("nodeGroupAction"),
-               [this] { groupSelectedNodes(); }),
-        QKeySequence(Qt::CTRL | Qt::Key_G));
-    ungroupAction_ = withDisplayShortcut(
-        action(headerNodeMenu_, tr("Ungroup"), QStringLiteral("nodeUngroupAction"),
-               [this] { ungroupSelection(); }),
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
+    groupAction_ =
+        withDisplayShortcut(action(headerNodeMenu_, tr("Group"), QStringLiteral("nodeGroupAction"),
+                                   [this] { groupSelectedNodes(); }),
+                            QKeySequence(Qt::CTRL | Qt::Key_G));
+    ungroupAction_ = withDisplayShortcut(action(headerNodeMenu_, tr("Ungroup"),
+                                                QStringLiteral("nodeUngroupAction"),
+                                                [this] { ungroupSelection(); }),
+                                         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
     headerNodeMenu_->addSeparator();
     muteAction_ = action(headerNodeMenu_, tr("Mute"), QStringLiteral("nodeMuteAction"),
-                        [this] { toggleSelectedMuted(true); });
+                         [this] { toggleSelectedMuted(true); });
     collapseAction_ = action(headerNodeMenu_, tr("Collapse"), QStringLiteral("nodeCollapseAction"),
                              [this] { toggleSelectedMuted(false); });
     headerNodeMenu_->addSeparator();
     renameAction_ = action(headerNodeMenu_, tr("Rename"), QStringLiteral("nodeRenameAction"),
-                          [this] { renameSelectedLayer(); });
+                           [this] { renameSelectedLayer(); });
     dissolveAction_ = action(headerNodeMenu_, tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
-                            [this] { dissolveSelectedNode(); });
+                             [this] { dissolveSelectedNode(); });
     headerNodeMenu_->addSeparator();
-    deleteAction_ = withDisplayShortcut(
-        action(headerNodeMenu_, tr("Delete"), QStringLiteral("nodeDeleteAction"),
-               [this] { removeSelectedNodes(); }),
-        QKeySequence(Qt::Key_Delete));
+    deleteAction_ = withDisplayShortcut(action(headerNodeMenu_, tr("Delete"),
+                                               QStringLiteral("nodeDeleteAction"),
+                                               [this] { removeSelectedNodes(); }),
+                                        QKeySequence(Qt::Key_Delete));
     connect(headerNodeMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshNodeMenuState);
 
     // `bar` (created above) stays alive and usable through headerMenuForTest() even before
@@ -965,7 +969,7 @@ void NodeGraphEditor::refreshSelectMenuState() {
 }
 
 void NodeGraphEditor::refreshNodeMenuState() {
-    const std::array<QAction*, 7> all{groupAction_, ungroupAction_, muteAction_,   collapseAction_,
+    const std::array<QAction*, 7> all{groupAction_,  ungroupAction_,  muteAction_,  collapseAction_,
                                       renameAction_, dissolveAction_, deleteAction_};
     const auto nodes = session_.selectedNodes();
     const bool hasSelection =
@@ -985,7 +989,7 @@ void NodeGraphEditor::refreshNodeMenuState() {
         return commands::canApplyNodeOperation(session_.snapshot(), operation);
     };
     dissolveAction_->setEnabled(nodes.size() == 1 &&
-                               accepts(commands::DissolveNode(composition, *nodes.begin())));
+                                accepts(commands::DissolveNode(composition, *nodes.begin())));
     const bool allMuted = std::ranges::all_of(
         nodes, [&](const auto id) { return layoutFor(*session_.composition(), id).muted; });
     const bool allCollapsed = std::ranges::all_of(
@@ -1064,7 +1068,8 @@ QWidget* NodeGraphEditor::takeHeaderMenuWidget() {
     return headerMenuWidget_;
 }
 
-// --- Task NODES-1, deliverable 4: the footer ------------------------------------------------------
+// --- Task NODES-1, deliverable 4: the footer
+// ------------------------------------------------------
 
 void NodeGraphEditor::refreshSelectionReadout() {
     if (footerSelectionLabel_ == nullptr) {
@@ -1112,7 +1117,8 @@ void NodeGraphEditor::buildFooter() {
         const QSignalBlocker blocker(snapSwitch);
         snapSwitch->setChecked(scene_->gridSnapEnabled());
     }
-    connect(snapSwitch, &kit::KSwitch::toggled, this, [this](bool checked) { applyGridSnap(checked); });
+    connect(snapSwitch, &kit::KSwitch::toggled, this,
+            [this](bool checked) { applyGridSnap(checked); });
     footerSnapSwitch_ = snapSwitch;
     layout->addWidget(snapSwitch);
 
@@ -1127,9 +1133,11 @@ void NodeGraphEditor::buildFooter() {
         const QSignalBlocker blocker(footerLinkStyleDropdown_);
         footerLinkStyleDropdown_->setCurrentIndex(static_cast<int>(scene_->linkStyle()));
     }
-    connect(footerLinkStyleDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
-        applyLinkStyle(static_cast<LinkStyle>(footerLinkStyleDropdown_->itemData(index).toInt()));
-    });
+    connect(footerLinkStyleDropdown_, &kit::KDropdown::currentIndexChanged, this,
+            [this](int index) {
+                applyLinkStyle(
+                    static_cast<LinkStyle>(footerLinkStyleDropdown_->itemData(index).toInt()));
+            });
     layout->addWidget(footerLinkStyleDropdown_);
 
     layout->addStretch(1);

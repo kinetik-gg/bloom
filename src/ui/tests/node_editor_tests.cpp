@@ -871,9 +871,8 @@ void testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(Expectations& expe
                             "a header too narrow for four buttons shows the overflow button "
                             "instead of wrapping to a second row");
         auto* overflowMenu = overflow->menu();
-        expectations.expect(overflowMenu != nullptr &&
-                                overflowMenu->objectName() ==
-                                    QStringLiteral("nodeHeaderOverflowMenu"),
+        expectations.expect(overflowMenu != nullptr && overflowMenu->objectName() ==
+                                                           QStringLiteral("nodeHeaderOverflowMenu"),
                             "the overflow button opens nodeHeaderOverflowMenu");
         if (overflowMenu != nullptr) {
             // addMenu(QMenu*) lists an EXISTING menu as a submenu action without reparenting it
@@ -886,17 +885,19 @@ void testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(Expectations& expe
                     submenus.push_back(action->menu());
             expectations.expect(submenus.size() == 4,
                                 "the overflow menu lists all four top-level menus as submenus");
-            for (const char* name : {"nodeAddMenu", "nodeViewMenu", "nodeSelectMenu",
-                                     "nodeNodeMenu"}) {
+            for (const char* name :
+                 {"nodeAddMenu", "nodeViewMenu", "nodeSelectMenu", "nodeNodeMenu"}) {
                 auto* menu = bar->findChild<QMenu*>(QString::fromLatin1(name));
-                expectations.expect(menu != nullptr && submenus.contains(menu),
-                                    (std::string("the overflow menu still offers ") + name).c_str());
+                expectations.expect(
+                    menu != nullptr && submenus.contains(menu),
+                    (std::string("the overflow menu still offers ") + name).c_str());
             }
         }
     }
     for (auto* button : topLevelButtons)
-        expectations.expect(!button->isVisible(),
-                            "the individual menu buttons hide once collapsed -- never a second row");
+        expectations.expect(
+            !button->isVisible(),
+            "the individual menu buttons hide once collapsed -- never a second row");
 }
 
 } // namespace

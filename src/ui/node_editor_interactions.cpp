@@ -12,7 +12,8 @@ bool fieldAt(QGraphicsScene& scene, QPointF point);
 // final commit both round through. Alt-bypass and the "is snapping even on" check are the caller's
 // job -- this is pure geometry.
 QPointF snappedToGrid(const QPointF point, const qreal gridSize) {
-    return {std::round(point.x() / gridSize) * gridSize, std::round(point.y() / gridSize) * gridSize};
+    return {std::round(point.x() / gridSize) * gridSize,
+            std::round(point.y() / gridSize) * gridSize};
 }
 // The pointer slop a socket gets, measured where the artist actually aims: on SCREEN. The socket's
 // own hit shape is fixed in scene units (SocketItem::shape()), so at a zoomed-out canvas -- which
@@ -612,7 +613,8 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
             if (card == nullptr || card->pos() == original) {
                 continue;
             }
-            const QPointF finalPosition = snap ? snappedToGrid(card->pos(), gridSize_) : card->pos();
+            const QPointF finalPosition =
+                snap ? snappedToGrid(card->pos(), gridSize_) : card->pos();
             if (finalPosition != card->pos()) {
                 card->setPos(finalPosition);
             }

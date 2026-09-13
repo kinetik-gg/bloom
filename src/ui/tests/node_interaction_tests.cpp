@@ -250,14 +250,15 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
             expect(linkStyleMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
                    (std::string("Link Style offers ") + name).c_str());
     auto* selectMenu = f.editor.headerMenuForTest("select");
-    for (const char* name : {"nodeSelectAllAction", "nodeSelectNoneAction", "nodeSelectInvertAction",
-                             "nodeSelectLinkedUpstreamAction", "nodeSelectLinkedDownstreamAction"})
+    for (const char* name :
+         {"nodeSelectAllAction", "nodeSelectNoneAction", "nodeSelectInvertAction",
+          "nodeSelectLinkedUpstreamAction", "nodeSelectLinkedDownstreamAction"})
         expect(selectMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
                (std::string("Select offers ") + name).c_str());
     auto* nodeMenu = f.editor.headerMenuForTest("node");
-    for (const char* name : {"nodeGroupAction", "nodeUngroupAction", "nodeMuteAction",
-                             "nodeCollapseAction", "nodeRenameAction", "nodeDissolveAction",
-                             "nodeDeleteAction"})
+    for (const char* name :
+         {"nodeGroupAction", "nodeUngroupAction", "nodeMuteAction", "nodeCollapseAction",
+          "nodeRenameAction", "nodeDissolveAction", "nodeDeleteAction"})
         expect(nodeMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
                (std::string("Node offers ") + name).c_str());
     auto* addMenu = f.editor.headerMenuForTest("add");

@@ -1,12 +1,12 @@
 #pragma once
 
+#include <array>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/tokens.hpp>
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -213,9 +213,9 @@ class NodeGraphicsView final : public QGraphicsView {
     // Ctrl+1: exactly 100%, with the graph's bounding rectangle centered -- the same "actual size,
     // centered" the Viewer's 100% means.
     void zoomToActualSize();
-    // The footer's zoom dropdown (task NODES-1, deliverable 4): `percent` is one of the Viewer's own
-    // fixed presets (25/50/100/200/400 -- viewer_editor.cpp's kZoomPresets). Same centered-scale
-    // behavior as zoomToActualSize(), generalized to an arbitrary factor.
+    // The footer's zoom dropdown (task NODES-1, deliverable 4): `percent` is one of the Viewer's
+    // own fixed presets (25/50/100/200/400 -- viewer_editor.cpp's kZoomPresets). Same
+    // centered-scale behavior as zoomToActualSize(), generalized to an arbitrary factor.
     void zoomToPercent(int percent);
     // View > Frame Selected (task NODES-1): scales and centers so exactly `bounds` (already in
     // scene coordinates -- the caller's job to compute, since only it knows which cards are
@@ -354,12 +354,12 @@ class NodeGraphEditor final : public QWidget,
     void selectLinkedUpstream();
     void selectLinkedDownstream();
     // Shared BFS the two linked-selection commands above both walk, over the SAME link set
-    // rebuildEdges() draws (graph edges followed by every driver binding) so "linked" here can never
-    // disagree with what the canvas actually shows as a wire. Returns `seeds` itself united with
-    // whatever following edges (upstream: toward sources; downstream: toward destinations) reaches
-    // transitively.
+    // rebuildEdges() draws (graph edges followed by every driver binding) so "linked" here can
+    // never disagree with what the canvas actually shows as a wire. Returns `seeds` itself united
+    // with whatever following edges (upstream: toward sources; downstream: toward destinations)
+    // reaches transitively.
     [[nodiscard]] std::set<document::NodeId> linkedNodes(const std::set<document::NodeId>& seeds,
-                                                          bool upstream) const;
+                                                         bool upstream) const;
 
     // --- Task NODES-1: the persistent header menus (deliverable 1) and their live state. ---
     void buildHeaderMenus();
@@ -372,7 +372,8 @@ class NodeGraphEditor final : public QWidget,
     // every time the menu is reopened: QMenu::clear() does not delete a submenu it did not itself
     // parent, and addMenu(QString) parents the submenu to ITSELF, not to the menu clear() is called
     // on).
-    void populateAddMenu(QMenu* menu, std::vector<std::pair<QAction*, std::string>>* recordInto = nullptr);
+    void populateAddMenu(QMenu* menu,
+                         std::vector<std::pair<QAction*, std::string>>* recordInto = nullptr);
     void refreshAddMenuState();
     // The one place Add's own refusal text is computed, from a private draft exactly like a dry
     // run of the command itself -- shared by populateAddMenu() (a fresh menu's initial state) and
@@ -395,12 +396,13 @@ class NodeGraphEditor final : public QWidget,
     std::optional<document::OutputPortRef> addOutput_;
     document::Revision addRevision_;
 
-    // Header menus (task NODES-1, deliverable 1): built once in buildHeaderMenus(), lived in for the
-    // editor's whole lifetime regardless of whether EditorArea ever calls takeHeaderMenuWidget() --
-    // a test can reach them directly through headerMenuForTest(). Every action below reuses one of
-    // the objectNames the canvas context menu already established wherever the same command
-    // applies; the exceptions (Select None/Invert/Linked Upstream/Linked Downstream, Frame
-    // Selected, Grid Snapping, Link Style) are new and documented in this task's report.
+    // Header menus (task NODES-1, deliverable 1): built once in buildHeaderMenus(), lived in for
+    // the editor's whole lifetime regardless of whether EditorArea ever calls
+    // takeHeaderMenuWidget() -- a test can reach them directly through headerMenuForTest(). Every
+    // action below reuses one of the objectNames the canvas context menu already established
+    // wherever the same command applies; the exceptions (Select None/Invert/Linked Upstream/Linked
+    // Downstream, Frame Selected, Grid Snapping, Link Style) are new and documented in this task's
+    // report.
     QMenu* headerAddMenu_ = nullptr;
     QMenu* headerViewMenu_ = nullptr;
     QMenu* headerSelectMenu_ = nullptr;
