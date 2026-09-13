@@ -36,17 +36,20 @@ class Expectations final {
 
 [[nodiscard]] bloom::runtime::NodeDefinition customSolid(const std::uint32_t version = 1) {
     using namespace bloom;
-    return {{"example.solid", version},
-            runtime::NodeLoweringKind::Solid,
-            {},
-            {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-            // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
-            // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
-            // solid colour is animatable now -- so a custom Solid must declare it too.
-            {{std::string(document::kSolidColorParameterRole),
-              std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true, true}},
-            std::nullopt};
+    return {
+        {"example.solid", version},
+        runtime::NodeLoweringKind::Solid,
+        // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable
+        // operand socket per parameter role, so a custom Solid declares the colour socket too.
+        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
+        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+        // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
+        // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
+        // solid colour is animatable now -- so a custom Solid must declare it too.
+        {{std::string(document::kSolidColorParameterRole),
+          std::string(document::kSolidColorParameterSchemaKey),
+          runtime::ParameterValueKind::Color4d, true, true}},
+        std::nullopt};
 }
 
 [[nodiscard]] bloom::runtime::NodeDefinition unsupportedDefinition(std::string typeId) {
@@ -88,7 +91,7 @@ void testValidationAndDuplicates(Expectations& expectations) {
     expectations.expect(registry.registerDefinition(original) == NodeRegistrationStatus::Registered,
                         "valid definition is registered");
     auto replacement = original;
-    replacement.outputs.front().name = "replacement";
+    replacement.parameters.front().role = "replacement";
     expectations.expect(registry.registerDefinition(std::move(replacement)) ==
                             NodeRegistrationStatus::InvalidDefinition,
                         "malformed replacement is rejected before duplicate lookup");
@@ -109,8 +112,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    expectations.expect(registry.definitions().size() == 5,
-                        "startup contribution includes all five built-in lowerings");
+    // ADAPTED (task S7): the five structural node types plus the forty-node value library.
+    expectations.expect(registry.definitions().size() == 45,
+                        "startup contribution includes every built-in definition");
 
     registry.freeze();
     const auto* solid =

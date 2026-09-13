@@ -278,14 +278,17 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
     // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, which is true
     // for a solid colour since task S5 made it animatable -- so this custom definition declares it
     // too, or the registry refuses the definition outright.
-    return {{"example.solid", 17},
-            runtime::NodeLoweringKind::Solid,
-            {},
-            {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-            {{std::string(document::kSolidColorParameterRole),
-              std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true, true}},
-            std::nullopt};
+    // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable operand
+    // socket per parameter role, so the colour parameter's Color socket is declared here too.
+    return {
+        {"example.solid", 17},
+        runtime::NodeLoweringKind::Solid,
+        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
+        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+        {{std::string(document::kSolidColorParameterRole),
+          std::string(document::kSolidColorParameterSchemaKey),
+          runtime::ParameterValueKind::Color4d, true, true}},
+        std::nullopt};
 }
 
 [[nodiscard]] runtime::NodeDefinition bulkUnsupportedDefinition(const std::size_t index) {
@@ -295,6 +298,29 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
             {{"image", runtime::SocketValueKind::Image}},
             {},
             std::nullopt};
+}
+
+// Task S7: a driver binding names a value node's output, so a driven fixture needs a value node to
+// name. Adds one literal Value node of `typeId` and points `target`'s source at its single output.
+void attachValueDriver(document::Project& project, const document::NodeId nodeId,
+                       const document::ParameterId valueParameterId, const std::string_view typeId,
+                       const std::string_view valueSchemaKey, document::ParameterValue defaultValue,
+                       const document::ParameterId target) {
+    using namespace document;
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "driver fixture composition must exist");
+    require(composition->parameters().insert({valueParameterId, std::string(valueSchemaKey),
+                                              ConstantValueSource{std::move(defaultValue)}}),
+            "driver fixture value parameter must be accepted");
+    require(composition->graph().addNode({nodeId,
+                                          std::string(typeId),
+                                          {{std::string(kValueParameterRole), valueParameterId}},
+                                          kValueNodeSchemaVersion}),
+            "driver fixture value node must be accepted");
+    require(composition->parameters().setSource(
+                target, DriverBindingSource{nodeId, std::string(kValuePortName)}),
+            "driver fixture binding must be accepted");
+    require(project.validate().ok(), "driver fixture must remain valid document truth");
 }
 
 [[nodiscard]] runtime::SnapshotCompileResult
@@ -749,19 +775,45 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                             "bloom.runtime.compile.unsupported-parameter-source",
                         "compiler diagnostics expose stable machine-readable identifiers");
 
+    // ADAPTED (task S7): a driver binding on a Colour parameter is evaluable now, so what used to
+    // be an unsupported-source assertion is a positive one -- the solid's colour compiles to a
+    // value-graph output, and the value node that supplies it becomes a compiled value operation.
     auto driven = makeProject(singleLayerOptions());
-    auto& drivenParameters = driven.findComposition(kCompositionId)->parameters();
-    require(
-        drivenParameters.setSource(
-            kFirstColor, document::DriverBindingSource{document::DriverBindingId::fromRaw(101)}) &&
-            driven.validate().ok(),
-        "driver reference fixture must remain valid document truth");
+    attachValueDriver(driven, document::NodeId::fromRaw(14), document::ParameterId::fromRaw(46),
+                      document::kColorValueNodeType, document::kColorValueParameterSchemaKey,
+                      core::Color4d{0.25, 0.5, 0.75, 1.0}, kFirstColor);
     const auto drivenResult = compile(std::move(driven), registry);
+    expectations.expect(drivenResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            drivenResult.plan,
+                        "a Colour parameter driven by a Colour value node compiles");
+    if (drivenResult.plan) {
+        const auto& plan = *drivenResult.plan;
+        expectations.expect(plan.valueOperations().size() == 1 && plan.valueOutputCount() == 1,
+                            "the driving value node compiles to exactly one value operation");
+        const auto solid = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledSolid>(operation);
+        });
+        expectations.expect(solid != plan.operations().end() &&
+                                std::holds_alternative<runtime::ValueOutputIndex>(
+                                    std::get<runtime::CompiledSolid>(*solid).color.source),
+                            "the driven colour operand resolves to a value-graph output");
+    }
+
+    // The other half of the same rule: the three parameter kinds with a value-graph arm are Scalar,
+    // Vector2 and Colour. An Integer one -- the blend mode -- is linkable and durable, but nothing
+    // carries its value into a compiled operation yet, so it keeps the unsupported-source report.
+    auto drivenBlendMode = makeProject(singleLayerOptions());
+    attachValueDriver(drivenBlendMode, document::NodeId::fromRaw(14),
+                      document::ParameterId::fromRaw(46), document::kIntegerValueNodeType,
+                      document::kIntegerValueParameterSchemaKey, std::int64_t{0}, kFirstBlendMode);
+    const auto blendModeResult = compile(std::move(drivenBlendMode), registry);
     expectations.expect(
-        drivenResult.status == runtime::SnapshotCompileStatus::Unsupported &&
-            hasDiagnostic(drivenResult, runtime::CompileDiagnosticCode::UnsupportedParameterSource,
-                          kFirstSolidNode),
-        "driver source stays unsupported until its Batch 4 typed output contract");
+        blendModeResult.status == runtime::SnapshotCompileStatus::Unsupported &&
+            hasDiagnostic(blendModeResult,
+                          runtime::CompileDiagnosticCode::UnsupportedParameterSource,
+                          kFirstLayerNode),
+        "a driven Integer parameter reports an unsupported source rather than pretending to "
+        "evaluate");
 }
 
 // An authored blend mode lowers from its stored integer through core::BlendMode's one mapping, and
@@ -872,13 +924,10 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
         "override targets must participate in the requested output path");
 
     auto drivenProject = makeProject(singleLayerOptions());
-    require(
-        drivenProject.findComposition(kCompositionId)
-                ->parameters()
-                .setSource(kFirstPosition,
-                           document::DriverBindingSource{document::DriverBindingId::fromRaw(92)}) &&
-            drivenProject.validate().ok(),
-        "driven override fixture must remain valid document truth");
+    attachValueDriver(drivenProject, document::NodeId::fromRaw(14),
+                      document::ParameterId::fromRaw(46), document::kVector2ValueNodeType,
+                      document::kVector2ValueParameterSchemaKey, document::Vec2d{7.0, 9.0},
+                      kFirstPosition);
     const auto driven =
         compile(std::move(drivenProject), registry,
                 runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,

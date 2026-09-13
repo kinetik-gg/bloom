@@ -530,6 +530,17 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
                emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
+    if (const auto* vector = std::get_if<Vec3d>(&value)) {
+        // Document 1.4. Its own kind token rather than a third component appended to "vec2": the
+        // format's discriminators name TYPES, and a three-component vector is a different type from
+        // a two-component one -- which is also why an older minor refuses to decode this kind at
+        // all rather than reading it as a vec2 with a stray member.
+        return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("vec3")) &&
+               state.ok(writer.memberName("x")) && state.ok(writer.float64Value(vector->x)) &&
+               state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
+               state.ok(writer.memberName("z")) && state.ok(writer.float64Value(vector->z)) &&
+               emitRetainedTrailing(state) && state.ok(writer.endObject());
+    }
     if (const auto* color = std::get_if<bloom::core::Color4d>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("color4")) &&
                state.ok(writer.memberName("red")) && state.ok(writer.float64Value(color->red)) &&
@@ -595,11 +606,26 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
             if (!emitNamedId(state, "curveId", curve->curveId.value())) {
                 return false;
             }
+        } else if (const auto* driver = std::get_if<DriverBindingSource>(&record.source)) {
+            // Document 1.4. The durable record is exactly the pair it addresses, written the same
+            // way an edge's source is -- an object id and a port name -- because that is what a
+            // driver is: an ordinary port reference that lands in parameter-address space.
+            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("driver"))) {
+                return false;
+            }
+            if (!emitNamedId(state, "sourceNodeId", driver->sourceNodeId.value())) {
+                return false;
+            }
+            if (!state.ok(writer.memberName("outputPort")) ||
+                !state.ok(writer.stringValue(driver->outputPort))) {
+                return false;
+            }
         } else {
-            // Admission rejected live driver sources before staging; reaching this path means the
-            // caller bypassed canonicalDocumentSize.
-            state.walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource,
-                            state.walk.compositionIndex, parameterRank);
+            // Unreachable: ParameterSource is a closed three-alternative variant and all three are
+            // handled above. Reported rather than assumed, matching how every other
+            // cannot-occur branch in this writer behaves.
+            state.walk.fail(CanonicalDocumentError::InvalidParameter, state.walk.compositionIndex,
+                            parameterRank);
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -1900,19 +1926,13 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         return walk;
     }
 
-    // Native v1 Save is a restricted supported-subset encoder: a live driver source is an
-    // unsupported save feature reported with its exact location, never a degraded rewrite.
+    // No parameter-source admission pass any more. Document 1.4 can write every alternative the
+    // document layer can hold, and a driver source's own well-formedness -- a valid node id and
+    // valid structural port text -- is already refused by ParameterStore on insert, so a second
+    // check here could only ever be unreachable.
     for (std::size_t compositionIndex = 0; compositionIndex < project.compositions().size();
          ++compositionIndex) {
         const auto& composition = project.compositions()[compositionIndex];
-        const auto& parameters = composition.parameters().records();
-        for (std::size_t parameterIndex = 0; parameterIndex < parameters.size(); ++parameterIndex) {
-            if (std::holds_alternative<DriverBindingSource>(parameters[parameterIndex].source)) {
-                walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource, compositionIndex,
-                          parameterIndex);
-                return walk;
-            }
-        }
 
         // Defensive domain re-checks for values whose owning types cannot always guarantee the
         // serialized domain (for example through setFormat).

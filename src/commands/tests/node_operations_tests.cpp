@@ -462,15 +462,27 @@ void testDuplicationOwnershipEdges(TestContext& test) {
                            std::set<NodeId>{kFirstLayerNodeId},
                            Vec2d{std::numeric_limits<double>::max(), 0});
 
-    // Driver identity exists, but the document model has no driver record to clone.
+    // ADAPTED (task S7): a driver binding names a value node's output now, so the fixture adds the
+    // Scalar node the binding points at instead of allocating a bare driver id. The contract under
+    // test is unchanged -- duplicating a node whose parameter is driven is still refused, because a
+    // copy would need a second driver nothing asked for.
     auto before = fixture.document.snapshot();
     auto draft = fixture.document.draft(before);
-    const auto driver = draft.ids().allocateDriverBinding();
-    if (!driver ||
-        !draft.project()
-             .findComposition(kCompositionId)
-             ->parameters()
-             .setSource(kSecondOpacityId, DriverBindingSource{*driver}) ||
+    const auto valueNodeId = draft.ids().allocateNode();
+    const auto valueParameterId = draft.ids().allocateParameter();
+    auto* drivenComposition = draft.project().findComposition(kCompositionId);
+    if (!valueNodeId || !valueParameterId || drivenComposition == nullptr ||
+        !drivenComposition->parameters().insert(
+            {*valueParameterId, std::string(bloom::document::kScalarValueParameterSchemaKey),
+             ConstantValueSource{0.5}}) ||
+        !drivenComposition->graph().addNode(
+            {*valueNodeId,
+             std::string(bloom::document::kScalarValueNodeType),
+             {{std::string(bloom::document::kValueParameterRole), *valueParameterId}},
+             bloom::document::kValueNodeSchemaVersion}) ||
+        !drivenComposition->parameters().setSource(
+            kSecondOpacityId,
+            DriverBindingSource{*valueNodeId, std::string(bloom::document::kValuePortName)}) ||
         !fixture.document.commit(before.revision(), std::move(draft)).committed())
         throw std::logic_error("driver fixture");
     fixture.stack.clear();

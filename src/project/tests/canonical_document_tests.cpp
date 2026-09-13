@@ -163,7 +163,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 3\n"
+    "    \"minor\": 4\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -335,7 +335,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 3\n"
+        "    \"minor\": 4\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -827,7 +827,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 3\n"
+        "    \"minor\": 4\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -1157,7 +1157,11 @@ void testInvalidColorSettingsRejections(Expectations& expectations) {
                        "color settings schema version is fixed at 1.0");
 }
 
-void testDriverSourceAdmission(Expectations& expectations) {
+// Task S7 inverted this test's subject. A live driver source used to fail admission, because the
+// source carried a DriverBindingId into a table the format did not have; document 1.4 records the
+// durable node-and-port pair the driver addresses, so what is asserted now is that a driven
+// parameter ENCODES -- and encodes as the same object shape an edge source already uses.
+void testDriverSourceEncoding(Expectations& expectations) {
     using namespace bloom::document;
     auto duration = RationalTime::create(240, 24);
     if (!duration.has_value()) {
@@ -1173,7 +1177,7 @@ void testDriverSourceAdmission(Expectations& expectations) {
     }
     expectations.expect(composition->parameters().insert(
                             {ParameterId::fromRaw(2), std::string(kOpacityParameterSchemaKey),
-                             DriverBindingSource{DriverBindingId::fromRaw(4)}}),
+                             DriverBindingSource{NodeId::fromRaw(1), std::string(kValuePortName)}}),
                         "the driver fixture parameter inserts with a live driver source");
 
     IdAllocatorHighWater highWater{};
@@ -1181,6 +1185,8 @@ void testDriverSourceAdmission(Expectations& expectations) {
     highWater.node = 2;
     highWater.edge = 1;
     highWater.parameter = 2;
+    // Still declared even though no record carries one: decision 0018 requires the driverBinding
+    // high-water to persist so issued ids are never reused, and task S7 did not change that.
     highWater.driverBinding = 4;
     Document document{std::move(newProject.project), highWater};
     auto snapshot = document.snapshot();
@@ -1192,9 +1198,17 @@ void testDriverSourceAdmission(Expectations& expectations) {
                                       .colorSettings = &settings,
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch};
-    expectRequestError(expectations, request, {},
-                       CanonicalDocumentError::UnsupportedDriverBindingSource, 0, 0,
-                       "a live driver source fails admission with its composition and parameter");
+    const auto encoded = encodeWithSlack(request);
+    expectations.expect(encoded.ok, "a live driver source encodes rather than failing admission");
+    // Member order is part of the canonical form, so the three members are asserted as one
+    // contiguous run rather than three independent searches.
+    expectations.expect(encoded.bytes.find("\"kind\": \"driver\",\n"
+                                           "              \"sourceNodeId\": \"1\",\n"
+                                           "              \"outputPort\": \"value\"\n") !=
+                            std::string::npos,
+                        "the driver source is written as the node-and-port pair it addresses");
+    expectations.expect(encoded.bytes.find("\"minor\": 4") != std::string::npos,
+                        "a document carrying a driver source declares schema minor 4");
 }
 
 void testLimitsAndCapacityAdversarial(Expectations& expectations) {
@@ -1385,8 +1399,10 @@ void testPlainWriteExplicitDefaultsUnchanged(Expectations& expectations) {
 // Version parameterization: schemaMinor alone (no overlay) changes only the root schemaVersion.
 void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1400,22 +1416,24 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
-                        "schemaMinor=4 with no overlay sizes exactly with the golden");
+                        "schemaMinor=5 with no overlay sizes exactly with the golden");
     const auto encoded = encodeWithSlack(request);
     expectBytesEqual(expectations,
                      encoded.ok ? std::string_view(encoded.bytes) : std::string_view{}, expected,
-                     "schemaMinor=4 with no overlay emits {1, 4} and is otherwise "
+                     "schemaMinor=5 with no overlay emits {1, 5} and is otherwise "
                      "byte-identical");
 }
 
 // The document root itself is an attachment point (its schema path is the empty path).
 void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1436,7 +1454,7 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a root-attached retained member sizes exactly with the golden");
@@ -1449,8 +1467,10 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
 // A singleton schema-path attachment point nested one level in (project).
 void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello\"\n  },\n  \"idAllocation\"");
 
@@ -1471,7 +1491,7 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a project-attached retained member sizes exactly with the golden");
@@ -1487,8 +1507,10 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
 // canonical (byte equality proves no re-derivation/renormalization happened).
 void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1550,7 +1572,7 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "composition- and format-attached retained members size exactly with the "
@@ -1565,8 +1587,10 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
 // A collection-element attachment point nested two levels in (a graph node).
 void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1600,7 +1624,7 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a node-attached retained member sizes exactly with the golden");
@@ -1614,8 +1638,10 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
 // Composition/Node.
 void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1649,7 +1675,7 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "an edge-attached retained member sizes exactly with the golden");
@@ -1663,8 +1689,10 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
 // carrying a retained array of booleans.
 void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "      \"nodeGroup\": \"0\"\n"
                    "    }\n"
@@ -1707,7 +1735,7 @@ void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "idAllocation- and highestIssued-attached retained members size exactly "
@@ -1743,7 +1771,7 @@ void testOverlayLeftoverEntryIsTypedError(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(!size.hasValue() &&
                             size.error() == CanonicalDocumentError::RoundTripStateMismatch,
@@ -1785,7 +1813,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 4};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     if (!size.hasValue()) {
         expectations.expect(false, "the overlay capacity fixture preflights successfully");
@@ -1947,8 +1975,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 3\n  },\n  \"project\"",
-                   "\"minor\": 4\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"
@@ -2056,7 +2084,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 4};
+                                             .schemaMinor = 5};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "
@@ -2079,7 +2107,7 @@ int main() {
         testComposedGoldenBytes(expectations);
         testExtensionGoldenBytes(expectations);
         testInvalidColorSettingsRejections(expectations);
-        testDriverSourceAdmission(expectations);
+        testDriverSourceEncoding(expectations);
         testLimitsAndCapacityAdversarial(expectations);
         testPlainWriteExplicitDefaultsUnchanged(expectations);
         testSchemaMinorParameterization(expectations);
