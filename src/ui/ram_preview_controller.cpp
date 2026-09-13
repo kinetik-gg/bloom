@@ -44,6 +44,9 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, &RamPreviewController::cancel);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &RamPreviewController::cancel);
+    // A range must not mix factors or policies when the viewer changes resolution mid-run.
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
+            &RamPreviewController::cancel);
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
@@ -98,6 +101,7 @@ void RamPreviewController::beginShutdown() {
     }
     shuttingDown_ = true;
     disconnect(&session_, nullptr, this, nullptr);
+    disconnect(&previewController_, nullptr, this, nullptr);
     cancelAndDetachActive();
     if (caching_) {
         finish(false);

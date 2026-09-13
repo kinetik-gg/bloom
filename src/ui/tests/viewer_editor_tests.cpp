@@ -310,6 +310,7 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(320, 240);
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "an initial reference-labeled frame becomes ready");
@@ -771,11 +772,39 @@ void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expecta
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+void testAutoFollowsFitResize(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(
+        document::makeNewProject("Fit resolution", "Main", core::RationalTime::fromInteger(1)));
+    fixture.viewer.show();
+    expectations.expect(fixture.controller.resolutionDivisor() == 4,
+                        "a small fitted 1080p viewer chooses Quarter");
+    fixture.viewer.resize(800, 500);
+    expectations.expect(fixture.controller.resolutionDivisor() == 2,
+                        "enlarging the fitted viewer raises Auto to Half");
+    if (!fixture.controller.state().desiredIdentity.has_value()) {
+        std::abort();
+    }
+    const auto generation = fixture.controller.state().desiredIdentity->requestGeneration;
+    fixture.viewer.resize(850, 500);
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->requestGeneration ==
+                                generation,
+                        "a resize within Half does not request another frame");
+    fixture.viewer.resize(1200, 800);
+    expectations.expect(fixture.controller.resolutionDivisor() == 1,
+                        "a large fitted viewer raises Auto to Full");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 void testProxyPaintingAndAutoZoom(Expectations& expectations) {
     using namespace bloom;
+    const auto format = document::CompositionFormat::create(160, 120);
+    if (!format.has_value()) {
+        std::abort();
+    }
     ViewerFixture fixture(document::makeNewProject("Proxy display geometry", "Main",
-                                                   core::RationalTime::fromInteger(1),
-                                                   *document::CompositionFormat::create(160, 120)));
+                                                   core::RationalTime::fromInteger(1), *format));
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Blue"), core::Color4d{0.0, 0.0, 1.0, 1.0}),
         "the proxy painting fixture has opaque content");
@@ -811,9 +840,14 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
         fixture.controller.resolutionDivisor() == 2 &&
             fixture.viewer.statusBarReadoutTextForTest().startsWith(QStringLiteral("Auto · ½")),
         "wheel zoom past Quarter raises Auto to Half and updates the readout");
+    if (!fixture.controller.state().desiredIdentity.has_value()) {
+        std::abort();
+    }
     const auto generation = fixture.controller.state().desiredIdentity->requestGeneration;
     QCoreApplication::sendEvent(&fixture.viewer, &wheel);
-    expectations.expect(fixture.controller.state().desiredIdentity->requestGeneration == generation,
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->requestGeneration ==
+                                generation,
                         "another wheel step within Half leaves the request alone");
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
     expectations.expect(fixture.controller.resolutionDivisor() == 1,
@@ -883,6 +917,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     testResolutionDropdownPersistsAndMovesWithFooter(expectations);
+    testAutoFollowsFitResize(expectations);
     testProxyPaintingAndAutoZoom(expectations);
     testSquarePixelFitting(expectations);
     testPixelAspectFitting(expectations);

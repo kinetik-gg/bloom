@@ -1049,7 +1049,7 @@ void testResolutionPolicyAndRequestThresholds(Expectations& expectations) {
     using namespace bloom;
     auto project =
         document::makeNewProject("Resolution policy", "Main", core::RationalTime::fromInteger(1),
-                                 *document::CompositionFormat::create(1920, 1080));
+                                 document::CompositionFormat{});
     const auto compositionId = project.initialCompositionId;
     document::Document document(std::move(project.project));
     commands::CommandStack commands(document);
@@ -1090,6 +1090,7 @@ void testResolutionPolicyAndRequestThresholds(Expectations& expectations) {
     const auto key = controller.cacheKeyForTime(core::RationalTime::fromInteger(0));
     expectations.expect(key.has_value() &&
                             key->resolutionPolicy == runtime::PreviewResolutionPolicy::Quarter &&
+                            controller.state().desiredIdentity.has_value() &&
                             key->resolution == controller.state().desiredIdentity->resolution,
                         "cache and request share policy and resolved factor");
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
@@ -1133,16 +1134,21 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
-    testResolutionPolicyAndRequestThresholds(expectations);
-    testProxyPipelineUsesRoundedExtent(expectations);
-    testRevisionAndPanelSuppression(expectations);
-    testNewestPendingRequestGate(expectations);
-    testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);
-    testDroppedFrameCountingIsArmedAndHonest(expectations);
-    testActiveGateHoldsAndScrubEndBypassesRemainingCadence(expectations);
-    testSameRevisionGenerationAndSelection(expectations);
-    testLastGoodAndOutcomeMapping(expectations);
-    testCompositionSwitchClearsPixels(expectations);
-    testQualifiedDisplayReadinessAndFailClosed(expectations);
+    try {
+        testResolutionPolicyAndRequestThresholds(expectations);
+        testProxyPipelineUsesRoundedExtent(expectations);
+        testRevisionAndPanelSuppression(expectations);
+        testNewestPendingRequestGate(expectations);
+        testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);
+        testDroppedFrameCountingIsArmedAndHonest(expectations);
+        testActiveGateHoldsAndScrubEndBypassesRemainingCadence(expectations);
+        testSameRevisionGenerationAndSelection(expectations);
+        testLastGoodAndOutcomeMapping(expectations);
+        testCompositionSwitchClearsPixels(expectations);
+        testQualifiedDisplayReadinessAndFailClosed(expectations);
+    } catch (const std::exception& error) {
+        std::cerr << "unexpected exception: " << error.what() << '\n';
+        return 1;
+    }
     return expectations.failures() == 0 ? 0 : 1;
 }

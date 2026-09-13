@@ -333,7 +333,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 return TaskResult::failed(std::move(diagnostics));
             }
             prepared = runtime::PreparedPreviewFrame::createQualified(
-                desiredIdentity.requestGeneration, qualifiedResult.frame());
+                desiredIdentity.requestGeneration, qualifiedResult.frame(),
+                desiredIdentity.resolutionPolicy);
         } else {
             const runtime::ReferenceDisplayPreparationRequest displayRequest{
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
@@ -368,7 +369,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 return TaskResult::failed(std::move(diagnostics));
             }
             prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
-                                                             displayResult.frame());
+                                                             displayResult.frame(),
+                                                             desiredIdentity.resolutionPolicy);
         }
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(

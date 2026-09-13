@@ -130,7 +130,7 @@ std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
         break;
     }
     const auto* composition = session_.composition();
-    if (composition == nullptr) {
+    if (composition == nullptr || displayedCompositionScale_ >= 1.0) {
         return 1;
     }
     const auto format = composition->format();

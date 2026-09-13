@@ -298,14 +298,17 @@ frame status. Proxy painting uses the existing smooth image transform into the c
 
 Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
 The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
-and export resolution remain unchanged.
+and export resolution remain unchanged. RAM preview uses the same controller-resolved factor and
+policy for every request and cache lookup. A policy or Auto factor change cancels an active RAM
+preview run, keeping completed cached frames and requiring a new run at the new resolution. Single
+frame and frame-range exports always evaluate at Full, independently of the Viewer preference.
 
 ### RAM Preview
 
 Preview frames are kept in memory so that playing a range a second time, or stepping back to a frame
 already rendered, costs a lookup rather than an evaluation.
 
-**Cache key.** Everything that decides a frame's PIXELS and nothing else: project, composition,
+**Cache key.** Preview render inputs and the requested resolution policy: project, composition,
 document revision, exact rational time, preview output, resolution (which is where a proxy factor
 lives), resolution policy, quality, and color intent. That is `PreviewRequestIdentity` minus its request generation,
 because the generation says which ASK a frame answered, not what it contains -- a hit is therefore

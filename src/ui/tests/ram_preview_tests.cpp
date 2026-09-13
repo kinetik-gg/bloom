@@ -623,6 +623,79 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Resolution cache", time(3, 25)));
+    fixture.controller.setDisplayedCompositionScale(0.25);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "Auto Quarter becomes ready");
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            ramPreview.cachedFrameCount() == 3,
+                        "RAM preview fills the Auto Quarter range");
+    const auto count = fixture.preparationCount.load();
+    expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
+                        "advance to a cached proxy time");
+    expectations.expect(isReady(fixture.controller) && fixture.preparationCount.load() == count &&
+                            !fixture.controller.state().frame->hasProcessFrame(),
+                        "ordinary playback consumes RAM preview's proxy buffer without evaluation");
+    const auto autoKey = fixture.controller.cacheKeyForTime(time(1, 25));
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }) &&
+                            fixture.preparationCount.load() > count,
+                        "fixed Quarter has its own request policy identity");
+    expectations.expect(autoKey.has_value() && fixture.controller.frameCache().contains(*autoKey),
+                        "switching policy preserves the reusable Auto cache entry");
+    const auto afterFixed = fixture.preparationCount.load();
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Auto);
+    expectations.expect(isReady(fixture.controller) &&
+                            fixture.preparationCount.load() == afterFixed,
+                        "returning to Auto serves its cache with the new request generation");
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "Half becomes ready");
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            ramPreview.cachedFrameCount() == 3,
+                        "RAM preview fills the separate Half range");
+    const auto halfCount = fixture.preparationCount.load();
+    ramPreview.start();
+    expectations.expect(!ramPreview.isCaching() && fixture.preparationCount.load() == halfCount,
+                        "repeating Half RAM preview is entirely cached");
+    finishFixture(fixture, expectations);
+}
+
+void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Resolution change during RAM preview", time(3, 25)));
+    fixture.controller.setDisplayedCompositionScale(0.25);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "Auto Quarter becomes ready");
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "a RAM preview proxy is in flight");
+    bool cancelled = false;
+    QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
+                     [&cancelled](const bool completed) { cancelled = !completed; });
+    fixture.controller.setDisplayedCompositionScale(0.5);
+    expectations.expect(!ramPreview.isCaching() && cancelled &&
+                            !fixture.controller.ramPreviewProgress().has_value(),
+                        "an Auto factor change cancels the old range without starting playback");
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the new Half preview reaches ready");
+    expectations.expect(ramPreview.cachedFrameCount() == 1,
+                        "the cancelled old factor does not count or publish its in-flight frame");
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            ramPreview.cachedFrameCount() == 3,
+                        "a fresh RAM preview uses Half throughout");
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -633,6 +706,8 @@ int main(int argc, char** argv) {
     // std::variant-carrying identities, so the standard library's own throwing paths are reachable
     // in principle and main() must not be the frame they escape from.
     try {
+        testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
+        testResolutionChangeCancelsAnActiveRamPreview(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);
         testCachingReleasesTheProcessImage(expectations);
