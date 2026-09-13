@@ -183,19 +183,28 @@ void testSearchKeyboardAndMenus() {
            "Tab opens all registered node kinds at the cursor");
     // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
     // heading only for a section that actually has results under it.
+    // Task S7: Values and Utilities are populated now -- the value library is registered under them
+    // -- so the sectioned list shows six headings in the same pipeline reading order it always
+    // used.
     expect(sectionHeadings(list->model()) ==
                QStringList{QStringLiteral("Sources"), QStringLiteral("Layers"),
-                           QStringLiteral("Compositing"), QStringLiteral("Output")},
+                           QStringLiteral("Compositing"), QStringLiteral("Values"),
+                           QStringLiteral("Output"), QStringLiteral("Utilities")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
            "a heading is not a row the artist can reach");
-    // Exactly the rows and headings, with no dead surface under the last one.
+    // Exactly the rows and headings, with no dead surface under the last one. ADAPTED (task S7):
+    // the whole registry no longer fits under the shared popup's twelve-row cap, so the invariant
+    // is pinned where it is observable -- a filtered list short enough to fit. The cap itself
+    // belongs to the popup primitive and is tested there.
+    field->setText(QStringLiteral("merge"));
     int expectedHeight = 0;
     for (int row = 0; row < list->model()->rowCount(); ++row)
         expectedHeight += list->model()->index(row, 0).data(Qt::SizeHintRole).toSize().height();
-    expect(list->height() == expectedHeight,
+    expect(list->model()->rowCount() > 0 && list->height() == expectedHeight,
            "the list is exactly as tall as the rows and headings it holds");
+    field->clear();
     // The popup's corners come from the shared dropdown surface alone: the list sits below the
     // filter field, so its own top edge must stay square rather than carving notches under it.
     const QRegion mask = list->mask();
@@ -323,20 +332,35 @@ void testSearchKeyboardAndMenus() {
         expect(emptyMenu->actions().isEmpty(),
                "an empty selection has no node menu to reach mute or collapse through");
     }
-    // A fixture-owned durable driver ID pins the N2 limitation; there is no driver record to copy.
+    // ADAPTED (task S7): a driver names a value-graph output rather than an allocated id, so the
+    // fixture adds the Colour value node the solid's colour is driven from. What is pinned is
+    // unchanged -- duplicating a node whose parameter is driven is refused, because the copy would
+    // need a second driver nothing asked for.
     auto beforeDriver = f.document.snapshot();
     auto draft = f.document.draft(beforeDriver);
-    const auto driver = draft.ids().allocateDriverBinding();
+    auto* drivenComposition = draft.project().findComposition(f.session.compositionId());
     const auto* source =
-        draft.project().findComposition(f.session.compositionId())->graph().findNode(a);
-    if (!driver || !source || source->parameters.empty())
+        drivenComposition == nullptr ? nullptr : drivenComposition->graph().findNode(a);
+    const auto valueNodeId = draft.ids().allocateNode();
+    const auto valueParameterId = draft.ids().allocateParameter();
+    if (!source || source->parameters.empty() || !valueNodeId || !valueParameterId)
         throw std::runtime_error("driver fixture");
-    expect(draft.project()
-               .findComposition(f.session.compositionId())
-               ->parameters()
-               .setSource(source->parameters.front().parameterId,
-                          document::DriverBindingSource{*driver}),
-           "driver source fixture");
+    // Read the solid's colour parameter id BEFORE adding a node: the node vector reallocates, and
+    // `source` would be dangling by the time setSource() is reached.
+    const auto drivenParameterId = source->parameters.front().parameterId;
+    expect(
+        drivenComposition->parameters().insert(
+            {*valueParameterId, std::string(document::kColorValueParameterSchemaKey),
+             document::ConstantValueSource{document::kDefaultValueColor}}) &&
+            drivenComposition->graph().addNode(
+                {*valueNodeId,
+                 std::string(document::kColorValueNodeType),
+                 {{std::string(document::kValueParameterRole), *valueParameterId}},
+                 document::kValueNodeSchemaVersion}) &&
+            drivenComposition->parameters().setSource(
+                drivenParameterId,
+                document::DriverBindingSource{*valueNodeId, std::string(document::kValuePortName)}),
+        "driver source fixture");
     expect(f.document.commit(beforeDriver.revision(), std::move(draft)).committed(),
            "driver source publication");
     f.stack.clear();

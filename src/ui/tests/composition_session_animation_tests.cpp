@@ -133,10 +133,22 @@ void testDrivenEditIsExplicitlyRejected() {
     commands::CommandStack stack(document);
     const auto ids = addSolidLayer(document, stack);
 
+    // ADAPTED (task S7): a driver source names the value-graph output it reads, and the kinds have
+    // to connect -- so the fixture adds the Vector2 value node a position can actually be driven
+    // from.
+    commands::Transaction addValue("Add value node", document.snapshot().revision());
+    addValue.emplace<commands::AddNode>(compositionId, std::string(document::kVector2ValueNodeType),
+                                        document::Vec2d{200.0, 200.0});
+    const auto valueResult = stack.execute(std::move(addValue));
+    const auto valueNode = valueResult.outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!valueNode.has_value()) {
+        require(false, "the driven fixture adds its Vector2 value node");
+        return;
+    }
     commands::Transaction drive("Drive position", document.snapshot().revision());
     drive.emplace<commands::SetParameterSource>(
         compositionId, ids.position,
-        document::DriverBindingSource{document::DriverBindingId::fromRaw(1)});
+        document::DriverBindingSource{*valueNode, std::string(document::kValuePortName)});
     require(stack.execute(std::move(drive)).changed(), "test position becomes driver-backed");
 
     ui::CompositionSession session(document, stack, compositionId);

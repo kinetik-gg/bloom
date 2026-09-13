@@ -85,9 +85,12 @@ void testLayoutSelectionAndSockets() {
     f.scene()->sendEvent(socket, &hover);
     expect(socket->data(kNodeHoveredRole).toBool(), "socket hover grows its painted state");
     // Task S1, item 6: the socket palette is its own, not the Data* palette's.
-    const std::array mapping{kit::Color::SocketImage, kit::Color::SocketColor,
-                             kit::Color::SocketScalar, kit::Color::SocketVector,
-                             kit::Color::SocketString};
+    // ADAPTED (task S7): three more kinds. Both vector widths share SocketVector deliberately --
+    // they read as one family, and a cross-width link is refused by the kind check regardless.
+    const std::array mapping{kit::Color::SocketImage,   kit::Color::SocketColor,
+                             kit::Color::SocketScalar,  kit::Color::SocketVector,
+                             kit::Color::SocketString,  kit::Color::SocketInteger,
+                             kit::Color::SocketBoolean, kit::Color::SocketVector};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
                "all socket palette mappings use the socket roles");
@@ -107,34 +110,44 @@ void testLayoutSelectionAndSockets() {
                !field->graphicsProxyWidget()->isVisible() &&
                f.socket(b, true)->pos().y() < node_editor::kCardHeaderHeight,
            "collapsed node is header-only with visible header-edge sockets and hidden fields");
-    // Detached, fixture-only schema: pin the linked-widget render rule without introducing any
-    // production node kind, parameter transport or evaluator behavior.
+    // ADAPTED (task S7, item 3): the render rule is real now, so it is pinned against the
+    // PRODUCTION Solid card rather than a detached fixture schema -- and what hides the control is
+    // the parameter's own driver binding, not an edge, because an operand socket and its parameter
+    // are one authored value with one durable source.
     document::NodeDefinitionRegistry registry;
     expect(document::registerBuiltInNodeDefinitions(registry), "render-rule registry builtins");
-    document::NodeDefinition definition;
-    definition.key = {"test.image-parameter-row", 1};
-    definition.inputs = {{"color", document::SocketValueKind::Image, false}};
-    expect(registry.registerDefinition(definition) == document::NodeRegistrationStatus::Registered,
-           "render-rule fixture schema");
     registry.freeze();
     auto projectionComposition = *f.session.composition();
     const auto* sourceRecord = projectionComposition.graph().findNode(a);
-    const document::NodeRecord rowNode{document::NodeId::fromRaw(99999), definition.key.typeId,
-                                       sourceRecord->parameters, 1};
-    expect(projectionComposition.graph().addNode(rowNode), "render-rule fixture node");
+    expect(sourceRecord != nullptr, "render-rule fixture source node");
+    const document::NodeRecord rowNode = *sourceRecord;
     node_editor::NodeItem rowCard(rowNode.id, &f.session);
     rowCard.refresh(rowNode, projectionComposition, {{0, 0}, 200, false, false}, registry);
     auto* rowWidget = rowCard.fieldWidget(QStringLiteral("nodeColorChip"));
     expect(rowWidget && rowWidget->graphicsProxyWidget()->isVisible(),
            "unlinked parameter-role socket keeps its kit control");
-    expect(projectionComposition.graph().addEdge({document::EdgeId::fromRaw(99999),
-                                                  {a, "image"},
-                                                  document::NodeInputRef{rowNode.id, "color"}},
-                                                 registry),
-           "render-rule fixture Image edge");
+    const auto colorBinding = std::ranges::find(
+        rowNode.parameters, document::kSolidColorParameterRole, &document::ParameterBinding::role);
+    expect(colorBinding != rowNode.parameters.end(), "render-rule fixture colour binding");
+    const auto valueNodeId = document::NodeId::fromRaw(99999);
+    const auto valueParameterId = document::ParameterId::fromRaw(99999);
+    expect(projectionComposition.parameters().insert(
+               {valueParameterId, std::string(document::kColorValueParameterSchemaKey),
+                document::ConstantValueSource{document::kDefaultValueColor}}),
+           "render-rule fixture value parameter");
+    expect(projectionComposition.graph().addNode(
+               {valueNodeId,
+                std::string(document::kColorValueNodeType),
+                {{std::string(document::kValueParameterRole), valueParameterId}},
+                document::kValueNodeSchemaVersion}),
+           "render-rule fixture Colour value node");
+    expect(projectionComposition.parameters().setSource(
+               colorBinding->parameterId,
+               document::DriverBindingSource{valueNodeId, std::string(document::kValuePortName)}),
+           "render-rule fixture driver binding");
     rowCard.refresh(rowNode, projectionComposition, {{0, 0}, 200, false, false}, registry);
     expect(rowWidget && !rowWidget->graphicsProxyWidget()->isVisible() && rowCard.hasInputSocket(),
-           "linked parameter-role input hides its kit control while retaining the real socket");
+           "a driven parameter role hides its kit control while retaining the real socket");
     const auto snapshot = f.session.snapshot();
     const auto color = document::makeBloomNeutralColorSettingsV1(
         core::Sha256Digest::fromBytes(std::array<std::uint8_t, 32>{}));

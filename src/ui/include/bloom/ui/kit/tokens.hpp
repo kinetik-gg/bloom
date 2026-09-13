@@ -67,6 +67,9 @@ enum class Color : std::uint8_t {
     SocketInteger,
     SocketVector,
     SocketString,
+    // Task S7. Integer reuses the existing SocketInteger token; the two vector widths share
+    // SocketVector so they read as one family, and a Boolean needed its own.
+    SocketBoolean,
 };
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =

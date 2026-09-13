@@ -425,9 +425,12 @@ void testMidChainCardsCarryBothPortDots(Expectations& expectations) {
         return;
     }
 
+    // ADAPTED (task S7, item 3): a source card carries an input dot now -- its colour parameter is
+    // a linkable operand socket, so "nothing feeds into a source" stopped being true the moment
+    // every parameter role became linkable.
     expectations.expect(fixture.scene()->nodeSocketsForTest(*sourceNodeId) ==
-                            ui::NodeSockets{false, true},
-                        "a source card carries only an output dot: nothing feeds into it");
+                            ui::NodeSockets{true, true},
+                        "a source card carries an operand socket for its colour and one output");
     expectations.expect(fixture.scene()->nodeSocketsForTest(*boundaryNodeId) ==
                             ui::NodeSockets{true, true},
                         "the layer boundary card carries both: it consumes the source and feeds "

@@ -60,6 +60,7 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::SocketInteger, 0x4AC8D4U},
     {Color::SocketVector, 0xC87AF0U},
     {Color::SocketString, 0xF0C93CU},
+    {Color::SocketBoolean, 0xE0567BU},
 });
 
 // Darkest first. surfaceStep() walks exactly this ladder and nothing else.

@@ -152,9 +152,10 @@ class SocketItem final : public QGraphicsItem {
     // kSocketRowHeight row; the card sums these rather than multiplying by the socket count, so a
     // socket that is taller than a row can exist without the card's body landing on top of it.
     [[nodiscard]] qreal rowHeight() const;
-    [[nodiscard]] bool draggable() const {
-        return !structural_ && kind == document::SocketValueKind::Image;
-    }
+    // Task S7: every kind is linkable now, not Image alone. The only non-draggable sockets left are
+    // the structural Layer Output / stack-slot boundary, which a link gesture must not break --
+    // removing the layer is how that connection goes.
+    [[nodiscard]] bool draggable() const { return !structural_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -446,6 +447,17 @@ class NodeItem final : public QGraphicsObject {
         proxy->setWidget(widget);
     }
 
+    // Declares which parameter role a control edits, so relayout() can apply the one
+    // linked-hides-the- widget rule by role instead of by identity. A control with no role
+    // registered -- a keyframe diamond, a rename editor -- is never hidden by a link, which is
+    // correct: neither edits a value.
+    void registerControlRole(const QWidget* widget, const std::string_view role) {
+        if (widget != nullptr) {
+            controlRoles_.emplace(
+                widget, QString::fromUtf8(role.data(), static_cast<qsizetype>(role.size())));
+        }
+    }
+
     // The card's own keyframe diamond for `role` (task S5, item 0): the SAME shared
     // ui::KeyframeDiamond the Properties rows use, hosted on the canvas the way every other card
     // control is. Null when this card has no session to read, which is the same guard every commit*
@@ -511,6 +523,7 @@ class NodeItem final : public QGraphicsObject {
         }
         valueRows_.clear();
         readOnlyRows_.clear();
+        controlRoles_.clear();
         positionX_ = nullptr;
         positionY_ = nullptr;
         anchorX_ = nullptr;
@@ -537,6 +550,8 @@ class NodeItem final : public QGraphicsObject {
                                            -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
                 addProxy(positionX_);
                 addProxy(positionY_);
+                registerControlRole(positionX_, document::kPositionParameterRole);
+                registerControlRole(positionY_, document::kPositionParameterRole);
                 connect(positionX_, &kit::KValueField::valueChanged, this,
                         [this] { commitPosition(); });
                 connect(positionY_, &kit::KValueField::valueChanged, this,
@@ -553,6 +568,8 @@ class NodeItem final : public QGraphicsObject {
                                          -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
                 addProxy(anchorX_);
                 addProxy(anchorY_);
+                registerControlRole(anchorX_, document::kAnchorParameterRole);
+                registerControlRole(anchorY_, document::kAnchorParameterRole);
                 connect(anchorX_, &kit::KValueField::valueChanged, this,
                         [this] { commitAnchor(); });
                 connect(anchorY_, &kit::KValueField::valueChanged, this,
@@ -568,6 +585,8 @@ class NodeItem final : public QGraphicsObject {
                                         -100'000.0, 100'000.0, 2, QStringLiteral("%"));
                 addProxy(scaleX_);
                 addProxy(scaleY_);
+                registerControlRole(scaleX_, document::kScaleParameterRole);
+                registerControlRole(scaleY_, document::kScaleParameterRole);
                 connect(scaleX_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
                 connect(scaleY_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
                 valueRows_.push_back({tr("Scale X"), scaleX_,
@@ -578,6 +597,7 @@ class NodeItem final : public QGraphicsObject {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
                 addProxy(rotation_);
+                registerControlRole(rotation_, document::kRotationParameterRole);
                 connect(rotation_, &kit::KValueField::valueChanged, this,
                         [this] { commitRotation(); });
                 valueRows_.push_back({tr("Rotation"), rotation_,
@@ -587,6 +607,7 @@ class NodeItem final : public QGraphicsObject {
                 opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"), 0.0,
                                          100.0, 1, QStringLiteral("%"));
                 addProxy(opacity_);
+                registerControlRole(opacity_, document::kOpacityParameterRole);
                 connect(opacity_, &kit::KValueField::valueChanged, this,
                         [this] { commitOpacity(); });
                 valueRows_.push_back({tr("Opacity"), opacity_,
@@ -607,6 +628,7 @@ class NodeItem final : public QGraphicsObject {
                 }
                 blendMode_->resize(blendMode_->sizeHint());
                 addProxy(blendMode_);
+                registerControlRole(blendMode_, document::kBlendModeParameterRole);
                 connect(blendMode_, &kit::KDropdown::currentIndexChanged, this,
                         [this](const int index) { commitBlendMode(index); });
                 valueRows_.push_back({tr("Blending"), blendMode_, nullptr, {}});
@@ -617,6 +639,7 @@ class NodeItem final : public QGraphicsObject {
                 colorChip_->setControlSize(kit::KColorChip::ControlSize::Compact);
                 colorChip_->resize(colorChip_->sizeHint());
                 addProxy(colorChip_);
+                registerControlRole(colorChip_, document::kSolidColorParameterRole);
                 connect(colorChip_, &kit::KColorChip::colorChanged, this,
                         [this](const kit::KColor& color) { commitColor(color); });
                 colorRowLabel_ = tr("Color");
@@ -630,6 +653,7 @@ class NodeItem final : public QGraphicsObject {
                 textContent_->setFont(kit::font(kit::TypeRole::Ui));
                 textContent_->resize(textContent_->sizeHint());
                 addProxy(textContent_);
+                registerControlRole(textContent_, document::kTextParameterRole);
                 connect(textContent_, &QLineEdit::editingFinished, this,
                         [this] { commitTextContent(); });
                 valueRows_.push_back({tr("Text"), textContent_, nullptr, {}});
@@ -640,6 +664,7 @@ class NodeItem final : public QGraphicsObject {
                     makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"), 1.0,
                                   document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
                 addProxy(textSize_);
+                registerControlRole(textSize_, document::kTextSizeParameterRole);
                 connect(textSize_, &kit::KValueField::valueChanged, this,
                         [this] { commitTextSize(); });
                 valueRows_.push_back({tr("Size"), textSize_,
@@ -984,26 +1009,12 @@ class NodeItem final : public QGraphicsObject {
             if (proxy == nullptr || proxy == renameProxy_)
                 continue;
             const auto* widget = proxy->widget();
-            bool linked = false;
-            for (const auto* socket : sockets_) {
-                if (!socket->input || !linkedInputs_.contains(socket->name))
-                    continue;
-                // Future parameter sockets must match the row role; today's schema has only
-                // Image transport and therefore cannot drive numeric/color kit fields.
-                linked = linked ||
-                         (socket->name == QString::fromUtf8(document::kPositionParameterRole) &&
-                          (widget == positionX_ || widget == positionY_)) ||
-                         (socket->name == QString::fromUtf8(document::kAnchorParameterRole) &&
-                          (widget == anchorX_ || widget == anchorY_)) ||
-                         (socket->name == QString::fromUtf8(document::kScaleParameterRole) &&
-                          (widget == scaleX_ || widget == scaleY_)) ||
-                         (socket->name == QString::fromUtf8(document::kRotationParameterRole) &&
-                          widget == rotation_) ||
-                         (socket->name == QString::fromUtf8(document::kOpacityParameterRole) &&
-                          widget == opacity_) ||
-                         (socket->name == QString::fromUtf8(document::kSolidColorParameterRole) &&
-                          widget == colorChip_);
-            }
+            // Task S7, item 3: one rule, by role. Every control the card builds registers the
+            // parameter role it edits, and a role whose socket is linked hides its control -- which
+            // is what makes "unlinked shows the widget, linked shows only the socket" one sentence
+            // rather than a per-control chain that had to be extended for every new row.
+            const auto role = controlRoles_.find(widget);
+            const bool linked = role != controlRoles_.end() && linkedInputs_.contains(role->second);
             proxy->setVisible(!layout_.collapsed && !linked);
             proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
             // Exactly 1, always. A fractional scale resampled a control's own hairlines, padding
@@ -1056,6 +1067,9 @@ class NodeItem final : public QGraphicsObject {
     bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;
+    // Which parameter role each control edits. Keyed by widget because that is what the proxy sweep
+    // in relayout() has in hand, and rebuilt with the fields themselves in ensureFields().
+    std::map<const QWidget*, QString> controlRoles_;
     QGraphicsProxyWidget* renameProxy_ = nullptr;
     bool fieldsBuilt_ = false;
     bool refreshing_ = false;
