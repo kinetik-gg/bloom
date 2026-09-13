@@ -81,6 +81,15 @@ Mute, collapse, and dissolve are context-menu commands in this editor and bind n
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
 becomes "rename whichever thing is selected".
 
+Every socket is a drag target, not only the image ports: a node's parameter roles are sockets of their
+own kind, so the same one gesture that wires an image wires a value into a parameter. Nothing new was
+added for it -- a link into a parameter socket records that parameter's driver binding, and releasing
+the same drag on empty canvas restores the parameter's registered default. The drag's own preview says
+in advance whether a release will be accepted: a compatible socket brightens and an incompatible one
+dims, and the wire turns `Error` red over a socket whose kind the connect rule would refuse. The rule
+it previews is the same one the command applies, promotions included, so the preview is never a second
+opinion.
+
 ## Timeline
 
 Transport bindings are unchanged by this document.

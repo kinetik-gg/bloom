@@ -4,14 +4,14 @@ Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.3` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.4` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
 staged-artifact close/reopen verification foundation, the version 1 canonical document writer
 over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
 container reader and writer, and the document `1.0` → `1.1` node-layout, `1.1` → `1.2` node-group,
-and `1.2` → `1.3` animation-breadth migrations are implemented.
+`1.2` → `1.3` animation-breadth, and `1.3` → `1.4` value-graph migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
@@ -37,23 +37,32 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.3`.
-The earlier document `1.0`, `1.1`, and `1.2` artifacts are retained for migration fixtures. Version objects
+The container version remains `1.0`; the current document schema is `1.4`.
+The earlier document `1.0`, `1.1`, `1.2`, and `1.3` artifacts are retained for migration fixtures.
+Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.3.schema.json` and `schemas/project/document-1.3.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.3` and
-`urn:kinetik:bloom:schema:project-document:1.3`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.3`. Every historical artifact -- `1.0`, `1.1`, and `1.2`,
-manifest and
+`schemas/project/manifest-1.4.schema.json` and `schemas/project/document-1.4.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.4` and
+`urn:kinetik:bloom:schema:project-document:1.4`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.4`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
+`1.3`, manifest and
 document -- remains checked, and each version's checker validates what its own minor adds and then
-reduces the artifact to its predecessor so the older checks run unchanged. They declare the 2020-12
+reduces the artifact to its predecessor so the older checks run unchanged.
+
+Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
+value -- the third authoring vector width, with its own kind token rather than a third component on
+`vec2`, because the discriminators name TYPES -- and a `driver` parameter source carrying
+`sourceNodeId` and `outputPort`, structurally an edge source that lands in parameter-address space. A
+`1.3` document can contain neither, so the `1.3` → `1.4` migration rewrites only the version, exactly
+as the `1.2` → `1.3` step does. A live driver source is no longer an unsupported save feature: the
+writer can describe every parameter source the document layer holds. They declare the 2020-12
 `$schema` and use only repository-local `$ref` targets during validation. A generic schema validator
 is useful for fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
 cross-reference, allocator, graph, and preservation validation.
 
-`document-1.3.schema.json` retains required `$defs` named `colorSettings-1.0`,
+`document-1.4.schema.json` retains required `$defs` named `colorSettings-1.0`,
 `ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
 definition requires `colorSettings`; the OCIO reference definition requires every member specified
 below and selects one closed locator shape with `oneOf`. These definitions validate structure and
@@ -479,14 +488,15 @@ driver source encountered through a newer compatible container is unknown core s
 preserves the bounded archive as `PreservedReadOnly` rather than constructing a lossy placeholder
 or rewriting the source.
 
-The live document model may contain `DriverBindingSource` while driver authoring is being developed,
-but native v1 Save is intentionally a restricted supported-subset encoder. Its admission pass walks
-every parameter before creating a stage. If any live source is `DriverBindingSource`, Save returns
-`FailedBeforePublication` with typed `ProjectIoCode::UnsupportedDocumentFeature` and the exact
-composition/parameter path. It does not discard the driver, sample it into a constant, serialize an
-undeclared discriminator, or fall back to a degraded rewrite. This is an unsupported save feature,
-not invalid live document truth. Constant and animation-curve sources remain the complete writable
-v1 subset.
+Every parameter source the document layer can hold is writable from document `1.4` on. A
+`DriverBindingSource` is the durable `{sourceNodeId, outputPort}` pair it addresses, so the writer
+describes it the way it describes an edge source, and there is no parameter-source admission pass left
+to fail: a driver's own well-formedness -- a valid node id and valid structural port text -- is already
+refused by `ParameterStore` on insert, so a second check here could only ever be unreachable.
+
+Earlier minors had no shape for a driver at all, which is why a `1.3`-or-older archive carrying an
+on-disk `driver` source is a preserved-read-only result rather than a decode: the kind is gated on the
+minor that declares it, exactly as the `color4` animation-curve kind is.
 
 Constant values have one of these shapes and member orders:
 
@@ -604,11 +614,11 @@ high-water value is an unsigned decimal string in `0..18446744073709551615`. Eve
 ID is an unsigned decimal string in `1..18446744073709551615`. The document's sole `ProjectId` has
 the same nonzero typed-ID domain but is not allocator-backed.
 
-`driverBinding` remains required even though `DriverBindingSource` is outside the v1 writable
-parameter-source subset and no driver declaration table is serialized. The live allocator may have
-issued driver IDs before every driver source was removed; Save preserves that inclusive high-water
-so reopen can never reuse one. A nonzero `driverBinding` high-water with no live driver source is
-valid. A live driver source still fails Save with `UnsupportedDocumentFeature` as specified above.
+`driverBinding` remains required even though no driver declaration table is serialized and, from
+document `1.4` on, no record carries a `DriverBindingId` at all -- a driver source is the node-and-port
+pair it addresses. The live allocator may have issued driver IDs before that model; Save preserves
+that inclusive high-water so reopen can never reuse one, and a nonzero `driverBinding` high-water with
+nothing referencing it is valid and expected.
 
 Every serialized typed ID in a namespace must be nonzero and at most its high-water value. The
 high-water may exceed all surviving declarations because deleted and undone allocations remain
@@ -950,9 +960,10 @@ Acquisition, lock, offline build, provenance, and release evidence follow
   and lone-surrogate fixtures
 - scalar/Vec2/Color4 animation, the `ease-in-out` token, the `1.2` → `1.3` version-only migration and
   its minor gating, curve/key ownership, final-key normalization, graph connectivity, Layer
-  Stack order, future on-disk driver sources producing preserved-read-only results, live
-  `DriverBindingSource` producing typed `UnsupportedDocumentFeature` before staging, retained
-  `driverBinding` high-water after source removal, and source/schema mismatches
+  Stack order, the `1.3` → `1.4` version-only migration, the `vec3` constant and `driver`
+  parameter-source kinds and their minor gating, a live driver source encoding as the node-and-port
+  pair it addresses, retained `driverBinding` high-water with no record referencing it, and
+  source/schema mismatches
 - exact composition-domain boundaries for dimensions, pixel-count product, positive normalized
   frame rate and pixel aspect, and signed-64 positive duration rationals
 - exact, sorted, unique `providedNodeTypeIds` coverage for unavailable node types, including
