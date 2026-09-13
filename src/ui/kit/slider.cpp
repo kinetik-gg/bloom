@@ -102,6 +102,10 @@ State KSlider::visualState() const {
     return State::Normal;
 }
 
+Color KSlider::borderToken() const {
+    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+}
+
 bool KSlider::isDragging() const noexcept { return dragging_; }
 
 QSize KSlider::sizeHint() const { return {px(Size::ControlRoomy) * 4, px(Size::ControlCompact)}; }
@@ -218,16 +222,12 @@ void KSlider::paintEvent(QPaintEvent* event) {
         fillRoundedSurface(painter, filled, accent, {}, Radius::Full);
     }
 
-    if (hasFocus() && state != State::Disabled) {
-        drawFocusRing(painter, handleRect(), Radius::Full);
-    }
-
     QColor handleFill = color(Color::Foreground);
     if (state == State::Disabled) {
         handleFill = withOpacity(handleFill, kDisabledOpacity);
     }
-    fillRoundedSurface(painter, handleRect(), handleFill, color(borderForState(state)),
-                       Radius::Full);
+    // The handle's own single border carries focus; the ring outside it is gone.
+    fillRoundedSurface(painter, handleRect(), handleFill, color(borderToken()), Radius::Full);
 }
 
 } // namespace bloom::ui::kit

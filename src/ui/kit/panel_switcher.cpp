@@ -150,6 +150,10 @@ State KPanelSwitcher::visualState() const {
     return State::Normal;
 }
 
+Color KPanelSwitcher::borderToken() const {
+    return borderForInteraction(isEnabled(), isPopupVisible() || hasFocus(), hovered_);
+}
+
 QIcon KPanelSwitcher::currentIcon() const {
     const auto* item = model_->item(currentIndex_);
     return item == nullptr ? QIcon{} : item->icon();
@@ -248,10 +252,7 @@ void KPanelSwitcher::paintEvent(QPaintEvent* event) {
     // SAME state recipe every kit control resolves through (Border at rest, BorderHover on
     // hover), never QSS.
     fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
-                       color(borderForState(state)), Radius::Small);
-    if (hasFocus() && state != State::Disabled) {
-        drawFocusRing(painter, bounds, Radius::Small);
-    }
+                       color(borderToken()), Radius::Small);
 
     const QColor ink = inkForState(Color::Foreground, state);
     const auto chevronWidth = static_cast<qreal>(chevronBoxWidth());

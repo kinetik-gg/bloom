@@ -154,6 +154,10 @@ State KDropdown::visualState() const {
     return State::Normal;
 }
 
+Color KDropdown::borderToken() const {
+    return borderForInteraction(isEnabled(), isPopupVisible() || hasFocus(), hovered_);
+}
+
 int KDropdown::controlExtent() const {
     switch (controlSize_) {
     case ControlSize::Compact:
@@ -246,10 +250,7 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     // previously Field). ControlSurface is not a surfaceStep() rung, so its hover step is the
     // border alone, exactly like Field's own behavior at the top of the ladder before it.
     fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
-                       color(borderForState(state)), Radius::Small);
-    if (hasFocus() && state != State::Disabled) {
-        drawFocusRing(painter, bounds, Radius::Small);
-    }
+                       color(borderToken()), Radius::Small);
 
     const QColor ink = inkForState(Color::Foreground, state);
     const auto caretWidth = static_cast<qreal>(caretColumnWidth());

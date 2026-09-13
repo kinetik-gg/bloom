@@ -13,8 +13,9 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenu>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPainterPath>
-#include <QRegion>
 #include <QResizeEvent>
 #include <QSize>
 #include <QSizePolicy>
@@ -26,6 +27,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -67,6 +69,62 @@ constexpr auto kHeaderIconSize = kit::Size::IconMedium;
 // Spacing::PanelHeader governing the header row's own padding (below), not the button.
 constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
 
+// The real clip a bordered, rounded container needs (task C1, item C5; owner: "cut rounded
+// corners because the background is not clipped by the panel"). QFrame#editorArea's own QSS
+// border-radius already paints THIS widget's own background/border with correctly rounded
+// corners -- but the header, content, and footer are ordinary rectangular children stacked on top
+// of that paint, and each one's own square corner would otherwise overwrite it. A QWidget::mask()
+// bitmap region was tried and rejected: building it from an integer QPolygon
+// (QPainterPath::toFillPolygon().toPolygon()) rounds the rounded-rect's vertices to whole logical
+// pixels before any HiDPI scaling happens, so the clip can drift or step at 125%/150% scale, and a
+// mask set on an ancestor is not guaranteed to reach every kind of child window on every platform.
+// Painting the correction directly is immune to both: one small, always-on-top widget per corner
+// fills exactly the wedge outside the panel's own Radius::Panel arc with Color::Background -- the
+// one color a rounded panel's corner always reveals in this design language -- leaving the arc's
+// interior untouched so whatever is legitimately there (the header/footer's own rounded paint, or
+// content within the curve) still shows through normally.
+class PanelCornerMask final : public QWidget {
+  public:
+    enum class Corner : std::uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
+
+    PanelCornerMask(const Corner corner, QWidget* parent) : QWidget(parent), corner_(corner) {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setFocusPolicy(Qt::NoFocus);
+        const int extent = kit::radiusPx(kit::Radius::Panel, 0);
+        setFixedSize(extent, extent);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const qreal r = width();
+        QPointF center;
+        switch (corner_) {
+        case Corner::TopLeft:
+            center = QPointF(r, r);
+            break;
+        case Corner::TopRight:
+            center = QPointF(0.0, r);
+            break;
+        case Corner::BottomLeft:
+            center = QPointF(r, 0.0);
+            break;
+        case Corner::BottomRight:
+            center = QPointF(0.0, 0.0);
+            break;
+        }
+        QPainterPath square;
+        square.addRect(rect());
+        QPainterPath arc;
+        arc.addEllipse(center, r, r);
+        painter.fillPath(square.subtracted(arc), kit::color(kit::Color::Background));
+    }
+
+  private:
+    Corner corner_;
+};
+
 } // namespace
 
 EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialEditorId,
@@ -79,9 +137,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::ClickFocus);
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout_ = new QVBoxLayout(this);
+    layout_->setContentsMargins(0, 0, 0, 0);
+    layout_->setSpacing(0);
 
     header_ = new QWidget(this);
     header_->setObjectName("editorHeader");
@@ -114,7 +172,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     content->setObjectName("editorContent");
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentLayout_ = new QVBoxLayout(content);
-    contentLayout_->setContentsMargins(0, 0, 0, 0);
+    // Content inset inside the 1px border (task C1, item C5): the editor content itself stops one
+    // hairline short of the frame's own left/right/bottom edge (the top edge is already bounded by
+    // the header), so its own background never draws directly on top of the frame's border stroke.
+    // The actual rounded-corner clipping is a separate concern, handled by the always-on-top
+    // PanelCornerMask overlays below rather than by this inset alone.
+    const int hairlineInset = static_cast<int>(kit::kHairlineWidth);
+    contentLayout_->setContentsMargins(hairlineInset, 0, hairlineInset, hairlineInset);
     contentLayout_->setSpacing(0);
 
     // The single chokepoint every header control is built through (task U1, issue #117): the
@@ -175,8 +239,12 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     headerLayout->setAlignment(editorPicker_, Qt::AlignVCenter);
     headerLayout->setAlignment(maximizeButton_, Qt::AlignVCenter);
 
-    layout->addWidget(header_);
-    layout->addWidget(content, 1);
+    layout_->addWidget(header_);
+    layout_->addWidget(content, 1);
+
+    // FORMAL AMENDMENT 1: the footer slot itself is built here (empty: `layout_` has header and
+    // content only so far), but whether it is ever populated is entirely rebuildEditor()'s call --
+    // see the EditorFooterProvider dynamic_cast there.
 
     connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
@@ -190,6 +258,18 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     if (editorWidget_ == nullptr) {
         rebuildEditor(editorPicker_->currentIndex());
     }
+
+    // The four corner-mask overlays (task C1, item C5): created last, after every layout-managed
+    // child, so Qt's default stacking order already puts them on top; raise() is only a defensive
+    // guarantee against a future reordering of the constructor above.
+    cornerMasks_ = {new PanelCornerMask(PanelCornerMask::Corner::TopLeft, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::TopRight, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::BottomLeft, this),
+                    new PanelCornerMask(PanelCornerMask::Corner::BottomRight, this)};
+    for (auto* mask : cornerMasks_) {
+        mask->raise();
+    }
+    layoutCornerMasks();
 
     watchForActivation(this);
     setAreaActive(false);
@@ -273,8 +353,17 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
 void EditorArea::rebuildEditor(int editorIndex) {
     if (editorWidget_ != nullptr) {
         contentLayout_->removeWidget(editorWidget_);
+        // The old editor widget is destroyed BEFORE the footer it may have handed out below: Qt
+        // severs every signal connection made through it as part of its own destructor, so nothing
+        // it might otherwise still notify (e.g. a footer widget's repaint-on-state-change wiring)
+        // can fire against a footer that is about to be deleted out from under it.
         delete editorWidget_;
         editorWidget_ = nullptr;
+    }
+    if (footer_ != nullptr) {
+        layout_->removeWidget(footer_);
+        delete footer_;
+        footer_ = nullptr;
     }
 
     if (editorIndex < 0) {
@@ -300,6 +389,31 @@ void EditorArea::rebuildEditor(int editorIndex) {
     editorWidget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     contentLayout_->addWidget(editorWidget_);
     watchForActivation(editorWidget_);
+
+    // FORMAL AMENDMENT 1: the footer slot is OPTIONAL. An editor widget that also implements
+    // EditorFooterProvider (ViewerEditor is the only one today) may hand back a real footer
+    // widget, which EditorArea takes ownership of by reparenting it here; an editor that does not
+    // implement the interface, or returns nullptr, gets no footer row at all -- content already
+    // extends to the panel's own bottom border via `layout_`'s own stretch factor on `content`.
+    if (auto* footerProvider = dynamic_cast<EditorFooterProvider*>(editorWidget_)) {
+        if (auto* offeredFooter = footerProvider->takeFooterWidget()) {
+            footer_ = offeredFooter;
+            footer_->setObjectName(QStringLiteral("editorFooter"));
+            footer_->setParent(this);
+            layout_->addWidget(footer_);
+        }
+    }
+
+    // A freshly created/reparented footer is a new child of `this`, stacked above whatever
+    // siblings already existed -- including the corner-mask overlays constructed once, up front.
+    // Re-raising them here (a no-op the very first time, before they exist yet) keeps the
+    // rounded-corner clip on top regardless of how many times the editor picker swaps footers in
+    // and out.
+    for (auto* mask : cornerMasks_) {
+        if (mask != nullptr) {
+            mask->raise();
+        }
+    }
 }
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {
@@ -348,21 +462,18 @@ void EditorArea::watchForActivation(QWidget* widget) {
 
 void EditorArea::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
-    updateRoundedMask();
+    layoutCornerMasks();
 }
 
-void EditorArea::updateRoundedMask() {
-    // Rounded corners over the Background gutter (task U2, issue #118, decision 4; shrunk to
-    // Radius::Small by task U8, issue #131, fix 2; moved to its own Radius::Panel = 4 by formal
-    // amendment 1, A3): a real clip rather than only the stylesheet's own border-radius, so the
-    // header's Surface background and whatever the active editor draws never overhang the
-    // panel's rounded corners -- the QFrame's own CSS border-radius (kinetikStyleSheet()'s
-    // QFrame#editorArea rule) only ever paints the frame's OWN background/border, never its
-    // children.
-    QPainterPath path;
-    const int radius = kit::radiusPx(kit::Radius::Panel, 0);
-    path.addRoundedRect(rect(), radius, radius);
-    setMask(QRegion(path.toFillPolygon().toPolygon()));
+void EditorArea::layoutCornerMasks() {
+    // Repositions the four PanelCornerMask overlays (task C1, item C5) to this frame's current
+    // four corners -- each is a fixed Radius::Panel square, so only its position ever needs to
+    // change on resize, never its size.
+    const int extent = kit::radiusPx(kit::Radius::Panel, 0);
+    cornerMasks_[0]->move(0, 0);
+    cornerMasks_[1]->move(width() - extent, 0);
+    cornerMasks_[2]->move(0, height() - extent);
+    cornerMasks_[3]->move(width() - extent, height() - extent);
 }
 
 } // namespace bloom::ui

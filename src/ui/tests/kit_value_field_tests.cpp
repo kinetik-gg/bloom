@@ -6,12 +6,14 @@
 #include <QApplication>
 #include <QFontInfo>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QSignalSpy>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -38,11 +40,37 @@ class Expectations final {
 
 using namespace bloom::ui;
 
-void clickAt(QWidget& widget, const QPointF& point) {
+void pressAt(QWidget& widget, const QPointF& point,
+             const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QMouseEvent press(QEvent::MouseButtonPress, point, widget.mapToGlobal(point), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
+                      Qt::LeftButton, modifiers);
     QCoreApplication::sendEvent(&widget, &press);
     QCoreApplication::processEvents();
+}
+
+void moveTo(QWidget& widget, const QPointF& point,
+            const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent move(QEvent::MouseMove, point, widget.mapToGlobal(point), Qt::NoButton,
+                     Qt::LeftButton, modifiers);
+    QCoreApplication::sendEvent(&widget, &move);
+    QCoreApplication::processEvents();
+}
+
+void releaseAt(QWidget& widget, const QPointF& point,
+               const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent release(QEvent::MouseButtonRelease, point, widget.mapToGlobal(point),
+                        Qt::LeftButton, Qt::NoButton, modifiers);
+    QCoreApplication::sendEvent(&widget, &release);
+    QCoreApplication::processEvents();
+}
+
+// A press, a horizontal drag well past the platform drag threshold, and a release.
+void scrub(kit::KValueField& field, const int pixels,
+           const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const QPointF start(field.cellRect().center());
+    pressAt(field, start, modifiers);
+    moveTo(field, start + QPointF(static_cast<qreal>(pixels), 0.0), modifiers);
+    releaseAt(field, start + QPointF(static_cast<qreal>(pixels), 0.0), modifiers);
 }
 
 void testTheCellCarriesAMonospacedNumberAndAUnit(Expectations& expectations) {
@@ -85,7 +113,7 @@ void testTheFieldDoesNotResizeAsDigitsChange(Expectations& expectations) {
                         "does not resize as digits change");
 }
 
-void testGeometryPlacesTheLabelCellAndSteppers(Expectations& expectations) {
+void testGeometryPlacesTheLabelAndCell(Expectations& expectations) {
     kit::KValueField field;
     field.setLabel(QStringLiteral("Opacity"));
     field.resize(field.sizeHint());
@@ -95,12 +123,8 @@ void testGeometryPlacesTheLabelCellAndSteppers(Expectations& expectations) {
                         "the label claims the leading column");
     expectations.expect(field.cellRect().left() > field.labelRect().right(),
                         "the cell begins after the label, not on top of it");
-    expectations.expect(field.stepUpRect().right() <= field.cellRect().right() + 0.01,
-                        "the steppers live inside the cell");
-    expectations.expect(field.stepUpRect().bottom() <= field.stepDownRect().top() + 0.01,
-                        "the up stepper is above the down stepper");
-    expectations.expect(!field.stepUpRect().intersects(field.stepDownRect()),
-                        "the two steppers do not overlap, so a click means one thing");
+    expectations.expect(field.cursor().shape() == Qt::SizeHorCursor,
+                        "the control advertises the scrub with a horizontal-resize cursor");
 
     kit::KValueField unlabelled;
     unlabelled.resize(unlabelled.sizeHint());
@@ -110,21 +134,13 @@ void testGeometryPlacesTheLabelCellAndSteppers(Expectations& expectations) {
                         "and its cell starts at the control's edge");
 }
 
-void testSteppersAndKeysStepTheValue(Expectations& expectations) {
+void testKeysStepTheValue(Expectations& expectations) {
     kit::KValueField field;
     field.setRange(0.0, 100.0);
     field.setSingleStep(0.5);
     field.setValue(10.0);
     field.resize(field.sizeHint());
     QCoreApplication::processEvents();
-
-    QSignalSpy changed(&field, &kit::KValueField::valueChanged);
-
-    clickAt(field, field.stepUpRect().center());
-    expectations.expect(field.value() == 10.5, "the up stepper adds one step");
-    clickAt(field, field.stepDownRect().center());
-    expectations.expect(field.value() == 10.0, "the down stepper removes one step");
-    expectations.expect(changed.count() == 2, "each step was reported once");
 
     QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
     QCoreApplication::sendEvent(&field, &up);
@@ -196,9 +212,141 @@ void testTheStateMachineAndDisabledField(Expectations& expectations) {
 
     field.setEnabled(false);
     expectations.expect(field.visualState() == kit::State::Disabled, "disabled outranks the rest");
-    clickAt(field, field.stepUpRect().center());
-    expectations.expect(field.value() == 10.0, "a disabled field's steppers do not respond at all");
+    scrub(field, 20);
+    expectations.expect(field.value() == 10.0, "a disabled field does not scrub at all");
+    expectations.expect(!field.isEditing(), "and a click on it opens no editor");
     field.setEnabled(true);
+}
+
+// Task F1, item F4: After Effects' scrub. One pixel is one step, Shift is ten of them, Ctrl is a
+// tenth, and the displacement is measured from the press so a drag that returns lands exactly
+// where it started.
+void testDraggingScrubsTheValue(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& field = *new kit::KValueField(&host);
+    layout->addWidget(&field);
+    field.setRange(-10'000.0, 10'000.0);
+    field.setDecimals(2);
+    field.setSingleStep(1.0);
+    field.setValue(0.0);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    scrub(field, 40);
+    expectations.expect(field.value() == 40.0, "forty pixels to the right is forty steps, got " +
+                                                   std::to_string(field.value()));
+    expectations.expect(!field.isScrubbing(), "the gesture ends on release");
+    expectations.expect(!field.isEditing(), "a drag does not open the text editor");
+
+    field.setValue(0.0);
+    scrub(field, -25);
+    expectations.expect(field.value() == -25.0, "dragging left subtracts steps");
+
+    field.setValue(0.0);
+    field.setSingleStep(0.5);
+    scrub(field, 10);
+    expectations.expect(field.value() == 5.0, "one pixel is one singleStep(), not one unit");
+
+    field.setSingleStep(1.0);
+    field.setValue(0.0);
+    scrub(field, 10, Qt::ShiftModifier);
+    expectations.expect(field.value() == 100.0, "Shift scrubs ten times as fast");
+
+    field.setValue(0.0);
+    scrub(field, 100, Qt::ControlModifier);
+    expectations.expect(field.value() == 10.0, "Ctrl scrubs a tenth as fast");
+
+    field.setValue(0.0);
+    scrub(field, 10, Qt::ShiftModifier | Qt::ControlModifier);
+    expectations.expect(field.value() == 100.0, "Shift wins when both modifiers are held");
+    expectations.expect(kit::KValueField::scrubScale(Qt::ShiftModifier) == 10.0 &&
+                            kit::KValueField::scrubScale(Qt::ControlModifier) == 0.1 &&
+                            kit::KValueField::scrubScale(Qt::NoModifier) == 1.0,
+                        "the scale rule is stated once and is what the gesture uses");
+
+    // Measured from the press: out and back lands exactly where it started.
+    field.setValue(7.0);
+    const QPointF start(field.cellRect().center());
+    pressAt(field, start);
+    moveTo(field, start + QPointF(60.0, 0.0));
+    moveTo(field, start);
+    releaseAt(field, start);
+    expectations.expect(field.value() == 7.0,
+                        "a scrub that wanders back to the press lands on the original value");
+
+    // A drag shorter than the platform threshold is not a scrub at all.
+    field.setValue(3.0);
+    const int under = std::max(0, QApplication::startDragDistance() - 1);
+    pressAt(field, start);
+    moveTo(field, start + QPointF(static_cast<qreal>(under), 0.0));
+    expectations.expect(!field.isScrubbing(), "travel inside the drag threshold is not a scrub");
+    expectations.expect(field.value() == 3.0, "and it changes nothing");
+    releaseAt(field, start + QPointF(static_cast<qreal>(under), 0.0));
+}
+
+void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& field = *new kit::KValueField(&host);
+    layout->addWidget(&field);
+    field.setRange(0.0, 100.0);
+    field.setDecimals(1);
+    field.setValue(20.0);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    const QPointF centre(field.cellRect().center());
+    pressAt(field, centre);
+    expectations.expect(!field.isEditing(), "the editor waits for the release, not the press");
+    releaseAt(field, centre);
+    expectations.expect(field.isEditing(), "a click with no travel enters text edit");
+    expectations.expect(field.lineEdit()->isVisible(), "the text editor is actually shown");
+    expectations.expect(field.lineEdit()->selectedText() == QStringLiteral("20.0"),
+                        "entering text edit selects the whole number, got '" +
+                            field.lineEdit()->selectedText().toStdString() + '\'');
+    expectations.expect(field.borderToken() == kit::Color::Accent,
+                        "an editing cell is active, so it wears the accent border");
+
+    QSignalSpy changed(&field, &kit::KValueField::valueChanged);
+    field.lineEdit()->setText(QStringLiteral("42.5"));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &escape);
+    QCoreApplication::processEvents();
+    expectations.expect(!field.isEditing(), "Esc leaves text edit");
+    expectations.expect(field.value() == 20.0, "Esc cancels: the typed value is discarded");
+    expectations.expect(changed.count() == 0, "and nothing is committed");
+
+    pressAt(field, centre);
+    releaseAt(field, centre);
+    expectations.expect(field.isEditing(), "clicking again re-enters text edit");
+    field.lineEdit()->setText(QStringLiteral("42.5"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &enter);
+    QCoreApplication::processEvents();
+    expectations.expect(!field.isEditing(), "Enter leaves text edit");
+    expectations.expect(field.value() == 42.5, "Enter commits what was typed");
+    expectations.expect(changed.count() == 1, "committing reports the change exactly once");
+
+    pressAt(field, centre);
+    releaseAt(field, centre);
+    field.lineEdit()->setText(QStringLiteral("13.5"));
+    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &tab);
+    QCoreApplication::processEvents();
+    expectations.expect(!field.isEditing(), "Tab leaves text edit");
+    expectations.expect(field.value() == 13.5, "Tab commits too");
+
+    pressAt(field, centre);
+    releaseAt(field, centre);
+    field.lineEdit()->setText(QStringLiteral("not a number"));
+    QKeyEvent enterAgain(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &enterAgain);
+    QCoreApplication::processEvents();
+    expectations.expect(field.value() == 13.5,
+                        "unparseable text is refused the way Esc is, never silently zero");
 }
 
 } // namespace
@@ -235,10 +383,12 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testTheCellCarriesAMonospacedNumberAndAUnit(expectations);
     testTheFieldDoesNotResizeAsDigitsChange(expectations);
-    testGeometryPlacesTheLabelCellAndSteppers(expectations);
-    testSteppersAndKeysStepTheValue(expectations);
+    testGeometryPlacesTheLabelAndCell(expectations);
+    testKeysStepTheValue(expectations);
     testTheWheelIsIgnoredUntilTheFieldIsFocused(expectations);
     testTheStateMachineAndDisabledField(expectations);
     testAFocusedFieldClaimsEditingKeyOverrides(expectations);
+    testDraggingScrubsTheValue(expectations);
+    testAClickEntersTextEditAndEscCancels(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

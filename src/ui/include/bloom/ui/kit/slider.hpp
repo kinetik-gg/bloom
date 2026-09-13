@@ -35,6 +35,10 @@ class KSlider final : public QWidget {
     [[nodiscard]] QRectF handleRect() const;
 
     [[nodiscard]] State visualState() const;
+
+    // The single border the handle paints, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction).
+    [[nodiscard]] Color borderToken() const;
     [[nodiscard]] bool isDragging() const noexcept;
 
     [[nodiscard]] QSize sizeHint() const override;

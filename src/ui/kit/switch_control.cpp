@@ -57,6 +57,10 @@ State KSwitch::visualState() const {
     return State::Normal;
 }
 
+Color KSwitch::borderToken() const {
+    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+}
+
 QSize KSwitch::sizeHint() const {
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     return {kTrackWidth + ringMargin,
@@ -131,12 +135,11 @@ void KSwitch::paintEvent(QPaintEvent* event) {
     if (state == State::Disabled) {
         trackFill = withOpacity(trackFill, kDisabledOpacity);
     }
-    const QColor trackBorder = on ? QColor{} : color(borderForState(state));
+    const Color borderRole = borderToken();
+    // An "on" track is a filled accent pill with no outline at rest or on hover; focus is the one
+    // state that still draws a border there, because it is the only border the rule asserts.
+    const QColor trackBorder = (on && borderRole != Color::Accent) ? QColor{} : color(borderRole);
     fillRoundedSurface(painter, track, trackFill, trackBorder, Radius::Full);
-
-    if (hasFocus() && state != State::Disabled) {
-        drawFocusRing(painter, track, Radius::Full);
-    }
 
     const auto thumbDiameter = static_cast<qreal>(kTrackHeight - kThumbInset * 2);
     const qreal travel = track.width() - thumbDiameter - kThumbInset * 2;

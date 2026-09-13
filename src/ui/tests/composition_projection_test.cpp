@@ -28,7 +28,6 @@
 #include <QLabel>
 #include <QMenu>
 #include <QToolButton>
-#include <QTreeWidget>
 
 #include <algorithm>
 #include <chrono>
@@ -199,7 +198,7 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto layerStackNodeId = session.composition()->graph().layerStack().nodeId();
     if (!require(nodes.graphScene()->findNodeItem(layerStackNodeId) != nullptr,
                  "node projection includes the layer stack") ||
-        !require(timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItemCount() == 0,
+        !require(timeline.layerStackForTest()->rowCount() == 0,
                  "empty document starts with no layer rows") ||
         !require(addButton != nullptr && addButton->menu() == addMenu && addMenu != nullptr &&
                      !addButton->accessibleName().isEmpty() && !addMenu->accessibleName().isEmpty(),
@@ -239,15 +238,16 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto layerId = *layerIdPtr;
     const auto boundaryNode = session.boundaryNodeForLayer(layerId);
     const auto directTextSource = session.directSourceNodeForLayer(layerId);
-    auto* layerRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(0);
+    auto* layerStack = timeline.layerStackForTest();
     if (!boundaryNode.has_value()) {
         (void)require(false, "layer resolves to its graph boundary");
         return false;
     }
     if (!require(directTextSource.has_value() && *directTextSource != *boundaryNode,
                  "layer resolves only its direct content source") ||
-        !require(layerRow != nullptr && layerRow->text(0) == QStringLiteral("Text 1") &&
-                     layerRow->text(1) == QStringLiteral("Text"),
+        !require(layerStack != nullptr && layerStack->rowCount() == 1 &&
+                     layerStack->entries()[0].name == QStringLiteral("Text 1") &&
+                     layerStack->entries()[0].kind == QStringLiteral("Text"),
                  "timeline reads the durable name and derives Text from the direct source") ||
         !require(nodes.graphScene()->findNodeItem(*boundaryNode) != nullptr,
                  "node scene refreshes with the same boundary") ||
@@ -273,7 +273,7 @@ parameterForRole(const bloom::document::Composition& composition,
                  "internal node remains the primary selection") ||
         !require(session.selection().contextualLayer == layerId,
                  "internal node resolves its unique owning layer context") ||
-        !require(layerRow->isSelected(),
+        !require(timeline.layerStackForTest()->currentRow() == 0,
                  "timeline reflects contextual layer selection without replacing the node")) {
         return false;
     }
@@ -343,13 +343,14 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     const auto solidLayerId = *solidLayerIdPtr;
     const auto solidSourceNodeId = session.directSourceNodeForLayer(solidLayerId);
-    auto* solidRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(1);
+    layerStack = timeline.layerStackForTest();
     if (!solidSourceNodeId.has_value()) {
         (void)require(false, "solid layer has one exact direct source node");
         return false;
     }
-    if (!require(solidRow != nullptr && solidRow->text(0) == QStringLiteral("Solid 1") &&
-                     solidRow->text(1) == QStringLiteral("Solid"),
+    if (!require(layerStack != nullptr && layerStack->rowCount() == 2 &&
+                     layerStack->entries()[1].name == QStringLiteral("Solid 1") &&
+                     layerStack->entries()[1].kind == QStringLiteral("Solid"),
                  "timeline derives Solid kind and default numbered name from project truth")) {
         return false;
     }
@@ -358,7 +359,13 @@ parameterForRole(const bloom::document::Composition& composition,
     const auto* solidColorParameter =
         parameterForRole(*composition, *solidSourceNodeId, document::kSolidColorParameterRole);
     auto* solidColorPanel = properties.findChild<QWidget*>("solidColorProperties");
-    auto* solidColorValue = properties.findChild<QLabel*>("solidColorValue");
+    // Task P3 (owner review 2026-09-12) replaced the read-only RGBA label with four editable
+    // kit::KValueField cells; this fixture now reads the same default color back through them
+    // instead of a QLabel's text.
+    auto* solidColorRed = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* solidColorGreen = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* solidColorBlue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    auto* solidColorAlpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
     auto* solidAlphaAssociation = properties.findChild<QLabel*>("solidAlphaAssociation");
     auto* solidColorEncoding = properties.findChild<QLabel*>("solidColorEncoding");
     if (!require(solidSourceNode != nullptr &&
@@ -369,9 +376,11 @@ parameterForRole(const bloom::document::Composition& composition,
                          core::Color4d{0.62, 0.08, 0.04, 1.0},
                  "first default solid stores the warm proof-palette color") ||
         !require(solidColorPanel != nullptr && !solidColorPanel->isHidden() &&
-                     solidColorValue != nullptr &&
-                     solidColorValue->text() == QStringLiteral("R 0.62  G 0.08  B 0.04  A 1"),
-                 "Properties exposes the exact default RGBA as read-only text") ||
+                     solidColorRed != nullptr && solidColorGreen != nullptr &&
+                     solidColorBlue != nullptr && solidColorAlpha != nullptr &&
+                     solidColorRed->value() == 0.62 && solidColorGreen->value() == 0.08 &&
+                     solidColorBlue->value() == 0.04 && solidColorAlpha->value() == 1.0,
+                 "Properties exposes the exact default RGBA through editable value cells") ||
         !require(solidAlphaAssociation != nullptr &&
                      solidAlphaAssociation->text() == QStringLiteral("Straight (unassociated)") &&
                      solidColorEncoding != nullptr &&
@@ -386,12 +395,11 @@ parameterForRole(const bloom::document::Composition& composition,
     }
     nodes.graphScene()->clearSelection();
     solidNodeItem->setSelected(true);
-    solidRow = timeline.findChild<QTreeWidget*>("layerStackView")->topLevelItem(1);
     if (!require(session.selection().primary == ui::SelectionTarget{*solidSourceNodeId},
                  "clicking a layer-owned node preserves NodeId as primary selection") ||
         !require(session.selection().contextualLayer == solidLayerId,
                  "node selection retains its contextual layer") ||
-        !require(solidRow != nullptr && solidRow->isSelected(),
+        !require(timeline.layerStackForTest()->currentRow() == 1,
                  "timeline highlights node context without replacing primary selection")) {
         return false;
     }
@@ -412,7 +420,11 @@ parameterForRole(const bloom::document::Composition& composition,
         (void)require(false, "HDR solid layer has one exact direct source node");
         return false;
     }
-    if (!require(solidColorValue->text() == QStringLiteral("R -0.25  G 1.5  B 0.125  A 0.8"),
+    // FORMAL AMENDMENT 1 (2026-09-12): the RGBA cells are unbounded, exactly like the read-only
+    // label they replaced -- restores the original "preserves negative and HDR RGB without
+    // clipping" pin, now read through the editable cells instead of a QLabel's text.
+    if (!require(solidColorRed->value() == -0.25 && solidColorGreen->value() == 1.5 &&
+                     solidColorBlue->value() == 0.125 && solidColorAlpha->value() == 0.8,
                  "Properties preserves negative and HDR RGB without clipping") ||
         !require(session.undo(), "adding the HDR solid is undoable") ||
         !require(session.composition()->graph().layerStack().entries().size() == 2 &&

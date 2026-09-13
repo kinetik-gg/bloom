@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-02
+Updated: 2026-09-12
 
 ## Purpose
 
@@ -75,8 +75,8 @@ state recipes below step along exactly this ladder and nothing else.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `Small` | `3` | Controls, chips, item rows, and dropdown-list popups |
-| `Medium` | `6` | Menus and cards |
+| `Small` | `3` | Controls, chips, and a dropdown or menu popup's own frame -- the frame rounds, never the rows inside it |
+| `Medium` | `6` | Cards |
 | `Panel` | `4` | Panel bodies and their rounded-corner mask -- its own step, not a reuse of `Small` |
 | `Large` | `12` | Dialogs |
 | `XLarge` | `16` | Full-screen surfaces |
@@ -87,8 +87,22 @@ state recipes below step along exactly this ladder and nothing else.
 | Token | Value | Rule |
 | --- | --- | --- |
 | Hairline | `1` | Snapped to whole physical pixels at any device pixel ratio -- no blur at 125% or 150% |
-| Focus ring | `1.5`, `Accent` | Drawn **outside** the control's rectangle, in margin the control's size hint already reserves, so focus never shifts a layout |
+| Focus | `1`, `Accent` | The control's **own single** hairline turns `Accent`. There is no second outline outside it, and Qt's own focus rectangle is suppressed |
 | Window | `1`, `Border` | The application window's own edge |
+
+A control shows exactly one border, and its color is the whole state channel: `Border` at rest,
+`BorderHover` under the pointer, `Accent` while active -- focused, being edited, or holding an open
+popup. **Focus wins over hover**: a control that is both keeps `Accent`, so putting the pointer on
+the thing you are editing never takes the focus indication away. A control that is borderless at
+rest (a `KValueField` cell) paints its resting border transparent and gains the outline only on
+hover or focus. `kit::borderForInteraction()` is the one implementation;
+`src/ui/tests/kit_focus_border_tests.cpp` pins every control at all four points.
+
+The color widgets are the documented exception: `KColorChip` and `KRangeSelector` (through
+`kit::drawFocusRing()`) and `KColorSwatches` and `KColorPicker` (through accent pens of their own)
+still draw a `1.5` accent ring outside the focused element, because their focusable target is a
+color field, a swatch, or a handle whose own border color is the artist's data rather than a state
+channel -- a border-color change there could not carry focus at all.
 
 ### Spacing
 
@@ -103,10 +117,19 @@ state recipes below step along exactly this ladder and nothing else.
 | `XXL` | `32` |
 | `Gutter` | `6` |
 | `PanelHeader` | `10` |
+| `MenuItemY` | `6` |
+| `MenuItemX` | `10` |
 
-`Gutter` is the visible `Background` gap between panels. Panels float on the window; they do not
-share edges. `PanelHeader` is the panel header's own vertical padding -- deliberately off the
-base-4 scale, not rounded to a nearby step.
+`Gutter` is the visible `Background` gap between panels, AND (task C1, item C4) the window's own
+inner padding: the central area that hosts panels insets itself from the window's edge by the same
+`Gutter` on all four sides, so a panel never touches the window border either. Panels float on the
+window; they do not share edges. `PanelHeader` is the panel header's own vertical padding --
+deliberately off the base-4 scale, not rounded to a nearby step. `MenuItemY` and `MenuItemX` are a
+menu row's own padding, off the base scale for the same reason: a menu row is denser vertically and
+roomier horizontally than the scale offers. `MenuItemY` sizes a `QMenu` popup's own rows
+(`kit::AltUnderlineProxyStyle`, owned by the kit foundation); the menu BAR's own row (task C1, item
+C3) instead gets its vertical breathing room from `Spacing::S` padding around the whole bar, with
+`MenuItemX` alone governing each bar item's own horizontal padding.
 
 ### Size
 
@@ -118,11 +141,17 @@ base-4 scale, not rounded to a nearby step.
 | `IconSmall` | `12` | Dense chrome |
 | `IconMedium` | `16` | Default |
 | `IconLarge` | `20` | Prominent actions |
-| `TitleBar` | `34` | The application title bar |
+| `TitleBar` | `34` | `kit::TitleBar`'s own row height. Compiled and tested, but currently unused: task C1 moved Bloom to native (OS) window chrome only, so `MainWindow` never constructs `kit::TitleBar` today -- the token and the widget both stay ready for a possible future custom-chrome/CSD return |
 | `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
 | `EditorHeader` | `48` | An editor panel's header row |
-| `TimelineRow` | `34` | One timeline row |
+| `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
+
+An editor panel's footer strip (task C1, item C5) is not a distinct token: it reuses `Control`
+(`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
+the header's own `Border` hairline, just on its top edge, and is empty by default -- see this
+task's report for why an editor's own existing bottom bar (the viewer's status readout, the
+timeline's transport) is not moved into it yet.
 
 ### Elevation
 
@@ -140,28 +169,36 @@ never the only thing separating a surface from what is behind it.
 
 | Role | Family | Size | Weight | Use |
 | --- | --- | --- | --- | --- |
-| `Ui` | Plus Jakarta Sans | `12.5` | 500 | The default interface text |
-| `UiSmall` | Plus Jakarta Sans | `11` | 500 | Panel headers: uppercase, `+0.07em` tracking |
+| `Ui` | DejaVu Sans | `12` | 500 | The default interface text |
+| `UiSmall` | DejaVu Sans | `10.5` | 500 | Panel headers: uppercase, `+0.07em` tracking |
 | `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
-| `Title` | Plus Jakarta Sans | `13` | 600 | Dialog and section titles |
+| `Title` | DejaVu Sans | `13` | 600 | Dialog and section titles |
 
 Sizes are in design pixels. `Value` is monospaced so a column of numbers stays aligned and a
 changing digit does not reflow the text beside it.
 
 Static faces are shipped rather than the upstream variable fonts (see Font Packaging And Loading
-below). A static face names its heavier weights as separate families -- the Medium face registers
-as `Plus Jakarta Sans Medium`, not as `Plus Jakarta Sans` at weight 500 -- so a role asks for the
-exact face first and the base family second, and the platform family last.
+below). How a role asks for a face depends on how the upstream family is cut. The interface family's
+three faces all declare the one family name `DejaVu Sans` and differ by style (`Book` / `Bold` /
+`Oblique`), so an interface role names that family and the role's own weight picks the face: `Ui`
+and `UiSmall` at 500 resolve to Book, `Title` at 600 resolves to Bold. The monospaced family is cut
+the other way -- its Medium face registers as its own family `Geist Mono Medium` -- so the `Value`
+role asks for that exact face first, the base family second, and the platform family last.
+
+`Ui` and `UiSmall` are `12` and `10.5` rather than the `12.5` and `11` they were under the previous
+interface face: DejaVu Sans renders visibly larger at an equal pixel size, and the earlier numbers
+read oversized in dense chrome once the family changed.
 
 ### State
 
 | State | Recipe |
 | --- | --- |
 | Hover | One surface step up, plus `BorderHover`. At the top of the ladder the step clamps and the border change carries the state alone |
-| Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill |
+| Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; the frame's own rounded corners clip the bar, so only the frame is ever rounded |
+| Menu row | A reserved icon column so text aligns with or without an icon, the shortcut in `Faint`, and the submenu caret as the Phosphor `CaretRight` glyph. Painted by `kit::AltUnderlineProxyStyle`, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
 | Selected | An `Accent` fill, or a 2px inset accent edge where a fill would hide content |
-| Focus | The focus ring, always visible for keyboard focus, always drawn outside the control |
+| Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline |
 | Disabled | Ink at 40% opacity, and no hover response at all |
 
 A filled control that is not accent-colored -- a destructive action, for instance -- reproduces the
@@ -225,10 +262,10 @@ Official sources:
 
 ## Typography
 
-Plus Jakarta Sans is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
+DejaVu Sans is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
 typeface.
 
-Use Plus Jakarta Sans for:
+Use DejaVu Sans for:
 
 - menus, editor headers, controls, labels, dialogs, properties, and timeline text
 - headings and ordinary artist-facing documentation rendered inside the application
@@ -247,7 +284,7 @@ layout should carry hierarchy in the normal interface.
 
 - Vendor native font assets from pinned upstream releases; do not use a Git submodule, install them
   through npm, or fetch them from a network while configuring, building, or launching Bloom.
-- Retain each upstream SIL Open Font License 1.1 file and record the exact version or commit.
+- Retain each upstream license file and record the exact version or commit.
 - Prefer upstream variable TTF assets when they behave consistently through the supported Qt
   version on all three platforms. Keep a tested static-font fallback if variable-font behavior or
   packaging differs.
@@ -261,21 +298,21 @@ layout should carry hierarchy in the normal interface.
   application font control. Bloom does not introduce platform-specific menu or window chrome solely
   to force typography.
 
-Initial interface weights are Regular, Medium, and SemiBold for Plus Jakarta Sans, and Regular and
-Medium for Geist Mono. Additional weights or italics should enter the shipped set only when an
-implemented component uses them.
+Initial interface faces are Book, Bold, and Oblique for DejaVu Sans, and Regular and Medium for
+Geist Mono. Book carries the `Ui`/`UiSmall` roles and Bold carries `Title`; the Oblique face is
+shipped with the family but no implemented component asks for an italic role yet.
 
-The shipped set is the static TTFs, not the upstream variable fonts: the weight set above is
-exactly five faces, those five are what implemented components use, and a static face resolves the
-same way on every supported Qt platform without depending on the platform font engine's
-named-instance handling. The vendored assets, their pinned releases, their archive digests, and a
-digest for every file are recorded in `src/ui/kit/third_party/plus-jakarta-sans/provenance.md` and
+The shipped set is the static TTFs, not an upstream variable font: it is exactly five faces, and a
+static face resolves the same way on every supported Qt platform without depending on the platform
+font engine's named-instance handling. The vendored assets, their pinned releases, their archive
+digests, and a digest for every file are recorded in
+`src/ui/kit/third_party/dejavu-sans/provenance.md` and
 `src/ui/kit/third_party/geist-mono/provenance.md`, and inventoried in the repository's
 `THIRD_PARTY_NOTICES.md`.
 
 Official sources:
 
-- [Plus Jakarta Sans](https://github.com/tokotype/PlusJakartaSans)
+- [DejaVu fonts](https://github.com/dejavu-fonts/dejavu-fonts)
 - [Geist and Geist Mono](https://github.com/vercel/geist-font)
 
 ## Ownership Boundary

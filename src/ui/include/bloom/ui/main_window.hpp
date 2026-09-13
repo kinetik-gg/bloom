@@ -9,38 +9,34 @@ class QCloseEvent;
 class QLabel;
 class QMenu;
 class QMenuBar;
-class QResizeEvent;
 class QSettings;
 class QStackedWidget;
-
-namespace bloom::ui::kit {
-class TitleBar;
-} // namespace bloom::ui::kit
 
 namespace bloom::ui {
 
 class CompositionSession;
 class EditorRegistry;
 class FrameExportController;
-class FramelessEdgeResizer;
 class ProjectHost;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
-// Custom window chrome, default on, with a persisted native fallback (task U2, issue #118,
-// decision 1). Read via chromeModeFromSettings() at startup, in apps/bloom/main.cpp, BEFORE
-// MainWindow is constructed -- QSettings can only be read correctly once QCoreApplication's
-// organization/application name is set, and MainWindow's window flags must be right from its very
-// first construction, not patched in afterward, so the mode is a constructor argument rather than
-// something MainWindow discovers for itself.
+// Historical custom-chrome setting (task U2, issue #118). Superseded by task C1 ("let OS handle
+// the native window chrome for now"): MainWindow now always builds native (server-side) window
+// decorations and never reads or writes this setting. ChromeMode and the two free functions below
+// stay compiled and independently tested (main_window_chrome_tests.cpp's own
+// chromeModeFromSettings coverage) alongside kit::TitleBar (kit_title_bar_tests.cpp) and
+// FramelessEdgeResizer (frameless_window_support_tests.cpp) purely so a future custom-chrome/CSD
+// return has working, tested pieces to build on -- nothing in the live application constructs or
+// consults any of them today.
 enum class ChromeMode : std::uint8_t {
     Custom,
     Native,
 };
 
 // "appearance/chrome" = "custom" (default) | "native". Any other or missing value reads as
-// Custom. Shared by apps/bloom/main.cpp's startup read and by MainWindow's own "Use Native Window
-// Frame" View-menu toggle, so both agree on exactly what the setting means.
+// Custom. No in-app settings UI writes this key anymore (task C1 removed the View menu's "Use
+// Native Window Frame" toggle); kept only for the round trip these two functions have always had.
 [[nodiscard]] ChromeMode chromeModeFromSettings(const QSettings& settings);
 void setChromeModeInSettings(QSettings& settings, ChromeMode mode);
 
@@ -50,7 +46,7 @@ class MainWindow final : public QMainWindow {
   public:
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
-               ChromeMode chromeMode = ChromeMode::Custom, QWidget* parent = nullptr);
+               QWidget* parent = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -61,15 +57,12 @@ class MainWindow final : public QMainWindow {
     // can assert the switch without depending on QWidget::isVisible(), which only reports
     // correctly once the top-level window itself has been shown.
     [[nodiscard]] bool isShowingReadOnlyPlaceholder() const noexcept;
-    [[nodiscard]] ChromeMode chromeMode() const noexcept;
 
   signals:
     void shutdownRequested();
 
   protected:
     void closeEvent(QCloseEvent* event) override;
-    void changeEvent(QEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
 
   private:
     void createChrome();
@@ -77,7 +70,6 @@ class MainWindow final : public QMainWindow {
     void createFileMenu(QMenu& fileMenu);
     void createViewMenu(QMenu& viewMenu);
     void createHelpMenu(QMenu& helpMenu);
-    void createWorkspaceSwitcher(QMenuBar& menuBar);
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void createCentralStack();
     QWidget* createReadOnlyPlaceholderPage();
@@ -89,17 +81,12 @@ class MainWindow final : public QMainWindow {
     void updateExportAction();
     void updateWindowTitle();
     void updateContentSurface();
-    void updateWindowMask();
     void toggleFullScreen();
-    void toggleMaximizeRestore();
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
     FrameExportController& frameExportController_;
-    ChromeMode chromeMode_;
-    kit::TitleBar* titleBar_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
-    FramelessEdgeResizer* edgeResizer_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
@@ -113,6 +100,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
+    QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* splitLeftRightAction_ = nullptr;
@@ -121,7 +109,6 @@ class MainWindow final : public QMainWindow {
     QAction* maximizeAreaAction_ = nullptr;
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;
-    QAction* useNativeFrameAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;

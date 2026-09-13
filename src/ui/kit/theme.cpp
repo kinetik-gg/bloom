@@ -60,6 +60,8 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("space.XXL"), px(Spacing::XXL)},
         {QLatin1StringView("space.Gutter"), px(Spacing::Gutter)},
         {QLatin1StringView("space.PanelHeader"), px(Spacing::PanelHeader)},
+        {QLatin1StringView("space.MenuItemY"), px(Spacing::MenuItemY)},
+        {QLatin1StringView("space.MenuItemX"), px(Spacing::MenuItemX)},
         {QLatin1StringView("radius.Small"), radiusPx(Radius::Small, 0)},
         {QLatin1StringView("radius.Medium"), radiusPx(Radius::Medium, 0)},
         {QLatin1StringView("radius.Large"), radiusPx(Radius::Large, 0)},
@@ -81,10 +83,6 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("radius.ScrollBarThumb"), radiusPx(Radius::Full, px(Size::ScrollBar))},
         {QLatin1StringView("radius.ScrollBarThumbHover"),
          radiusPx(Radius::Full, px(Size::ScrollBarHover))},
-        // The workspace-switcher tab's checked pill (task U2, issue #118, decision 2): Radius::Full
-        // against the menu bar's own Control-height row, the same "pill against its own extent"
-        // technique the scrollbar thumb above uses.
-        {QLatin1StringView("radius.WorkspaceTabPill"), radiusPx(Radius::Full, px(Size::Control))},
         {QLatin1StringView("border.Hairline"), static_cast<int>(kHairlineWidth)},
         {QLatin1StringView("border.Window"), static_cast<int>(kWindowBorderWidth)},
     });
@@ -165,27 +163,28 @@ QString kinetikStyleSheet() {
     // Every objectName below already existed before this slice and is reproduced verbatim: they are
     // test contracts, and this sheet only restates their appearance in token terms.
     static const auto kTemplate = QStringLiteral(R"(
-QMainWindow, QMenuBar, QMenu {
+QMainWindow, QMenuBar {
     background: {color.Background};
     color: {color.Foreground};
 }
 QMenuBar {
     border-bottom: {border.Hairline}px solid {color.Border};
-    padding: {space.XXS}px {space.XS}px;
+    /* task C1, item C3 (owner: "menus properly padded, not reaching the top edge"): the bar's own
+       Spacing::S (8px) top/bottom padding is what keeps the row's items off the client area's top
+       edge; symmetric top/bottom padding is also what centers the items vertically in the row. */
+    padding: {space.S}px {space.XS}px;
 }
 QMenuBar::item {
-    padding: {space.XXS}px {space.S}px;
+    /* Spacing::MenuItemX (10px) horizontal item padding, per item, per C3. Vertical padding stays
+       at the item's own resting XXS: the bar's own padding above already supplies the 8px of
+       vertical breathing room the owner asked for. */
+    padding: {space.XXS}px {space.MenuItemX}px;
     border-radius: {radius.Small}px;
     background: transparent;
 }
 QMenuBar::item:selected {
     background: {color.Accent};
     color: {color.Foreground};
-}
-QMenuBar::item:checked {
-    background: {color.SurfaceRaised};
-    color: {color.Accent};
-    border-radius: {radius.WorkspaceTabPill}px;
 }
 QMenuBar::item:disabled {
     color: {color.DisabledInk};
@@ -201,28 +200,13 @@ QWidget#kinetikTitleBar QMenuBar {
 QLabel#titleBarTitleLabel {
     color: {color.Foreground};
 }
-QMenu {
-    background: {color.SurfaceRaised};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Medium}px;
-    padding: {space.XXS}px;
-}
-QMenu::item {
-    padding: {space.XS}px {space.M}px;
-    border-radius: {radius.Small}px;
-}
-QMenu::item:selected {
-    background: {color.Accent};
-    color: {color.Foreground};
-}
-QMenu::item:disabled {
-    color: {color.DisabledInk};
-}
-QMenu::separator {
-    height: {border.Hairline}px;
-    background: {color.Border};
-    margin: {space.XXS}px {space.XS}px;
-}
+/* task F1, item F5: there is deliberately NO QMenu rule in this sheet at all. A menu's frame AND
+   its rows are painted by kit::AltUnderlineProxyStyle, because a stylesheet cannot reach a menu
+   item's shortcut column (QSS has no selector for it), cannot tint a vendored currentColor SVG
+   into a submenu arrow, and cannot reserve an icon column the painter honours. Verified
+   empirically: the instant ANY QMenu rule with a box exists, QStyleSheetStyle draws the whole
+   item itself and the application style's drawControl(CE_MenuItem) is never called -- so the two
+   cannot be mixed, and the proxy owns the lot. */
 QFrame#editorArea {
     background: {color.Background};
     border: {border.Hairline}px solid {color.Border};
@@ -454,11 +438,19 @@ void installKinetikTheme(QApplication& application) {
         QApplication::setStyle(style);
     }
     // Bundled faces are registered before the application font is set, so the very first widget
-    // already renders in Plus Jakarta Sans rather than flashing the platform family. A face that
+    // already renders in DejaVu Sans rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
     QApplication::setFont(font(TypeRole::Ui));
+    // Menus need the role named explicitly (task F1, item F5). Qt resolves a widget's default font
+    // from the platform theme's per-CLASS font (QPlatformTheme::MenuFont) before the
+    // application-wide default -- which is exactly the "menu font size is too big" the interface
+    // showed. Setting it here is not enough on its own: changing the application style re-applies
+    // the platform theme's class fonts, and apps/bloom/main.cpp installs the kit proxy style right
+    // after this call. kit::AltUnderlineProxyStyle::polish() sets it on every menu for that
+    // reason; this line covers a menu built before any style change.
+    QApplication::setFont(font(TypeRole::Ui), "QMenu");
     application.setStyleSheet(kinetikStyleSheet());
 }
 

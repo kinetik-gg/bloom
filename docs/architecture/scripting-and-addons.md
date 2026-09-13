@@ -448,7 +448,7 @@ The stable public UI tier is schema-driven. An add-on declares property bindings
 lists, trees, actions, validation, diagnostics, task controls, and editor descriptors. Bloom owns
 the QWidget tree, so the UI automatically follows:
 
-- Plus Jakarta Sans, Geist Mono roles, and Phosphor icon IDs
+- DejaVu Sans, Geist Mono roles, and Phosphor icon IDs
 - palette, spacing, density, and high-DPI behavior
 - keyboard focus, shortcut, and screen-reader semantics
 - panel replacement, persistence, missing-editor placeholders, and platform parity

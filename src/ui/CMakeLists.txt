@@ -183,18 +183,18 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
 
 
 # The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix. The
-# shipped weight set is deliberately minimal (visual-language.md): Regular/Medium/SemiBold for the
-# interface family and Regular/Medium for the monospaced one -- a weight ships when a component
-# uses it, not before.
+# shipped set is deliberately minimal (visual-language.md): Book/Bold/Oblique for the interface
+# family -- one family, three styles, unlike the per-weight families the previous interface face
+# shipped -- and Regular/Medium for the monospaced one.
 qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
+        kit/third_party/dejavu-sans/DejaVuSans-Bold.ttf
+        kit/third_party/dejavu-sans/DejaVuSans-Oblique.ttf
+        kit/third_party/dejavu-sans/DejaVuSans.ttf
         kit/third_party/geist-mono/GeistMono-Medium.ttf
         kit/third_party/geist-mono/GeistMono-Regular.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-Medium.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-Regular.ttf
-        kit/third_party/plus-jakarta-sans/PlusJakartaSans-SemiBold.ttf
 )
 
 # Generates the "Open Source Licenses..." embedded catalog (task U2, issue #118, decision 3) BEFORE
@@ -208,7 +208,8 @@ target_sources(
     bloom_ui
     PRIVATE
         application_shutdown_coordinator.cpp
-        composition_editors.cpp
+        composition_authoring.cpp
+        composition_editor_support.cpp
         composition_preview_controller.cpp
         composition_preview_pipeline.cpp
         composition_session.cpp
@@ -219,12 +220,15 @@ target_sources(
         jobs_editor.cpp
         licenses_window.cpp
         main_window.cpp
+        media_editor.cpp
         node_editor.cpp
         playback_controller.cpp
         project_host.cpp
+        properties_editor.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
+        timeline_editor.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
         viewer_editor.cpp
@@ -235,6 +239,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/ui/application_shutdown_coordinator.hpp
+            include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
@@ -246,13 +251,16 @@ target_sources(
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/licenses_window.hpp
             include/bloom/ui/main_window.hpp
+            include/bloom/ui/media_editor.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/project_host.hpp
+            include/bloom/ui/properties_editor.hpp
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
             include/bloom/ui/third_party_license_catalog.hpp
+            include/bloom/ui/timeline_editor.hpp
             include/bloom/ui/timeline_frame_math.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/viewer_editor.hpp

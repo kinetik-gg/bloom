@@ -67,6 +67,10 @@ class KDropdown final : public QWidget {
 
     [[nodiscard]] State visualState() const;
 
+    // The single border this control paints, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction). An open popup counts as active, exactly as focus does.
+    [[nodiscard]] Color borderToken() const;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
