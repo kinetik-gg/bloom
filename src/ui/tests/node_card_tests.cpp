@@ -310,8 +310,9 @@ void testMergeRendersOneOrderedMultiInput() {
     expect(wires == static_cast<int>(f.session.composition()->graph().edges().size()),
            "collapsing the rows loses no link: one wire per graph edge, as before");
 
-    // A link drag over the pill names the position in the order the pointer is at, while the pill
-    // itself is dimmed -- a stack slot is structural and accepts no drop.
+    // A link drag over the pill names the position in the order the pointer is at. ADAPTED (task
+    // FIX1, item B): the pill ACCEPTS a drop now -- that is what creates the stack slot -- so an
+    // Image output over it reads as compatible and the caret says where the layer will land.
     const auto solid = f.session.directSourceNodeForLayer(entries.front().layerId);
     expect(solid.has_value(), "the lower layer resolves its source node");
     if (!solid.has_value())
@@ -328,8 +329,8 @@ void testMergeRendersOneOrderedMultiInput() {
     expect(pill->dropIndicator().has_value() &&
                *pill->dropIndicator() == pill->orderedInputs().size() - 1,
            "the indicator names the slot under the pointer");
-    expect(pill->dragAffinity() == node_editor::SocketItem::DragAffinity::Incompatible,
-           "while the pill stays dimmed: the caret reports a position, never a landing");
+    expect(pill->dragAffinity() == node_editor::SocketItem::DragAffinity::Compatible,
+           "and the pill reads as a landing site, because a drop there creates the slot");
     f.release(overSecond);
     expect(!pill->dropIndicator().has_value(),
            "and ending the drag clears the indicator with the gesture");

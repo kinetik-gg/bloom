@@ -5,6 +5,7 @@
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
+#include <string>
 #include <variant>
 
 namespace bloom::commands {
@@ -67,6 +68,24 @@ OperationResult AddNode::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node could not be inserted");
     composition->nodeLayout()[*nodeId] = {layoutPosition_, 128.0, false, false};
+    // A Layer node gets its layer IDENTITY here, at creation, rather than on its first connection
+    // to Merge (task FIX1, item B). The alternative -- waiting for the Merge link -- would leave a
+    // card on the canvas with no name to rename, no LayerId for Properties and the Timeline to
+    // address, and two different shapes of Layer node to reason about. The TIMELINE still lists a
+    // layer only once it has a stack slot, which is the thing that actually makes it draw, so
+    // "added" and "participating" stay distinguishable without a second node shape.
+    if (nodeTypeId_ == document::kLayerOutputNodeType) {
+        const auto layerId = draft.ids().allocateLayer();
+        if (!layerId)
+            return detail::exhaustedIds();
+        const auto number = composition->graph().layerOutputs().size() + 1;
+        if (!composition->graph().addLayerOutput({*nodeId, *layerId,
+                                                  "Layer " + std::to_string(number),
+                                                  std::string(document::kLayerOutputOutputPort)}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer boundary could not be inserted");
+        outputs.push_back({"layer", *layerId});
+    }
     return OperationResult::applied(std::move(outputs));
 }
 
@@ -126,11 +145,22 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     auto& graph = composition->graph();
     const auto sourceKind = graph.outputKind(source_, registry_);
     const auto inputKind = graph.inputKind(destination_, registry_);
-    if (!sourceKind || !inputKind)
+    // An unconnected REROUTE has no kind yet, and that is not a missing port -- it is the whole of
+    // what "a reroute takes the kind of the link it joins" means (task FIX1, item I). The first
+    // link into one is accepted whatever it carries; every link after it is checked against what
+    // the reroute now holds, because by then outputKind()/inputKind() answer with that kind.
+    const auto kindless = [&graph](const document::NodeId nodeId) {
+        const auto* node = graph.findNode(nodeId);
+        return node != nullptr && document::isRerouteNodeType(node->typeId);
+    };
+    const bool sourceIsKindlessReroute = !sourceKind && kindless(source_.nodeId);
+    const bool destinationIsKindlessReroute =
+        !inputKind && kindless(detail::destinationNode(destination_));
+    if ((!sourceKind && !sourceIsKindlessReroute) || (!inputKind && !destinationIsKindlessReroute))
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
             "Connection requires existing registered source and destination ports");
-    if (!document::isAcceptedSocketConnection(*sourceKind, *inputKind))
+    if (sourceKind && inputKind && !document::isAcceptedSocketConnection(*sourceKind, *inputKind))
         return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
                                          "Connected socket kinds do not match");
     // Task S7: a link into an operand socket is the PARAMETER's driver binding, not an edge. One
@@ -150,6 +180,48 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return OperationResult::applied();
+    }
+    // A link into Merge's ordered multi-input whose slot id is the invalid sentinel MEANS "make a
+    // new slot here" (task FIX1, item B): the stack slot is what a Layer node's connection to Merge
+    // IS, so creating it is part of connecting rather than a separate command the artist has to
+    // find.
+    if (const auto* slot = std::get_if<document::LayerStackInputRef>(&destination_);
+        slot != nullptr && !slot->slotId.isValid()) {
+        if (slot->stackNodeId != graph.layerStack().nodeId())
+            return detail::invalidTarget();
+        const auto boundaries = graph.layerOutputs();
+        const auto boundary = std::ranges::find_if(boundaries, [this](const auto& candidate) {
+            return candidate.nodeId == source_.nodeId;
+        });
+        if (boundary == boundaries.end())
+            return OperationResult::rejected(
+                OperationIssueCode::Unsupported,
+                "Only a Layer node's output can take a slot in the layer stack");
+        const auto entries = graph.layerStack().entries();
+        if (std::ranges::any_of(entries, [&boundary](const auto& entry) {
+                return entry.layerId == boundary->layerId;
+            }))
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "This layer already has a slot in the layer stack");
+        const auto slotId = draft.ids().allocateLayerSlot();
+        const auto edgeId = draft.ids().allocateEdge();
+        if (!slotId || !edgeId)
+            return detail::exhaustedIds();
+        if (!graph.layerStack().append({*slotId, boundary->layerId}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer stack slot could not be inserted");
+        if (insertBefore_.has_value() && !graph.layerStack().moveBefore(*slotId, insertBefore_))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer stack slot could not be ordered");
+        if (!graph.addEdge({*edgeId, source_,
+                            document::LayerStackInputRef{slot->stackNodeId, *slotId, slot->role}},
+                           registry_))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer stack connection could not be inserted");
+        if (const auto failure = detail::validateGraph(*composition, registry_))
+            return *failure;
+        return OperationResult::applied(
+            {{std::string(kConnectPortsSlotOutput), *slotId}, {"edge", *edgeId}});
     }
     const auto* previous = detail::inputEdge(graph, destination_);
     if (previous && previous->source == source_)
@@ -175,10 +247,25 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     auto& graph = composition->graph();
     if (!graph.inputKind(input_, registry_))
         return detail::invalidTarget();
-    if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_);
-        slot && (slot->stackNodeId != graph.layerStack().nodeId() ||
-                 !graph.layerStack().find(slot->slotId)))
-        return detail::invalidTarget();
+    if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_); slot != nullptr) {
+        if (slot->stackNodeId != graph.layerStack().nodeId() ||
+            graph.layerStack().find(slot->slotId) == nullptr)
+            return detail::invalidTarget();
+        // Detaching a stack slot's content REMOVES the slot (task FIX1, item B). A slot with
+        // nothing in it is not a shape the canonical graph admits -- every visible slot requires
+        // one typed content connection -- so "the slot" and "the link into it" are one thing to the
+        // artist and one thing here. The Layer node keeps its boundary and its LayerId, so
+        // reconnecting it is one gesture rather than a rebuild.
+        const auto* edge = detail::inputEdge(graph, input_);
+        if (edge != nullptr)
+            (void)graph.eraseEdge(edge->id);
+        if (!graph.layerStack().erase(slot->slotId))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer stack slot could not be removed");
+        if (const auto failure = detail::validateGraph(*composition, registry_))
+            return *failure;
+        return OperationResult::applied();
+    }
     // Unlinking an operand socket restores its parameter to the constant its registered default
     // names; see registeredDefault() for why that, and not a remembered previous value, is what an
     // explicit disconnect lands on.
@@ -206,7 +293,15 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     const auto* edge = detail::inputEdge(graph, input_);
     if (!edge)
         return OperationResult::noChange();
+    const auto upstream = edge->source.nodeId;
+    const auto downstream = detail::destinationNode(input_);
     (void)graph.eraseEdge(edge->id);
+    // A reroute with nothing on either side is a dot floating in the canvas that the artist never
+    // placed: it existed only to bend a wire, and the wire is gone (task FIX1, item I). Removed in
+    // the SAME transaction, so one undo puts the link and its bend back together. Both ends are
+    // checked, because either of them may be the reroute this disconnect stranded.
+    for (const auto candidate : {upstream, downstream})
+        (void)detail::eraseStrandedReroute(*composition, candidate);
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
     return OperationResult::applied();
@@ -245,11 +340,13 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     for (auto edge : graph.edges()) {
         if (edge.source.nodeId != nodeId_ || edge.source.port != output->name)
             continue;
+        // A stack slot is NOT reconnected to the dissolved node's upstream source: a slot belongs
+        // to a layer, and the layer goes with its boundary node (CanonicalGraph::eraseNode removes
+        // both). Before task FIX1 this refused outright; now that a slot is created and removed by
+        // connecting and disconnecting it, dissolving a participating Layer Output simply takes the
+        // layer out of the stack, which is what the gesture means.
         if (std::holds_alternative<document::LayerStackInputRef>(edge.destination))
-            return OperationResult::rejected(
-                OperationIssueCode::Unsupported,
-                "Dissolving a participating Layer Output would break its required stack boundary; "
-                "remove the layer instead");
+            continue;
         edge.source = source;
         consumers.push_back(std::move(edge));
     }

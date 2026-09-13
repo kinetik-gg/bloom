@@ -426,19 +426,17 @@ QRectF expectedDisplayRect(const QWidget& viewer,
     if (frame == nullptr) {
         return {};
     }
-    const auto viewResult = frame->displayBuffer().view();
-    if (!viewResult) {
-        return {};
-    }
-    const auto view = *viewResult.value();
-    const auto descriptorResult = view.descriptor();
-    if (!descriptorResult.has_value()) {
+    // Auto may retain a proxy while a zoom requests Full. The displayed composition rectangle
+    // still comes from the full format, including when the retained frame is display-only.
+    const auto format = frame->processIdentity().plan->format();
+    const auto extent = render::ImageExtent::create(format.width(), format.height());
+    if (!extent) {
         return {};
     }
     const qreal statusBarHeight = ui::kit::px(ui::kit::Size::Control);
     const QRectF frameRect = QRectF(viewer.rect()).adjusted(0.0, 0.0, 0.0, -statusBarHeight);
-    return ui::viewTransformedDisplayRect(frameRect, descriptorResult->displayWindow().extent(),
-                                          descriptorResult->pixelAspect(), transform);
+    return ui::viewTransformedDisplayRect(frameRect, *extent.value(), format.pixelAspect(),
+                                          transform);
 }
 
 // document::Document is non-movable/non-copyable (its constructor and snapshot() own the live

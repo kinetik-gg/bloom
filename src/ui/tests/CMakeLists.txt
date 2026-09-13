@@ -596,8 +596,66 @@ target_link_libraries(bloom_node_canvas_lifetime_test PRIVATE bloom_ui bloom_pro
 bloom_enable_warnings(bloom_node_canvas_lifetime_test)
 bloom_add_test(NAME bloom.ui.node-canvas-lifetime COMMAND bloom_node_canvas_lifetime_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_node_value_animation_test node_value_animation_tests.cpp)
+target_include_directories(bloom_node_value_animation_test PRIVATE ..)
+target_link_libraries(bloom_node_value_animation_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_value_animation_test)
+bloom_add_test(NAME bloom.ui.node-value-animation COMMAND bloom_node_value_animation_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_delete_key_test node_delete_key_tests.cpp)
+target_include_directories(bloom_node_delete_key_test PRIVATE ..)
+target_link_libraries(bloom_node_delete_key_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_delete_key_test)
+bloom_add_test(NAME bloom.ui.node-delete-key COMMAND bloom_node_delete_key_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_blend_mode_test node_blend_mode_tests.cpp)
+target_include_directories(bloom_node_blend_mode_test PRIVATE ..)
+target_link_libraries(bloom_node_blend_mode_test PRIVATE bloom_ui bloom_runtime bloom_render bloom_color Qt6::Test)
+bloom_enable_warnings(bloom_node_blend_mode_test)
+bloom_add_test(NAME bloom.ui.node-blend-mode COMMAND bloom_node_blend_mode_test LABELS ui integration TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_reroute_test node_reroute_tests.cpp)
+target_include_directories(bloom_node_reroute_test PRIVATE ..)
+target_link_libraries(bloom_node_reroute_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_reroute_test)
+bloom_add_test(NAME bloom.ui.node-reroute COMMAND bloom_node_reroute_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_link_detach_test node_link_detach_tests.cpp)
+target_include_directories(bloom_node_link_detach_test PRIVATE ..)
+target_link_libraries(bloom_node_link_detach_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_link_detach_test)
+bloom_add_test(NAME bloom.ui.node-link-detach COMMAND bloom_node_link_detach_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_explicit_wiring_test node_explicit_wiring_tests.cpp)
+target_include_directories(bloom_node_explicit_wiring_test PRIVATE ..)
+target_link_libraries(bloom_node_explicit_wiring_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_explicit_wiring_test)
+bloom_add_test(NAME bloom.ui.node-explicit-wiring COMMAND bloom_node_explicit_wiring_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_node_driver_gesture_test node_driver_gesture_tests.cpp)
+target_include_directories(bloom_node_driver_gesture_test PRIVATE ..)
+target_link_libraries(bloom_node_driver_gesture_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_driver_gesture_test)
+bloom_add_test(NAME bloom.ui.node-driver-gesture COMMAND bloom_node_driver_gesture_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_production_wiring_test node_production_wiring_tests.cpp)
 target_include_directories(bloom_node_production_wiring_test PRIVATE ..)
 target_link_libraries(bloom_node_production_wiring_test PRIVATE bloom_ui bloom_project Qt6::Test)
 bloom_enable_warnings(bloom_node_production_wiring_test)
 bloom_add_test(NAME bloom.ui.node-production-wiring COMMAND bloom_node_production_wiring_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Task PERF1: the RAM preview cache, the compiled-plan cache, and the RAM Preview command. Its own
+# executable rather than more cases inside composition_preview_controller_tests.cpp or
+# playback_controller_tests.cpp, each of which owns a contract this task had to leave intact -- and
+# this one needs its own counting/pausable preparation function to prove that a cache hit evaluates
+# nothing.
+add_executable(bloom_ram_preview_test ram_preview_tests.cpp)
+target_link_libraries(bloom_ram_preview_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ram_preview_test)
+bloom_add_test(
+    NAME bloom.ui.ram-preview
+    COMMAND bloom_ram_preview_test
+    LABELS ui integration animation
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

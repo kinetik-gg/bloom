@@ -73,6 +73,10 @@ inline constexpr qreal kCardRowGap = kit::px(kit::Spacing::XXS);
 inline constexpr qreal kCardHeaderHeight = kit::px(kit::Size::PanelHeader);
 inline constexpr auto kCardRadius = kit::Radius::Medium;
 inline constexpr qreal kCardMinimumWidth = 128.0;
+// Task FIX1, item I: a reroute is drawn as a DOT, not a card. It has no name to show, no parameter
+// to edit, and no header to grab -- it is a bend in a wire, and a card around one would be a box
+// the size of a Solid standing in for a single point.
+inline constexpr qreal kRerouteDiameter = 10.0;
 inline constexpr qreal kSocketDiameter = 8.0;
 inline constexpr qreal kSocketRowHeight = kit::px(kit::Size::ControlCompact);
 // One ordered slot's worth of the Merge node's multi-input pill (task S1, item 7): the pill grows
@@ -122,8 +126,7 @@ class SocketItem final : public QGraphicsItem {
   public:
     SocketItem(document::NodeId node, QString name, document::SocketValueKind kind,
                std::optional<document::InputPortRef> input,
-               std::optional<document::OutputPortRef> output, bool structural,
-               QGraphicsItem* parent);
+               std::optional<document::OutputPortRef> output, QGraphicsItem* parent);
     [[nodiscard]] QRectF boundingRect() const override;
     [[nodiscard]] QPainterPath shape() const override;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
@@ -135,20 +138,26 @@ class SocketItem final : public QGraphicsItem {
     [[nodiscard]] const std::vector<document::InputPortRef>& orderedInputs() const noexcept {
         return orderedInputs_;
     }
-    [[nodiscard]] bool multiInput() const noexcept { return !orderedInputs_.empty(); }
+    // True for Merge's ONE ordered multi-input, whether the stack is empty or not: an empty stack
+    // still has a port to drop the first layer on (task FIX1, item B), so this is a property of the
+    // socket rather than a count of what it currently carries.
+    [[nodiscard]] bool multiInput() const noexcept { return stackPill_; }
     // True when `ref` is this socket's own input, or -- for the ordered multi-input -- any of the
     // slots it stands for. This is how an edge finds the socket that terminates it.
     [[nodiscard]] bool accepts(const document::InputPortRef& ref) const;
-    // The slot position the pointer is over during a drag, drawn as a caret across the pill. The
-    // pill is dimmed as incompatible at the same time (stack slots are structural and accept no
-    // drop), so the caret says "this is the position you are at", never "release here and it will
-    // land".
+    // The slot position the pointer is over during a drag, drawn as a caret across the pill. A drop
+    // on the pill lands a new slot at that position (task FIX1, item B), so the caret now says
+    // exactly where the layer will go.
     void setDropIndicator(std::optional<std::size_t> slotIndex);
     [[nodiscard]] std::optional<std::size_t> dropIndicator() const noexcept {
         return dropIndicator_;
     }
     // Which ordered slot a point in this socket's own coordinates falls on.
     [[nodiscard]] std::optional<std::size_t> slotIndexAt(QPointF localPoint) const;
+    // The existing slot a drop at `localPoint` should land BEFORE, or nothing to append at the
+    // bottom. This is what ConnectPorts takes as its `insertBefore`, so the caret the artist saw
+    // and the order the command writes are the same decision.
+    [[nodiscard]] std::optional<document::LayerSlotId> slotInsertionAt(QPointF localPoint) const;
     // The pill's painted extent along the card's edge; kSocketDiameter for an ordinary round
     // socket.
     [[nodiscard]] qreal pillLength() const;
@@ -156,17 +165,27 @@ class SocketItem final : public QGraphicsItem {
     // kSocketRowHeight row; the card sums these rather than multiplying by the socket count, so a
     // socket that is taller than a row can exist without the card's body landing on top of it.
     [[nodiscard]] qreal rowHeight() const;
-    // Task S7: every kind is linkable now, not Image alone. The only non-draggable sockets left are
-    // the structural Layer Output / stack-slot boundary, which a link gesture must not break --
-    // removing the layer is how that connection goes.
-    [[nodiscard]] bool draggable() const { return !structural_; }
+    // Task FIX1, item C: EVERY socket is draggable. The formerly structural pair -- a participating
+    // Layer Output's image output and Merge's stack-slot pill -- are now ordinary link ends,
+    // because connecting a Layer to Merge is what CREATES its stack slot and disconnecting it is
+    // what removes it. `structural_` survives only as the flag that says a socket carries no
+    // authored widget of its own.
+    [[nodiscard]] bool draggable() const { return true; }
+    // An unconnected reroute's socket takes whatever the first link brings (task FIX1, item I), so
+    // it is a landing site for every kind rather than for the placeholder its definition declares.
+    void setAcceptsAnyKind(const bool any) { acceptsAnyKind_ = any; }
+    [[nodiscard]] bool acceptsAnyKind() const noexcept { return acceptsAnyKind_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
     // brightens toward Foreground and an incompatible one fades to the disabled ink, so a drag
     // names its own landing sites instead of leaving the artist to aim and find out.
     enum class DragAffinity : std::uint8_t { Idle, Compatible, Incompatible };
-    void setDragAffinity(DragAffinity affinity);
+    // `refusal` is the one line that says WHY an incompatible socket cannot take the link now being
+    // dragged (task FIX1, item A.3). It joins this socket's own tooltip for as long as the drag
+    // lasts and is dropped again when the affinity returns to Idle, so a hover during a refused
+    // drag explains itself instead of leaving the artist to guess at a dimmed dot.
+    void setDragAffinity(DragAffinity affinity, const QString& refusal = {});
     [[nodiscard]] DragAffinity dragAffinity() const noexcept { return affinity_; }
     // The ink this socket paints right now, affinity included. Exposed so a test can state the
     // brighten/dim rule in the same terms the painter applies it.
@@ -183,10 +202,11 @@ class SocketItem final : public QGraphicsItem {
 
   private:
     QString description_;
-    bool structural_;
     bool hovered_ = false;
+    bool acceptsAnyKind_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
+    bool stackPill_ = false;
     std::optional<std::size_t> dropIndicator_;
 };
 
@@ -217,6 +237,9 @@ class NodeItem final : public QGraphicsObject {
     }
 
     [[nodiscard]] document::NodeId id() const noexcept { return id_; }
+    // The name this card shows. Exposed so a link can name both of its ends in its own tooltip
+    // (task FIX1, item C) without re-deriving either from the document.
+    [[nodiscard]] QString title() const { return title_; }
 
     // Reconciles this card against the node record IN PLACE. Field widgets are created once, on the
     // first refresh that sees a given set of parameter roles, and afterwards only reconfigured --
@@ -227,13 +250,25 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
+        reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
         eyebrow_ = nodeEyebrow(composition, node);
-        setToolTip(QStringLiteral("%1\n%2\nNode %3")
-                       .arg(title_, nodeTypeDisplayName(node.typeId))
-                       .arg(id_.value()));
+        if (reroute_) {
+            // A dot has no name on it, so its tooltip is where the kind it carries is said.
+            const auto kind = composition.graph().rerouteKind(node.id, registry);
+            setToolTip(kind.has_value()
+                           ? QStringLiteral("%1 · %2").arg(nodeTypeDisplayName(node.typeId),
+                                                           socketKindName(*kind))
+                           : QStringLiteral("%1 · %2").arg(
+                                 nodeTypeDisplayName(node.typeId),
+                                 tr("unconnected; takes the kind of the link it joins")));
+        } else {
+            setToolTip(QStringLiteral("%1\n%2\nNode %3")
+                           .arg(title_, nodeTypeDisplayName(node.typeId))
+                           .arg(id_.value()));
+        }
         ensureFields(node, registry);
         buildSockets(node, composition, registry);
         refreshValues(node, composition);
@@ -310,6 +345,8 @@ class NodeItem final : public QGraphicsObject {
     // that paints outside its bounding rectangle leaves trails behind it and gets clipped out of
     // itemsBoundingRect() (which is what Fit frames against).
     [[nodiscard]] QRectF cardRect() const { return {0.0, 0.0, width_, height_}; }
+    // True for the one node type that is a point on a link rather than a card (task FIX1, item I).
+    [[nodiscard]] bool isReroute() const noexcept { return reroute_; }
 
     [[nodiscard]] QRectF boundingRect() const override {
         const qreal overhang = kSocketDiameter / 2.0 + kit::kHairlineWidth;
@@ -745,6 +782,10 @@ class NodeItem final : public QGraphicsObject {
         row.kind = declared->valueKind;
         const auto label = displayTypeName(role);
         const auto commit = [this, index] { commitOperand(index); };
+        // Task FIX1, item G: a literal value node whose kind has a curve gets the SAME diamond a
+        // layer parameter has, bound to its own parameter. The predicate is the schema's, never a
+        // list here, so a row cannot offer a key the command layer would refuse.
+        const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
         if (const auto items = selectorItems(declared->schemaKey); !items.isEmpty()) {
             row.selector = new kit::KDropdown;
@@ -799,7 +840,8 @@ class NodeItem final : public QGraphicsObject {
             registerControlRole(row.color, role);
             connect(row.color, &kit::KColorChip::colorChanged, this,
                     [commit](const kit::KColor&) { commit(); });
-            valueRows_.push_back({label, row.color, nullptr, {}});
+            valueRows_.push_back(
+                {label, row.color, animatable ? makeCardDiamond(role) : nullptr, role});
             break;
         }
         case document::ParameterValueKind::Integer:
@@ -828,7 +870,12 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(field, role);
                 connect(field, &kit::KValueField::valueChanged, this, [commit] { commit(); });
                 row.numeric[static_cast<std::size_t>(component)] = field;
-                valueRows_.push_back({componentLabel, field, nullptr, {}});
+                // One diamond per PARAMETER, on its first component row: a Vector 2's X and Y are
+                // one curve, exactly as a layer position's are.
+                valueRows_.push_back(
+                    {componentLabel, field,
+                     animatable && component == 0 ? makeCardDiamond(role) : nullptr,
+                     component == 0 ? role : std::string_view{}});
             }
             break;
         }
@@ -956,11 +1003,50 @@ class NodeItem final : public QGraphicsObject {
         if (!value.has_value() || !selectSelf()) {
             return;
         }
-        commands::Transaction transaction("Set Node Value", session_->snapshot().revision());
-        transaction.emplace<commands::SetParameterSource>(
-            session_->compositionId(), row.parameterId,
-            document::ConstantValueSource{*std::move(value)});
-        (void)graphScene->submit(std::move(transaction));
+        // Constant or KEY, by the session's own rule (task FIX1, item G): editing an animated value
+        // node's number at a new time adds a key there rather than replacing its curve.
+        (void)session_->setParameterValue(row.parameterId, *std::move(value), tr("Set Node Value"));
+    }
+
+    // One animated operand row, read at the session time through the session's own exact sampler so
+    // the card and the Properties panel cannot disagree about what an animated value is right now.
+    void refreshAnimatedOperandRow(const OperandRow& row) {
+        if (session_ == nullptr) {
+            return;
+        }
+        const auto setComponent = [&row](const std::size_t component, const double value) {
+            if (row.numeric[component] != nullptr) {
+                const QSignalBlocker blocker(row.numeric[component]);
+                row.numeric[component]->setValue(value);
+            }
+        };
+        switch (row.kind) {
+        case document::ParameterValueKind::Float64:
+            if (const auto sampled = session_->effectiveScalarValue(row.parameterId))
+                setComponent(0, *sampled);
+            return;
+        case document::ParameterValueKind::Vec2d:
+            if (const auto sampled = session_->effectiveVec2Value(row.parameterId)) {
+                setComponent(0, sampled->x);
+                setComponent(1, sampled->y);
+            }
+            return;
+        case document::ParameterValueKind::Color4d:
+            if (const auto sampled = session_->effectiveColorValue(row.parameterId);
+                sampled.has_value() && row.color != nullptr) {
+                const QSignalBlocker blocker(row.color);
+                row.color->setColor(kit::KColor{
+                    static_cast<float>(sampled->red), static_cast<float>(sampled->green),
+                    static_cast<float>(sampled->blue), static_cast<float>(sampled->alpha)});
+            }
+            return;
+        case document::ParameterValueKind::Boolean:
+        case document::ParameterValueKind::Integer:
+        case document::ParameterValueKind::Vec3d:
+        case document::ParameterValueKind::String:
+            // No curve kind carries these, so no row of theirs can be animated.
+            return;
+        }
     }
 
     // Reads every operand row back from document truth. Signals are blocked: this runs in response
@@ -988,6 +1074,10 @@ class NodeItem final : public QGraphicsObject {
             applyTip(row.toggle);
             applyTip(row.selector);
             if (constant == nullptr) {
+                // An ANIMATED operand has no constant to read; its row shows the value sampled at
+                // the session time, exactly as a Properties row does (task FIX1, item G). A DRIVEN
+                // one shows nothing, because its widget is hidden anyway.
+                refreshAnimatedOperandRow(row);
                 continue;
             }
             if (row.selector != nullptr) {
@@ -1260,6 +1350,27 @@ class NodeItem final : public QGraphicsObject {
     // row label, and the widest control -- rather than from a spelled card width, then positions
     // each proxy inside it.
     void relayout() {
+        // A reroute is a dot: one input on its left edge, one output on its right, and nothing
+        // else. Laid out here rather than in the card path below because none of that path's
+        // questions -- how wide is the label column, which row carries a diamond, how tall is the
+        // header -- has an answer for a node with no rows and no name (task FIX1, item I).
+        if (reroute_) {
+            if (!qFuzzyCompare(width_, kRerouteDiameter) ||
+                !qFuzzyCompare(height_, kRerouteDiameter)) {
+                prepareGeometryChange();
+                width_ = kRerouteDiameter;
+                height_ = kRerouteDiameter;
+            }
+            minimumWidth_ = kRerouteDiameter;
+            for (auto* child : childItems())
+                if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                    proxy != nullptr && proxy != renameProxy_)
+                    proxy->setVisible(false);
+            for (auto* socket : sockets_)
+                socket->setPos(socket->input.has_value() ? 0.0 : width_, height_ / 2.0);
+            update();
+            return;
+        }
         const QFontMetricsF rowMetrics(kit::font(kit::TypeRole::UiSmall));
         const QFontMetricsF valueMetrics(kit::font(kit::TypeRole::Value));
 
@@ -1432,6 +1543,7 @@ class NodeItem final : public QGraphicsObject {
     qreal rowHeight_ = kit::px(kit::Size::Control);
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
+    bool reroute_ = false;
     bool primary_ = false;
     bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;

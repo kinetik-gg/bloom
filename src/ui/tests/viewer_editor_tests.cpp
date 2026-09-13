@@ -31,6 +31,8 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QRectF>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QWheelEvent>
 
 #include <chrono>
@@ -308,6 +310,7 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(320, 240);
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "an initial reference-labeled frame becomes ready");
@@ -625,7 +628,7 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
                         "the fixture's initial frame becomes ready");
 
     expectations.expect(fixture.viewer.statusBarReadoutTextForTest() ==
-                            QStringLiteral("Frame 0 · 0.000s"),
+                            QStringLiteral("Auto · 1 · Frame 0 · 0.000s"),
                         "the readout starts at frame 0, exact zero seconds");
 
     // 1/3 s has no terminating decimal expansion: truncated to 3 places this is EXACTLY "0.333s",
@@ -769,12 +772,153 @@ void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expecta
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+void testAutoFollowsFitResize(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(
+        document::makeNewProject("Fit resolution", "Main", core::RationalTime::fromInteger(1)));
+    fixture.viewer.show();
+    expectations.expect(fixture.controller.resolutionDivisor() == 4,
+                        "a small fitted 1080p viewer chooses Quarter");
+    fixture.viewer.resize(800, 500);
+    expectations.expect(fixture.controller.resolutionDivisor() == 2,
+                        "enlarging the fitted viewer raises Auto to Half");
+    if (!fixture.controller.state().desiredIdentity.has_value()) {
+        std::abort();
+    }
+    const auto generation = fixture.controller.state().desiredIdentity->requestGeneration;
+    fixture.viewer.resize(850, 500);
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->requestGeneration ==
+                                generation,
+                        "a resize within Half does not request another frame");
+    fixture.viewer.resize(1200, 800);
+    expectations.expect(fixture.controller.resolutionDivisor() == 1,
+                        "a large fitted viewer raises Auto to Full");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+void testProxyPaintingAndAutoZoom(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(160, 120);
+    if (!format.has_value()) {
+        std::abort();
+    }
+    ViewerFixture fixture(document::makeNewProject("Proxy display geometry", "Main",
+                                                   core::RationalTime::fromInteger(1), *format));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Blue"), core::Color4d{0.0, 0.0, 1.0, 1.0}),
+        "the proxy painting fixture has opaque content");
+    fixture.viewer.show();
+    fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "Full is ready at actual size");
+    const auto fullImage = fixture.viewer.grab().toImage();
+    const auto interior = fullImage.pixelColor(130, 150);
+    expectations.expect(interior != fullImage.pixelColor(100, 150),
+                        "the sample lies inside the full composition");
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "fixed Quarter is ready");
+    const auto proxyImage = fixture.viewer.grab().toImage();
+    expectations.expect(proxyImage.pixelColor(130, 150) == interior,
+                        "Quarter upscales to the same actual-size composition rectangle");
+    const auto proxyView = fixture.controller.state().frame->displayBufferView();
+    expectations.expect(proxyView.has_value() && proxyView->displayWindow.extent().width() == 40,
+                        "the painted proxy really has quarter-width pixels");
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Auto);
+    fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "Auto at 25 percent is ready");
+    expectations.expect(
+        fixture.controller.resolutionDivisor() == 4 &&
+            fixture.viewer.statusBarReadoutTextForTest().startsWith(QStringLiteral("Auto · ¼")),
+        "the footer readout names the effective Auto factor");
+    QWheelEvent wheel(QPointF(200.0, 150.0), QPointF(200.0, 150.0), QPoint(), QPoint(0, 120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(&fixture.viewer, &wheel);
+    expectations.expect(
+        fixture.controller.resolutionDivisor() == 2 &&
+            fixture.viewer.statusBarReadoutTextForTest().startsWith(QStringLiteral("Auto · ½")),
+        "wheel zoom past Quarter raises Auto to Half and updates the readout");
+    if (!fixture.controller.state().desiredIdentity.has_value()) {
+        std::abort();
+    }
+    const auto generation = fixture.controller.state().desiredIdentity->requestGeneration;
+    QCoreApplication::sendEvent(&fixture.viewer, &wheel);
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->requestGeneration ==
+                                generation,
+                        "another wheel step within Half leaves the request alone");
+    fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
+    expectations.expect(fixture.controller.resolutionDivisor() == 1,
+                        "actual size restores Auto Full");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/resolution");
+    {
+        ViewerFixture fixture(makeTestProject("Resolution preference"));
+        auto* dropdown = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
+        expectations.expect(dropdown != nullptr, "the footer exposes a named Resolution dropdown");
+        if (dropdown == nullptr) {
+            reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+            return;
+        }
+        expectations.expect(dropdown->accessibleName() == QStringLiteral("Resolution") &&
+                                dropdown->count() == 4 &&
+                                dropdown->currentText() == QStringLiteral("Auto"),
+                            "Resolution defaults to Auto and offers four policies");
+        dropdown->setCurrentIndex(2);
+        expectations.expect(fixture.controller.settings().resolutionPolicy ==
+                                    runtime::PreviewResolutionPolicy::Half &&
+                                QSettings().value("viewer/resolution").toString() ==
+                                    QStringLiteral("Half"),
+                            "choosing Half updates the controller and preference");
+        auto* footer = fixture.viewer.takeFooterWidget();
+        footer->resize(800, ui::kit::px(ui::kit::Size::Control));
+        (void)footer->grab();
+        expectations.expect(dropdown->parentWidget() == footer &&
+                                dropdown->geometry().left() >
+                                    fixture.viewer.zoomDropdownForTest()->geometry().right(),
+                            "Resolution stays beside Zoom in the detached footer");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+    }
+    {
+        ViewerFixture restored(makeTestProject("Restored resolution"));
+        auto* dropdown = restored.viewer.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
+        expectations.expect(dropdown != nullptr &&
+                                dropdown->currentText() == QStringLiteral("Half") &&
+                                restored.controller.resolutionDivisor() == 2,
+                            "a new viewer restores Half");
+        reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
+    }
+    QSettings().setValue("viewer/resolution", QStringLiteral("invalid"));
+    {
+        ViewerFixture invalid(makeTestProject("Invalid resolution preference"));
+        expectations.expect(invalid.controller.settings().resolutionPolicy ==
+                                runtime::PreviewResolutionPolicy::Auto,
+                            "an unrecognized saved preference falls back to Auto");
+        reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
+    }
+    QSettings().remove("viewer/resolution");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QTemporaryDir settingsDirectory;
+    QCoreApplication::setOrganizationName("BloomTests");
+    QCoreApplication::setApplicationName("ViewerResolution");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
+    testResolutionDropdownPersistsAndMovesWithFooter(expectations);
+    testAutoFollowsFitResize(expectations);
+    testProxyPaintingAndAutoZoom(expectations);
     testSquarePixelFitting(expectations);
     testPixelAspectFitting(expectations);
     testDegenerateAvailableRect(expectations);

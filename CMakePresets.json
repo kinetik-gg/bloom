@@ -40,6 +40,17 @@
       "cacheVariables": {
         "BLOOM_BUILD_DESKTOP": "ON"
       }
+    },
+    {
+      "name": "desktop-release",
+      "displayName": "Bloom Linux desktop, optimized (for running the app)",
+      "inherits": "ci-linux-desktop",
+      "binaryDir": "${sourceDir}/build/desktop-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BLOOM_ENABLE_CLANG_TIDY": "OFF",
+        "BLOOM_ENABLE_TEST_CLANG_TIDY": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -54,6 +65,10 @@
     {
       "name": "ci-linux-desktop",
       "configurePreset": "ci-linux-desktop"
+    },
+    {
+      "name": "desktop-release",
+      "configurePreset": "desktop-release"
     }
   ],
   "testPresets": [
@@ -74,6 +89,13 @@
     {
       "name": "ci-linux-desktop",
       "configurePreset": "ci-linux-desktop",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "desktop-release",
+      "configurePreset": "desktop-release",
       "output": {
         "outputOnFailure": true
       }

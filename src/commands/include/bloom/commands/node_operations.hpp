@@ -81,14 +81,20 @@ class RenameLayer final : public Operation {
     std::string name_;
 };
 
+// The stack slot a link into Merge's ordered multi-input should land BEFORE, or nothing to append
+// at the bottom. Only meaningful for a `LayerStackInputRef` destination whose slot id is invalid --
+// the "a new slot here" sentinel (task FIX1, item B).
+inline constexpr std::string_view kConnectPortsSlotOutput = "layerSlot";
+
 class ConnectPorts final : public Operation {
   public:
     ConnectPorts(
         document::CompositionId compositionId, document::OutputPortRef source,
         document::InputPortRef destination,
-        const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions())
+        const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions(),
+        std::optional<document::LayerSlotId> insertBefore = std::nullopt)
         : compositionId_(compositionId), source_(std::move(source)),
-          destination_(std::move(destination)), registry_(registry) {}
+          destination_(std::move(destination)), registry_(registry), insertBefore_(insertBefore) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
@@ -97,6 +103,7 @@ class ConnectPorts final : public Operation {
     document::OutputPortRef source_;
     document::InputPortRef destination_;
     const document::NodeDefinitionRegistry& registry_;
+    std::optional<document::LayerSlotId> insertBefore_;
 };
 
 class DisconnectInput final : public Operation {

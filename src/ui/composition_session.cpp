@@ -648,6 +648,50 @@ bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, 
     return executePositionCommand(parameter->id, currentTime_, document::Vec2d{x, y}, commandLabel);
 }
 
+bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
+                                           document::ParameterValue value,
+                                           const QString& commandLabel) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    const auto* parameter = current == nullptr ? nullptr : current->parameters().find(parameterId);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
+        return false;
+    }
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source)) {
+        transaction.emplace<commands::SetParameterSource>(
+            compositionId_, parameterId, document::ConstantValueSource{std::move(value)});
+        return execute(std::move(transaction));
+    }
+    const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (animated == nullptr) {
+        reportUnavailable(
+            QStringLiteral("Disconnect the driven parameter before editing its value"));
+        return false;
+    }
+    // Only the three kinds a curve can carry reach a key; anything else on an animated parameter is
+    // a document inconsistency this command did not create, refused rather than silently flattened.
+    const bool queued = std::visit(
+        [&](const auto& held) {
+            using Held = std::decay_t<decltype(held)>;
+            if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
+                          std::is_same_v<Held, core::Color4d>) {
+                transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animated->curveId,
+                                                                 currentTime_, held);
+                return true;
+            } else {
+                return false;
+            }
+        },
+        value);
+    if (!queued) {
+        reportUnavailable(QStringLiteral("This parameter's kind cannot carry a keyframe"));
+        return false;
+    }
+    return execute(std::move(transaction));
+}
+
 bool CompositionSession::setSelectedAnchor(const double x, const double y) {
     return setSelectionVec2Parameter(document::kAnchorParameterRole, x, y,
                                      QStringLiteral("Set Anchor"));

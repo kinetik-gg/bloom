@@ -590,19 +590,24 @@ void testAddFromTheCanvasIsOneUndoableCommand(Expectations& expectations) {
         return;
     }
 
+    // ADAPTED (task FIX1, item B): the canvas's Add creates exactly the node asked for. No Layer
+    // Output, no stack slot, no edges -- "new text or any other object should not assume we want to
+    // merge it", and the artist wires it.
     const auto nodesBefore = fixture.session.composition()->graph().nodes().size();
+    const auto edgesBefore = fixture.session.composition()->graph().edges().size();
     addSolidAction->trigger();
-    expectations.expect(fixture.session.composition()->graph().layerStack().entries().size() == 1,
-                        "Add > Solid on the canvas creates one layer through the command layer");
-    expectations.expect(fixture.session.composition()->graph().nodes().size() > nodesBefore,
-                        "and the projection grows with the new nodes");
-    expectations.expect(fixture.session.undoLabel() == QStringLiteral("Add Solid Layer"),
-                        "through the exact command the timeline's own Add menu uses");
+    expectations.expect(fixture.session.composition()->graph().layerStack().entries().empty(),
+                        "Add > Solid on the canvas creates no stack slot");
+    expectations.expect(fixture.session.composition()->graph().nodes().size() == nodesBefore + 1 &&
+                            fixture.session.composition()->graph().edges().size() == edgesBefore,
+                        "and adds exactly one node with no edges of its own");
+    expectations.expect(fixture.session.undoLabel() == QStringLiteral("Add Node"),
+                        "through the one primitive the canvas Add uses for every kind");
 
     expectations.expect(fixture.session.undo(), "the canvas Add is undoable");
     expectations.expect(fixture.session.composition()->graph().layerStack().entries().empty() &&
                             fixture.session.composition()->graph().nodes().size() == nodesBefore,
-                        "ONE undo step removes the whole layer the gesture created");
+                        "ONE undo step removes the node the gesture created");
     menu->deleteLater();
 }
 

@@ -738,14 +738,18 @@ void testReachableSchemaDiagnostics(Expectations& expectations) {
     populateRegistry(registry);
     registry.freeze();
 
+    // ADAPTED (task FIX1, item B): a Layer Output's content input is OPTIONAL now, because an
+    // artist wires a Layer node up by hand and "added but not yet fed" is an ordinary intermediate
+    // state. The layer is classified as an empty image instead of failing the compile, so the
+    // composition still produces a frame -- one in which that layer draws nothing.
     auto missingInputOptions = singleLayerOptions();
     missingInputOptions.omitFirstSourceEdge = true;
     const auto missingInput = compile(makeProject(std::move(missingInputOptions)), registry);
-    expectations.expect(missingInput.status == runtime::SnapshotCompileStatus::Failed &&
-                            hasDiagnostic(missingInput,
-                                          runtime::CompileDiagnosticCode::MissingInput,
-                                          kFirstLayerNode),
-                        "required fixed inputs are validated by the compiler schema");
+    expectations.expect(
+        missingInput.status == runtime::SnapshotCompileStatus::Compiled &&
+            !hasDiagnostic(missingInput, runtime::CompileDiagnosticCode::MissingInput,
+                           kFirstLayerNode),
+        "an unfed Layer Output compiles to nothing rather than failing the compile");
 
     auto wrongPortOptions = singleLayerOptions();
     wrongPortOptions.firstSourcePort = "pixels";

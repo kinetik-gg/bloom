@@ -35,12 +35,19 @@ using bloom::document::SocketValueKind;
     return {std::string(name), kind};
 }
 
-// An operand's backing parameter. supportsAnimation is always false: no value schema is animatable,
-// because a value graph already lets an artist shape a number upstream of the operand.
+// An operand's backing parameter. supportsAnimation is read from the schema predicates rather than
+// spelled here, so a definition cannot drift from document::isAnimatableSchemaKey() -- which after
+// task FIX1, item G accepts the Scalar, Vector 2 and Colour LITERALS and nothing else in this
+// library. Every generic operand schema is still constant-or-driven.
 [[nodiscard]] ParameterDefinition parameter(const std::string_view role,
                                             const std::string_view schemaKey,
                                             const ParameterValueKind kind, ParameterValue value) {
-    return {std::string(role), std::string(schemaKey), kind, true, false, std::move(value)};
+    return {std::string(role),
+            std::string(schemaKey),
+            kind,
+            true,
+            bloom::document::isAnimatableSchemaKey(schemaKey),
+            std::move(value)};
 }
 
 struct KindVocabulary final {
@@ -496,7 +503,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         return false;
     }
     const bool carriesImages = definition.lowering == NodeLoweringKind::ValueReroute &&
-                               definition.key.typeId == kImageRerouteNodeType;
+                               isRerouteNodeType(definition.key.typeId);
     for (const auto& output : definition.outputs) {
         if ((output.valueKind == SocketValueKind::Image) != carriesImages) {
             return false;
@@ -526,9 +533,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         }
     }
     for (const auto& declared : definition.parameters) {
-        // No value schema is animatable; a definition claiming otherwise would promise a curve kind
-        // that does not exist.
-        if (declared.supportsAnimation) {
+        // Animatability is the schema predicates' answer, never a second opinion: a definition that
+        // claimed a curve kind the document does not have would promise an editor gesture that
+        // cannot be carried out.
+        if (declared.supportsAnimation != isAnimatableSchemaKey(declared.schemaKey)) {
             return false;
         }
         const auto socket =
@@ -676,14 +684,11 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
 
     definitions.push_back(randomDefinition());
 
-    definitions.push_back(rerouteDefinition(kImageRerouteNodeType, SocketValueKind::Image));
-    definitions.push_back(rerouteDefinition(kScalarRerouteNodeType, SocketValueKind::Scalar));
-    definitions.push_back(rerouteDefinition(kIntegerRerouteNodeType, SocketValueKind::Integer));
-    definitions.push_back(rerouteDefinition(kBooleanRerouteNodeType, SocketValueKind::Boolean));
-    definitions.push_back(rerouteDefinition(kVector2RerouteNodeType, SocketValueKind::Vector2));
-    definitions.push_back(rerouteDefinition(kVector3RerouteNodeType, SocketValueKind::Vector3));
-    definitions.push_back(rerouteDefinition(kColorRerouteNodeType, SocketValueKind::Color));
-    definitions.push_back(rerouteDefinition(kStringRerouteNodeType, SocketValueKind::String));
+    // ONE reroute (task FIX1, item I). Its DECLARED kind is Image only because a definition must
+    // name one; the kind a reroute actually carries is resolved from the link it sits on, which is
+    // what CanonicalGraph::outputKind()/inputKind() answer for this type and what every
+    // connect-time and compile-time check therefore asks.
+    definitions.push_back(rerouteDefinition(kRerouteNodeType, SocketValueKind::Image));
     return definitions;
 }
 

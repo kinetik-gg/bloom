@@ -415,10 +415,13 @@ class CompilePass final {
                        "The endpoint must name a Composition Output image port.");
             return;
         }
+        // The endpoint names the node that ENDS the composition, and the port string is how the
+        // document has always spelled that endpoint -- not a socket. Task FIX1, item H made the
+        // Output node a sink with no declared output port, so the lowering is what is checked here;
+        // the port spelling is pinned by the equality test above.
         const auto definition = definitions_.find(endpoint.nodeId);
         if (definition != definitions_.end() &&
-            (definition->second->lowering != runtime::NodeLoweringKind::CompositionOutput ||
-             findOutput(*definition->second, endpoint.port) == nullptr)) {
+            definition->second->lowering != runtime::NodeLoweringKind::CompositionOutput) {
             addFailure(runtime::CompileDiagnosticCode::InvalidCompositionOutput,
                        subject(endpoint.nodeId, "compositionOutput"),
                        "Composition output endpoint is invalid",

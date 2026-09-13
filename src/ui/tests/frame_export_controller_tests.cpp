@@ -11,11 +11,13 @@
 #include <bloom/output/flat_exr_reopen_verifier.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -346,6 +348,24 @@ void testFullDriveApprovedAndPublished(Expectations& expectations) {
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.25, 0.5, 0.75, 1.0}),
         "full drive: the solid layer is added");
+
+    const runtime::CpuCompositionEvaluator previewEvaluator;
+    const runtime::CpuReferenceDisplayPreparer previewPreparer;
+    runtime::QualifiedDisplayProcessorProvider previewProvider;
+    bloom::ui::CompositionPreviewController preview(
+        fixture.session, fixture.scheduler, fixture.bridge,
+        bloom::ui::makeCompositionPreviewPipeline(fixture.compiler, previewEvaluator,
+                                                  previewPreparer, previewProvider),
+        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter});
+    expectations.expect(
+        waitUntil([&] { return preview.state().activity == bloom::ui::PreviewActivity::Ready; }),
+        "Quarter preview is ready before exporting at Full");
+    const auto previewBuffer = preview.state().frame == nullptr
+                                   ? std::nullopt
+                                   : preview.state().frame->displayBufferView();
+    expectations.expect(previewBuffer.has_value() &&
+                            previewBuffer->displayWindow.extent().width() == 1,
+                        "the viewer's actual preview buffer is reduced to Quarter");
 
     const auto target = fixture.directory.path() / "published.exr";
     fixture.controller().setDestinationProvider(
@@ -826,6 +846,24 @@ void testFrameRangeExportsEveryFrameAtItsOwnTime(Expectations& expectations) {
     if (!fixture.setUp(expectations, "frame range: fixture is available")) {
         return;
     }
+
+    const runtime::CpuCompositionEvaluator previewEvaluator;
+    const runtime::CpuReferenceDisplayPreparer previewPreparer;
+    runtime::QualifiedDisplayProcessorProvider previewProvider;
+    bloom::ui::CompositionPreviewController preview(
+        fixture.session, fixture.scheduler, fixture.bridge,
+        bloom::ui::makeCompositionPreviewPipeline(fixture.compiler, previewEvaluator,
+                                                  previewPreparer, previewProvider),
+        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter});
+    expectations.expect(
+        waitUntil([&] { return preview.state().activity == bloom::ui::PreviewActivity::Ready; }),
+        "Quarter preview is ready before exporting at Full");
+    const auto previewBuffer = preview.state().frame == nullptr
+                                   ? std::nullopt
+                                   : preview.state().frame->displayBufferView();
+    expectations.expect(previewBuffer.has_value() &&
+                            previewBuffer->displayWindow.extent().width() == 1,
+                        "the viewer's actual preview buffer is reduced to Quarter");
 
     // Black at frame 0, white at frame 3, animated in between.
     expectations.expect(

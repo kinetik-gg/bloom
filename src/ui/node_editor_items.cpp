@@ -122,14 +122,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
         LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
         LibraryName{document::kRandomNodeType, "Random"},
-        LibraryName{document::kImageRerouteNodeType, "Reroute Image"},
-        LibraryName{document::kScalarRerouteNodeType, "Reroute Scalar"},
-        LibraryName{document::kIntegerRerouteNodeType, "Reroute Integer"},
-        LibraryName{document::kBooleanRerouteNodeType, "Reroute Boolean"},
-        LibraryName{document::kVector2RerouteNodeType, "Reroute Vector 2"},
-        LibraryName{document::kVector3RerouteNodeType, "Reroute Vector 3"},
-        LibraryName{document::kColorRerouteNodeType, "Reroute Color"},
-        LibraryName{document::kStringRerouteNodeType, "Reroute String"},
+        LibraryName{document::kRerouteNodeType, "Reroute"},
     };
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
@@ -153,9 +146,27 @@ QString nodeDisplayName(const document::Composition& composition,
 // A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
 // of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
 QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node) {
-    for (const auto& boundary : composition.graph().layerOutputs())
-        if (boundary.nodeId == node.id && !boundary.name.empty())
+    for (const auto& boundary : composition.graph().layerOutputs()) {
+        if (boundary.nodeId != node.id || boundary.name.empty())
+            continue;
+        const auto* parameter =
+            parameterForRole(node, composition, document::kBlendModeParameterRole);
+        const auto* constant = parameter == nullptr
+                                   ? nullptr
+                                   : std::get_if<document::ConstantValueSource>(&parameter->source);
+        const auto* stored =
+            constant == nullptr ? nullptr : std::get_if<std::int64_t>(&constant->value);
+        const auto mode =
+            stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
+        // Task FIX1, item E: the blend mode joins the eyebrow. It is the one layer property with no
+        // visible trace on the card when its widget is a dropdown among six rows, and an artist who
+        // has set a layer to Screen should be able to see that from the card rather than by opening
+        // the row.
+        if (!mode.has_value() || *mode == core::kDefaultBlendMode)
             return nodeTypeDisplayName(document::kLayerOutputNodeType);
+        return nodeTypeDisplayName(document::kLayerOutputNodeType) + QStringLiteral(" · ") +
+               blendModeDisplayName(*mode);
+    }
     return {};
 }
 
@@ -235,6 +246,22 @@ kit::KValueField* makeCardField(const QString& objectName, const QString& access
 
 void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) {
     const QRectF bounds = cardRect();
+    if (reroute_) {
+        // A dot in the kind's own colour, ringed like a socket so it reads as part of the wire,
+        // with the selection outline the cards use so selecting one is the same gesture and the
+        // same ink.
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const auto kind =
+            sockets_.empty() ? document::SocketValueKind::Image : sockets_.front()->kind;
+        painter->setPen(
+            QPen(kit::color(option->state.testFlag(QStyle::State_Selected)
+                                ? (primary_ ? kit::Color::Foreground : kit::Color::Accent)
+                                : kit::Color::Surface),
+                 kSelectionEdgeWidth));
+        painter->setBrush(kit::color(socketColorToken(kind)));
+        painter->drawEllipse(bounds.center(), kRerouteDiameter / 2.0, kRerouteDiameter / 2.0);
+        return;
+    }
     const auto radiusToken = layout_.collapsed ? kit::Radius::Full : kCardRadius;
     const bool selected = option->state.testFlag(QStyle::State_Selected);
     painter->setRenderHint(QPainter::Antialiasing, true);
@@ -436,10 +463,9 @@ QPainterPath linkPath(const QPointF start, const QPointF end) {
 SocketItem::SocketItem(const document::NodeId node, QString portName,
                        const document::SocketValueKind valueKind,
                        std::optional<document::InputPortRef> inputRef,
-                       std::optional<document::OutputPortRef> outputRef, const bool structural,
-                       QGraphicsItem* parent)
+                       std::optional<document::OutputPortRef> outputRef, QGraphicsItem* parent)
     : QGraphicsItem(parent), name(std::move(portName)), kind(valueKind), input(std::move(inputRef)),
-      output(std::move(outputRef)), structural_(structural) {
+      output(std::move(outputRef)) {
     setData(kNodeItemKindRole, QStringLiteral("socket"));
     setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(node.value()));
     setData(kNodeSocketNameRole, name);
@@ -448,11 +474,7 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
     setAcceptedMouseButtons(Qt::LeftButton);
     setZValue(2);
     setCursor(draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
-    QString tip = name + QStringLiteral(" · ") + socketKindName(kind);
-    if (structural)
-        tip += QStringLiteral("\nStructural Layer Output / stack-slot boundary; remove the layer "
-                              "to remove this connection");
-    description_ = tip;
+    description_ = name + QStringLiteral(" · ") + socketKindName(kind);
     setAuthoringEnabled(true);
 }
 
@@ -487,10 +509,16 @@ QPainterPath SocketItem::shape() const {
 void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
     prepareGeometryChange();
     orderedInputs_ = std::move(inputs);
-    if (multiInput()) {
-        description_ += QStringLiteral("\nOrdered multi-input: %1 in stack order, topmost first")
-                            .arg(orderedInputs_.size());
-    }
+    stackPill_ = true;
+    description_ =
+        orderedInputs_.empty()
+            ? name + QStringLiteral(" · ") + socketKindName(kind) +
+                  QCoreApplication::translate(
+                      "node_editor", "\nOrdered multi-input: empty; drop a Layer output here")
+            : name + QStringLiteral(" · ") + socketKindName(kind) +
+                  QCoreApplication::translate(
+                      "node_editor", "\nOrdered multi-input: %1 in stack order, topmost first")
+                      .arg(orderedInputs_.size());
     setToolTip(description_);
     update();
 }
@@ -507,8 +535,24 @@ void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {
     update();
 }
 
+std::optional<document::LayerSlotId> SocketItem::slotInsertionAt(const QPointF localPoint) const {
+    const auto index = slotIndexAt(localPoint);
+    if (!index.has_value())
+        return std::nullopt;
+    // The caret sits ON a slot; a pointer in that slot's upper half means "above it", and in its
+    // lower half "below it" -- which for the last slot is an append.
+    const qreal pitch = pillLength() / static_cast<qreal>(orderedInputs_.size());
+    const qreal top = -pillLength() / 2.0 + pitch * static_cast<qreal>(*index);
+    const bool below = localPoint.y() > top + pitch / 2.0;
+    const auto target = below ? *index + 1 : *index;
+    if (target >= orderedInputs_.size())
+        return std::nullopt;
+    const auto* slot = std::get_if<document::LayerStackInputRef>(&orderedInputs_[target]);
+    return slot == nullptr ? std::nullopt : std::optional(slot->slotId);
+}
+
 std::optional<std::size_t> SocketItem::slotIndexAt(const QPointF localPoint) const {
-    if (!multiInput() || !shape().contains(localPoint))
+    if (!multiInput() || orderedInputs_.empty() || !shape().contains(localPoint))
         return std::nullopt;
     const qreal length = pillLength();
     const qreal pitch = length / static_cast<qreal>(orderedInputs_.size());
@@ -531,10 +575,14 @@ QColor SocketItem::paintedInk() const {
     return base;
 }
 
-void SocketItem::setDragAffinity(const DragAffinity affinity) {
-    if (affinity_ == affinity)
+void SocketItem::setDragAffinity(const DragAffinity affinity, const QString& refusal) {
+    const QString tip = affinity == DragAffinity::Incompatible && !refusal.isEmpty()
+                            ? description_ + QStringLiteral("\n") + refusal
+                            : description_;
+    if (affinity_ == affinity && toolTip() == tip)
         return;
     affinity_ = affinity;
+    setToolTip(tip);
     update();
 }
 
@@ -553,6 +601,8 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
     const qreal length = pillLength();
     const QRectF pill(-radius, -length / 2.0, radius * 2.0, length);
     painter->drawRoundedRect(pill, radius, radius);
+    if (orderedInputs_.empty())
+        return;
     // Not named `slots`: Qt's moc keyword macro takes that identifier.
     const auto slotCount = static_cast<qreal>(orderedInputs_.size());
     kit::applyHairlinePen(*painter, kit::color(kit::Color::Surface));
@@ -593,9 +643,17 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
     const auto* definition = registry.find(node.typeId, node.schemaVersion);
     if (!definition)
         return;
-    const bool boundary =
-        std::ranges::any_of(composition.graph().layerOutputs(),
-                            [&](const auto& layer) { return layer.nodeId == node.id; });
+    // A reroute's sockets take the kind of the link it sits on (task FIX1, item I); the
+    // definition's declared Image is only the placeholder a definition must name. An unconnected
+    // reroute keeps the placeholder for painting and accepts anything, which is what its own
+    // kind-less state means.
+    const auto rerouteKind = document::isRerouteNodeType(node.typeId)
+                                 ? composition.graph().rerouteKind(node.id, registry)
+                                 : std::nullopt;
+    const auto kindOf = [&rerouteKind](const document::SocketValueKind declared) {
+        return rerouteKind.value_or(declared);
+    };
+    const bool kindless = document::isRerouteNodeType(node.typeId) && !rerouteKind.has_value();
     for (const auto& port : definition->inputs) {
         document::InputPortRef input = document::NodeInputRef{node.id, port.name};
         // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
@@ -619,29 +677,35 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         if (linked)
             linkedInputs_.insert(QString::fromStdString(port.name));
         sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
-                                          port.valueKind, input, std::nullopt, false, this));
+                                          kindOf(port.valueKind), input, std::nullopt, this));
+        sockets_.back()->setAcceptsAnyKind(kindless);
     }
     if (definition->layerSlotInput && node.id == composition.graph().layerStack().nodeId()) {
         // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
         // slot. The slot model underneath is exactly as it was -- these are its own slots, in its
         // own order -- and every edge that terminates on any of them terminates on this one socket.
+        //
+        // Task FIX1, item B: the pill exists even when the stack is EMPTY, and its own `input` is
+        // the invalid-slot sentinel that ConnectPorts reads as "make a new slot here". Without it a
+        // fresh composition's Merge node had no port at all and the artist had nothing to wire the
+        // first layer into.
         const auto& port = *definition->layerSlotInput;
         const auto entries = composition.graph().layerStack().entries();
-        if (!entries.empty()) {
-            std::vector<document::InputPortRef> ordered;
-            ordered.reserve(entries.size());
-            for (const auto& slot : entries)
-                ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
-            auto* pill = new SocketItem(node.id, QString::fromStdString(port.role), port.valueKind,
-                                        ordered.front(), std::nullopt, true, this);
-            pill->setOrderedInputs(std::move(ordered));
-            sockets_.push_back(pill);
-        }
+        std::vector<document::InputPortRef> ordered;
+        ordered.reserve(entries.size());
+        for (const auto& slot : entries)
+            ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
+        auto* pill = new SocketItem(
+            node.id, QString::fromStdString(port.role), port.valueKind,
+            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
+            this);
+        pill->setOrderedInputs(std::move(ordered));
+        sockets_.push_back(pill);
     }
     for (const auto& port : definition->outputs)
-        sockets_.push_back(
-            new SocketItem(node.id, QString::fromStdString(port.name), port.valueKind, std::nullopt,
-                           document::OutputPortRef{node.id, port.name}, boundary, this));
+        sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
+                                          port.valueKind, std::nullopt,
+                                          document::OutputPortRef{node.id, port.name}, this));
 }
 
 NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output,
@@ -654,8 +718,10 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     setAcceptHoverEvents(true);
     setAcceptedMouseButtons(Qt::NoButton);
     setZValue(-1);
-    if (structural)
-        setToolTip(output.draggable() ? input.toolTip() : output.toolTip());
+    // Every link names both of its ends (task FIX1, item C), so hovering a wire in a dense graph
+    // says what it connects instead of leaving the artist to trace it.
+    setToolTip(QCoreApplication::translate("node_editor", "%1 · %2  →  %3 · %4")
+                   .arg(source.title(), output.name, destination.title(), input.name));
     source_.addEdge(*this);
     destination_.addEdge(*this);
     updatePath();

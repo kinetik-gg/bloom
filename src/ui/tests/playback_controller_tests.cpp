@@ -256,6 +256,57 @@ void testPlayAdvancesExactFrameTimesAndDropsFrames(Expectations& expectations) {
 
 // Controller test 2: loop wrap at duration is exact -- no drift after several wraps, verified by
 // exact RationalTime equality (never an approximate/epsilon comparison).
+// Task PERF1, item 4: the frame-accurate clock. A cached next frame costs a lookup, so the
+// transport has nothing to drop and must not skip -- it advances exactly one frame, even when
+// several frame durations have already elapsed. An uncached next frame keeps the original
+// drop-not-slow jump, and the two clocks have to be able to alternate within one run.
+void testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Cached Playback Clock", time(4)));
+    ManualClock clock;
+    bool framesAreCached = true;
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms,
+        [&framesAreCached](std::uint64_t) { return framesAreCached; });
+
+    playback.play();
+    clock.advance(200'000'000ns); // exactly five 25 fps frames
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(1, 25),
+                        "a cached next frame advances exactly one frame, however far behind the "
+                        "transport is");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(2, 25),
+                        "the frames the transport owes are played rather than skipped");
+    playback.tick();
+    playback.tick();
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(5, 25),
+                        "paying the debt off stops exactly where elapsed time asks, never past it");
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(5, 25),
+                        "a caught-up cached transport waits for the next frame to come due");
+    clock.advance(40'000'000ns);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(6, 25),
+                        "the due moment is still total elapsed time since play(), so presentations "
+                        "track the ideal frame grid");
+
+    // The same run, with the cache no longer answering: the original elapsed-time policy comes back
+    // and the next tick skips straight to the frame the wall clock demands.
+    framesAreCached = false;
+    clock.advance(200'000'000ns);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(11, 25),
+                        "an uncached next frame keeps the drop-frames-never-slow jump");
+
+    playback.pause();
+    expectations.expect(fixture.controller.droppedFrameCount() == 0 ||
+                            !fixture.controller.isCountingDroppedFrames(),
+                        "the frame-accurate clock never asks the preview path to drop anything");
+    finishFixture(fixture, expectations);
+}
+
 void testLoopWrapExactAfterManyWraps(Expectations& expectations) {
     using namespace bloom;
     // 4 seconds @ 25 fps == 100 frames per loop (frame indices 0..99).
@@ -566,7 +617,7 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("playbackTestProbeLineEdit");
     layout->addWidget(editor);
@@ -800,7 +851,7 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("frameStepTestProbeLineEdit");
     layout->addWidget(editor);
@@ -875,7 +926,7 @@ void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& exp
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     layout->addWidget(editor);
     host.show();
     host.activateWindow();
@@ -987,6 +1038,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
+    testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(expectations);
     testLoopWrapExactAfterManyWraps(expectations);
     testPauseFreezesAndResumeUsesCurrentSessionTime(expectations);
     testScrubDuringPlaybackPauses(expectations);

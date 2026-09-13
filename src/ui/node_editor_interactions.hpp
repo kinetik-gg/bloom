@@ -9,7 +9,7 @@ namespace bloom::ui {
 // This is transient canvas state. Frozen revision and stable IDs prevent a gesture from editing
 // replacement project content. No draft, mutable document or command stack is retained by UI.
 struct NodeInteraction final {
-    enum class Mode { Idle, Move, Resize, Box, Link, Cut };
+    enum class Mode { Idle, Move, Resize, Box, Link, Cut, Reroute };
     Mode mode = Mode::Idle;
     document::Revision revision;
     QPointF origin;

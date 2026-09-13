@@ -47,6 +47,12 @@ A `Layer Output` is an explicit graph node or equivalent first-class boundary th
 `LayerId`. It declares that one image-producing graph result participates as a layer and exposes the
 standard layer-facing property bindings that apply at that boundary.
 
+Its content input is OPTIONAL, and so is its stack slot. An artist wires a Layer node up by hand, so
+"added but not yet fed" and "fed but not yet in the stack" are ordinary intermediate states, not
+compositions the compiler refuses to compile: an unfed Layer Output is classified as an empty image and
+draws nothing, and a Layer Output with no slot is simply unreachable from the composition output. The
+compile reports no diagnostic for either -- there is nothing wrong with a half-built graph.
+
 Deleting or bypassing the boundary may remove the corresponding timeline row and therefore requires
 a clear topology preview or warning. An explicit future `Create Layer from Selection` command may
 insert a boundary around an existing output, but it must reference the existing graph rather than
@@ -57,6 +63,14 @@ copy or translate it.
 A `Layer Stack` is a native graph operator with one ordered collection of stable entries. Each layer
 entry has a stable slot ID. Graph connections target `(stack node ID, slot ID, input role)`, never an
 array index such as `input 3`.
+
+Entry ZERO is the TOPMOST layer: the stack folds from its last entry to its first, so the entry list
+reads in the order the Timeline lists its rows and the Merge pill draws its segments. A newly added
+layer therefore lands at the FRONT of the list, on top of everything already there -- `AddSolidLayer`
+and `AddTextLayer` insert it there rather than appending. Appending put every new layer underneath
+every existing one, which is why an artist who added a layer and changed its blend mode saw nothing
+change: the layer they had just made had only the composition's transparent backdrop beneath it, and
+over transparency every separable mode folds to Normal.
 
 Reordering a layer changes only the ordered entry structure. Source, matte, parent, parameter, and
 selection references use stable IDs and must not change merely because the row moved.
@@ -416,9 +430,18 @@ inside the field. `docs/ux/interaction-model.md` remains the binding key list.
 ## Node Authoring Commands
 
 `AddNode(typeId, layoutPosition)` creates one node at a finite position and independent parameter
-records from the frozen registry's latest definition defaults. Even source and Layer Output types
-stay graph-only: this command never creates a layer boundary or slot. `AddSolidLayer` and
-`AddTextLayer` are the structured layer constructors, and both build the same topology.
+records from the frozen registry's latest definition defaults. A source type stays graph-only: no
+boundary, no slot, no edges. A **Layer Output** type also gets its layer IDENTITY here -- a `LayerId`,
+a boundary record, and the name `Layer N` -- but still no stack slot. That split is deliberate: a card
+on the canvas has to have a name to rename and a `LayerId` for Properties and the Timeline to address
+the moment it exists, while the thing that makes a layer DRAW is its stack slot, and the Timeline
+therefore lists a layer only once it has one. `AddSolidLayer` and `AddTextLayer` remain the structured
+layer constructors the TIMELINE's Add menu uses, and both build the same topology.
+
+The NODE CANVAS's own Add (Tab search, context menu) creates exactly the node asked for, through
+`AddNode`, for every type including Solid and Text. An artist wiring a source into a Layer and a Layer
+into Merge is making two decisions, and a canvas Add that made them for them was the substance of the
+owner's second report.
 
 `RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
 layout records, and parameters that no surviving node references. Orphaned owned animation curves
@@ -437,20 +460,32 @@ that topology is rejected by graph validation.
 `RenameLayer(LayerId, name)` changes the boundary's valid, nonempty UTF-8 human-facing name while
 preserving every graph and stack identity. An identical name is a no-op.
 
-`ConnectPorts(OutputPortRef, InputPortRef)` requires existing registered sockets of equal kind.
-It replaces the existing edge at that input, retaining its EdgeId, or allocates one new edge.
-The entire proposed graph is validated before publication; same-time cycles are refused with
-`GraphCycle`. A slot's content must still come from its matching Layer Output boundary.
+`ConnectPorts(OutputPortRef, InputPortRef, registry, insertBefore)` requires existing registered
+sockets of connectable kind. It replaces the existing edge at that input, retaining its EdgeId, or
+allocates one new edge. A link into an OPERAND socket is written as the parameter's driver binding
+rather than as an edge. The entire proposed graph is validated before publication; same-time cycles
+are refused with `GraphCycle`. A slot's content must still come from its matching Layer Output
+boundary.
 
-`DisconnectInput(InputPortRef)` removes the edge at an existing input; an unconnected input is a
-no-op. Disconnecting a mandatory stack-slot boundary edge is refused because it would violate the
-canonical stack invariant; removing the boundary uses `RemoveNodes` instead.
+A `LayerStackInputRef` destination whose `slotId` is the INVALID sentinel means "a new slot here":
+`ConnectPorts` allocates the slot, appends it, moves it before `insertBefore` when one is given, and
+connects the Layer Output's image output to it -- one transaction, one undo. The source must be a Layer
+Output boundary that does not already hold a slot. **Connecting a Layer to Merge is what creates its
+stack slot**, which is why the editor needs no separate command for it and why the Merge card carries
+its ordered multi-input even when the stack is empty.
+
+`DisconnectInput(InputPortRef)` removes the edge at an existing input, or restores an operand's
+registered default when the input is driven; an unconnected input is a no-op. On a **stack slot** it
+removes the slot along with the edge into it: a slot with nothing in it is not a shape the canonical
+graph admits, so the slot and the link into it are one thing to the artist and one thing here. The
+Layer node keeps its boundary and `LayerId`, so reconnecting it is one gesture rather than a rebuild.
 
 `DissolveNode(NodeId)` requires a registered first Image input/output pair and a connected input.
 It removes the node and reconnects the input source to every consumer of the first Image output,
-keeping those consumer edge IDs. Other incident edges, layout, and orphaned parameters are removed.
-Protected stack/output nodes and participating Layer Outputs cannot be dissolved while preserving
-the required boundary/slot topology; those requests are refused explicitly.
+keeping those consumer edge IDs. A consumer that is a stack SLOT is not reconnected: the slot belongs
+to the layer, and the layer goes with its boundary node -- so dissolving a participating Layer Output
+takes that layer out of the stack, which is what the gesture means. Protected stack/output nodes are
+still refused.
 
 `MoveNodes(map<NodeId, Vec2d>)` validates every node and finite position before changing the layout
 map. `SetNodeCollapsed`, `SetNodeMuted`, and `SetNodeWidth` change one layout field; width must be
@@ -496,7 +531,9 @@ way it always has -- that fallback is what `node_editor::displayTypeName()` is f
 `nodeTypeDisplayName()` is the node-type layer above it.
 
 A layer boundary card is named after its layer, so the card alone would no longer say what kind of
-node it is; the eyebrow is the one line that still says so.
+node it is; the eyebrow is the one line that still says so -- and it names the layer's BLEND MODE
+alongside it whenever that mode is not Normal, because a blend mode is otherwise the one layer
+property with no visible trace on a card whose rows are collapsed.
 
 ### Merge's Ordered Multi-Input
 
@@ -510,9 +547,11 @@ accepts that reference, so every slot edge is still projected as its own wire. N
 ordering record changes shape.
 
 While a link drag is in flight over the pill, a caret marks which position in the order the pointer is
-at. Stack slots remain structural, so the pill is dimmed as incompatible at the same moment and a
-release publishes nothing: the caret reports a position, never a landing. A gesture that could
-actually reorder or reconnect a slot needs a command that does not exist yet.
+at -- and the pill now ACCEPTS the drop, because a drop there is what creates the slot. A Layer
+output released on the pill lands a new slot at the caret's position (upper half of a slot means above
+it, lower half below it, past the last one appends). A press ON the pill picks up the link of the slot
+under the pointer, so a slot's content can be detached, transferred, or re-dropped at another position
+in the order; a press where there is no slot starts from the "new slot" sentinel instead.
 
 ### Node Categories
 
@@ -528,6 +567,22 @@ Add surfaces list entries in that category order and alphabetically inside each 
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
 heading, and the list is exactly as tall as the rows and headings it holds.
 
+The canvas's own context menu offers those categories as a **cascading `Add Node` submenu**, one
+section per category in the same order, entries alphabetical inside each section, and every entry adds
+its node at the click position through the same path the search uses. A type the command layer would
+refuse -- a singleton already in the composition -- is listed DISABLED with the command's own refusal
+in its tooltip, read from a dry run of the add operation rather than from a second copy of the rule.
+The search popup belongs to Tab alone: right-clicking to add a node the artist can already name should
+not make them type it. Menu rows, the submenu caret and `Size::MenuMinWidth` come from the
+application-wide proxy style (`kit/mnemonic_style.hpp`), so these are ordinary `QMenu`s.
+
+A typed query reorders that list by RELEVANCE OF THE NAME, never of the keywords. An entry is still
+found by the socket kinds it carries -- that is what the keywords are for -- but a keyword match can
+never outrank a name match: sections are ordered by their own best name score and entries inside a
+section by theirs, so typing `Scalar` and pressing Enter adds the node CALLED Scalar rather than the
+first node in category order that happens to carry a Scalar socket. With no query typed, every score
+is equal and the category order above is exactly what the artist reads.
+
 ### Value Graph And Drivers
 
 A composition holds two graphs in one node set. The **image chain** produces pixels and is addressed
@@ -540,6 +595,24 @@ Reachability follows drivers as well as edges: a node whose parameter is driven 
 node that drives it. Those dependencies feed the SAME indegree map the edge set builds, so a cycle
 through a driver is refused by the one existing acyclic check rather than by a second rule that could
 disagree with it.
+
+A driver binding is DRAWN, exactly as an edge is. The canvas's link list is the graph's edges followed
+by one synthesized link per driver binding, rendered as the same item so hover emphasis, selection
+emphasis, the cut gesture and the pick-up gesture all reach a driver without a second code path. Such
+a link carries no `EdgeId` -- there is no edge to carry one -- so it is addressed by its DESTINATION,
+which is what `DisconnectInput` already takes. The pick-up gesture asks an input one question, "where
+does your value come from", and an edge and a driver binding are the two answers; dropping a picked-up
+driver on empty canvas restores the operand's registered default, in one undoable step.
+
+Pointer slop around a socket is an ARTIST's slop, not a scene measurement: the socket's own hit shape
+is fixed in scene units, so the canvas widens the grab radius by the view's inverse scale before
+resolving a press. A socket is therefore the same size under the pointer at every zoom, and never
+smaller than its painted hit shape. A hosted field keeps its own clicks -- the widened radius is tried
+only where no field is under the pointer.
+
+While a link drag is in flight, a socket that cannot take it carries the reason in its own tooltip --
+which way round the link would have to go, or which two kinds do not meet -- and drops that line again
+when the drag ends.
 
 #### Socket Kinds And Promotion
 
@@ -559,6 +632,31 @@ have to invent information. Every promotion compiles to its own operation rather
 into whoever reads the value, so a widening is visible in a plan dump and diagnosable like any other
 step. One predicate -- `document::isAcceptedSocketConnection()` -- answers for the editor's drag
 affinity, `ConnectPorts`, document validation and the compiler's edge check alike.
+
+#### Reroute Is A Point On A Link
+
+There is ONE reroute type, `bloom.reroute`, and it is not a kind of node an artist picks out of a
+menu. Its sockets take the kind of the link it sits on: `CanonicalGraph::rerouteKind()` follows the
+node's incoming link -- through a chain of reroutes -- to whatever feeds it, and both kind accessors
+answer with that for this type, so every connect-time and validation-time check asks one question.
+An UNCONNECTED reroute has NO kind, which is what lets the first link into one be accepted whatever
+it carries; every link after it is checked against what the reroute now holds.
+
+It is hidden from both Add surfaces, and made on a link instead: right-click the link and choose
+**Add Reroute**, or **Shift + right drag** a stroke across it. Either way it is one transaction -- add
+the node, feed it from the link's source, point the link's destination at it -- and therefore one
+undo. Disconnecting its last link removes it in the SAME transaction: a reroute is a bend in a wire,
+and once both ends are gone there is nothing left for it to be.
+
+It is drawn as a 10px dot in the kind's own colour, with no header, no name and no rows; its tooltip
+says what kind it carries, or that it is unconnected and will take the kind of the link it joins. A
+reroute carrying an image is ELIDED in the image pass exactly as a muted node is; one carrying a
+number is compiled into the value pass. Both are the same pass-through evaluation the eight per-kind
+reroutes had.
+
+The eight it replaces -- `bloom.reroute-image` and its seven siblings -- are rewritten to
+`bloom.reroute` on decode. Nothing else changes: the kind each of them named is exactly the kind its
+own incoming link already carries.
 
 #### Node Library
 
@@ -597,16 +695,57 @@ explained, the same way a missing module or a mute bypass already behaves.
 | Reversed Clamp bounds | The value UNCLAMPED; passing it through is visibly wrong, where silently swapping the bounds would look correct |
 | Frame number not representable at the request time | `0`, reported |
 
+#### Animatable Value Literals
+
+A literal **Scalar**, **Vector 2** and **Colour** node's own authored value is ANIMATABLE: their schema
+keys join `isScalarAnimatableSchemaKey`, `isVec2AnimatableSchemaKey` and `isColor4AnimatableSchemaKey`
+respectively, so the existing keyframe commands, the existing curve kinds, the existing exact rational
+sampler and the existing keyframe diamond all serve them without a second path. A value literal on a
+curve lowers to a curve index in `CompiledValueOperand`, and the value graph samples it at the frame
+being rendered -- so a Scalar node keyed 0 to 1 over ten frames, driving a layer's opacity, produces a
+composited alpha of `frame / 10` at every one of them.
+
+Editing an animated literal's number on its card writes a KEY at the session time rather than
+replacing the curve with a constant, by the same rule every layer row already follows; its row shows
+the sampled value at the session time.
+
+Four literal kinds stay constant-or-driven, and deliberately: **Vector 3**, **Integer**, **Boolean**
+and **String** each need a curve KIND the document does not have (a Vec3 curve, or a Hold-only integer
+or boolean curve), which is a document-format change with its own schema ladder step rather than a
+widening of the animatable set. Every generic OPERAND schema also stays constant-or-driven: an operand
+is a value a node reads, and the artist already shapes it with a curve upstream -- wire an animated
+Scalar node into the socket -- so a curve of its own would be a second authoring path to one picture.
+
+The keyframe surface for a value literal is its NODE CARD's diamond. The Timeline's rows are layers
+and the Properties panel's rows are a layer's roles, so neither has a place to hang a value node's
+lane today; giving them one is a timeline-model change rather than an animation one.
+
 #### Evaluable Parameter Kinds
 
 `CompiledScalarParameter`, `CompiledVec2Parameter` and `CompiledColorParameter` each gained one
-alternative for a value-graph output. A new alternative appearing is not a plan-semantics change, so
-neither the plan nor the evaluator semantics version moved and no cached frame digest shifted.
+alternative for a value-graph output, and `CompiledValueOperand` gained three for the curve tables. A
+new alternative appearing is not a plan-semantics change, so neither the plan nor the evaluator
+semantics version moved and no cached frame digest shifted.
 
 The remaining kinds -- a Layer Output's `Integer` blend mode, a Text source's `String` content -- are
 linkable in the editor and durable in the document, but nothing yet carries their value into a
 compiled operation, so a driver on one is reported through the existing `UnsupportedParameterSource`
 diagnostic rather than silently ignored.
+
+#### The Output Node Is A Sink
+
+`bloom.composition-output` declares ONE input and NO output. Nothing connects from the end of the
+composition: the compiler's reachability walks backwards from this node, so an edge leaving it was
+never followed, and a socket that leads nowhere is an invitation to draw a wire that means nothing.
+The rule is stated once, in `CanonicalGraph::addEdge()` and `validate()`, as "a node whose registered
+definition declares no output is a sink" -- not as a special case for this type, and not as "this
+particular port is undeclared", which is still the compiler's own `UnknownPort` diagnostic about a
+different mistake. A document written before this that carries such an edge decodes with the edge
+dropped rather than refused; the graph's `compositionOutput` endpoint keeps its port spelling, which
+is how the document has always named the endpoint rather than a socket.
+
+Nesting one composition inside another belongs to a separate **Composition source** node -- a node
+that READS another composition's output -- not to an output port on this one.
 
 ### Node Cardinality
 
@@ -694,15 +833,25 @@ With that adapter supplied, the following behavior is implemented and covered by
   Linking an Image transport input never hides a value control, because an Image port backs no
   parameter.
 
-### Structural Edges
+### Detachable Links
 
-Stack-slot content edges and participating Layer Output boundary outputs are structural. They are
-projected with explanatory tooltips but cannot start or receive a drag, be cut, or be auto-insertion
-targets. Removing a layer uses `RemoveNodes`, which can remove its boundary and slot together.
-Disconnecting a mandatory slot or dissolving its participating Layer Output would violate the
-canonical graph. Duplicating a node whose parameter is driven still refuses: a copy would need a second driver
-nothing asked for. Duplication of incompatible canonical-stack topology still refuses through command
-validation.
+No link is structural. Stack-slot content edges and participating Layer Output boundary outputs used
+to be: they were projected with explanatory tooltips and could not start or receive a drag, be cut, or
+be auto-insertion targets, because nothing could repair the topology a detach would break. Creating
+and removing a slot by connecting and disconnecting it is what removes that asymmetry, so every link
+now answers to the same three gestures:
+
+* drag an input's link end off and drop it on empty canvas -- `DisconnectInput` on that destination;
+* Ctrl+right-drag a cut stroke across it -- the same command, once per crossed link;
+* right-click it -- a menu offering **Disconnect** and **Delete Link**, which are one command under the
+  two names an artist might look for it by.
+
+Which durable record a destination is addressed through -- an edge, a driver binding, or a stack slot
+-- is `DisconnectInput`'s business, not the gesture's, which is why one gesture serves every kind.
+Every link also carries a tooltip naming both of its ends. Removing a layer outright still uses
+`RemoveNodes`, which removes its boundary and slot together. Duplicating a node whose parameter is
+driven still refuses: a copy would need a second driver nothing asked for. Duplication of incompatible
+canonical-stack topology still refuses through command validation.
 
 These are Qt scene/widget interactions without platform-specific input code. The same implementation
 and offscreen event tests apply to Linux, macOS and Windows; this change's executed gates are Linux.

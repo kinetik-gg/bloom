@@ -378,9 +378,11 @@ parameterForRole(const bloom::document::Composition& composition,
         (void)require(false, "solid layer has one exact direct source node");
         return false;
     }
+    // ADAPTED (task FIX1, item E): a newly added layer lands on TOP of the stack, so the Solid the
+    // menu action just added is row 0 rather than the last row.
     if (!require(layerStack != nullptr && layerStack->rowCount() == 2 &&
-                     layerStack->entries()[1].name == QStringLiteral("Solid 1") &&
-                     layerStack->entries()[1].kind == QStringLiteral("Solid"),
+                     layerStack->entries()[0].name == QStringLiteral("Solid 1") &&
+                     layerStack->entries()[0].kind == QStringLiteral("Solid"),
                  "timeline derives Solid kind and default numbered name from project truth")) {
         return false;
     }
@@ -429,7 +431,8 @@ parameterForRole(const bloom::document::Composition& composition,
                  "clicking a layer-owned node preserves NodeId as primary selection") ||
         !require(session.selection().contextualLayer == solidLayerId,
                  "node selection retains its contextual layer") ||
-        !require(timeline.layerStackForTest()->currentRow() == 1,
+        // ADAPTED (task FIX1, item E): the Solid landed on top, so its row is 0.
+        !require(timeline.layerStackForTest()->currentRow() == 0,
                  "timeline highlights node context without replacing primary selection")) {
         return false;
     }

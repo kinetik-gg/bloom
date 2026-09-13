@@ -163,7 +163,7 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         // A value node carries no pixels, so "empty image" is not a state it can be in -- and a muted
         // one must not be classified as one, or the parameter it drives would lose its source.
-        if (isValueNode(*definition))
+        if (isValueNode(id))
             continue;
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput)
             continue;
@@ -173,7 +173,12 @@ lower(const std::vector<document::NodeId>& order) {
                                                            return candidate->destination == *input;
                                                        })
                                 : reachableEdges_.end();
-        if ((edge == reachableEdges_.end() && isMuted(id)) ||
+        // A Layer Output with nothing feeding its content port is empty whether it is muted or not
+        // (task FIX1, item B). The artist wires a Layer node up by hand, so "added but not yet fed"
+        // is an ordinary intermediate state; it draws nothing and says nothing, rather than failing
+        // the whole compile on a required input.
+        if ((edge == reachableEdges_.end() &&
+             (isMuted(id) || definition->lowering == runtime::NodeLoweringKind::LayerOutput)) ||
             (edge != reachableEdges_.end() && emptyImages_.contains((*edge)->source.nodeId))) {
             emptyImages_.insert(id);
         }
@@ -206,13 +211,13 @@ lower(const std::vector<document::NodeId>& order) {
         }
         if (emptyImages_.contains(nodeId))
             continue;
-        if (isValueNode(*definition->second))
+        if (isValueNode(nodeId))
             continue;
         // An Image Reroute is ELIDED rather than compiled: its consumers read its input's operation
         // directly, so it costs nothing at evaluation -- the same treatment a muted node's bypass
         // already gets, and the generalisation of DissolveNode's single Image pair to a node that
         // exists only to tidy a wire.
-        if (isImageReroute(*definition->second)) {
+        if (isImageReroute(nodeId)) {
             const auto* rerouteEdge = fixedInputEdge(nodeId, document::kValuePortName);
             const auto source = rerouteEdge == nullptr
                                     ? indices.end()

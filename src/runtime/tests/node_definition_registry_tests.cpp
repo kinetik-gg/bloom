@@ -112,8 +112,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    // ADAPTED (task S7): the five structural node types plus the forty-node value library.
-    expectations.expect(registry.definitions().size() == 45,
+    // ADAPTED (task S7, then FIX1 item I): the five structural node types plus the value library,
+    // which is thirty-three now -- the eight per-kind Reroutes became ONE.
+    expectations.expect(registry.definitions().size() == 38,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();
@@ -241,6 +242,23 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
         Case{document::kCompositionOutputNodeType, document::kCompositionOutputNodeSchemaVersion},
     };
 
+    // Task FIX1, item H: the composition Output is a SINK. It declares one input and no output at
+    // all, and a definition claiming one is refused -- which is what keeps "nothing connects from
+    // the end of the composition" a registry fact rather than an editor convention.
+    {
+        const auto output = builtInDefinition(document::kCompositionOutputNodeType,
+                                              document::kCompositionOutputNodeSchemaVersion);
+        expectations.expect(output.outputs.empty() && output.inputs.size() == 1,
+                            "the composition Output declares one input and no output");
+        runtime::NodeDefinitionRegistry sourcingOutput;
+        auto spoof = output;
+        spoof.outputs.push_back(
+            {std::string(document::kCompositionOutputOutputPort), runtime::SocketValueKind::Image});
+        expectations.expect(sourcingOutput.registerDefinition(std::move(spoof)) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "and a definition that gives it one is refused");
+    }
+
     for (const auto& testCase : cases) {
         runtime::NodeDefinitionRegistry customTypeRegistry;
         auto customType = builtInDefinition(testCase.typeId, testCase.version);
@@ -288,10 +306,19 @@ void testValueLoweringShapeContract(Expectations& expectations) {
         refuses(std::move(extraSocket), "a literal Value node may not take an input at all");
     }
     {
-        auto animatable = literal;
+        // ADAPTED (task FIX1, item G): the Scalar, Vector 2 and Colour LITERALS are animatable now,
+        // so the clause is no longer "never" but "exactly what the schema predicates say". A
+        // definition that disagrees with them in either direction is refused, which is what these
+        // two pin.
+        auto notAnimatable = literal;
+        notAnimatable.parameters.front().supportsAnimation = false;
+        refuses(std::move(notAnimatable),
+                "a Scalar literal that denies its own animatable schema is refused");
+        auto animatable =
+            builtInDefinition(document::kStringValueNodeType, document::kValueNodeSchemaVersion);
         animatable.parameters.front().supportsAnimation = true;
         refuses(std::move(animatable),
-                "no value schema is animatable, so a definition may not claim one is");
+                "and a String literal claiming a curve kind that does not exist is refused too");
     }
     {
         auto structural = literal;
@@ -336,9 +363,12 @@ void testValueLoweringShapeContract(Expectations& expectations) {
             "a parameter with no socket must be an inline selector, not an unreachable operand");
     }
 
-    // A Reroute: the one value lowering whose single socket is required and carries no parameter.
+    // The Reroute: ADAPTED (task FIX1, item I). There is ONE reroute type now, and the kind it
+    // carries comes from the link it sits on rather than from its name, so the clause that used to
+    // read "a kind-named type and its sockets cannot disagree" reads "its two sockets agree with
+    // each other".
     const auto reroute =
-        builtInDefinition(document::kScalarRerouteNodeType, document::kValueNodeSchemaVersion);
+        builtInDefinition(document::kRerouteNodeType, document::kValueNodeSchemaVersion);
     {
         auto optional = reroute;
         optional.inputs.front().required = false;
@@ -348,15 +378,7 @@ void testValueLoweringShapeContract(Expectations& expectations) {
     {
         auto retyped = reroute;
         retyped.outputs.front().valueKind = runtime::SocketValueKind::Color;
-        refuses(std::move(retyped), "a Reroute passes its own kind through, not another");
-    }
-    {
-        auto pixels = reroute;
-        pixels.inputs.front().valueKind = runtime::SocketValueKind::Image;
-        pixels.outputs.front().valueKind = runtime::SocketValueKind::Image;
-        refuses(std::move(pixels),
-                "only the Image Reroute type may carry Image: a kind-named type and its sockets "
-                "cannot disagree");
+        refuses(std::move(retyped), "a Reroute's two sockets declare one kind, not two");
     }
 
     // Time: no inputs, no parameters, and its two outputs in their declared units.

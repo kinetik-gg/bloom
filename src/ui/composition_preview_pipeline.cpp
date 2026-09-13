@@ -178,8 +178,13 @@ namespace bloom::ui {
 PreviewPreparationFunction makeCompositionPreviewPipeline(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::CpuReferenceDisplayPreparer& displayPreparer,
-    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider) {
-    return [&compiler, &evaluator, &displayPreparer, &qualifiedProcessorProvider](
+    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
+    CompiledPlanCacheHandle planCache) {
+    if (planCache == nullptr) {
+        planCache = std::make_shared<CompiledPlanCache>();
+    }
+    return [&compiler, &evaluator, &displayPreparer, &qualifiedProcessorProvider,
+            planCache = std::move(planCache)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -223,10 +228,11 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
         // (revision/target/reachability/schema/kind/domain, then source kind) is entirely
         // SnapshotCompiler's -- this only threads the override the controller already sourced from
         // the session's active interaction.
-        auto compileResult = compiler.compile({.snapshot = snapshot,
-                                               .compositionId = desiredIdentity.compositionId,
-                                               .parameterOverride = interactionOverride},
-                                              context.cancellation());
+        auto compileResult = planCache->compile(compiler,
+                                                {.snapshot = snapshot,
+                                                 .compositionId = desiredIdentity.compositionId,
+                                                 .parameterOverride = interactionOverride},
+                                                context.cancellation());
         auto diagnostics = taskDiagnostics(compileResult);
 
         switch (compileResult.status) {
@@ -260,11 +266,12 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .colorIntent = desiredIdentity.colorIntent,
             .pixelStorageByteLimit = pixelStorageByteLimit,
         };
-        auto evaluationResult =
-            evaluator.evaluate(compileResult.plan, evaluationRequest, context.cancellation(),
-                               [&context](const runtime::EvaluationProgress& progress) {
-                                   reportEvaluationProgress(context, progress);
-                               });
+        auto evaluationResult = evaluator.evaluate(
+            compileResult.plan, evaluationRequest, context.cancellation(),
+            [&context](const runtime::EvaluationProgress& progress) {
+                reportEvaluationProgress(context, progress);
+            },
+            context.rowBandExecutor());
         auto evaluationDiagnostics = taskDiagnostics(evaluationResult);
         diagnostics.insert(diagnostics.end(),
                            std::make_move_iterator(evaluationDiagnostics.begin()),
@@ -326,7 +333,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 return TaskResult::failed(std::move(diagnostics));
             }
             prepared = runtime::PreparedPreviewFrame::createQualified(
-                desiredIdentity.requestGeneration, qualifiedResult.frame());
+                desiredIdentity.requestGeneration, qualifiedResult.frame(),
+                desiredIdentity.resolutionPolicy);
         } else {
             const runtime::ReferenceDisplayPreparationRequest displayRequest{
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
@@ -336,7 +344,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 evaluationResult.frame(), displayRequest, context.cancellation(),
                 [&context](const runtime::ReferenceDisplayProgress& progress) {
                     reportDisplayProgress(context, progress);
-                });
+                },
+                context.rowBandExecutor());
             auto displayDiagnostics = taskDiagnostics(displayResult);
             diagnostics.insert(diagnostics.end(),
                                std::make_move_iterator(displayDiagnostics.begin()),
@@ -360,7 +369,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 return TaskResult::failed(std::move(diagnostics));
             }
             prepared = runtime::PreparedPreviewFrame::create(desiredIdentity.requestGeneration,
-                                                             displayResult.frame());
+                                                             displayResult.frame(),
+                                                             desiredIdentity.resolutionPolicy);
         }
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(

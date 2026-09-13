@@ -8,6 +8,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -54,9 +55,9 @@ void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                        ProjectHost& projectHost, FrameExportController& frameExportController,
-                       QWidget* parent)
+                       RamPreviewController* const ramPreview, QWidget* parent)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
-      frameExportController_(frameExportController) {
+      frameExportController_(frameExportController), ramPreview_(ramPreview) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -239,11 +240,44 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     connect(&compositionSession_, &CompositionSession::historyChanged, this,
             &MainWindow::updateEditActions);
 
+    compositionMenu_ = menuBar.addMenu("&Composition");
+    createCompositionMenu(*compositionMenu_);
     viewMenu_ = menuBar.addMenu("&View");
     createViewMenu(*viewMenu_);
     windowMenu_ = menuBar.addMenu("&Window");
     auto* helpMenu = menuBar.addMenu("&Help");
     createHelpMenu(*helpMenu);
+}
+
+void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
+    // RAM Preview (task PERF1, item 3). Same command the Timeline transport's own button and
+    // Ctrl+Shift+Space reach -- one named method called by all three, never a menu item
+    // synthesizing a key press (docs/ux/interaction-model.md, "Ownership Boundary"). The shortcut
+    // itself is declared on the Timeline editor, which owns the transport; declaring it here too
+    // would give one key two owners.
+    ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
+    ramPreviewAction_->setObjectName("compositionRamPreviewAction");
+    ramPreviewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
+    ramPreviewAction_->setShortcutContext(Qt::WindowShortcut);
+    ramPreviewAction_->setEnabled(ramPreview_ != nullptr);
+    // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning
+    // whatever it already meant everywhere else the rest of the time -- the same gating the
+    // frame-export cancel uses.
+    cancelRamPreviewAction_ = compositionMenu.addAction("Cancel RAM Preview");
+    cancelRamPreviewAction_->setObjectName("cancelRamPreviewAction");
+    cancelRamPreviewAction_->setShortcut(QKeySequence(Qt::Key_Escape));
+    cancelRamPreviewAction_->setShortcutContext(Qt::WindowShortcut);
+    cancelRamPreviewAction_->setEnabled(false);
+    if (ramPreview_ != nullptr) {
+        connect(ramPreviewAction_, &QAction::triggered, ramPreview_, &RamPreviewController::toggle);
+        connect(cancelRamPreviewAction_, &QAction::triggered, ramPreview_,
+                &RamPreviewController::cancel);
+        connect(ramPreview_, &RamPreviewController::stateChanged, this, [this] {
+            cancelRamPreviewAction_->setEnabled(ramPreview_->isCaching());
+            ramPreviewAction_->setText(ramPreview_->isCaching() ? "Cancel &RAM Preview"
+                                                                : "&RAM Preview");
+        });
+    }
 }
 
 void MainWindow::createViewMenu(QMenu& viewMenu) {

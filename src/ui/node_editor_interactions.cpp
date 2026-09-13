@@ -1,9 +1,27 @@
 #include "node_editor_interactions.hpp"
+#include <QCoreApplication>
+#include <QGraphicsView>
 #include <QPainterPathStroker>
+#include <cmath>
 
 namespace bloom::ui {
 using namespace node_editor;
 namespace {
+bool fieldAt(QGraphicsScene& scene, QPointF point);
+// The pointer slop a socket gets, measured where the artist actually aims: on SCREEN. The socket's
+// own hit shape is fixed in scene units (SocketItem::shape()), so at a zoomed-out canvas -- which
+// is what Fit leaves the artist looking at -- kSocketHitSlop's 12 scene px shrink to three or four
+// device px and a socket becomes something to aim at rather than something to grab. This converts
+// the same slop back into scene units through the view's own scale, so the grab radius is constant
+// in the artist's hand at every zoom.
+[[nodiscard]] qreal sceneGrabRadius(const QGraphicsScene& scene) {
+    qreal scale = 1.0;
+    for (const auto* view : scene.views())
+        if (view != nullptr && view->transform().m11() > 0.0)
+            scale = view->transform().m11();
+    // Never TIGHTER than the painted hit shape: zooming in does not make a socket harder to hit.
+    return std::max(kSocketHitSlop, kSocketHitSlop / scale);
+}
 SocketItem* socketAt(QGraphicsScene& scene, const QPointF point) {
     SocketItem* closest = nullptr;
     qreal distance = 1e30;
@@ -15,6 +33,30 @@ SocketItem* socketAt(QGraphicsScene& scene, const QPointF point) {
         if (candidate < distance) {
             closest = socket;
             distance = candidate;
+        }
+    }
+    if (closest != nullptr)
+        return closest;
+    // No socket's own shape held the point. Widen to the zoom-compensated radius, but only where a
+    // hosted field is not already under the pointer -- a field keeps its own clicks, exactly as it
+    // does when a socket shape does contain the point.
+    if (fieldAt(scene, point))
+        return nullptr;
+    const qreal radius = sceneGrabRadius(scene);
+    const QRectF region(point.x() - radius, point.y() - radius, radius * 2.0, radius * 2.0);
+    for (auto* item : scene.items(region, Qt::IntersectsItemBoundingRect)) {
+        auto* socket = dynamic_cast<SocketItem*>(item);
+        if (socket == nullptr || !socket->isVisible())
+            continue;
+        // Measured against the socket's own BODY, so a long multi-input pill is grabbable along its
+        // whole length rather than only near its centre.
+        const QPointF origin = socket->scenePos();
+        const qreal half = socket->pillLength() / 2.0;
+        const qreal dy = std::max(0.0, std::abs(point.y() - origin.y()) - half);
+        const qreal reach = std::hypot(point.x() - origin.x(), dy);
+        if (reach <= radius && reach < distance) {
+            closest = socket;
+            distance = reach;
         }
     }
     return closest;
@@ -59,6 +101,32 @@ const document::EdgeRecord* inputEdge(const document::Composition& composition,
     const auto found = std::ranges::find(edges, input, &document::EdgeRecord::destination);
     return found == edges.end() ? nullptr : &*found;
 }
+// Where an input's value comes from, whichever durable record carries it: an edge for image
+// transport, the parameter's own driver binding for an operand (task FIX1, item A). The pick-up
+// gesture asks this one question rather than only looking for an edge, which is why an operand's
+// link can now be dragged off and dropped the way an image link always could.
+std::optional<document::OutputPortRef> incomingSource(const document::Composition& composition,
+                                                      const document::InputPortRef& input) {
+    if (const auto* edge = inputEdge(composition, input))
+        return edge->source;
+    const auto* fixed = std::get_if<document::NodeInputRef>(&input);
+    if (fixed == nullptr)
+        return std::nullopt;
+    const auto* node = composition.graph().findNode(fixed->nodeId);
+    if (node == nullptr)
+        return std::nullopt;
+    const auto binding =
+        std::ranges::find(node->parameters, fixed->port, &document::ParameterBinding::role);
+    if (binding == node->parameters.end())
+        return std::nullopt;
+    const auto* parameter = composition.parameters().find(binding->parameterId);
+    const auto* driver = parameter == nullptr
+                             ? nullptr
+                             : std::get_if<document::DriverBindingSource>(&parameter->source);
+    return driver == nullptr
+               ? std::nullopt
+               : std::optional(document::OutputPortRef{driver->sourceNodeId, driver->outputPort});
+}
 SocketItem* findOutput(QGraphicsScene& scene, const document::OutputPortRef& output) {
     for (auto* item : scene.items())
         if (auto* socket = dynamic_cast<SocketItem*>(item); socket && socket->output == output)
@@ -70,7 +138,7 @@ std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
     SocketItem* input = nullptr;
     SocketItem* output = nullptr;
     for (auto* socket : card.sockets()) {
-        if (socket->kind != document::SocketValueKind::Image)
+        if (socket->kind != document::SocketValueKind::Image || socket->multiInput())
             continue;
         if (socket->input && !input)
             input = socket;
@@ -82,6 +150,25 @@ std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
         return {};
     return {input, output};
 }
+// The one line a dimmed socket carries while a drag it cannot take is in flight (task FIX1,
+// item A.3): which way round the link would have to go, or which two kinds do not meet.
+[[nodiscard]] QString refusalFor(const NodeInteraction& gesture, const SocketItem& socket,
+                                 const bool opposite) {
+    if (!socket.draggable())
+        return QCoreApplication::translate(
+            "node_editor", "Cannot be unlinked here; remove the layer to remove this connection");
+    if (!opposite)
+        return gesture.output.has_value()
+                   ? QCoreApplication::translate("node_editor",
+                                                 "A link from an output must land on an input")
+                   : QCoreApplication::translate("node_editor",
+                                                 "A link from an input must land on an output");
+    const auto from = gesture.output.has_value() ? gesture.linkKind : socket.kind;
+    const auto to = gesture.output.has_value() ? socket.kind : gesture.linkKind;
+    return QCoreApplication::translate("node_editor", "%1 does not connect to %2")
+        .arg(socketKindName(from), socketKindName(to));
+}
+
 // Tells every socket on the canvas whether the link now being dragged could land on it (task S1,
 // item 6). The socket the drag STARTED from keeps its resting ink: it is the thing in the artist's
 // hand, not a candidate to aim at.
@@ -102,10 +189,12 @@ void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
         // ConnectPorts will actually apply.
         const bool compatible =
             socket->draggable() && opposite &&
-            (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
-                        : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind));
+            (socket->acceptsAnyKind() ||
+             (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
+                         : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind)));
         socket->setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
-                                           : SocketItem::DragAffinity::Incompatible);
+                                           : SocketItem::DragAffinity::Incompatible,
+                                compatible ? QString{} : refusalFor(gesture, *socket, opposite));
     }
 }
 
@@ -235,6 +324,22 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         event->accept();
         return;
     }
+    // Shift + right drag draws a stroke that puts a REROUTE on every link it crosses (task FIX1,
+    // item I), the same shape of gesture as the Ctrl + right drag cut beside it and the same stroke
+    // arithmetic on release -- one adds a bend where the stroke crossed, the other takes the wire
+    // away.
+    if (submit_ && event->button() == Qt::RightButton && event->modifiers() == Qt::ShiftModifier) {
+        cancelGesture();
+        gesture.mode = NodeInteraction::Mode::Reroute;
+        gesture.origin = event->scenePos();
+        gesture.revision = session_->snapshot().revision();
+        gesture.line =
+            addPath(QPainterPath(gesture.origin), QPen(kit::color(kit::Color::Accent), 2));
+        gesture.line->setZValue(10);
+        gesture.line->setData(kNodeItemKindRole, QStringLiteral("reroute-preview"));
+        event->accept();
+        return;
+    }
     if (submit_ && event->button() == Qt::RightButton &&
         event->modifiers() == Qt::ControlModifier) {
         cancelGesture();
@@ -262,22 +367,34 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.mode = NodeInteraction::Mode::Link;
         gesture.revision = session_->snapshot().revision();
         gesture.origin = socket->scenePos();
-        gesture.input = socket->input;
         gesture.output = socket->output;
-        if (socket->input) {
-            if (const auto* edge = inputEdge(*session_->composition(), *socket->input)) {
-                auto* source = findOutput(*this, edge->source);
-                if (!source || !source->draggable()) {
+        // Merge's pill stands for every stack slot, so a press on it is a press on the slot under
+        // the pointer (task FIX1, items B and C). With no slot there -- an empty stack, or the
+        // pointer past the last one -- the gesture starts from the "new slot" sentinel the socket
+        // carries, and a release on a Layer output creates the slot.
+        std::optional<document::InputPortRef> pressedInput = socket->input;
+        if (socket->multiInput()) {
+            if (const auto index = socket->slotIndexAt(socket->mapFromScene(event->scenePos()));
+                index.has_value() && *index < socket->orderedInputs().size())
+                pressedInput = socket->orderedInputs()[*index];
+        }
+        gesture.input = pressedInput;
+        if (pressedInput) {
+            if (const auto existing = incomingSource(*session_->composition(), *pressedInput)) {
+                auto* source = findOutput(*this, *existing);
+                if (!source) {
                     cancelGesture();
                     return;
                 }
-                gesture.pickedInput = socket->input;
+                gesture.pickedInput = pressedInput;
                 gesture.input.reset();
-                gesture.output = edge->source;
+                gesture.output = *existing;
                 gesture.origin = source->scenePos();
+                // Addressed by DESTINATION, not by edge id: a driver link has no edge and therefore
+                // no id, and one input has exactly one incoming link either way.
                 for (auto* item : items())
                     if (auto* link = dynamic_cast<NodeEdgeItem*>(item);
-                        link && link->edge.id == edge->id)
+                        link && link->edge.destination == *pressedInput)
                         link->hide();
             }
         }
@@ -409,6 +526,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
     case NodeInteraction::Mode::Box:
         gesture.box->setRect(QRectF(gesture.origin, event->scenePos()).normalized());
         break;
+    case NodeInteraction::Mode::Reroute:
     case NodeInteraction::Mode::Cut: {
         auto path = gesture.line->path();
         // QGraphicsPathItem may coalesce a move-only path with its empty default. Restore the
@@ -428,7 +546,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         const bool orientationWrong = target != nullptr && ((gesture.output && !target->input) ||
                                                             (gesture.input && !target->output));
         const bool kindWrong =
-            target != nullptr && !orientationWrong &&
+            target != nullptr && !orientationWrong && !target->acceptsAnyKind() &&
             !(gesture.output
                   ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
                   : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
@@ -507,6 +625,21 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
             card && card->cardWidth() != gesture.width)
             transaction.emplace<commands::SetNodeWidth>(compositionId, gesture.resized,
                                                         card->cardWidth());
+    } else if (gesture.mode == NodeInteraction::Mode::Reroute) {
+        QPainterPathStroker stroke;
+        stroke.setWidth(2);
+        const auto crossing = stroke.createStroke(gesture.line->path());
+        for (auto* item : items()) {
+            const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
+            if (edge == nullptr || !crossing.intersects(edge->shape()))
+                continue;
+            // At the crossing itself, so the dot lands where the artist drew through the wire.
+            const auto crossingPoint = edge->path().pointAtPercent(0.5);
+            Q_EMIT rerouteRequested(edge->edge.destination, crossingPoint);
+            break;
+        }
+        cancelGesture();
+        return;
     } else if (gesture.mode == NodeInteraction::Mode::Cut) {
         QPainterPathStroker stroke;
         stroke.setWidth(2);
@@ -524,9 +657,15 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
                 gesture.input.value_or(target->input.value_or(document::NodeInputRef{}));
             const auto output =
                 gesture.output.value_or(target->output.value_or(document::OutputPortRef{}));
+            // Where in the stack order a drop on Merge's pill lands. Read off the same caret the
+            // artist watched during the drag, so the order they saw is the order written.
+            std::optional<document::LayerSlotId> insertBefore;
+            if (gesture.output && target->multiInput())
+                insertBefore = target->slotInsertionAt(target->mapFromScene(event->scenePos()));
             if (gesture.pickedInput && *gesture.pickedInput != input)
                 transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);
-            transaction.emplace<commands::ConnectPorts>(compositionId, output, input);
+            transaction.emplace<commands::ConnectPorts>(
+                compositionId, output, input, document::builtInNodeDefinitions(), insertBefore);
         } else if (!target && !cardAt(*this, event->scenePos())) {
             if (gesture.pickedInput)
                 transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);

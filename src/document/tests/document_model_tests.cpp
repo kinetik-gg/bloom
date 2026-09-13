@@ -558,9 +558,16 @@ void testCanonicalGraphAndLayerOrder(ExpectationContext& expectations) {
             {id<EdgeId>(99), {id<NodeId>(10), "image"}, NodeInputRef{id<NodeId>(11), "image"}}),
         "duplicate input connection is rejected");
 
+    // ADAPTED (task FIX1, item H): the composition Output is a SINK with no declared output port,
+    // so node 15 can no longer be an edge SOURCE at all. The Layer Stack's own image output makes
+    // the same cycle, which is what this case is actually about.
+    expectations.expect(
+        !graph.addEdge(
+            {id<EdgeId>(98), {id<NodeId>(15), "image"}, NodeInputRef{id<NodeId>(10), "feedback"}}),
+        "nothing connects from the composition Output: it declares no output port");
     expectations.expect(
         graph.addEdge(
-            {id<EdgeId>(99), {id<NodeId>(15), "image"}, NodeInputRef{id<NodeId>(10), "feedback"}}),
+            {id<EdgeId>(99), {id<NodeId>(14), "image"}, NodeInputRef{id<NodeId>(10), "feedback"}}),
         "incomplete draft may add a structurally valid edge");
     expectations.expect(hasIssue(project.validate(), ValidationCode::GraphCycle),
                         "same-time graph cycle is rejected by publication validation");

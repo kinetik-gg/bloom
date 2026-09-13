@@ -12,7 +12,13 @@
 [[nodiscard]] std::optional<document::InputPortRef>
 firstImageInput(const document::NodeRecord& node) const {
     const auto* definition = registry_.find(node.typeId, node.schemaVersion);
-    if (!definition || !hasImageOutput(*definition))
+    // The image-output test is what excludes a VALUE node, which carries no pixels for a mute bypass
+    // to pass through. The composition Output carries pixels -- it is where they end -- and since
+    // task FIX1, item H it publishes no socket at all, so it is named here rather than failing the
+    // test and taking its own input edge out of the reachable set when muted.
+    if (definition == nullptr ||
+        (!hasImageOutput(*definition) &&
+         definition->lowering != runtime::NodeLoweringKind::CompositionOutput))
         return std::nullopt;
     for (const auto& input : definition->inputs) {
         if (input.valueKind == runtime::SocketValueKind::Image)

@@ -220,9 +220,20 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
         document::LayerStackInputRef{graph.layerStack().nodeId(), ids->slotId,
                                      std::string(document::kLayerStackContentInputRole)},
     };
+    // Where the new layer LANDS in the stack: on top, which is entry ZERO. The evaluator folds the
+    // stack from its last entry to its first, so entry zero is the topmost layer and the timeline
+    // lists it first. Appending put every new layer underneath every existing one instead -- so an
+    // artist who added a layer and changed its blend mode saw nothing change, because the layer
+    // they had just made was beneath an opaque one and had only the transparent backdrop under
+    // itself, where every mode folds to Normal. That was the substance of the "blend modes are not
+    // working" report, and every comparable tool adds a layer on top.
+    const auto existingTop = graph.layerStack().entries().empty()
+                                 ? std::nullopt
+                                 : std::optional(graph.layerStack().entries().front().slotId);
     if (!graph.addNode(std::move(sourceNode)) || !graph.addNode(std::move(layerOutputNode)) ||
         !graph.addLayerOutput(std::move(layerBoundary)) ||
         !graph.layerStack().append({ids->slotId, ids->layerId}) ||
+        !graph.layerStack().moveBefore(ids->slotId, existingTop) ||
         !graph.addEdge(std::move(sourceToLayerEdge)) ||
         !graph.addEdge(std::move(layerToStackEdge))) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,

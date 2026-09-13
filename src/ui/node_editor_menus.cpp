@@ -2,7 +2,9 @@
 #include "node_editor_items.hpp"
 #include <QCursor>
 #include <QMenu>
+#include <algorithm>
 #include <bloom/ui/kit/search_popup.hpp>
+#include <vector>
 
 namespace bloom::ui {
 using namespace node_editor;
@@ -23,7 +25,14 @@ QString addActionName(const std::string_view type) {
         return QStringLiteral("nodeAddLayerOutputAction");
     if (type == document::kLayerStackNodeType)
         return QStringLiteral("nodeAddLayerStackAction");
-    return QStringLiteral("nodeAddCompositionOutputAction");
+    if (type == document::kCompositionOutputNodeType)
+        return QStringLiteral("nodeAddCompositionOutputAction");
+    // Every other registered type gets its own name derived from its type id. Before task FIX1 this
+    // function fell through to the composition-output name, so all forty value nodes shared one
+    // object name -- which made the menu unaddressable from a test and said nothing about which row
+    // was which.
+    return QStringLiteral("nodeAddAction.") +
+           QString::fromUtf8(type.data(), static_cast<qsizetype>(type.size()));
 }
 } // namespace
 
@@ -289,30 +298,69 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                    [this] { removeSelectedNodes(); });
         return menu;
     }
-    if (scene_->canSubmit()) {
-        action(tr("Add…"), QStringLiteral("nodeAddSearchAction"), [this] {
-            openAddSearch(addPosition_,
-                          view_->viewport()->mapToGlobal(view_->mapFromScene(addPosition_)));
-        })->setEnabled(session_.composition() != nullptr);
-    }
-    // Preserve existing action names. Without an application submission adapter, only the existing
-    // session Add Solid path is offered; a search promising cursor placement would be misleading.
-    auto* addMenu = scene_->canSubmit() ? new QMenu(menu) : menu->addMenu(tr("Add"));
+    // Task FIX1, item D: "Add Node" is a CASCADING SUBMENU grouped by the registry's own
+    // categories, in the same order the search popup's sections are read in. It is not the search
+    // popup: right- clicking to add a known node should not make the artist type its name, and Tab
+    // is where the search lives. Both surfaces call addNode() with the same click position and read
+    // their refusals from the same dry run of AddEditorNode, so neither can disagree with the other
+    // about what is addable. Kit menu styling is the application-wide proxy style
+    // (kit/mnemonic_style.hpp)
+    // -- rows, the submenu caret and Size::MenuMinWidth come from it, so an ordinary QMenu is
+    // already a Kinetik menu and a second opinion here would be the drift that file exists to
+    // prevent.
+    auto* addMenu = menu->addMenu(tr("Add Node"));
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
-    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
-        auto* item = addMenu->addAction(nodeTypeDisplayName(definition.key.typeId));
-        item->setObjectName(addActionName(definition.key.typeId));
-        if (!scene_->canSubmit()) {
-            // Without a submission adapter only the two session-level Add paths exist, and both of
-            // them now work: task S3 gave the text source a CPU rasterizer, so the Text row is
-            // enabled and carries no refusal tooltip.
-            const bool solid = definition.key.typeId == document::kSolidSourceNodeType;
-            const bool text = definition.key.typeId == document::kTextSourceNodeType;
-            item->setVisible(solid || text);
-            item->setEnabled((solid || text) && session_.composition() != nullptr);
+    addMenu->setEnabled(session_.composition() != nullptr);
+    const auto refusalFor = [this](const std::string& typeId) {
+        if (session_.composition() == nullptr)
+            return tr("No active composition");
+        document::Document isolated(session_.snapshot().project(),
+                                    session_.snapshot().ids().highWater());
+        auto draft = isolated.draft(isolated.snapshot());
+        const auto result =
+            AddEditorNode(session_.compositionId(), typeId, {addPosition_.x(), addPosition_.y()})
+                .apply(draft);
+        return result.issues.empty() ? QString{}
+                                     : QString::fromStdString(result.issues.front().message);
+    };
+    for (const auto category : nodeCategoryOrder()) {
+        std::vector<const document::NodeDefinition*> section;
+        for (const auto& definition : document::builtInNodeDefinitions().definitions())
+            // Task FIX1, item I: a reroute is a point on a LINK, made by right-clicking the link or
+            // dragging across it. It is not something to pick out of a menu and then find a use
+            // for, so it is listed in neither Add surface.
+            if (definition.category == category &&
+                !document::isRerouteNodeType(definition.key.typeId))
+                section.push_back(&definition);
+        if (section.empty())
+            continue;
+        std::ranges::sort(section, [](const auto* left, const auto* right) {
+            return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
+        });
+        auto* sectionMenu = addMenu->addMenu(nodeCategoryName(category));
+        sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") +
+                                   nodeCategoryName(category));
+        for (const auto* candidate : section) {
+            auto* item = sectionMenu->addAction(nodeTypeDisplayName(candidate->key.typeId));
+            item->setObjectName(addActionName(candidate->key.typeId));
+            if (scene_->canSubmit()) {
+                // Cardinality and every other refusal, read back from the command itself rather
+                // than restated here: a singleton already in the composition is listed and
+                // disabled, with the command's own words in its tooltip.
+                const auto refusal = refusalFor(candidate->key.typeId);
+                item->setToolTip(refusal);
+                item->setEnabled(refusal.isEmpty());
+            } else {
+                // Without a submission adapter only the two session-level Add paths exist.
+                const bool solid = candidate->key.typeId == document::kSolidSourceNodeType;
+                const bool text = candidate->key.typeId == document::kTextSourceNodeType;
+                item->setVisible(solid || text);
+                item->setEnabled((solid || text) && session_.composition() != nullptr);
+            }
+            connect(
+                item, &QAction::triggered, this,
+                [this, type = QString::fromStdString(candidate->key.typeId)] { addNode(type); });
         }
-        connect(item, &QAction::triggered, this,
-                [this, type = QString::fromStdString(definition.key.typeId)] { addNode(type); });
     }
     menu->addSeparator();
     action(tr("Fit"), QStringLiteral("nodeFitAction"), [this] { view_->frameGraph(); });
@@ -330,8 +378,87 @@ QMenu* NodeGraphEditor::contextMenuForTest(const bool nodeMenu,
                                            const std::optional<document::NodeGroupId> group) {
     return buildContextMenu(this, nodeMenu, group);
 }
+
+QMenu* NodeGraphEditor::linkContextMenuForTest(const QPoint viewportPosition) {
+    return buildLinkContextMenu(this, viewportPosition);
+}
+
+// Task FIX1, item C: a link is a thing an artist can act on, not only a thing to look at. One
+// command, offered under the two names an artist might look for it by -- "Disconnect" says what
+// happens to the connection, "Delete Link" says what happens to the wire, and they are the same
+// DisconnectInput on the same destination. Which durable record that destination is addressed
+// through -- an edge, a driver binding, or a stack slot -- is DisconnectInput's business, not this
+// menu's, which is why every link kind works here.
+QMenu* NodeGraphEditor::buildLinkContextMenu(QWidget* parent, const QPoint viewportPosition) {
+    if (!scene_->canSubmit() || session_.composition() == nullptr)
+        return nullptr;
+    const node_editor::NodeEdgeItem* link = nullptr;
+    for (auto* item : view_->items(viewportPosition))
+        if (const auto* candidate = dynamic_cast<node_editor::NodeEdgeItem*>(item);
+            candidate != nullptr) {
+            link = candidate;
+            break;
+        }
+    if (link == nullptr)
+        return nullptr;
+    auto* menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("nodeLinkMenu"));
+    menu->setAccessibleName(tr("Link menu"));
+    const auto input = link->edge.destination;
+    auto* disconnect = menu->addAction(tr("Disconnect"));
+    disconnect->setObjectName(QStringLiteral("nodeLinkDisconnectAction"));
+    connect(disconnect, &QAction::triggered, this, [this, input] { disconnectLink(input); });
+    auto* remove = menu->addAction(tr("Delete Link"));
+    remove->setObjectName(QStringLiteral("nodeLinkDeleteAction"));
+    connect(remove, &QAction::triggered, this, [this, input] { disconnectLink(input); });
+    menu->addSeparator();
+    // Task FIX1, item I: a reroute is made ON a link, at the point the artist clicked, because that
+    // is the only place a bend in a wire means anything.
+    auto* reroute = menu->addAction(tr("Add Reroute"));
+    reroute->setObjectName(QStringLiteral("nodeLinkAddRerouteAction"));
+    const auto scenePosition = view_->sceneFromViewport(viewportPosition);
+    connect(reroute, &QAction::triggered, this,
+            [this, input, scenePosition] { insertReroute(input, scenePosition); });
+    return menu;
+}
+
+void NodeGraphEditor::insertReroute(document::InputPortRef input, const QPointF scenePosition) {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    commands::Transaction insert("Add Reroute", session_.snapshot().revision());
+    insert.emplace<InsertReroute>(session_.compositionId(), std::move(input),
+                                  document::Vec2d{scenePosition.x(), scenePosition.y()});
+    const auto result = scene_->submit(std::move(insert));
+    if (const auto id = result.outputId<document::NodeId>("editorNode"); result.succeeded() && id)
+        session_.selectNode(*id);
+}
+
+void NodeGraphEditor::disconnectLink(document::InputPortRef input) {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    commands::Transaction transaction("Disconnect Link", session_.snapshot().revision());
+    transaction.emplace<commands::DisconnectInput>(session_.compositionId(), std::move(input));
+    (void)scene_->submit(std::move(transaction));
+}
 void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     auto* card = nodeItemAncestor(view_->itemAt(viewportPosition));
+    // A link under the pointer owns the click, and only where there is no card there: a wire
+    // passing behind a card is the card's business.
+    if (card == nullptr) {
+        if (const QPointer<QMenu> linkMenu = buildLinkContextMenu(view_, viewportPosition)) {
+            linkMenu->setAttribute(Qt::WA_DeleteOnClose);
+            linkMenu->popup(view_->viewport()->mapToGlobal(viewportPosition));
+            return;
+        }
+    }
     if (card && !session_.selectedNodes().contains(card->id()))
         session_.selectNode(card->id());
     addPosition_ = view_->sceneFromViewport(viewportPosition);
@@ -377,7 +504,9 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
     for (const auto category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
-            if (definition.category == category)
+            // The reroute is hidden here for the same reason it is hidden from the Add submenu.
+            if (definition.category == category &&
+                !document::isRerouteNodeType(definition.key.typeId))
                 section.push_back(&definition);
         std::ranges::sort(section, [](const auto* left, const auto* right) {
             return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
@@ -423,14 +552,10 @@ void NodeGraphEditor::addNode(const QString& type) {
             (void)addDefaultTextLayer(session_);
         return;
     }
-    const auto typeId = type.toStdString();
-    const char* label = "Add Node";
-    if (typeId == document::kSolidSourceNodeType) {
-        label = "Add Solid Layer";
-    } else if (typeId == document::kTextSourceNodeType) {
-        label = "Add Text Layer";
-    }
-    commands::Transaction transaction(label, addRevision_);
+    // One label, because there is one thing the canvas's Add does now: it adds the node that was
+    // asked for (task FIX1, item B). "Add Solid Layer" would have been a promise about structure
+    // the artist makes themselves.
+    commands::Transaction transaction("Add Node", addRevision_);
     transaction.emplace<AddEditorNode>(session_.compositionId(), type.toStdString(),
                                        document::Vec2d{addPosition_.x(), addPosition_.y()},
                                        addInput_, addOutput_);

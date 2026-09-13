@@ -7,7 +7,9 @@
 
 #include <QThread>
 
+#include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -60,9 +62,13 @@ FrameFreshness freshnessFor(const PreparedPreviewFrameHandle& frame,
 
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
-    PreviewPreparationFunction preparation, CompositionPreviewSettings settings, QObject* parent)
+    PreviewPreparationFunction preparation, CompositionPreviewSettings settings,
+    PreviewFrameCacheHandle frameCache, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
-      preparation_(std::move(preparation)), settings_(settings) {
+      preparation_(std::move(preparation)), settings_(settings),
+      frameCache_(frameCache != nullptr
+                      ? std::move(frameCache)
+                      : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -88,10 +94,99 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
+PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
+    return *frameCache_;
+}
+
+std::optional<PreviewFrameCacheKey>
+CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) const {
+    const auto& snapshot = session_.snapshot();
+    const auto compositionId = session_.compositionId();
+    if (snapshot.project().findComposition(compositionId) == nullptr) {
+        return std::nullopt;
+    }
+    return PreviewFrameCacheKey{
+        .projectId = snapshot.project().id(),
+        .compositionId = compositionId,
+        .sourceRevision = snapshot.revision(),
+        .time = time,
+        .output = runtime::PreviewOutput::Composition,
+        .resolution = resolution(),
+        .quality = settings_.quality,
+        .colorIntent = settings_.colorIntent,
+        .resolutionPolicy = settings_.resolutionPolicy,
+    };
+}
+
+std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
+    switch (settings_.resolutionPolicy) {
+    case runtime::PreviewResolutionPolicy::Full:
+        return 1;
+    case runtime::PreviewResolutionPolicy::Half:
+        return 2;
+    case runtime::PreviewResolutionPolicy::Quarter:
+        return 4;
+    case runtime::PreviewResolutionPolicy::Auto:
+        break;
+    }
+    const auto* composition = session_.composition();
+    if (composition == nullptr || displayedCompositionScale_ >= 1.0) {
+        return 1;
+    }
+    const auto format = composition->format();
+    for (const std::uint32_t divisor : {4U, 2U}) {
+        const auto width = (format.width() + divisor - 1) / divisor;
+        const auto height = (format.height() + divisor - 1) / divisor;
+        if (width >= format.width() * displayedCompositionScale_ &&
+            height >= format.height() * displayedCompositionScale_) {
+            return divisor;
+        }
+    }
+    return 1;
+}
+
+runtime::EvaluationResolution CompositionPreviewController::resolution() const {
+    const auto divisor = resolutionDivisor();
+    const auto* composition = session_.composition();
+    if (divisor == 1 || composition == nullptr) {
+        return runtime::CompositionFormatResolution{};
+    }
+    const auto format = composition->format();
+    const auto extent = render::ImageExtent::create((format.width() + divisor - 1) / divisor,
+                                                    (format.height() + divisor - 1) / divisor);
+    return runtime::ProxyResolution{*extent.value()};
+}
+
+void CompositionPreviewController::setResolutionPolicy(
+    const runtime::PreviewResolutionPolicy policy) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_ || settings_.resolutionPolicy == policy) {
+        return;
+    }
+    settings_.resolutionPolicy = policy;
+    emit resolutionChanged();
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::setDisplayedCompositionScale(const double scale) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_) {
+        return;
+    }
+    const auto previous = resolution();
+    displayedCompositionScale_ = std::isfinite(scale) && scale > 0.0 ? scale : 1.0;
+    if (previous == resolution()) {
+        return;
+    }
+    emit resolutionChanged();
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
-        requestPreview(false, PreviewRequestKind::Visible);
+        // Deliberately NOT from the cache: see requestPreview()'s `allowCachedFrame`.
+        requestPreview(false, PreviewRequestKind::Visible, false);
     }
 }
 
@@ -179,6 +274,39 @@ void CompositionPreviewController::endDroppedFrameCounting() {
     emit droppedFrameCountChanged();
 }
 
+const std::optional<RamPreviewProgress>&
+CompositionPreviewController::ramPreviewProgress() const noexcept {
+    return ramPreviewProgress_;
+}
+
+void CompositionPreviewController::beginRamPreviewProgress(const std::uint64_t totalFrames) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    ramPreviewProgress_ = RamPreviewProgress{.cachedFrames = 0, .totalFrames = totalFrames};
+    emit ramPreviewProgressChanged();
+}
+
+void CompositionPreviewController::setRamPreviewProgress(const std::uint64_t cachedFrames) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!ramPreviewProgress_.has_value() || ramPreviewProgress_->cachedFrames == cachedFrames) {
+        return;
+    }
+    ramPreviewProgress_->cachedFrames = cachedFrames;
+    emit ramPreviewProgressChanged();
+}
+
+void CompositionPreviewController::endRamPreviewProgress() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!ramPreviewProgress_.has_value()) {
+        return;
+    }
+    ramPreviewProgress_.reset();
+    emit ramPreviewProgressChanged();
+}
+
+const CompositionPreviewSettings& CompositionPreviewController::settings() const noexcept {
+    return settings_;
+}
+
 void CompositionPreviewController::noteDroppedFrame() {
     if (!countingDroppedFrames_ ||
         droppedFrameCount_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -221,7 +349,8 @@ void CompositionPreviewController::beginShutdown() {
 }
 
 void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
-                                                  const PreviewRequestKind kind) {
+                                                  const PreviewRequestKind kind,
+                                                  const bool allowCachedFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
 
     const document::Snapshot snapshot = session_.snapshot();
@@ -260,9 +389,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         .requestGeneration = generation,
         .time = session_.currentTime(),
         .output = runtime::PreviewOutput::Composition,
-        .resolution = settings_.resolution,
+        .resolution = resolution(),
         .quality = settings_.quality,
         .colorIntent = settings_.colorIntent,
+        .resolutionPolicy = settings_.resolutionPolicy,
     };
 
     const auto publishTerminal = [this, &desiredIdentity,
@@ -306,6 +436,30 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     std::optional<runtime::SnapshotParameterOverride> interactionOverride;
     if (kind == PreviewRequestKind::Interactive) {
         interactionOverride = session_.positionInteractionOverride();
+    }
+
+    // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request
+    // whose key is cached is answered right here: no task, no coalescing, no cadence -- which is
+    // what makes cached playback frame-accurate rather than best-effort. An overridden request is
+    // never served from the cache, because its pixels are the gesture's, not the revision's.
+    if (allowCachedFrame && !interactionOverride.has_value()) {
+        if (auto cached = frameCache_->take(desiredIdentity); cached != nullptr) {
+            interactiveCadenceTimer_.stop();
+            if (pending_.has_value()) {
+                // A request that was waiting to be submitted and never will be: the frame it asked
+                // for was never delivered, which is exactly what droppedFrameCount() counts.
+                noteDroppedFrame();
+                pending_.reset();
+            }
+            // An in-flight task is for an older ask. Cancelling it leaves the admission gate closed
+            // until its terminal result is observed, which consumeReadyResult() already handles;
+            // the cached frame is published now regardless.
+            if (active_.has_value()) {
+                active_->handle.cancel();
+            }
+            publishCachedFrame(desiredIdentity, std::move(cached));
+            return;
+        }
     }
 
     PendingRequest pendingRequest{.snapshot = snapshot,
@@ -411,10 +565,25 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     }
 
     const runtime::TaskId taskId = submission.handle.id();
-    active_.emplace(
-        ActiveRequest{.handle = std::move(submission.handle), .desiredIdentity = desiredIdentity});
+    active_.emplace(ActiveRequest{.handle = std::move(submission.handle),
+                                  .desiredIdentity = desiredIdentity,
+                                  .carriedInteractionOverride = interactionOverride.has_value()});
     publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
     taskUiBridge_.wake();
+}
+
+void CompositionPreviewController::publishCachedFrame(
+    const runtime::PreviewRequestIdentity& desiredIdentity, PreparedPreviewFrameHandle frame) {
+    CompositionPreviewState ready{
+        .activity = PreviewActivity::Ready,
+        .freshness = FrameFreshness::Current,
+        .desiredIdentity = desiredIdentity,
+        .taskId = std::nullopt,
+        .frame = std::move(frame),
+        .diagnostics = {},
+        .message = tr("The current composition frame is ready"),
+    };
+    publish(std::move(ready));
 }
 
 void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
@@ -513,6 +682,13 @@ void CompositionPreviewController::consumeReadyResult() {
             next.freshness = FrameFreshness::Current;
             next.frame = frame;
             next.message = tr("The current composition frame is ready");
+            // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
+            // second pass over the same range is a sequence of lookups (task PERF1, item 3). A
+            // frame rendered under an interactive override is the exception: its pixels belong to a
+            // gesture, and its identity cannot say so.
+            if (!completed.carriedInteractionOverride) {
+                frameCache_->insert(frame);
+            }
             break;
         }
         case runtime::PreviewPreparationStatus::Unsupported:

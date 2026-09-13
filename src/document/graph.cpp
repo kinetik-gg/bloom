@@ -184,6 +184,17 @@ bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& regi
     }
     const auto sourceKind = outputKind(edge.source, registry);
     const auto targetKind = inputKind(edge.destination, registry);
+    // Nothing connects FROM a SINK. Task FIX1, item H made the composition Output one -- it
+    // declares no output port at all -- and this is the rule that says so for every connect path at
+    // once. It asks whether the registered definition has ANY output, not whether this particular
+    // port is declared: an unknown port on a node that does have outputs is still the compiler's
+    // UnknownPort diagnostic to report, which is a different mistake with a different message.
+    if (const auto* source = findNode(edge.source.nodeId); source != nullptr) {
+        const auto* definition = registry.find(source->typeId, source->schemaVersion);
+        if (definition != nullptr && definition->outputs.empty()) {
+            return false;
+        }
+    }
     // Task S7: equal kinds, or one of the whitelisted promotions. The ONE predicate every connect
     // path asks (node_definition_registry.hpp), so this, validate() below, ConnectPorts and the
     // compiler's edge check cannot disagree about which links exist.
@@ -378,7 +389,17 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
 
         const auto sourceKind = outputKind(edge.source, registry);
         const auto targetKind = inputKind(edge.destination, registry);
-        if (sourceKind && targetKind && !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+        const auto* sourceDefinition = [&]() -> const NodeDefinition* {
+            const auto* sourceNode = findNode(edge.source.nodeId);
+            return sourceNode == nullptr
+                       ? nullptr
+                       : registry.find(sourceNode->typeId, sourceNode->schemaVersion);
+        }();
+        if (sourceDefinition != nullptr && sourceDefinition->outputs.empty()) {
+            result.add(ValidationCode::InvalidValue, path + ".source",
+                       "This node is a sink and declares no output to connect from");
+        } else if (sourceKind && targetKind &&
+                   !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
             result.add(ValidationCode::SocketKindMismatch, path,
                        "Connected socket kinds do not match");
         }
@@ -532,10 +553,59 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     return result;
 }
 
+// A reroute takes the kind of whatever feeds it, following a chain of reroutes to whatever feeds
+// the first one (task FIX1, item I). An UNCONNECTED reroute has no kind: std::nullopt is what every
+// kind check reads as "nothing to disagree with", so the first link into a fresh reroute is
+// accepted whatever it carries and every link after it is checked against what the reroute now
+// holds.
+//
+// `seen` stops a chain that closes on itself. Such a graph is refused by the acyclic rule anyway,
+// but this function is also asked about DRAFT graphs mid-edit, where the cycle exists for one call.
+std::optional<SocketValueKind>
+CanonicalGraph::rerouteKind(const NodeId id, const NodeDefinitionRegistry& registry,
+                            std::unordered_set<std::uint64_t>& seen) const {
+    if (!seen.insert(id.value()).second) {
+        return std::nullopt;
+    }
+    const auto incoming = std::ranges::find_if(edges_, [id](const auto& edge) {
+        const auto* fixed = std::get_if<NodeInputRef>(&edge.destination);
+        return fixed != nullptr && fixed->nodeId == id && fixed->port == kValuePortName;
+    });
+    if (incoming == edges_.end()) {
+        return std::nullopt;
+    }
+    const auto* source = findNode(incoming->source.nodeId);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    if (isRerouteNodeType(source->typeId)) {
+        return rerouteKind(source->id, registry, seen);
+    }
+    const auto* definition = registry.find(source->typeId, source->schemaVersion);
+    if (definition == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto& port : definition->outputs) {
+        if (port.name == incoming->source.port) {
+            return port.valueKind;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::rerouteKind(const NodeId id, const NodeDefinitionRegistry& registry) const {
+    std::unordered_set<std::uint64_t> seen;
+    return rerouteKind(id, registry, seen);
+}
+
 std::optional<SocketValueKind>
 CanonicalGraph::outputKind(const OutputPortRef& output,
                            const NodeDefinitionRegistry& registry) const {
     const auto* node = findNode(output.nodeId);
+    if (node != nullptr && isRerouteNodeType(node->typeId)) {
+        return rerouteKind(output.nodeId, registry);
+    }
     const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
     if (definition) {
         for (const auto& port : definition->outputs) {
@@ -549,6 +619,9 @@ CanonicalGraph::outputKind(const OutputPortRef& output,
 std::optional<SocketValueKind>
 CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistry& registry) const {
     const auto* node = findNode(destinationNode(input));
+    if (node != nullptr && isRerouteNodeType(node->typeId)) {
+        return rerouteKind(node->id, registry);
+    }
     const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
     if (definition == nullptr)
         return std::nullopt;

@@ -535,6 +535,10 @@ std::optional<TaskSnapshot> TaskScheduler::snapshot(const TaskId id) const {
 
 void TaskScheduler::beginShutdown() noexcept { state_->requestShutdown(); }
 
+CpuRowBandExecutor* TaskScheduler::rowBandExecutor() const noexcept {
+    return state_->rowBandExecutor();
+}
+
 bool TaskScheduler::isAccepting() const noexcept { return state_->isAccepting(); }
 
 bool TaskScheduler::isQuiescent() const noexcept { return state_->isQuiescent(); }

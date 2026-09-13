@@ -21,7 +21,12 @@ hosts reach with a modifier — bare letters belong to tools.
 - **A command may live in a menu without owning a key.** Mute, collapse, and dissolve are exactly
   that: they are in the node context menu and bind nothing.
 - **A focused text field keeps its own keys.** While an in-node value field or rename field holds
-  focus, the canvas claims nothing — including Tab, which commits and travels.
+  focus, the canvas claims nothing — including Tab, which commits and travels. The one pair the
+  canvas takes back is `Delete`/`Backspace`, and only where no text editor is actually OPEN in that
+  field: a value field with its editor closed, a colour chip, a switch and a dropdown have no use for
+  them, and swallowing them there made "click a card, press Delete" do nothing at all. A field whose
+  text editor is open — the rename field, a text content row, a value field the artist has clicked
+  into — keeps them.
 - **Reserved keys are left unbound**, so the gesture that will own them is not taken first. Nothing
   is reserved at the moment: `Ctrl+G` and `Ctrl+Shift+G` were, and the Nodes canvas now binds them
   to grouping and ungrouping.
@@ -35,6 +40,8 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+O` | Open project |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `Ctrl+Q` | Quit |
+| `Ctrl+Shift+Space` | RAM Preview: cache this composition's range, then play it |
+| `Esc` | Cancel the RAM preview being cached (bound only while one is) |
 | `F11` | Full screen |
 | `` ` `` | Maximize or restore the panel under the pointer |
 | `Alt` (held) | Reveal menu mnemonics |
@@ -74,8 +81,9 @@ hosts reach with a modifier — bare letters belong to tools.
 | Left drag on a group frame | Move every member of that group |
 | Left drag on a card's right edge | Resize the card |
 | Left drag from a socket | Connect, rewire, or disconnect |
-| `Ctrl` + right drag | Cut every ordinary wire crossed |
-| Right-click | Context menu |
+| `Ctrl` + right drag | Cut every wire crossed |
+| `Shift` + right drag | Add a reroute on the wire crossed |
+| Right-click a card, a group frame, a link, or the canvas | Context menu |
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key. A group's own
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
@@ -99,6 +107,11 @@ Transport bindings are unchanged by this document.
 | `Space` | Play / pause |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
+
+RAM Preview sits in the transport cluster as a button, but its KEYS are declared by the Composition
+menu, not here: one `Qt::WindowShortcut` owner per sequence, or Qt reports an ambiguous overload and
+fires neither. The button, the menu item, and `Ctrl+Shift+Space` all call the one
+`RamPreviewController::toggle()`, per **Ownership Boundary** below.
 
 ## Retired Bindings
 

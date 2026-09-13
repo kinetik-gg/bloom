@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-13
 
 ## Objective
 
@@ -248,6 +248,26 @@ panel, task monitor, headless renderer, log, or test.
 CPU computation and blocking I/O use bounded executors with separate concurrency controls so slow
 storage cannot consume all compute capacity. The design does not require one operating-system
 thread for every task.
+
+### Row bands
+
+A task whose work is a per-row kernel over an image -- the CPU composition evaluator and the reference
+display mapping today -- spreads its rows across a second bounded pool the scheduler owns, reached
+through `TaskContext::rowBandExecutor()`. Its width is `TaskSchedulerConfig::rowBandWorkerCount`:
+zero derives a bounded default from the machine, and a configuration may ask for no pool at all, in
+which case every band runs on the calling thread.
+
+These are deliberately NOT the CPU task workers. A task that blocked on tasks of its own would
+deadlock the moment every CPU worker were such a task, and `cpuWorkerCount` is allowed to be one.
+Instead the thread that opens a parallel region runs bands itself and never claims another region's
+band, so a region always makes progress with its caller alone and can never wait on work it is
+itself responsible for finishing. Concurrent regions are supported; workers take bands from the
+oldest region that still has one, so a frame already half finished completes before a newer one
+starts.
+
+Row bands change how long a frame takes and nothing about what it contains: the split is a pure
+function of the row count and the band budget, and the pool is not part of any frame identity. See
+[`animation-and-time.md`](animation-and-time.md), "Row Bands".
 
 GPU work goes through the render backend and its device/queue owners. Potentially blocking resource
 creation, uploads, pipeline compilation, fence waits, and readback do not run on the UI thread.

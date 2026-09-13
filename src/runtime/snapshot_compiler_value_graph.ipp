@@ -10,13 +10,17 @@
 // Whether this node belongs to the value pass. The Image Reroute is the one exception: it carries
 // pixels, so it is ELIDED in the image pass (its consumers read its input's operation directly),
 // exactly as a muted node is, rather than compiled here.
-[[nodiscard]] bool isImageReroute(const runtime::NodeDefinition& definition) const noexcept {
-    return definition.lowering == runtime::NodeLoweringKind::ValueReroute &&
-           definition.key.typeId == document::kImageRerouteNodeType;
-}
-
-[[nodiscard]] bool isValueNode(const runtime::NodeDefinition& definition) const noexcept {
-    return runtime::isValueLowering(definition.lowering) && !isImageReroute(definition);
+// Task FIX1, item I: there is ONE reroute type and it takes the kind of the link it sits on, so
+// "does this reroute carry pixels" is a question about a NODE rather than about a definition. A
+// reroute carrying an image is ELIDED in the image pass (its consumers read its input's operation
+// directly), exactly as a muted node is; one carrying a number is compiled into the value pass.
+[[nodiscard]] bool isImageReroute(const document::NodeId nodeId) const {
+    const auto* node = findNode(nodeId);
+    if (node == nullptr || !document::isRerouteNodeType(node->typeId)) {
+        return false;
+    }
+    const auto kind = composition_->graph().rerouteKind(nodeId, registry_);
+    return kind.has_value() && *kind == runtime::SocketValueKind::Image;
 }
 
 [[nodiscard]] bool isValueNode(const document::NodeId nodeId) const {
@@ -24,7 +28,19 @@
     const auto* definition = node == nullptr
                                  ? nullptr
                                  : registry_.find(node->typeId, node->schemaVersion);
-    return definition != nullptr && isValueNode(*definition);
+    return definition != nullptr && runtime::isValueLowering(definition->lowering) &&
+           !isImageReroute(nodeId);
+}
+
+// The kind a socket on `nodeId` actually carries: the reroute's resolved kind where the node is one,
+// and the registry's declared kind everywhere else.
+[[nodiscard]] runtime::SocketValueKind socketKindOf(const document::NodeId nodeId,
+                                                    const runtime::SocketValueKind declared) const {
+    const auto* node = findNode(nodeId);
+    if (node == nullptr || !document::isRerouteNodeType(node->typeId)) {
+        return declared;
+    }
+    return composition_->graph().rerouteKind(nodeId, registry_).value_or(declared);
 }
 
 // Every driver binding on a reachable node, as the (value node, output port) pair it names. Collected
@@ -95,6 +111,10 @@ valuePromotionFor(const runtime::SocketValueKind source,
 [[nodiscard]] std::optional<runtime::SocketValueKind>
 outputKindOf(const document::OutputPortRef& output) const {
     const auto* node = findNode(output.nodeId);
+    // A reroute answers with the kind of the link it sits on, not with its declared placeholder.
+    if (node != nullptr && document::isRerouteNodeType(node->typeId)) {
+        return composition_->graph().rerouteKind(output.nodeId, registry_);
+    }
     const auto* definition = node == nullptr
                                  ? nullptr
                                  : registry_.find(node->typeId, node->schemaVersion);
@@ -141,6 +161,30 @@ resolveValueOutput(const document::OutputPortRef& source,
 // otherwise the authored constant behind it. This is the single place the "unlinked means the widget's
 // value, linked means the wire's value" rule is implemented for evaluation, matching the editor's own
 // rule exactly.
+// A curve-backed authored value, as the index of its compiled curve (task FIX1, item G). Answers
+// nothing when the parameter is not on a curve, or when its kind has no curve table -- the caller
+// then falls through to the constant it must be.
+[[nodiscard]] std::optional<runtime::CompiledValueOperand>
+curveOperand(const document::ParameterRecord& parameter) const {
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto scalar = scalarCurveIndices_.find(source->curveId);
+        scalar != scalarCurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, scalar->second};
+    }
+    if (const auto vector = vec2CurveIndices_.find(source->curveId);
+        vector != vec2CurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, vector->second};
+    }
+    if (const auto color = color4CurveIndices_.find(source->curveId);
+        color != color4CurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, color->second};
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledValueOperand>
 valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& definition,
              const std::string_view port) {
@@ -157,7 +201,8 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
         if (edge == nullptr) {
             return std::nullopt;
         }
-        const auto resolved = resolveValueOutput(edge->source, declared->valueKind);
+        const auto resolved =
+            resolveValueOutput(edge->source, socketKindOf(node.id, declared->valueKind));
         return resolved.has_value()
                    ? std::optional(runtime::CompiledValueOperand{document::ParameterId{}, *resolved})
                    : std::nullopt;
@@ -173,6 +218,9 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
     // a parameter socket for exactly that reason.
     if (const auto driven = driverOutput(*parameter, declared->valueKind)) {
         return runtime::CompiledValueOperand{binding->parameterId, *driven};
+    }
+    if (auto curve = curveOperand(*parameter)) {
+        return curve;
     }
     const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constant == nullptr) {
@@ -215,9 +263,16 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::ValueConstant: {
         const auto* binding = runtime::detail::findParameterBinding(node, kValueParameterRole);
         const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
-        const auto* constant = parameter == nullptr
-                                   ? nullptr
-                                   : std::get_if<ConstantValueSource>(&parameter->source);
+        if (parameter == nullptr) {
+            return std::nullopt;
+        }
+        // Task FIX1, item G: a literal whose value is on a curve lowers to its curve index, and the
+        // evaluator samples it at the frame being rendered -- so a Scalar node keyed 0 to 1 over ten
+        // frames drives a layer's opacity per frame, exactly as a Time node already could.
+        if (auto curve = curveOperand(*parameter)) {
+            return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{*curve}};
+        }
+        const auto* constant = std::get_if<ConstantValueSource>(&parameter->source);
         if (constant == nullptr) {
             return std::nullopt;
         }
@@ -416,7 +471,7 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
         if (node == nullptr || definition == definitions_.end() ||
-            !isValueNode(*definition->second)) {
+            !isValueNode(nodeId)) {
             continue;
         }
         auto kernel = lowerValueKernel(*node, *definition->second);

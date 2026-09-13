@@ -233,6 +233,27 @@ details.
 
 ## Per-Frame Evaluation
 
+### Row Bands
+
+An operation's rows are evaluated in BANDS across a bounded pool of threads the task scheduler owns,
+not one after another on the thread that asked. The four CPU row kernels -- solid fill, text coverage,
+the affine layer resample, and the layer-stack blend -- and the reference display mapping each write
+only their own output row and read only immutable inputs, so rows divide.
+
+The split is `planRowBands()`: a pure function of the row count and the band budget, at least eight
+rows per band, remainder spread one row at a time across the leading bands. It depends on nothing
+about timing or the order bands finish, so the same image always divides the same way. Pixels do not
+depend on the split: a serial frame and a frame banded any number of ways are byte for byte the same,
+the pool is not part of `ProcessFrameIdentity`, and no semantics version moves for it. A layer stack's
+ENTRIES still fold in order, bottom to top -- only the rows within one entry band.
+
+Progress brackets a row pass (`completed` 0, then the total) instead of counting rows, because a band
+runs on a thread the progress callback does not belong to.
+
+A compiled plan is cached per document revision for the same reason a sequence export compiles once:
+the compiler is time-independent, so two requests that differ only in time compile to the same plan.
+A request carrying an interactive parameter override is compiled directly and never retained.
+
 ### Sequence Export
 
 "Export Frame Range..." exports an inclusive range of composition frame INDICES, one complete
@@ -257,6 +278,94 @@ them:
 - cancellation ends the range and leaves every frame already published exactly as it is. A sequence is
   a sequence of complete publications, not one transaction that could roll back, and the terminal
   outcome says how many landed.
+
+### Viewer Preview Resolution
+
+The preview controller owns an Auto, Full, Half, or Quarter policy. Auto selects the smallest
+rendered extent covering the composition's displayed size, including device pixel ratio: Quarter,
+then Half, then Full. Each proxy dimension rounds up and stays nonzero. Unknown viewer geometry
+uses Full; actual size and larger zooms use Full. Fixed policies ignore zoom. The viewer computes
+zoom, fit, painting, and interaction rectangles from the full composition format, so a proxy is
+upscaled into the same rectangle without changing composition geometry. A zoom or resize requests
+another frame only when its resolved resolution changes.
+
+The Viewer footer places a Resolution dropdown beside Zoom, with Auto, Full, Half, and Quarter.
+It defaults to Auto and persists the policy name in QSettings `viewer/resolution`; an unknown saved
+value falls back to Auto. The control moves with the editor footer. The footer readout includes
+`Auto · ¼`, `Auto · ½`, or `Auto · 1` (or the fixed policy name), followed by exact frame/time.
+This reports the requested factor; retained older pixels remain identified by the existing stale
+frame status. Proxy painting uses the existing smooth image transform into the composition rectangle.
+
+Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
+The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
+and export resolution remain unchanged. RAM preview uses the same controller-resolved factor and
+policy for every request and cache lookup. A policy or Auto factor change cancels an active RAM
+preview run, keeping completed cached frames and requiring a new run at the new resolution. Single
+frame and frame-range exports always evaluate at Full, independently of the Viewer preference.
+
+### RAM Preview
+
+Preview frames are kept in memory so that playing a range a second time, or stepping back to a frame
+already rendered, costs a lookup rather than an evaluation.
+
+**Cache key.** Preview render inputs and the requested resolution policy: project, composition,
+document revision, exact rational time, preview output, resolution (which is where a proxy factor
+lives), resolution policy, quality, and color intent. That is `PreviewRequestIdentity` minus its request generation,
+because the generation says which ASK a frame answered, not what it contains -- a hit is therefore
+re-stamped with the asking request's own generation before it is published, so the frame the artist
+sees is the answer to the request they made.
+
+The display identity is a cache-wide tag rather than a key field: the qualified display processor
+publishes once per session, so an entry's display identity can change at most once, and when it does
+every earlier entry is stale. A frame whose qualification differs from the tag clears the cache and
+adopts the new one.
+
+**What is retained.** The packed RGBA8 display buffer and the identity, and NOT the Float32 process
+image it was mapped from. Playback paints the packed buffer and nothing else -- the viewer's own
+painting, its display geometry, its colour-state chip, and the direct-manipulation mapping all read
+that buffer, none of them the process image -- so keeping the process image would spend four fifths
+of the budget on pixels nothing in a preview ever reads. A retained frame is therefore about 8 MB at
+1920x1080 rather than about 41 MB.
+
+Anything that DOES need scene-linear pixels -- a frame or sequence export, a future sampler or
+analysis -- evaluates the frame again rather than being handed a cached one, and asks
+`PreparedPreviewFrame::hasProcessFrame()` rather than assuming. That is the one thing a cache hit
+cannot answer, and it is stated rather than papered over with a silently null handle.
+
+**Budget.** `playback/ram-preview-memory-bytes` in QSettings, 2 GiB by default; missing, unparseable,
+or zero reads as the default. Least-recently-used entries are evicted until the budget is satisfied,
+and a frame larger than the whole budget is refused rather than allowed to evict everything for
+itself. At about 8 MB a frame the default budget holds roughly 250 frames of a 1920x1080
+composition -- ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the
+first eviction and keeps the prefix that does.
+
+**Invalidation is the key.** A document edit advances the revision, so every entry of an earlier
+revision is unreachable by construction; those entries are dropped outright when a frame of a newer
+revision arrives. Two requests never reach the cache at all: one carrying an interactive parameter
+override, whose pixels belong to a gesture rather than to the revision and whose identity cannot say
+so, and an explicit refresh, which asks for the frame to be re-derived precisely because something
+the key does not cover may have changed.
+
+**The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
+own button) pre-renders the composition's whole frame range into the cache one frame at a time, in
+the background, reporting "Caching 42/240" in the Viewer footer and cancellable with Escape, then
+asks the transport to play it. Frames already cached are counted without being rendered again, so a
+second RAM preview of an unedited range is immediate. The range is the composition's own
+`[0, duration)`: Bloom has no work-area range to scope it to, since the timeline's work-area strip
+honestly spans the whole duration and the document model has no in/out points.
+
+**Clock rule.** A tick asks whether the NEXT frame is cached.
+
+- Cached: the target advances by exactly ONE frame -- a cached frame costs a lookup, so there is
+  nothing to drop and skipping one would state something about the composition that is not true. The
+  due moment is still total elapsed time since `play()`, so presentations track the ideal frame grid
+  and no per-tick error accumulates. A host that stalls long enough to owe several frames plays every
+  one of them, at one frame per tick, rather than skipping to the frame the wall clock now demands.
+- Not cached: the elapsed-time policy below is unchanged, and the footer keeps reporting what the
+  coalescing preview path dropped.
+
+A cached request never enters the coalescing path at all -- it is published directly, with no task --
+which is why a fully cached playback run reports zero dropped frames rather than a small number.
 
 ### Dropped-Frame Counter
 
@@ -339,6 +448,15 @@ translation interaction; locking, multi-selection transforms, and constraint mod
 - stepping frame by frame over an animated composition and sampling each frame's own exact value
 - a sequence export whose per-frame files carry per-frame values, and the dropped-frame counter's
   silence while nothing is measuring
+- row-banded evaluation byte-identical to serial at every band width, cancellation observed inside a
+  band, and the deterministic band split itself
+- a compiled plan reused across requests at one revision and recompiled at the next
+- a cached preview key published with no task and no evaluation, eviction under the memory budget,
+  and entries of an older revision dropped when a newer one arrives
+- a retained frame costing its display buffer alone, painting exactly the pixels the evaluation
+  published, and letting its process image go
+- a RAM preview of a twenty-four frame composition caching every frame, then playing all of them in
+  order with nothing evaluated and no frame dropped, and its cancellation keeping what it cached
 
 Per-key Bezier tangents (handles an artist can drag -- `EaseInOut`'s handles are fixed), curve
 modifiers, procedural extrapolation, expression sampling, shared curves, playback audio sync,

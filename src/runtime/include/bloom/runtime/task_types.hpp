@@ -6,6 +6,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -157,6 +158,15 @@ enum class TaskSubmissionStatus {
 
 struct TaskSchedulerConfig {
     std::size_t cpuWorkerCount = 1;
+    // How many THREADS the scheduler's row-band executor owns (TaskScheduler::rowBandExecutor()).
+    // Zero derives a bounded default from std::thread::hardware_concurrency(), which is what every
+    // caller that has not thought about it should get; a test that wants strictly serial row
+    // evaluation asks for a negative answer explicitly by setting kSerialRowBandWorkers.
+    //
+    // These are deliberately NOT the cpuWorkerCount threads: a CPU task that blocked on CPU tasks
+    // of its own would deadlock as soon as every worker were such a task, and cpuWorkerCount is
+    // allowed to be one.
+    std::size_t rowBandWorkerCount = 0;
     std::size_t blockingIoWorkerCount = 1;
     std::size_t cpuQueueCapacity = 256;
     std::size_t blockingIoQueueCapacity = 64;
@@ -193,6 +203,11 @@ class GpuServiceGeneration final {
 
     std::uint64_t value_ = 0;
 };
+
+// The one value of TaskSchedulerConfig::rowBandWorkerCount that asks for no row parallelism at all:
+// every band runs on the calling thread, in band order. It exists so a test can pin serial
+// evaluation as the reference a parallel evaluation must match bit for bit.
+inline constexpr std::size_t kSerialRowBandWorkers = std::numeric_limits<std::size_t>::max();
 
 struct GpuTaskAdmission {
     std::size_t queuedCommandBytes = 0;

@@ -177,10 +177,17 @@ void testSearchKeyboardAndMenus() {
     auto* popup = search(f);
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
-    expect(popup->isVisible() &&
-               resultRows(list->model()) ==
-                   static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
-           "Tab opens all registered node kinds at the cursor");
+    // ADAPTED (task FIX1, item I): every registered kind EXCEPT the reroute, which is a point on a
+    // link rather than a node to pick out of a list, and is therefore hidden from both Add
+    // surfaces.
+    const auto addable = static_cast<int>(std::ranges::count_if(
+        document::builtInNodeDefinitions().definitions(), [](const auto& definition) {
+            return !document::isRerouteNodeType(definition.key.typeId);
+        }));
+    expect(popup->isVisible() && resultRows(list->model()) == addable,
+           "Tab opens every addable node kind at the cursor, and only those");
+    expect(rowForKey(list->model(), document::kRerouteNodeType).isValid() == false,
+           "the reroute is not one of them");
     // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
     // heading only for a section that actually has results under it.
     // Task S7: Values and Utilities are populated now -- the value library is registered under them
@@ -257,26 +264,34 @@ void testSearchKeyboardAndMenus() {
                f.session.composition()->graph().layerOutputs().size() == 1,
            "armed search adds a structured solid layer and connects its compatible port in one "
            "transaction");
-    // Task S3: the same armed-search path creates a real text layer, in one transaction.
+    // ADAPTED (task FIX1, item B): adding a source from the CANVAS creates that source and nothing
+    // else. No Layer Output, no stack slot, no edges -- the artist wires it up, which is the whole
+    // point of the report. The timeline's Add menu still builds a whole layer.
     f.editor.openAddSearch({560, 460}, global);
     popup = search(f);
     field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     field->setText(QStringLiteral("text"));
     history = f.stack.size();
     const auto boundariesBeforeText = f.session.composition()->graph().layerOutputs().size();
+    const auto slotsBeforeText = f.session.composition()->graph().layerStack().entries().size();
+    const auto edgesBeforeText = f.session.composition()->graph().edges().size();
     QTest::keyClick(field, Qt::Key_Return);
     selected = f.session.selectedNode();
     expect(f.stack.size() == history + 1 && selected != nullptr &&
                selected->typeId == document::kTextSourceNodeType &&
-               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText + 1,
-           "Enter on the text result adds a structured text layer in one transaction");
+               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText &&
+               f.session.composition()->graph().layerStack().entries().size() == slotsBeforeText &&
+               f.session.composition()->graph().edges().size() == edgesBeforeText,
+           "Enter on the text result adds ONLY the text source node");
 
     const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
     f.session.selectLayer(layerId);
     const auto boundary = f.session.selectedNode()->id;
     menu = f.editor.contextMenuForTest(true);
-    expect(named(menu, "nodeRenameAction") && !named(menu, "nodeDissolveAction"),
-           "participating Layer Output offers rename and refuses dissolve");
+    // ADAPTED (task FIX1, item B): a Layer Output's stack slot is created and removed by connecting
+    // and disconnecting it, so dissolving one no longer breaks a boundary it cannot repair -- it
+    // takes the layer out of the stack, which is what the gesture means. Rename is unchanged.
+    expect(named(menu, "nodeRenameAction") != nullptr, "a Layer Output offers rename");
     if (auto* rename = named(menu, "nodeRenameAction"))
         rename->trigger();
     auto* renameField = qobject_cast<QLineEdit*>(
@@ -375,15 +390,34 @@ void testSearchKeyboardAndMenus() {
     expect(!named(menu, "nodeDuplicateAction"), "driver duplication is absent from the node menu");
     delete menu;
     menu = f.editor.contextMenuForTest();
-    expect(named(menu, "nodeAddSearchAction") && named(menu, "nodeSelectAllAction") &&
+    // ADAPTED (task FIX1, item D): the canvas menu offers a categorized "Add Node" SUBMENU, not the
+    // search popup -- Tab is where the search lives. The sections are the registry's own categories
+    // in the search popup's own order, and a singleton already in the composition is listed
+    // disabled with the command's refusal in its tooltip.
+    expect(!named(menu, "nodeAddSearchAction") && named(menu, "nodeSelectAllAction") &&
                named(menu, "nodeFitAction") && named(menu, "nodeActualSizeAction") &&
                named(menu, "nodeZoomInAction") && named(menu, "nodeZoomOutAction"),
-           "canvas menu offers Add search, view actions and Select All");
+           "canvas menu offers view actions and Select All, and no Add search");
+    auto* addMenu = menu->findChild<QMenu*>(QStringLiteral("nodeAddMenu"));
+    expect(addMenu != nullptr, "and an Add Node submenu");
+    if (addMenu != nullptr) {
+        QStringList sections;
+        for (auto* entry : addMenu->actions())
+            if (entry->menu() != nullptr)
+                sections.append(entry->text());
+        QStringList expected;
+        for (const auto category : node_editor::nodeCategoryOrder())
+            expected.append(node_editor::nodeCategoryName(category));
+        expect(sections == expected, "whose sections are the registry's categories, in order");
+        auto* output = named(menu, "nodeAddCompositionOutputAction");
+        expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
+               "a singleton already present is listed disabled with its refusal");
+    }
     const auto aliasRevision = f.session.snapshot().revision();
     if (auto* solid = named(menu, "nodeAddSolidLayerAction"))
         solid->trigger();
     expect(f.session.snapshot().revision().value() == aliasRevision.value() + 1,
-           "preserved Add action contracts capture the revision when their menu is constructed");
+           "and one entry adds its node at the click position in one transaction");
     delete menu;
 }
 } // namespace bloom::ui::test
