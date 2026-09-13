@@ -80,6 +80,7 @@ hosts reach with a modifier — bare letters belong to tools.
 | Left drag on a card's right edge | Resize the card |
 | Left drag from a socket | Connect, rewire, or disconnect |
 | `Ctrl` + right drag | Cut every wire crossed |
+| `Shift` + right drag | Add a reroute on the wire crossed |
 | Right-click a card, a group frame, a link, or the canvas | Context menu |
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key. A group's own

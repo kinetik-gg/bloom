@@ -63,3 +63,48 @@ commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
     return result;
 }
 } // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+commands::OperationResult InsertReroute::apply(document::Draft& draft) const {
+    const auto* composition = draft.project().findComposition(composition_);
+    if (composition == nullptr)
+        return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidTarget,
+                                                   "No active composition");
+    const auto edges = composition->graph().edges();
+    const auto link = std::ranges::find(edges, destination_, &document::EdgeRecord::destination);
+    if (link == edges.end())
+        return commands::OperationResult::rejected(commands::OperationIssueCode::MissingReference,
+                                                   "That link no longer exists");
+    const auto source = link->source;
+    auto added = commands::AddNode(composition_, std::string(document::kRerouteNodeType), position_)
+                     .apply(draft);
+    if (added.status == commands::OperationStatus::Rejected)
+        return added;
+    std::optional<document::NodeId> reroute;
+    for (const auto& item : added.outputs)
+        if (const auto* id = std::get_if<document::NodeId>(&item.id);
+            id != nullptr && item.name == commands::kAddNodeOutput)
+            reroute = *id;
+    if (!reroute)
+        return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidTarget,
+                                                   "Reroute returned no node identity");
+    // Upstream FIRST: the reroute takes its kind from whatever feeds it, so feeding it before it is
+    // asked to satisfy the destination's kind is what lets the second connection be checked at all.
+    auto upstream = commands::ConnectPorts(
+                        composition_, source,
+                        document::NodeInputRef{*reroute, std::string(document::kValuePortName)})
+                        .apply(draft);
+    if (upstream.status == commands::OperationStatus::Rejected)
+        return upstream;
+    auto downstream =
+        commands::ConnectPorts(
+            composition_, document::OutputPortRef{*reroute, std::string(document::kValuePortName)},
+            destination_)
+            .apply(draft);
+    if (downstream.status == commands::OperationStatus::Rejected)
+        return downstream;
+    auto result = std::move(added);
+    result.outputs.push_back({"editorNode", *reroute});
+    return result;
+}
+} // namespace bloom::ui::node_editor

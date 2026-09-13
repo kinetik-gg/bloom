@@ -76,6 +76,8 @@ class NodeGraphicsScene final : public QGraphicsScene {
     void addSearchRequested(QPointF scenePosition, QPoint screenPosition,
                             std::optional<document::InputPortRef> input,
                             std::optional<document::OutputPortRef> output);
+    // Shift + right drag crossed a link and asks for a reroute at that point (task FIX1, item I).
+    void rerouteRequested(document::InputPortRef input, QPointF scenePosition);
 
   public:
     // The session in-node field rows read and commit through (decision 5). Null leaves the scene a
@@ -241,6 +243,9 @@ class NodeGraphEditor final : public QWidget {
     // is what tells showContextMenu() to fall through to the canvas or card menu.
     [[nodiscard]] QMenu* buildLinkContextMenu(QWidget* parent, QPoint viewportPosition);
     void disconnectLink(document::InputPortRef input);
+    // Task FIX1, item I: inserts a reroute into the link that ends at `input`, at `scenePosition`.
+    // Both creation gestures -- the link's own menu and Shift + right drag across it -- call this.
+    void insertReroute(document::InputPortRef input, QPointF scenePosition);
     void handleCanvasKey(int key, Qt::KeyboardModifiers modifiers);
     // The node commands, each named for what it does (task S1, item 8). The keyboard and the
     // context menu call these; neither synthesizes a key press at the other, so a command can exist

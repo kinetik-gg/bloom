@@ -123,14 +123,35 @@ inline constexpr std::string_view kCombineRgbaNodeType = "bloom.combine-rgba";
 
 inline constexpr std::string_view kRandomNodeType = "bloom.random";
 
-inline constexpr std::string_view kImageRerouteNodeType = "bloom.reroute-image";
-inline constexpr std::string_view kScalarRerouteNodeType = "bloom.reroute-scalar";
-inline constexpr std::string_view kIntegerRerouteNodeType = "bloom.reroute-integer";
-inline constexpr std::string_view kBooleanRerouteNodeType = "bloom.reroute-boolean";
-inline constexpr std::string_view kVector2RerouteNodeType = "bloom.reroute-vector2";
-inline constexpr std::string_view kVector3RerouteNodeType = "bloom.reroute-vector3";
-inline constexpr std::string_view kColorRerouteNodeType = "bloom.reroute-color";
-inline constexpr std::string_view kStringRerouteNodeType = "bloom.reroute-string";
+// ONE reroute (task FIX1, item I). A reroute is a POINT ON A LINK, not a kind of node an artist
+// picks out of a menu: its sockets take whatever the link it was inserted into carries, which is
+// why its kind is resolved from the graph (CanonicalGraph::outputKind/inputKind) rather than
+// declared per type. Eight per-kind reroutes made the artist answer a question the wire had already
+// answered, and filled the Utilities section with eight rows that differ only in a colour.
+inline constexpr std::string_view kRerouteNodeType = "bloom.reroute";
+
+// The eight it replaces. Kept only so a document written before this opens: the decode upgrade
+// rewrites each of them to kRerouteNodeType, whose behaviour is identical once the kind comes from
+// the link. Nothing else may use them.
+inline constexpr std::string_view kLegacyImageRerouteNodeType = "bloom.reroute-image";
+inline constexpr std::string_view kLegacyScalarRerouteNodeType = "bloom.reroute-scalar";
+inline constexpr std::string_view kLegacyIntegerRerouteNodeType = "bloom.reroute-integer";
+inline constexpr std::string_view kLegacyBooleanRerouteNodeType = "bloom.reroute-boolean";
+inline constexpr std::string_view kLegacyVector2RerouteNodeType = "bloom.reroute-vector2";
+inline constexpr std::string_view kLegacyVector3RerouteNodeType = "bloom.reroute-vector3";
+inline constexpr std::string_view kLegacyColorRerouteNodeType = "bloom.reroute-color";
+inline constexpr std::string_view kLegacyStringRerouteNodeType = "bloom.reroute-string";
+
+[[nodiscard]] constexpr bool isRerouteNodeType(const std::string_view typeId) noexcept {
+    return typeId == kRerouteNodeType;
+}
+
+[[nodiscard]] constexpr bool isLegacyRerouteNodeType(const std::string_view typeId) noexcept {
+    return typeId == kLegacyImageRerouteNodeType || typeId == kLegacyScalarRerouteNodeType ||
+           typeId == kLegacyIntegerRerouteNodeType || typeId == kLegacyBooleanRerouteNodeType ||
+           typeId == kLegacyVector2RerouteNodeType || typeId == kLegacyVector3RerouteNodeType ||
+           typeId == kLegacyColorRerouteNodeType || typeId == kLegacyStringRerouteNodeType;
+}
 
 // One schema version for the whole library's first appearance. Each type versions independently
 // from here -- the constant is shared only because every one of them ships at version 1 in this

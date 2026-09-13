@@ -633,6 +633,31 @@ into whoever reads the value, so a widening is visible in a plan dump and diagno
 step. One predicate -- `document::isAcceptedSocketConnection()` -- answers for the editor's drag
 affinity, `ConnectPorts`, document validation and the compiler's edge check alike.
 
+#### Reroute Is A Point On A Link
+
+There is ONE reroute type, `bloom.reroute`, and it is not a kind of node an artist picks out of a
+menu. Its sockets take the kind of the link it sits on: `CanonicalGraph::rerouteKind()` follows the
+node's incoming link -- through a chain of reroutes -- to whatever feeds it, and both kind accessors
+answer with that for this type, so every connect-time and validation-time check asks one question.
+An UNCONNECTED reroute has NO kind, which is what lets the first link into one be accepted whatever
+it carries; every link after it is checked against what the reroute now holds.
+
+It is hidden from both Add surfaces, and made on a link instead: right-click the link and choose
+**Add Reroute**, or **Shift + right drag** a stroke across it. Either way it is one transaction -- add
+the node, feed it from the link's source, point the link's destination at it -- and therefore one
+undo. Disconnecting its last link removes it in the SAME transaction: a reroute is a bend in a wire,
+and once both ends are gone there is nothing left for it to be.
+
+It is drawn as a 10px dot in the kind's own colour, with no header, no name and no rows; its tooltip
+says what kind it carries, or that it is unconnected and will take the kind of the link it joins. A
+reroute carrying an image is ELIDED in the image pass exactly as a muted node is; one carrying a
+number is compiled into the value pass. Both are the same pass-through evaluation the eight per-kind
+reroutes had.
+
+The eight it replaces -- `bloom.reroute-image` and its seven siblings -- are rewritten to
+`bloom.reroute` on decode. Nothing else changes: the kind each of them named is exactly the kind its
+own incoming link already carries.
+
 #### Node Library
 
 Every type below ships inside Bloom and is therefore a foundation node type: no manifest requirement

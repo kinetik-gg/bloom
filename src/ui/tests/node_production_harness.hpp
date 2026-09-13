@@ -86,11 +86,12 @@ struct App final {
                 return socket;
         return nullptr;
     }
-    void mouse(QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
+    void mouse(QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons,
+               Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         auto* view = editor.graphView();
         const QPoint viewport = view->mapFromScene(point);
         QMouseEvent event(type, viewport, view->viewport()->mapToGlobal(viewport), button, buttons,
-                          Qt::NoModifier);
+                          modifiers);
         QCoreApplication::sendEvent(view->viewport(), &event);
     }
     void press(QPointF point) {

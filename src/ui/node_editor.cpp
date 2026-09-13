@@ -349,6 +349,7 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     connect(view_, &NodeGraphicsView::canvasKeyPressed, this, &NodeGraphEditor::handleCanvasKey);
     connect(view_, &NodeGraphicsView::canvasFocusLost, scene_, &NodeGraphicsScene::cancelGesture);
     connect(scene_, &NodeGraphicsScene::addSearchRequested, this, &NodeGraphEditor::openAddSearch);
+    connect(scene_, &NodeGraphicsScene::rerouteRequested, this, &NodeGraphEditor::insertReroute);
     rebuild();
 }
 

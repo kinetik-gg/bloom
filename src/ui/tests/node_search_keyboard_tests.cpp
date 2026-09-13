@@ -177,10 +177,17 @@ void testSearchKeyboardAndMenus() {
     auto* popup = search(f);
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
-    expect(popup->isVisible() &&
-               resultRows(list->model()) ==
-                   static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
-           "Tab opens all registered node kinds at the cursor");
+    // ADAPTED (task FIX1, item I): every registered kind EXCEPT the reroute, which is a point on a
+    // link rather than a node to pick out of a list, and is therefore hidden from both Add
+    // surfaces.
+    const auto addable = static_cast<int>(std::ranges::count_if(
+        document::builtInNodeDefinitions().definitions(), [](const auto& definition) {
+            return !document::isRerouteNodeType(definition.key.typeId);
+        }));
+    expect(popup->isVisible() && resultRows(list->model()) == addable,
+           "Tab opens every addable node kind at the cursor, and only those");
+    expect(rowForKey(list->model(), document::kRerouteNodeType).isValid() == false,
+           "the reroute is not one of them");
     // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
     // heading only for a section that actually has results under it.
     // Task S7: Values and Utilities are populated now -- the value library is registered under them

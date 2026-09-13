@@ -553,10 +553,59 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     return result;
 }
 
+// A reroute takes the kind of whatever feeds it, following a chain of reroutes to whatever feeds
+// the first one (task FIX1, item I). An UNCONNECTED reroute has no kind: std::nullopt is what every
+// kind check reads as "nothing to disagree with", so the first link into a fresh reroute is
+// accepted whatever it carries and every link after it is checked against what the reroute now
+// holds.
+//
+// `seen` stops a chain that closes on itself. Such a graph is refused by the acyclic rule anyway,
+// but this function is also asked about DRAFT graphs mid-edit, where the cycle exists for one call.
+std::optional<SocketValueKind>
+CanonicalGraph::rerouteKind(const NodeId id, const NodeDefinitionRegistry& registry,
+                            std::unordered_set<std::uint64_t>& seen) const {
+    if (!seen.insert(id.value()).second) {
+        return std::nullopt;
+    }
+    const auto incoming = std::ranges::find_if(edges_, [id](const auto& edge) {
+        const auto* fixed = std::get_if<NodeInputRef>(&edge.destination);
+        return fixed != nullptr && fixed->nodeId == id && fixed->port == kValuePortName;
+    });
+    if (incoming == edges_.end()) {
+        return std::nullopt;
+    }
+    const auto* source = findNode(incoming->source.nodeId);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    if (isRerouteNodeType(source->typeId)) {
+        return rerouteKind(source->id, registry, seen);
+    }
+    const auto* definition = registry.find(source->typeId, source->schemaVersion);
+    if (definition == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto& port : definition->outputs) {
+        if (port.name == incoming->source.port) {
+            return port.valueKind;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::rerouteKind(const NodeId id, const NodeDefinitionRegistry& registry) const {
+    std::unordered_set<std::uint64_t> seen;
+    return rerouteKind(id, registry, seen);
+}
+
 std::optional<SocketValueKind>
 CanonicalGraph::outputKind(const OutputPortRef& output,
                            const NodeDefinitionRegistry& registry) const {
     const auto* node = findNode(output.nodeId);
+    if (node != nullptr && isRerouteNodeType(node->typeId)) {
+        return rerouteKind(output.nodeId, registry);
+    }
     const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
     if (definition) {
         for (const auto& port : definition->outputs) {
@@ -570,6 +619,9 @@ CanonicalGraph::outputKind(const OutputPortRef& output,
 std::optional<SocketValueKind>
 CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistry& registry) const {
     const auto* node = findNode(destinationNode(input));
+    if (node != nullptr && isRerouteNodeType(node->typeId)) {
+        return rerouteKind(node->id, registry);
+    }
     const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
     if (definition == nullptr)
         return std::nullopt;

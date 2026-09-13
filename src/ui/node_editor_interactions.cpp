@@ -189,8 +189,9 @@ void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
         // ConnectPorts will actually apply.
         const bool compatible =
             socket->draggable() && opposite &&
-            (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
-                        : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind));
+            (socket->acceptsAnyKind() ||
+             (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
+                         : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind)));
         socket->setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
                                            : SocketItem::DragAffinity::Incompatible,
                                 compatible ? QString{} : refusalFor(gesture, *socket, opposite));
@@ -320,6 +321,22 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     }
     if (event->button() == Qt::RightButton && gestureActive()) {
         cancelGesture();
+        event->accept();
+        return;
+    }
+    // Shift + right drag draws a stroke that puts a REROUTE on every link it crosses (task FIX1,
+    // item I), the same shape of gesture as the Ctrl + right drag cut beside it and the same stroke
+    // arithmetic on release -- one adds a bend where the stroke crossed, the other takes the wire
+    // away.
+    if (submit_ && event->button() == Qt::RightButton && event->modifiers() == Qt::ShiftModifier) {
+        cancelGesture();
+        gesture.mode = NodeInteraction::Mode::Reroute;
+        gesture.origin = event->scenePos();
+        gesture.revision = session_->snapshot().revision();
+        gesture.line =
+            addPath(QPainterPath(gesture.origin), QPen(kit::color(kit::Color::Accent), 2));
+        gesture.line->setZValue(10);
+        gesture.line->setData(kNodeItemKindRole, QStringLiteral("reroute-preview"));
         event->accept();
         return;
     }
@@ -509,6 +526,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
     case NodeInteraction::Mode::Box:
         gesture.box->setRect(QRectF(gesture.origin, event->scenePos()).normalized());
         break;
+    case NodeInteraction::Mode::Reroute:
     case NodeInteraction::Mode::Cut: {
         auto path = gesture.line->path();
         // QGraphicsPathItem may coalesce a move-only path with its empty default. Restore the
@@ -528,7 +546,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         const bool orientationWrong = target != nullptr && ((gesture.output && !target->input) ||
                                                             (gesture.input && !target->output));
         const bool kindWrong =
-            target != nullptr && !orientationWrong &&
+            target != nullptr && !orientationWrong && !target->acceptsAnyKind() &&
             !(gesture.output
                   ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
                   : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
@@ -607,6 +625,21 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
             card && card->cardWidth() != gesture.width)
             transaction.emplace<commands::SetNodeWidth>(compositionId, gesture.resized,
                                                         card->cardWidth());
+    } else if (gesture.mode == NodeInteraction::Mode::Reroute) {
+        QPainterPathStroker stroke;
+        stroke.setWidth(2);
+        const auto crossing = stroke.createStroke(gesture.line->path());
+        for (auto* item : items()) {
+            const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
+            if (edge == nullptr || !crossing.intersects(edge->shape()))
+                continue;
+            // At the crossing itself, so the dot lands where the artist drew through the wire.
+            const auto crossingPoint = edge->path().pointAtPercent(0.5);
+            Q_EMIT rerouteRequested(edge->edge.destination, crossingPoint);
+            break;
+        }
+        cancelGesture();
+        return;
     } else if (gesture.mode == NodeInteraction::Mode::Cut) {
         QPainterPathStroker stroke;
         stroke.setWidth(2);

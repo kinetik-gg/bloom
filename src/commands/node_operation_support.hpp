@@ -130,6 +130,30 @@ inline std::optional<OperationResult> validateGraph(
     }
     return std::nullopt;
 }
+// A reroute that now has nothing on either side, removed (task FIX1, item I). A reroute is a bend
+// in a wire and nothing else -- it carries no value of its own, has no parameter to edit, and shows
+// no name -- so once both of its links are gone there is nothing for it to be. Answers whether it
+// removed one, and is a no-op for every node that is not a stranded reroute.
+inline bool eraseStrandedReroute(document::Composition& composition, const document::NodeId id) {
+    auto& graph = composition.graph();
+    const auto* node = graph.findNode(id);
+    if (node == nullptr || !document::isRerouteNodeType(node->typeId)) {
+        return false;
+    }
+    const auto edges = graph.edges();
+    const bool linked =
+        std::ranges::any_of(edges.begin(), edges.end(), [id](const document::EdgeRecord& edge) {
+            return edge.source.nodeId == id || destinationNode(edge.destination) == id;
+        });
+    if (linked) {
+        return false;
+    }
+    (void)graph.eraseNode(id);
+    composition.nodeLayout().erase(id);
+    (void)detachFromNodeGroups(composition, {id});
+    return true;
+}
+
 inline void eraseOrphanedParameters(document::Composition& composition,
                                     const std::set<document::ParameterId>& candidates) {
     for (const auto id : candidates) {

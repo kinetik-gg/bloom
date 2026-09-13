@@ -122,14 +122,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
         LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
         LibraryName{document::kRandomNodeType, "Random"},
-        LibraryName{document::kImageRerouteNodeType, "Reroute Image"},
-        LibraryName{document::kScalarRerouteNodeType, "Reroute Scalar"},
-        LibraryName{document::kIntegerRerouteNodeType, "Reroute Integer"},
-        LibraryName{document::kBooleanRerouteNodeType, "Reroute Boolean"},
-        LibraryName{document::kVector2RerouteNodeType, "Reroute Vector 2"},
-        LibraryName{document::kVector3RerouteNodeType, "Reroute Vector 3"},
-        LibraryName{document::kColorRerouteNodeType, "Reroute Color"},
-        LibraryName{document::kStringRerouteNodeType, "Reroute String"},
+        LibraryName{document::kRerouteNodeType, "Reroute"},
     };
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
@@ -253,6 +246,22 @@ kit::KValueField* makeCardField(const QString& objectName, const QString& access
 
 void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) {
     const QRectF bounds = cardRect();
+    if (reroute_) {
+        // A dot in the kind's own colour, ringed like a socket so it reads as part of the wire,
+        // with the selection outline the cards use so selecting one is the same gesture and the
+        // same ink.
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const auto kind =
+            sockets_.empty() ? document::SocketValueKind::Image : sockets_.front()->kind;
+        painter->setPen(
+            QPen(kit::color(option->state.testFlag(QStyle::State_Selected)
+                                ? (primary_ ? kit::Color::Foreground : kit::Color::Accent)
+                                : kit::Color::Surface),
+                 kSelectionEdgeWidth));
+        painter->setBrush(kit::color(socketColorToken(kind)));
+        painter->drawEllipse(bounds.center(), kRerouteDiameter / 2.0, kRerouteDiameter / 2.0);
+        return;
+    }
     const auto radiusToken = layout_.collapsed ? kit::Radius::Full : kCardRadius;
     const bool selected = option->state.testFlag(QStyle::State_Selected);
     painter->setRenderHint(QPainter::Antialiasing, true);
@@ -634,6 +643,17 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
     const auto* definition = registry.find(node.typeId, node.schemaVersion);
     if (!definition)
         return;
+    // A reroute's sockets take the kind of the link it sits on (task FIX1, item I); the
+    // definition's declared Image is only the placeholder a definition must name. An unconnected
+    // reroute keeps the placeholder for painting and accepts anything, which is what its own
+    // kind-less state means.
+    const auto rerouteKind = document::isRerouteNodeType(node.typeId)
+                                 ? composition.graph().rerouteKind(node.id, registry)
+                                 : std::nullopt;
+    const auto kindOf = [&rerouteKind](const document::SocketValueKind declared) {
+        return rerouteKind.value_or(declared);
+    };
+    const bool kindless = document::isRerouteNodeType(node.typeId) && !rerouteKind.has_value();
     for (const auto& port : definition->inputs) {
         document::InputPortRef input = document::NodeInputRef{node.id, port.name};
         // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
@@ -657,7 +677,8 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         if (linked)
             linkedInputs_.insert(QString::fromStdString(port.name));
         sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
-                                          port.valueKind, input, std::nullopt, this));
+                                          kindOf(port.valueKind), input, std::nullopt, this));
+        sockets_.back()->setAcceptsAnyKind(kindless);
     }
     if (definition->layerSlotInput && node.id == composition.graph().layerStack().nodeId()) {
         // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per

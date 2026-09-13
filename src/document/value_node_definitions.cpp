@@ -503,7 +503,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         return false;
     }
     const bool carriesImages = definition.lowering == NodeLoweringKind::ValueReroute &&
-                               definition.key.typeId == kImageRerouteNodeType;
+                               isRerouteNodeType(definition.key.typeId);
     for (const auto& output : definition.outputs) {
         if ((output.valueKind == SocketValueKind::Image) != carriesImages) {
             return false;
@@ -684,14 +684,11 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
 
     definitions.push_back(randomDefinition());
 
-    definitions.push_back(rerouteDefinition(kImageRerouteNodeType, SocketValueKind::Image));
-    definitions.push_back(rerouteDefinition(kScalarRerouteNodeType, SocketValueKind::Scalar));
-    definitions.push_back(rerouteDefinition(kIntegerRerouteNodeType, SocketValueKind::Integer));
-    definitions.push_back(rerouteDefinition(kBooleanRerouteNodeType, SocketValueKind::Boolean));
-    definitions.push_back(rerouteDefinition(kVector2RerouteNodeType, SocketValueKind::Vector2));
-    definitions.push_back(rerouteDefinition(kVector3RerouteNodeType, SocketValueKind::Vector3));
-    definitions.push_back(rerouteDefinition(kColorRerouteNodeType, SocketValueKind::Color));
-    definitions.push_back(rerouteDefinition(kStringRerouteNodeType, SocketValueKind::String));
+    // ONE reroute (task FIX1, item I). Its DECLARED kind is Image only because a definition must
+    // name one; the kind a reroute actually carries is resolved from the link it sits on, which is
+    // what CanonicalGraph::outputKind()/inputKind() answer for this type and what every
+    // connect-time and compile-time check therefore asks.
+    definitions.push_back(rerouteDefinition(kRerouteNodeType, SocketValueKind::Image));
     return definitions;
 }
 

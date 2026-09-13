@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -137,6 +138,11 @@ class CanonicalGraph final {
     [[nodiscard]] std::optional<SocketValueKind>
     inputKind(const InputPortRef& input,
               const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
+    // The kind a reroute node carries: the kind of whatever feeds it, through a chain of reroutes,
+    // or nothing when it is unconnected (task FIX1, item I). Both kind accessors above answer with
+    // this for a reroute, so every connect-time and validation-time check asks one question.
+    [[nodiscard]] std::optional<SocketValueKind>
+    rerouteKind(NodeId id, const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
     [[nodiscard]] bool eraseNode(NodeId id);
     [[nodiscard]] bool eraseEdge(EdgeId id);
@@ -148,6 +154,10 @@ class CanonicalGraph final {
              const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
 
   private:
+    [[nodiscard]] std::optional<SocketValueKind>
+    rerouteKind(NodeId id, const NodeDefinitionRegistry& registry,
+                std::unordered_set<std::uint64_t>& seen) const;
+
     std::vector<NodeRecord> nodes_;
     std::vector<EdgeRecord> edges_;
     std::vector<LayerOutputBoundary> layerOutputs_;

@@ -163,7 +163,7 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         // A value node carries no pixels, so "empty image" is not a state it can be in -- and a muted
         // one must not be classified as one, or the parameter it drives would lose its source.
-        if (isValueNode(*definition))
+        if (isValueNode(id))
             continue;
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput)
             continue;
@@ -211,13 +211,13 @@ lower(const std::vector<document::NodeId>& order) {
         }
         if (emptyImages_.contains(nodeId))
             continue;
-        if (isValueNode(*definition->second))
+        if (isValueNode(nodeId))
             continue;
         // An Image Reroute is ELIDED rather than compiled: its consumers read its input's operation
         // directly, so it costs nothing at evaluation -- the same treatment a muted node's bypass
         // already gets, and the generalisation of DissolveNode's single Image pair to a node that
         // exists only to tidy a wire.
-        if (isImageReroute(*definition->second)) {
+        if (isImageReroute(nodeId)) {
             const auto* rerouteEdge = fixedInputEdge(nodeId, document::kValuePortName);
             const auto source = rerouteEdge == nullptr
                                     ? indices.end()

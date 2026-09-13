@@ -23,4 +23,24 @@ class AddEditorNode final : public commands::Operation {
     std::optional<document::InputPortRef> input_;
     std::optional<document::OutputPortRef> output_;
 };
+
+// Task FIX1, item I: inserts a reroute INTO an existing link, in one transaction and therefore one
+// undo step -- add the node at the drop point, rewire the link's destination to read from it, and
+// feed it from the link's original source. Resolving the freshly allocated node id inside one
+// operation is the same reason AddEditorNode exists.
+class InsertReroute final : public commands::Operation {
+  public:
+    InsertReroute(document::CompositionId composition, document::InputPortRef destination,
+                  document::Vec2d position)
+        : composition_(composition), destination_(std::move(destination)), position_(position) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.node.insert-reroute";
+    }
+    [[nodiscard]] commands::OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    document::InputPortRef destination_;
+    document::Vec2d position_;
+};
 } // namespace bloom::ui::node_editor

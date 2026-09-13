@@ -145,11 +145,22 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     auto& graph = composition->graph();
     const auto sourceKind = graph.outputKind(source_, registry_);
     const auto inputKind = graph.inputKind(destination_, registry_);
-    if (!sourceKind || !inputKind)
+    // An unconnected REROUTE has no kind yet, and that is not a missing port -- it is the whole of
+    // what "a reroute takes the kind of the link it joins" means (task FIX1, item I). The first
+    // link into one is accepted whatever it carries; every link after it is checked against what
+    // the reroute now holds, because by then outputKind()/inputKind() answer with that kind.
+    const auto kindless = [&graph](const document::NodeId nodeId) {
+        const auto* node = graph.findNode(nodeId);
+        return node != nullptr && document::isRerouteNodeType(node->typeId);
+    };
+    const bool sourceIsKindlessReroute = !sourceKind && kindless(source_.nodeId);
+    const bool destinationIsKindlessReroute =
+        !inputKind && kindless(detail::destinationNode(destination_));
+    if ((!sourceKind && !sourceIsKindlessReroute) || (!inputKind && !destinationIsKindlessReroute))
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
             "Connection requires existing registered source and destination ports");
-    if (!document::isAcceptedSocketConnection(*sourceKind, *inputKind))
+    if (sourceKind && inputKind && !document::isAcceptedSocketConnection(*sourceKind, *inputKind))
         return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
                                          "Connected socket kinds do not match");
     // Task S7: a link into an operand socket is the PARAMETER's driver binding, not an edge. One
@@ -282,7 +293,15 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     const auto* edge = detail::inputEdge(graph, input_);
     if (!edge)
         return OperationResult::noChange();
+    const auto upstream = edge->source.nodeId;
+    const auto downstream = detail::destinationNode(input_);
     (void)graph.eraseEdge(edge->id);
+    // A reroute with nothing on either side is a dot floating in the canvas that the artist never
+    // placed: it existed only to bend a wire, and the wire is gone (task FIX1, item I). Removed in
+    // the SAME transaction, so one undo puts the link and its bend back together. Both ends are
+    // checked, because either of them may be the reroute this disconnect stranded.
+    for (const auto candidate : {upstream, downstream})
+        (void)detail::eraseStrandedReroute(*composition, candidate);
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
     return OperationResult::applied();

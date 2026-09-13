@@ -326,7 +326,11 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
     for (const auto category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
-            if (definition.category == category)
+            // Task FIX1, item I: a reroute is a point on a LINK, made by right-clicking the link or
+            // dragging across it. It is not something to pick out of a menu and then find a use
+            // for, so it is listed in neither Add surface.
+            if (definition.category == category &&
+                !document::isRerouteNodeType(definition.key.typeId))
                 section.push_back(&definition);
         if (section.empty())
             continue;
@@ -407,7 +411,30 @@ QMenu* NodeGraphEditor::buildLinkContextMenu(QWidget* parent, const QPoint viewp
     auto* remove = menu->addAction(tr("Delete Link"));
     remove->setObjectName(QStringLiteral("nodeLinkDeleteAction"));
     connect(remove, &QAction::triggered, this, [this, input] { disconnectLink(input); });
+    menu->addSeparator();
+    // Task FIX1, item I: a reroute is made ON a link, at the point the artist clicked, because that
+    // is the only place a bend in a wire means anything.
+    auto* reroute = menu->addAction(tr("Add Reroute"));
+    reroute->setObjectName(QStringLiteral("nodeLinkAddRerouteAction"));
+    const auto scenePosition = view_->sceneFromViewport(viewportPosition);
+    connect(reroute, &QAction::triggered, this,
+            [this, input, scenePosition] { insertReroute(input, scenePosition); });
     return menu;
+}
+
+void NodeGraphEditor::insertReroute(document::InputPortRef input, const QPointF scenePosition) {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    commands::Transaction insert("Add Reroute", session_.snapshot().revision());
+    insert.emplace<InsertReroute>(session_.compositionId(), std::move(input),
+                                  document::Vec2d{scenePosition.x(), scenePosition.y()});
+    const auto result = scene_->submit(std::move(insert));
+    if (const auto id = result.outputId<document::NodeId>("editorNode"); result.succeeded() && id)
+        session_.selectNode(*id);
 }
 
 void NodeGraphEditor::disconnectLink(document::InputPortRef input) {
@@ -477,7 +504,9 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
     for (const auto category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
-            if (definition.category == category)
+            // The reroute is hidden here for the same reason it is hidden from the Add submenu.
+            if (definition.category == category &&
+                !document::isRerouteNodeType(definition.key.typeId))
                 section.push_back(&definition);
         std::ranges::sort(section, [](const auto* left, const auto* right) {
             return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);

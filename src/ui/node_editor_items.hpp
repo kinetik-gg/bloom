@@ -73,6 +73,10 @@ inline constexpr qreal kCardRowGap = kit::px(kit::Spacing::XXS);
 inline constexpr qreal kCardHeaderHeight = kit::px(kit::Size::PanelHeader);
 inline constexpr auto kCardRadius = kit::Radius::Medium;
 inline constexpr qreal kCardMinimumWidth = 128.0;
+// Task FIX1, item I: a reroute is drawn as a DOT, not a card. It has no name to show, no parameter
+// to edit, and no header to grab -- it is a bend in a wire, and a card around one would be a box
+// the size of a Solid standing in for a single point.
+inline constexpr qreal kRerouteDiameter = 10.0;
 inline constexpr qreal kSocketDiameter = 8.0;
 inline constexpr qreal kSocketRowHeight = kit::px(kit::Size::ControlCompact);
 // One ordered slot's worth of the Merge node's multi-input pill (task S1, item 7): the pill grows
@@ -167,6 +171,10 @@ class SocketItem final : public QGraphicsItem {
     // what removes it. `structural_` survives only as the flag that says a socket carries no
     // authored widget of its own.
     [[nodiscard]] bool draggable() const { return true; }
+    // An unconnected reroute's socket takes whatever the first link brings (task FIX1, item I), so
+    // it is a landing site for every kind rather than for the placeholder its definition declares.
+    void setAcceptsAnyKind(const bool any) { acceptsAnyKind_ = any; }
+    [[nodiscard]] bool acceptsAnyKind() const noexcept { return acceptsAnyKind_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -195,6 +203,7 @@ class SocketItem final : public QGraphicsItem {
   private:
     QString description_;
     bool hovered_ = false;
+    bool acceptsAnyKind_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
     bool stackPill_ = false;
@@ -241,13 +250,25 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
+        reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
         eyebrow_ = nodeEyebrow(composition, node);
-        setToolTip(QStringLiteral("%1\n%2\nNode %3")
-                       .arg(title_, nodeTypeDisplayName(node.typeId))
-                       .arg(id_.value()));
+        if (reroute_) {
+            // A dot has no name on it, so its tooltip is where the kind it carries is said.
+            const auto kind = composition.graph().rerouteKind(node.id, registry);
+            setToolTip(kind.has_value()
+                           ? QStringLiteral("%1 · %2").arg(nodeTypeDisplayName(node.typeId),
+                                                           socketKindName(*kind))
+                           : QStringLiteral("%1 · %2").arg(
+                                 nodeTypeDisplayName(node.typeId),
+                                 tr("unconnected; takes the kind of the link it joins")));
+        } else {
+            setToolTip(QStringLiteral("%1\n%2\nNode %3")
+                           .arg(title_, nodeTypeDisplayName(node.typeId))
+                           .arg(id_.value()));
+        }
         ensureFields(node, registry);
         buildSockets(node, composition, registry);
         refreshValues(node, composition);
@@ -324,6 +345,8 @@ class NodeItem final : public QGraphicsObject {
     // that paints outside its bounding rectangle leaves trails behind it and gets clipped out of
     // itemsBoundingRect() (which is what Fit frames against).
     [[nodiscard]] QRectF cardRect() const { return {0.0, 0.0, width_, height_}; }
+    // True for the one node type that is a point on a link rather than a card (task FIX1, item I).
+    [[nodiscard]] bool isReroute() const noexcept { return reroute_; }
 
     [[nodiscard]] QRectF boundingRect() const override {
         const qreal overhang = kSocketDiameter / 2.0 + kit::kHairlineWidth;
@@ -1327,6 +1350,27 @@ class NodeItem final : public QGraphicsObject {
     // row label, and the widest control -- rather than from a spelled card width, then positions
     // each proxy inside it.
     void relayout() {
+        // A reroute is a dot: one input on its left edge, one output on its right, and nothing
+        // else. Laid out here rather than in the card path below because none of that path's
+        // questions -- how wide is the label column, which row carries a diamond, how tall is the
+        // header -- has an answer for a node with no rows and no name (task FIX1, item I).
+        if (reroute_) {
+            if (!qFuzzyCompare(width_, kRerouteDiameter) ||
+                !qFuzzyCompare(height_, kRerouteDiameter)) {
+                prepareGeometryChange();
+                width_ = kRerouteDiameter;
+                height_ = kRerouteDiameter;
+            }
+            minimumWidth_ = kRerouteDiameter;
+            for (auto* child : childItems())
+                if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                    proxy != nullptr && proxy != renameProxy_)
+                    proxy->setVisible(false);
+            for (auto* socket : sockets_)
+                socket->setPos(socket->input.has_value() ? 0.0 : width_, height_ / 2.0);
+            update();
+            return;
+        }
         const QFontMetricsF rowMetrics(kit::font(kit::TypeRole::UiSmall));
         const QFontMetricsF valueMetrics(kit::font(kit::TypeRole::Value));
 
@@ -1499,6 +1543,7 @@ class NodeItem final : public QGraphicsObject {
     qreal rowHeight_ = kit::px(kit::Size::Control);
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
+    bool reroute_ = false;
     bool primary_ = false;
     bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;

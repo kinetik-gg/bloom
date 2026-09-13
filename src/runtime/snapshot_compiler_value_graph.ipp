@@ -10,13 +10,17 @@
 // Whether this node belongs to the value pass. The Image Reroute is the one exception: it carries
 // pixels, so it is ELIDED in the image pass (its consumers read its input's operation directly),
 // exactly as a muted node is, rather than compiled here.
-[[nodiscard]] bool isImageReroute(const runtime::NodeDefinition& definition) const noexcept {
-    return definition.lowering == runtime::NodeLoweringKind::ValueReroute &&
-           definition.key.typeId == document::kImageRerouteNodeType;
-}
-
-[[nodiscard]] bool isValueNode(const runtime::NodeDefinition& definition) const noexcept {
-    return runtime::isValueLowering(definition.lowering) && !isImageReroute(definition);
+// Task FIX1, item I: there is ONE reroute type and it takes the kind of the link it sits on, so
+// "does this reroute carry pixels" is a question about a NODE rather than about a definition. A
+// reroute carrying an image is ELIDED in the image pass (its consumers read its input's operation
+// directly), exactly as a muted node is; one carrying a number is compiled into the value pass.
+[[nodiscard]] bool isImageReroute(const document::NodeId nodeId) const {
+    const auto* node = findNode(nodeId);
+    if (node == nullptr || !document::isRerouteNodeType(node->typeId)) {
+        return false;
+    }
+    const auto kind = composition_->graph().rerouteKind(nodeId, registry_);
+    return kind.has_value() && *kind == runtime::SocketValueKind::Image;
 }
 
 [[nodiscard]] bool isValueNode(const document::NodeId nodeId) const {
@@ -24,7 +28,19 @@
     const auto* definition = node == nullptr
                                  ? nullptr
                                  : registry_.find(node->typeId, node->schemaVersion);
-    return definition != nullptr && isValueNode(*definition);
+    return definition != nullptr && runtime::isValueLowering(definition->lowering) &&
+           !isImageReroute(nodeId);
+}
+
+// The kind a socket on `nodeId` actually carries: the reroute's resolved kind where the node is one,
+// and the registry's declared kind everywhere else.
+[[nodiscard]] runtime::SocketValueKind socketKindOf(const document::NodeId nodeId,
+                                                    const runtime::SocketValueKind declared) const {
+    const auto* node = findNode(nodeId);
+    if (node == nullptr || !document::isRerouteNodeType(node->typeId)) {
+        return declared;
+    }
+    return composition_->graph().rerouteKind(nodeId, registry_).value_or(declared);
 }
 
 // Every driver binding on a reachable node, as the (value node, output port) pair it names. Collected
@@ -95,6 +111,10 @@ valuePromotionFor(const runtime::SocketValueKind source,
 [[nodiscard]] std::optional<runtime::SocketValueKind>
 outputKindOf(const document::OutputPortRef& output) const {
     const auto* node = findNode(output.nodeId);
+    // A reroute answers with the kind of the link it sits on, not with its declared placeholder.
+    if (node != nullptr && document::isRerouteNodeType(node->typeId)) {
+        return composition_->graph().rerouteKind(output.nodeId, registry_);
+    }
     const auto* definition = node == nullptr
                                  ? nullptr
                                  : registry_.find(node->typeId, node->schemaVersion);
@@ -181,7 +201,8 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
         if (edge == nullptr) {
             return std::nullopt;
         }
-        const auto resolved = resolveValueOutput(edge->source, declared->valueKind);
+        const auto resolved =
+            resolveValueOutput(edge->source, socketKindOf(node.id, declared->valueKind));
         return resolved.has_value()
                    ? std::optional(runtime::CompiledValueOperand{document::ParameterId{}, *resolved})
                    : std::nullopt;
@@ -450,7 +471,7 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
         if (node == nullptr || definition == definitions_.end() ||
-            !isValueNode(*definition->second)) {
+            !isValueNode(nodeId)) {
             continue;
         }
         auto kernel = lowerValueKernel(*node, *definition->second);

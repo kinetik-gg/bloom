@@ -112,8 +112,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    // ADAPTED (task S7): the five structural node types plus the forty-node value library.
-    expectations.expect(registry.definitions().size() == 45,
+    // ADAPTED (task S7, then FIX1 item I): the five structural node types plus the value library,
+    // which is thirty-three now -- the eight per-kind Reroutes became ONE.
+    expectations.expect(registry.definitions().size() == 38,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();
@@ -362,9 +363,12 @@ void testValueLoweringShapeContract(Expectations& expectations) {
             "a parameter with no socket must be an inline selector, not an unreachable operand");
     }
 
-    // A Reroute: the one value lowering whose single socket is required and carries no parameter.
+    // The Reroute: ADAPTED (task FIX1, item I). There is ONE reroute type now, and the kind it
+    // carries comes from the link it sits on rather than from its name, so the clause that used to
+    // read "a kind-named type and its sockets cannot disagree" reads "its two sockets agree with
+    // each other".
     const auto reroute =
-        builtInDefinition(document::kScalarRerouteNodeType, document::kValueNodeSchemaVersion);
+        builtInDefinition(document::kRerouteNodeType, document::kValueNodeSchemaVersion);
     {
         auto optional = reroute;
         optional.inputs.front().required = false;
@@ -374,15 +378,7 @@ void testValueLoweringShapeContract(Expectations& expectations) {
     {
         auto retyped = reroute;
         retyped.outputs.front().valueKind = runtime::SocketValueKind::Color;
-        refuses(std::move(retyped), "a Reroute passes its own kind through, not another");
-    }
-    {
-        auto pixels = reroute;
-        pixels.inputs.front().valueKind = runtime::SocketValueKind::Image;
-        pixels.outputs.front().valueKind = runtime::SocketValueKind::Image;
-        refuses(std::move(pixels),
-                "only the Image Reroute type may carry Image: a kind-named type and its sockets "
-                "cannot disagree");
+        refuses(std::move(retyped), "a Reroute's two sockets declare one kind, not two");
     }
 
     // Time: no inputs, no parameters, and its two outputs in their declared units.

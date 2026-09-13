@@ -614,6 +614,12 @@ target_link_libraries(bloom_node_blend_mode_test PRIVATE bloom_ui bloom_runtime 
 bloom_enable_warnings(bloom_node_blend_mode_test)
 bloom_add_test(NAME bloom.ui.node-blend-mode COMMAND bloom_node_blend_mode_test LABELS ui integration TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_node_reroute_test node_reroute_tests.cpp)
+target_include_directories(bloom_node_reroute_test PRIVATE ..)
+target_link_libraries(bloom_node_reroute_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_reroute_test)
+bloom_add_test(NAME bloom.ui.node-reroute COMMAND bloom_node_reroute_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_link_detach_test node_link_detach_tests.cpp)
 target_include_directories(bloom_node_link_detach_test PRIVATE ..)
 target_link_libraries(bloom_node_link_detach_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)

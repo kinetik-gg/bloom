@@ -84,6 +84,13 @@ struct InjectedLayerOutputParameter final {
     auto& highWater = envelope.highWater.parameter;
     for (auto& composition : envelope.compositions) {
         for (auto& node : composition.graph.nodes) {
+            // Task FIX1, item I: the eight per-kind Reroute types became ONE, whose kind comes from
+            // the link it sits on. A node written as one of them becomes that one type, and nothing
+            // else changes -- same ports, same pass-through, same pixels -- because the kind it
+            // used to name is exactly the kind its own incoming link already carries.
+            if (document::isLegacyRerouteNodeType(node.typeId)) {
+                node.typeId = std::string(document::kRerouteNodeType);
+            }
             if (node.typeId != document::kLayerOutputNodeType ||
                 node.schemaVersion >= document::kLayerOutputNodeSchemaVersion) {
                 continue;
