@@ -256,11 +256,11 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
 twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMode) {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}});
+        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, {.blendMode = topMode}));
     operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeB, kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}});
+        runtime::CompiledSolid{kSolidNodeB, {kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {.blendMode = bottomMode}));
     operations.emplace_back(

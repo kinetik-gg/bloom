@@ -103,9 +103,10 @@ Authored authoredProject() {
     const auto scaleParameter = draft.ids().allocateParameter();
     const auto rotationParameter = draft.ids().allocateParameter();
     const auto opacityParameter = draft.ids().allocateParameter();
+    const auto blendModeParameter = draft.ids().allocateParameter();
     if (!solidNodeId || !layerNodeId || !layerId || !slotId || !solidEdgeId || !stackEdgeId ||
         !colorParameter || !positionParameter || !anchorParameter || !scaleParameter ||
-        !rotationParameter || !opacityParameter) {
+        !rotationParameter || !opacityParameter || !blendModeParameter) {
         throw std::runtime_error("fixture ids");
     }
     auto& graph = composition.graph();
@@ -120,7 +121,8 @@ Authored authoredProject() {
                         {std::string(document::kAnchorParameterRole), *anchorParameter},
                         {std::string(document::kScaleParameterRole), *scaleParameter},
                         {std::string(document::kRotationParameterRole), *rotationParameter},
-                        {std::string(document::kOpacityParameterRole), *opacityParameter}},
+                        {std::string(document::kOpacityParameterRole), *opacityParameter},
+                        {std::string(document::kBlendModeParameterRole), *blendModeParameter}},
                        document::kLayerOutputNodeSchemaVersion}) &&
         graph.addLayerOutput(
             {*layerNodeId, *layerId, "Solid 1", std::string(document::kLayerOutputOutputPort)}) &&
@@ -155,7 +157,10 @@ Authored authoredProject() {
              document::ConstantValueSource{document::kDefaultRotationDegrees}}) &&
         composition.parameters().insert({*opacityParameter,
                                          std::string(document::kOpacityParameterSchemaKey),
-                                         document::ConstantValueSource{1.0}});
+                                         document::ConstantValueSource{1.0}}) &&
+        composition.parameters().insert(
+            {*blendModeParameter, std::string(document::kBlendModeParameterSchemaKey),
+             document::ConstantValueSource{document::kDefaultBlendModeValue}});
     if (!authoredParameters) {
         throw std::runtime_error("fixture parameters");
     }

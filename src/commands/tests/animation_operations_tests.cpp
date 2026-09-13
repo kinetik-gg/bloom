@@ -75,10 +75,11 @@ scalarCurve(const document::Snapshot& snapshot, const document::AnimationCurveId
 // all these cases need: an animation command is keyed by parameter, not by connectivity.
 inline constexpr document::NodeId kSolidSourceNodeId = document::NodeId::fromRaw(23);
 inline constexpr document::NodeId kTextSourceNodeId = document::NodeId::fromRaw(24);
-inline constexpr ParameterId kSolidColorId = ParameterId::fromRaw(70);
-inline constexpr ParameterId kTextContentId = ParameterId::fromRaw(71);
-inline constexpr ParameterId kTextSizeId = ParameterId::fromRaw(72);
-inline constexpr ParameterId kTextColorId = ParameterId::fromRaw(73);
+// ADAPTED (merge with blend modes): 70/71 became the shared fixture's blend-mode ids.
+inline constexpr ParameterId kSolidColorId = ParameterId::fromRaw(74);
+inline constexpr ParameterId kTextContentId = ParameterId::fromRaw(75);
+inline constexpr ParameterId kTextSizeId = ParameterId::fromRaw(76);
+inline constexpr ParameterId kTextColorId = ParameterId::fromRaw(77);
 inline constexpr core::Color4d kFixtureSolidColor{0.25, 0.5, 0.75, 1.0};
 inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
 

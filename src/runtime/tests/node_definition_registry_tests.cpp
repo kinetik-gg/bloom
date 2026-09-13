@@ -171,8 +171,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             std::ranges::all_of(
                 std::span(layer->parameters).first(5),
                 [](const auto& parameter) { return parameter.supportsAnimation; }) &&
-            !layer->parameters[5].supportsAnimation &&
-            solid != nullptr && solid->parameters.front().supportsAnimation && text != nullptr &&
+            !layer->parameters[5].supportsAnimation && solid != nullptr &&
+            solid->parameters.front().supportsAnimation && text != nullptr &&
             text->parameters.size() == 3 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
         "animation support is an explicit per-parameter evaluator capability");
