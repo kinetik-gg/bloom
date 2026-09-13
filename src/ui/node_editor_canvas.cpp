@@ -2,6 +2,7 @@
 #include <QFocusEvent>
 #include <QGraphicsProxyWidget>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -238,10 +239,39 @@ bool canvasShortcut(const QKeyEvent& event) {
 bool fieldFocused(const QGraphicsScene* scene) {
     return scene && dynamic_cast<QGraphicsProxyWidget*>(scene->focusItem()) != nullptr;
 }
+
+// Whether a TEXT editor is actually active inside the focused field (task FIX1, item F). A
+// kit::KValueField keeps its QLineEdit hidden until the artist enters it, and a colour chip, a
+// switch and a dropdown have no text entry at all -- so "a field has focus" and "the artist is
+// typing" are different questions, and only the second one has any claim on Delete.
+bool textEditorActive(const QGraphicsScene* scene) {
+    const auto* proxy =
+        scene == nullptr ? nullptr : dynamic_cast<QGraphicsProxyWidget*>(scene->focusItem());
+    const QWidget* hosted = proxy == nullptr ? nullptr : proxy->widget();
+    if (hosted == nullptr)
+        return false;
+    const QWidget* focused = hosted->focusWidget();
+    const auto* line = qobject_cast<const QLineEdit*>(focused == nullptr ? hosted : focused);
+    return line != nullptr && line->isVisible() && !line->isReadOnly();
+}
+
+// Whether the canvas takes this key press for itself. A focused field keeps every key it can
+// actually use; the two the canvas takes BACK are Delete and Backspace, and only where no text
+// editor is active in that field. Clicking a card's value row, colour chip, switch or dropdown gave
+// the field the scene's focus, and the canvas then declined its own binding -- so "click a card,
+// press Delete" did nothing at all, which is exactly what the owner reported.
+bool canvasClaimsKey(const QGraphicsScene* scene, const QKeyEvent& event) {
+    if (!canvasShortcut(event))
+        return false;
+    if (!fieldFocused(scene))
+        return true;
+    const bool removal = event.key() == Qt::Key_Delete || event.key() == Qt::Key_Backspace;
+    return removal && !textEditorActive(scene);
+}
 } // namespace
 bool NodeGraphicsView::event(QEvent* event) {
-    if (event->type() == QEvent::ShortcutOverride && !fieldFocused(scene()) &&
-        canvasShortcut(*static_cast<QKeyEvent*>(event))) {
+    if (event->type() == QEvent::ShortcutOverride &&
+        canvasClaimsKey(scene(), *static_cast<QKeyEvent*>(event))) {
         event->accept();
         return true;
     }
@@ -265,7 +295,7 @@ void NodeGraphicsView::focusOutEvent(QFocusEvent* event) {
     QGraphicsView::focusOutEvent(event);
 }
 void NodeGraphicsView::keyPressEvent(QKeyEvent* event) {
-    if (!fieldFocused(scene()) && !panActive_ && canvasShortcut(*event)) {
+    if (!panActive_ && canvasClaimsKey(scene(), *event)) {
         event->accept();
         if (event->isAutoRepeat())
             return;
