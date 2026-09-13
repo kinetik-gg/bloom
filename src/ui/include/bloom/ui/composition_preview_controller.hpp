@@ -35,7 +35,7 @@ enum class PreviewRequestKind : std::uint8_t {
 };
 
 struct CompositionPreviewSettings final {
-    runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{};
+    runtime::PreviewResolutionPolicy resolutionPolicy = runtime::PreviewResolutionPolicy::Auto;
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
@@ -159,6 +159,11 @@ class CompositionPreviewController final : public QObject {
     void endRamPreviewProgress();
 
     [[nodiscard]] const CompositionPreviewSettings& settings() const noexcept;
+    [[nodiscard]] runtime::EvaluationResolution resolution() const;
+    [[nodiscard]] std::uint32_t resolutionDivisor() const noexcept;
+    void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
+    // Display pixels per composition pixel, including device pixel ratio. Unknown geometry uses 1.
+    void setDisplayedCompositionScale(double scale);
 
   public slots:
     void requestRefresh();
@@ -175,6 +180,7 @@ class CompositionPreviewController final : public QObject {
 
   signals:
     void stateChanged();
+    void resolutionChanged();
     // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
     // update()).
@@ -245,6 +251,7 @@ class CompositionPreviewController final : public QObject {
     std::uint64_t droppedFrameCount_ = 0;
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
+    double displayedCompositionScale_ = 1.0;
 };
 
 } // namespace bloom::ui

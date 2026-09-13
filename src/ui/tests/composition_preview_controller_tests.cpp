@@ -1045,12 +1045,96 @@ void testQualifiedDisplayReadinessAndFailClosed(Expectations& expectations) {
     }
 }
 
+void testResolutionPolicyAndRequestThresholds(Expectations& expectations) {
+    using namespace bloom;
+    auto project =
+        document::makeNewProject("Resolution policy", "Main", core::RationalTime::fromInteger(1),
+                                 *document::CompositionFormat::create(1920, 1080));
+    const auto compositionId = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::optional<runtime::SnapshotParameterOverride>&,
+           runtime::TaskContext&) { return PipelineResult::cancelled(); });
+    expectations.expect(controller.resolutionDivisor() == 1, "unknown viewer geometry uses Full");
+    controller.setDisplayedCompositionScale(0.25);
+    expectations.expect(controller.resolutionDivisor() == 4,
+                        "480x270 display uses Quarter at 1080p");
+    const auto quarterGeneration = generation(controller.state());
+    controller.setDisplayedCompositionScale(0.20);
+    expectations.expect(generation(controller.state()) == quarterGeneration,
+                        "zoom within a factor does not request a frame");
+    controller.setDisplayedCompositionScale(0.26);
+    expectations.expect(controller.resolutionDivisor() == 2 &&
+                            generation(controller.state()) > quarterGeneration,
+                        "zoom past Quarter requests Half");
+    controller.setDisplayedCompositionScale(0.50);
+    expectations.expect(controller.resolutionDivisor() == 2, "the half boundary includes equality");
+    controller.setDisplayedCompositionScale(0.51);
+    expectations.expect(controller.resolutionDivisor() == 1, "zoom past Half requests Full");
+    controller.setDisplayedCompositionScale(1.0);
+    expectations.expect(
+        std::holds_alternative<runtime::CompositionFormatResolution>(controller.resolution()),
+        "actual size uses composition resolution");
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
+    const auto fixedGeneration = generation(controller.state());
+    controller.setDisplayedCompositionScale(2.0);
+    expectations.expect(controller.resolutionDivisor() == 4 &&
+                            generation(controller.state()) == fixedGeneration,
+                        "fixed Quarter ignores zoom changes");
+    const auto key = controller.cacheKeyForTime(core::RationalTime::fromInteger(0));
+    expectations.expect(key.has_value() &&
+                            key->resolutionPolicy == runtime::PreviewResolutionPolicy::Quarter &&
+                            key->resolution == controller.state().desiredIdentity->resolution,
+                        "cache and request share policy and resolved factor");
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expectations.expect(controller.resolutionDivisor() == 2, "fixed Half uses its own factor");
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
+    expectations.expect(controller.resolutionDivisor() == 1, "fixed Full uses its own factor");
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
+void testProxyPipelineUsesRoundedExtent(Expectations& expectations) {
+    using namespace bloom;
+    auto project = makeTestProject("Odd proxy extent");
+    const auto compositionId = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture pipeline;
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline.pipeline);
+    controller.setDisplayedCompositionScale(0.25);
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "Quarter passes through the real pipeline");
+    const auto view = controller.state().frame->displayBufferView();
+    expectations.expect(view.has_value() && view->displayWindow.extent().width() == 1 &&
+                            view->displayWindow.extent().height() == 1,
+                        "4x3 rounds Quarter up to a nonempty 1x1 display buffer");
+    controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "Half passes through the real pipeline");
+    const auto half = controller.state().frame->displayBufferView();
+    expectations.expect(half.has_value() && half->displayWindow.extent().width() == 2 &&
+                            half->displayWindow.extent().height() == 2,
+                        "4x3 rounds Half up to 2x2");
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testResolutionPolicyAndRequestThresholds(expectations);
+    testProxyPipelineUsesRoundedExtent(expectations);
     testRevisionAndPanelSuppression(expectations);
     testNewestPendingRequestGate(expectations);
     testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);

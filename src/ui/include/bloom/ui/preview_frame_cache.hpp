@@ -33,6 +33,8 @@ struct PreviewFrameCacheKey final {
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
 
+    runtime::PreviewResolutionPolicy resolutionPolicy = runtime::PreviewResolutionPolicy::Auto;
+
     [[nodiscard]] static PreviewFrameCacheKey
     forIdentity(const runtime::PreviewRequestIdentity& identity) noexcept;
 

@@ -553,12 +553,14 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // out into its own widget by also nudging statusBarFooter_ (a no-op update() call until then,
     // since it starts null).
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
         }
     });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
@@ -608,6 +610,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             statusBarFooter_->update();
         }
     });
+    updatePreviewResolution();
     updatePreviewAccessibility();
 }
 
@@ -631,6 +634,7 @@ QWidget* ViewerEditor::takeFooterWidget() {
     statusBarFooter_ = footer;
     // canvasRect() is now full-bleed (statusBarRect() returns empty) -- repaint immediately rather
     // than waiting for the next incidental update().
+    updatePreviewResolution();
     update();
     return footer;
 }
@@ -691,6 +695,7 @@ void ViewerEditor::layoutStatusBar() {
 }
 
 void ViewerEditor::refreshZoomDropdown() {
+    updatePreviewResolution();
     if (zoomDropdown_ == nullptr) {
         return;
     }
@@ -735,6 +740,33 @@ void ViewerEditor::refreshZoomDropdown() {
     zoomDropdown_->update();
 }
 
+void ViewerEditor::updatePreviewResolution() {
+    const auto geometry = currentDisplayGeometry();
+    if (!geometry.has_value()) {
+        return;
+    }
+    const auto actual = actualPixelRect(canvasRect(), geometry->extent, geometry->pixelAspect);
+    const auto displayed = viewTransformedDisplayRect(canvasRect(), geometry->extent,
+                                                      geometry->pixelAspect, transform_);
+    if (actual.isEmpty() || displayed.isEmpty()) {
+        return;
+    }
+    previewController_.setDisplayedCompositionScale(
+        std::max(displayed.width() / actual.width(), displayed.height() / actual.height()) *
+        devicePixelRatioF());
+}
+
+bool ViewerEditor::event(QEvent* event) {
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        if (dragActive_) {
+            endDrag(false);
+        }
+        updatePreviewResolution();
+    }
+    return handled;
+}
+
 void ViewerEditor::setZoomFit() {
     transform_ = ViewTransform{};
     refreshZoomDropdown();
@@ -750,16 +782,14 @@ void ViewerEditor::setZoomPercent(const int percent) {
 }
 
 std::optional<ViewerEditor::DisplayGeometry> ViewerEditor::currentDisplayGeometry() const {
-    const auto& preview = previewController_.state();
-    if (preview.frame == nullptr) {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
         return std::nullopt;
     }
-    const auto bufferView = preview.frame->displayBufferView();
-    if (!bufferView.has_value()) {
-        return std::nullopt;
-    }
-    return DisplayGeometry{.extent = bufferView->displayWindow.extent(),
-                           .pixelAspect = bufferView->pixelAspect};
+    const auto format = composition->format();
+    return DisplayGeometry{
+        .extent = *render::ImageExtent::create(format.width(), format.height()).value(),
+        .pixelAspect = format.pixelAspect()};
 }
 
 void ViewerEditor::paintEvent(QPaintEvent* event) {
@@ -812,8 +842,12 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     static_cast<int>(extent.height()),
                     static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
                 if (!image.isNull()) {
-                    const QRectF displayRect = viewTransformedDisplayRect(
-                        frame, extent, bufferView->pixelAspect, transform_);
+                    const auto geometry = currentDisplayGeometry();
+                    const QRectF displayRect =
+                        geometry.has_value()
+                            ? viewTransformedDisplayRect(frame, geometry->extent,
+                                                         geometry->pixelAspect, transform_)
+                            : QRectF{};
                     drawFrameShadow(painter, displayRect);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, image, QRectF(image.rect()));
@@ -927,8 +961,12 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
     // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
     // to start a NEW zoom/pan while dragActive_, so this only matters as a defensive backstop).
-    const QRectF displayRect = viewTransformedDisplayRect(
-        canvasRect(), descriptor.displayWindow().extent(), descriptor.pixelAspect(), transform_);
+    const auto geometry = currentDisplayGeometry();
+    if (!geometry.has_value()) {
+        return std::nullopt;
+    }
+    const QRectF displayRect = viewTransformedDisplayRect(canvasRect(), geometry->extent,
+                                                          geometry->pixelAspect, transform_);
     if (displayRect.isEmpty()) {
         return std::nullopt;
     }
@@ -1147,6 +1185,7 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
         updatePanCursor();
     }
     layoutStatusBar();
+    updatePreviewResolution();
 }
 
 void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {

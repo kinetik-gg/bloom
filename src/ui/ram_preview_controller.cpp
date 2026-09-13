@@ -140,9 +140,10 @@ void RamPreviewController::submitNextFrame() {
             .sourceRevision = snapshot.revision(),
             .time = *frameTime.value(),
             .output = runtime::PreviewOutput::Composition,
-            .resolution = previewController_.settings().resolution,
+            .resolution = previewController_.resolution(),
             .quality = previewController_.settings().quality,
             .colorIntent = previewController_.settings().colorIntent,
+            .resolutionPolicy = previewController_.settings().resolutionPolicy,
         };
         if (!previewController_.frameCache().contains(key)) {
             break;
@@ -168,9 +169,10 @@ void RamPreviewController::submitNextFrame() {
         .requestGeneration = ++generation_,
         .time = *frameTime.value(),
         .output = runtime::PreviewOutput::Composition,
-        .resolution = previewController_.settings().resolution,
+        .resolution = previewController_.resolution(),
         .quality = previewController_.settings().quality,
         .colorIntent = previewController_.settings().colorIntent,
+        .resolutionPolicy = previewController_.settings().resolutionPolicy,
     };
 
     // Foreground, not Interactive: a RAM preview is a background fill the artist asked for, and it

@@ -15,6 +15,8 @@ enum class PreviewOutput : std::uint8_t {
     Composition,
 };
 
+enum class PreviewResolutionPolicy : std::uint8_t { Auto, Full, Half, Quarter };
+
 struct PreviewRequestIdentity final {
     document::ProjectId projectId;
     document::CompositionId compositionId;
@@ -25,6 +27,8 @@ struct PreviewRequestIdentity final {
     EvaluationResolution resolution;
     EvaluationQuality quality = EvaluationQuality::Reference;
     EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
+
+    PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto;
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
