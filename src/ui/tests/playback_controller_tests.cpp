@@ -16,8 +16,10 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -26,7 +28,10 @@
 #include <QEventLoop>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QTest>
+#include <QTextEdit>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -607,6 +612,8 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Playback Widget", time(4)));
 
     QWidget host;
+    auto& sharedPlayback = fixture.controller.playbackController();
+    sharedPlayback.installWindowShortcut(host);
     auto* layout = new QVBoxLayout(&host);
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
@@ -653,6 +660,60 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     expectations.expect(probeLineEdit->text() == QStringLiteral(" "),
                         "the focused line edit consumed Space as ordinary text input, confirming "
                         "it -- not a dropped/ignored event -- is what won the key");
+
+    auto* secondTimeline =
+        new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
+    layout->addWidget(secondTimeline);
+    auto* secondButton = secondTimeline->findChild<QToolButton*>("playPauseButton");
+    expectations.expect(secondButton != nullptr && secondButton->isChecked(),
+                        "a second Timeline reflects the already playing shared transport");
+    expectations.expect(host.findChildren<QAction*>("playPauseAction").size() == 1,
+                        "multiple Timeline panels do not duplicate Space shortcuts");
+    auto* viewer = new ui::ViewerEditor(fixture.session, fixture.controller, &host);
+    auto* nodes = new ui::NodeGraphEditor(fixture.session, &host);
+    auto* plainButton = new QPushButton(QStringLiteral("Non-text button"), &host);
+    layout->addWidget(viewer);
+    layout->addWidget(nodes);
+    layout->addWidget(plainButton);
+    for (QWidget* panel : {static_cast<QWidget*>(viewer), static_cast<QWidget*>(nodes->graphView()),
+                           static_cast<QWidget*>(plainButton)}) {
+        panel->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        const auto before = sharedPlayback.state();
+        QTest::keyClick(panel, Qt::Key_Space);
+        QCoreApplication::processEvents();
+        expectations.expect(sharedPlayback.state() != before,
+                            "Space toggles from Viewer, Nodes, and non-text button focus");
+    }
+    auto* richText = new QTextEdit(&host);
+    auto* plainText = new QPlainTextEdit(&host);
+    layout->addWidget(richText);
+    layout->addWidget(plainText);
+    for (QWidget* text : {static_cast<QWidget*>(richText), static_cast<QWidget*>(plainText)}) {
+        text->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        const auto before = sharedPlayback.state();
+        QTest::keyClick(text, Qt::Key_Space);
+        QCoreApplication::processEvents();
+        expectations.expect(sharedPlayback.state() == before, "multiline text entry keeps Space");
+    }
+    expectations.expect(richText->toPlainText() == QStringLiteral(" ") &&
+                            plainText->toPlainText() == QStringLiteral(" "),
+                        "both multiline editors receive the actual character");
+    editor->hide();
+    secondTimeline->hide();
+    viewer->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    const auto beforeHidden = sharedPlayback.state();
+    QTest::keyClick(viewer, Qt::Key_Space);
+    expectations.expect(sharedPlayback.state() != beforeHidden,
+                        "hidden Timelines do not disable Space");
+    delete editor;
+    delete secondTimeline;
+    const auto beforeRemoved = sharedPlayback.state();
+    QTest::keyClick(viewer, Qt::Key_Space);
+    expectations.expect(sharedPlayback.state() != beforeRemoved,
+                        "Space and transport survive removal of every Timeline panel");
 
     finishFixture(fixture, expectations);
 }

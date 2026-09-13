@@ -21,6 +21,7 @@
 namespace bloom::ui {
 
 class CompositionSession;
+class PlaybackController;
 class TaskUiBridge;
 
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
@@ -115,6 +116,7 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
+    [[nodiscard]] PlaybackController& playbackController();
     // The identity this controller WOULD request for `time` in the live composition, which is what
     // a caller asks the cache about when it wants to know whether a frame is already there (the RAM
     // preview controller, and the transport deciding which clock to keep). Only the request
@@ -251,6 +253,7 @@ class CompositionPreviewController final : public QObject {
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
     double displayedCompositionScale_ = 1.0;
+    std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;
     std::chrono::nanoseconds playbackBudget_{};
     std::optional<std::chrono::nanoseconds> preparationEstimate_;

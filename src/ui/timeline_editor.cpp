@@ -837,10 +837,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // No cached-frame predicate: the transport asks the preview controller's own RAM preview cache,
-    // which is the one that actually answers its requests (task PERF1, item 4).
-    playback_ = new PlaybackController(session_, previewController, &std::chrono::steady_clock::now,
-                                       std::chrono::milliseconds{16}, {}, this);
+    playback_ = &previewController.playbackController();
 
     // ---- Header row: the transport/readout cluster on the left, the work area on the right
     // -------
@@ -1030,20 +1027,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     });
     connect(stack_, &TimelineLayerStack::viewportResized, this, &TimelineEditor::updateScrollRange);
 
-    // Spacebar application shortcut (decision 4), gated against stealing Space from text-entry
-    // focus using the SAME idiom main_window.cpp's own window-level shortcuts use (QAction +
-    // setShortcutContext(Qt::WindowShortcut)): Qt::WindowShortcut fires whenever this widget's
-    // top-level window is active, independent of which descendant currently holds focus, EXCEPT
-    // that a focused text-entry widget accepts the ShortcutOverride event for an ordinary printable
-    // key like Space itself first -- the standard Qt mechanism for exactly this gating, not a
-    // bespoke focus check.
-    auto* playPauseAction = new QAction(tr("Play/Pause"), this);
-    playPauseAction->setObjectName("playPauseAction");
-    playPauseAction->setShortcut(QKeySequence(Qt::Key_Space));
-    playPauseAction->setShortcutContext(Qt::WindowShortcut);
-    addAction(playPauseAction);
-    connect(playPauseAction, &QAction::triggered, playback_, &PlaybackController::toggle);
-
     // RAM Preview's KEYS are not declared here. Ctrl+Shift+Space and the Escape that cancels a run
     // are application-wide commands owned by the Composition menu (main_window.cpp): one
     // Qt::WindowShortcut owner per sequence, or Qt reports an ambiguous overload and fires neither.
@@ -1054,14 +1037,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                 &RamPreviewController::toggle);
         connect(ramPreview_, &RamPreviewController::stateChanged, this,
                 &TimelineEditor::updateRamPreviewButton);
-        // The cached range plays on THIS panel's transport: the RAM preview controller caches
-        // frames and says so, and the transport is what plays them (one owner per job).
-        connect(ramPreview_, &RamPreviewController::cachingFinished, this,
-                [this](const bool completed) {
-                    if (completed) {
-                        playback_->play();
-                    }
-                });
         updateRamPreviewButton();
     }
 

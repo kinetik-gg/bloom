@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <bloom/document/project.hpp>
@@ -79,7 +80,17 @@ CompositionPreviewController::CompositionPreviewController(
     requestPreview(true, PreviewRequestKind::Visible);
 }
 
-CompositionPreviewController::~CompositionPreviewController() { cancelAndDetachActive(); }
+CompositionPreviewController::~CompositionPreviewController() {
+    playbackController_.reset();
+    cancelAndDetachActive();
+}
+
+PlaybackController& CompositionPreviewController::playbackController() {
+    if (playbackController_ == nullptr) {
+        playbackController_ = std::make_unique<PlaybackController>(session_, *this);
+    }
+    return *playbackController_;
+}
 
 const CompositionPreviewState& CompositionPreviewController::state() const noexcept {
     return state_;
@@ -331,6 +342,9 @@ void CompositionPreviewController::beginShutdown() {
         return;
     }
 
+    if (playbackController_ != nullptr) {
+        playbackController_->pause();
+    }
     shuttingDown_ = true;
     emit foregroundWorkRequested();
     disconnect(&session_, nullptr, this, nullptr);

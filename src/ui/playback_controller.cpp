@@ -6,7 +6,10 @@
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
 
+#include <QAction>
+#include <QKeySequence>
 #include <QThread>
+#include <QWidget>
 
 #include <limits>
 #include <utility>
@@ -59,6 +62,18 @@ PlaybackController::PlaybackController(CompositionSession& session,
     // time entry, undo/redo) reaching the session while playing.
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &PlaybackController::handleCurrentTimeChanged);
+}
+
+PlaybackController::~PlaybackController() { pause(); }
+
+void PlaybackController::installWindowShortcut(QWidget& window) {
+    auto* action = new QAction(tr("Play/Pause"), &window);
+    action->setObjectName(QStringLiteral("playPauseAction"));
+    action->setShortcut(QKeySequence(Qt::Key_Space));
+    action->setShortcutContext(Qt::WindowShortcut);
+    action->setAutoRepeat(false);
+    window.addAction(action);
+    connect(action, &QAction::triggered, this, &PlaybackController::toggle);
 }
 
 PlaybackState PlaybackController::state() const noexcept { return state_; }

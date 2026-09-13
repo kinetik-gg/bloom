@@ -10,6 +10,8 @@
 #include <functional>
 #include <optional>
 
+class QWidget;
+
 namespace bloom::core {
 class FrameTimeMapping;
 } // namespace bloom::core
@@ -51,7 +53,11 @@ class PlaybackController final : public QObject {
         std::chrono::milliseconds tickInterval = std::chrono::milliseconds{16},
         FrameCachedPredicate frameCached = {}, QObject* parent = nullptr);
 
+    ~PlaybackController() override;
     [[nodiscard]] PlaybackState state() const noexcept;
+    // One action on the window, independent of panel visibility or lifetime. Text entry keeps
+    // Space via Qt's ShortcutOverride mechanism, just like the window's backtick shortcut.
+    void installWindowShortcut(QWidget& window);
 
   public slots:
     // No-op (guarded) if already playing, if no composition is available, or if the composition's

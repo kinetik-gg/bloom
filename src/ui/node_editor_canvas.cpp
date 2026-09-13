@@ -175,8 +175,7 @@ void NodeGraphicsView::wheelEvent(QWheelEvent* event) {
 }
 
 void NodeGraphicsView::mousePressEvent(QMouseEvent* event) {
-    if (!panActive_ && (event->button() == Qt::MiddleButton ||
-                        (event->button() == Qt::LeftButton && spaceHeld_))) {
+    if (!panActive_ && (event->button() == Qt::MiddleButton)) {
         panActive_ = true;
         panButton_ = event->button();
         panOrigin_ = event->position();
@@ -221,15 +220,15 @@ void NodeGraphicsView::mouseReleaseEvent(QMouseEvent* event) {
 namespace {
 // The canvas's own keys (task S1, item 8; docs/ux/interaction-model.md is the list). Adobe-first:
 // Delete/Backspace remove, Ctrl+D duplicates, Ctrl+A selects all, Ctrl+0 fits and Ctrl+1 is actual
-// size, Tab opens Add, Enter renames, Space holds to pan, Ctrl+G groups and Ctrl+Shift+G ungroups.
+// size, Tab opens Add, Enter renames, Ctrl+G groups and Ctrl+Shift+G ungroups.
 // Mute, collapse and dissolve are context-menu commands and bind no key at all.
 bool canvasShortcut(const QKeyEvent& event) {
     const auto modifiers = event.modifiers();
     const int key = event.key();
     if (modifiers == Qt::NoModifier)
-        return key == Qt::Key_Space || key == Qt::Key_Home || key == Qt::Key_Delete ||
-               key == Qt::Key_Backspace || key == Qt::Key_Escape || key == Qt::Key_Return ||
-               key == Qt::Key_Enter || key == Qt::Key_Tab;
+        return key == Qt::Key_Home || key == Qt::Key_Delete || key == Qt::Key_Backspace ||
+               key == Qt::Key_Escape || key == Qt::Key_Return || key == Qt::Key_Enter ||
+               key == Qt::Key_Tab;
     if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier))
         return key == Qt::Key_G;
     return modifiers == Qt::ControlModifier &&
@@ -288,7 +287,6 @@ bool NodeGraphicsView::event(QEvent* event) {
     return QGraphicsView::event(event);
 }
 void NodeGraphicsView::focusOutEvent(QFocusEvent* event) {
-    spaceHeld_ = false;
     panActive_ = false;
     updatePanCursor();
     Q_EMIT canvasFocusLost();
@@ -300,11 +298,7 @@ void NodeGraphicsView::keyPressEvent(QKeyEvent* event) {
         if (event->isAutoRepeat())
             return;
         if (event->modifiers() == Qt::NoModifier) {
-            if (event->key() == Qt::Key_Space) {
-                spaceHeld_ = true;
-                updatePanCursor();
-                return;
-            }
+
             if (event->key() == Qt::Key_Home) {
                 frameGraph();
                 return;
@@ -328,21 +322,10 @@ void NodeGraphicsView::keyPressEvent(QKeyEvent* event) {
     QGraphicsView::keyPressEvent(event);
 }
 
-void NodeGraphicsView::keyReleaseEvent(QKeyEvent* event) {
-    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
-        spaceHeld_ = false;
-        updatePanCursor();
-        event->accept();
-        return;
-    }
-    QGraphicsView::keyReleaseEvent(event);
-}
-
 void NodeGraphicsView::updatePanCursor() {
     if (panActive_) {
         viewport()->setCursor(Qt::ClosedHandCursor);
-    } else if (spaceHeld_) {
-        viewport()->setCursor(Qt::OpenHandCursor);
+
     } else {
         viewport()->unsetCursor();
     }
