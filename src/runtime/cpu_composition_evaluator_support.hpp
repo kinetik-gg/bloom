@@ -4,6 +4,7 @@
 
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/text_raster.hpp>
+#include <bloom/runtime/row_band_execution.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include <algorithm>
@@ -66,6 +67,7 @@ struct PreflightOutcome final {
 [[nodiscard]] EvaluationDiagnostic diagnostic(EvaluationDiagnosticCode code, std::string summary,
                                               std::string detail = {},
                                               EvaluationSubject subject = {});
+
 [[nodiscard]] EvaluationSubject subjectFor(OperationIndex index,
                                            const CompiledOperation& operation);
 void reportProgress(const EvaluationProgressCallback& callback,

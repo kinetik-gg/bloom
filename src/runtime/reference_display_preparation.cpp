@@ -154,7 +154,8 @@ ReferenceDisplayPreparationResult
 CpuReferenceDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> processFrame,
                                      const ReferenceDisplayPreparationRequest& request,
                                      const CancellationToken& cancellation,
-                                     const ReferenceDisplayProgressCallback& progress) const {
+                                     const ReferenceDisplayProgressCallback& progress,
+                                     CpuRowBandExecutor* const rowBands) const {
     try {
         if (cancellation.isCancellationRequested()) {
             return ReferenceDisplayPreparationResult::cancelled();
@@ -215,25 +216,45 @@ CpuReferenceDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
         }
         const auto window = displayDescriptorResult.value()->displayWindow();
         const auto height = window.extent().height();
-        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-            if (cancellation.isCancellationRequested()) {
-                return ReferenceDisplayPreparationResult::cancelled();
-            }
-            const auto y = window.originY() + static_cast<std::int64_t>(rowIndex);
-            auto outputRow = displayBuilder.value()->row(y);
-            if (!outputRow) {
-                return ReferenceDisplayPreparationResult::failed(imageDiagnostic(
-                    *outputRow.error(), "Reference display row could not be addressed"));
-            }
-            if (const auto rowStatus = render::mapLinearRec709SceneToSrgbRow(
-                    *processView.value(), window, y, *outputRow.value())) {
-                return ReferenceDisplayPreparationResult::failed(imageDiagnostic(
-                    *rowStatus, "Reference display mapping could not be evaluated"));
-            }
-            reportProgress(progress, {.stage = ReferenceDisplayProgressStage::Mapping,
-                                      .completed = rowIndex + 1,
-                                      .total = height});
+        // The mapping runs in row BANDS (task PERF1), so the two Mapping progress events bracket the
+        // pass instead of counting rows: a band runs on another thread and the callback belongs to the
+        // task that owns the frame. `completed == 0` is the start of the pass.
+        reportProgress(progress, {.stage = ReferenceDisplayProgressStage::Mapping,
+                                  .completed = 0,
+                                  .total = height});
+        auto& buffer = *displayBuilder.value();
+        const auto& source = *processView.value();
+        const auto outcome = runRowBandPass(
+            rowBands, cancellation, height, window.originY(),
+            [&buffer, &source, window](
+                const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
+                auto outputRow = buffer.row(y);
+                if (!outputRow) {
+                    return imageDiagnostic(*outputRow.error(),
+                                           "Reference display row could not be addressed");
+                }
+                if (const auto rowStatus = render::mapLinearRec709SceneToSrgbRow(
+                        source, window, y, *outputRow.value())) {
+                    return imageDiagnostic(*rowStatus,
+                                           "Reference display mapping could not be evaluated");
+                }
+                return std::nullopt;
+            });
+        if (outcome.cancelled) {
+            return ReferenceDisplayPreparationResult::cancelled();
         }
+        if (outcome.failure.has_value()) {
+            return ReferenceDisplayPreparationResult::failed(*outcome.failure);
+        }
+        if (outcome.incomplete) {
+            return ReferenceDisplayPreparationResult::failed(
+                diagnostic(ReferenceDisplayDiagnosticCode::AllocationFailure,
+                           "A display mapping row band could not complete",
+                           "A parallel row band ended in an exception; nothing was published."));
+        }
+        reportProgress(progress, {.stage = ReferenceDisplayProgressStage::Mapping,
+                                  .completed = height,
+                                  .total = height});
         if (cancellation.isCancellationRequested()) {
             return ReferenceDisplayPreparationResult::cancelled();
         }

@@ -16,6 +16,8 @@
 
 namespace bloom::runtime {
 
+class CpuRowBandExecutor;
+
 namespace detail {
 struct SchedulerState;
 struct TaskContextState;
@@ -38,6 +40,12 @@ class TaskContext final {
   public:
     [[nodiscard]] const CancellationToken& cancellation() const noexcept;
     [[nodiscard]] bool isCancellationRequested() const noexcept;
+
+    // The scheduler's row-band executor, for a task whose work is a per-row kernel over an image
+    // (the CPU composition evaluator is the one today). Null when this scheduler was configured for
+    // serial row evaluation, which every consumer must handle by running its bands itself -- the
+    // pool makes a frame faster, never correct, and the pixels must not depend on it.
+    [[nodiscard]] CpuRowBandExecutor* rowBandExecutor() const noexcept;
 
     void reportProgress(TaskProgress progress);
     void addDiagnostic(TaskDiagnostic diagnostic);
@@ -387,6 +395,12 @@ class TaskScheduler final {
 
     [[nodiscard]] GpuExecutorAttachment attachGpuExecutor(GpuServiceGeneration generation,
                                                           GpuTaskWakeSink wakeSink);
+
+    // The row-band executor every TaskContext this scheduler makes hands to its task body. Null when
+    // TaskSchedulerConfig::rowBandWorkerCount was kSerialRowBandWorkers. Exposed for a caller that
+    // evaluates outside a task (a test, or a synchronous tool) and wants the same bounded
+    // parallelism a task would get.
+    [[nodiscard]] CpuRowBandExecutor* rowBandExecutor() const noexcept;
 
     [[nodiscard]] TaskGroupSubmission createGroup(TaskOwner owner, std::string name);
     [[nodiscard]] bool cancel(TaskId id) noexcept;
