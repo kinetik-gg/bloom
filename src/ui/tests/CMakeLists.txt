@@ -596,6 +596,12 @@ target_link_libraries(bloom_node_canvas_lifetime_test PRIVATE bloom_ui bloom_pro
 bloom_enable_warnings(bloom_node_canvas_lifetime_test)
 bloom_add_test(NAME bloom.ui.node-canvas-lifetime COMMAND bloom_node_canvas_lifetime_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_node_value_animation_test node_value_animation_tests.cpp)
+target_include_directories(bloom_node_value_animation_test PRIVATE ..)
+target_link_libraries(bloom_node_value_animation_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_value_animation_test)
+bloom_add_test(NAME bloom.ui.node-value-animation COMMAND bloom_node_value_animation_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_delete_key_test node_delete_key_tests.cpp)
 target_include_directories(bloom_node_delete_key_test PRIVATE ..)
 target_link_libraries(bloom_node_delete_key_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)

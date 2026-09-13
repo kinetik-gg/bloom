@@ -6,6 +6,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <compare>
@@ -41,108 +42,6 @@ inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 2;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
-
-enum class CompiledKeyframeInterpolation : std::uint8_t {
-    Hold,
-    Linear,
-    EaseInOut,
-};
-
-struct CompiledScalarKeyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    double value = 0.0;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledScalarKeyframe&, const CompiledScalarKeyframe&) = default;
-};
-
-struct CompiledVec2Keyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    document::Vec2d value;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledVec2Keyframe&, const CompiledVec2Keyframe&) = default;
-};
-
-struct CompiledScalarCurve final {
-    document::AnimationCurveId id;
-    std::vector<CompiledScalarKeyframe> keyframes;
-
-    friend bool operator==(const CompiledScalarCurve&, const CompiledScalarCurve&) = default;
-};
-
-struct CompiledVec2Curve final {
-    document::AnimationCurveId id;
-    std::vector<CompiledVec2Keyframe> keyframes;
-
-    friend bool operator==(const CompiledVec2Curve&, const CompiledVec2Curve&) = default;
-};
-
-struct CompiledColor4Keyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    core::Color4d value;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledColor4Keyframe&, const CompiledColor4Keyframe&) = default;
-};
-
-struct CompiledColor4Curve final {
-    document::AnimationCurveId id;
-    std::vector<CompiledColor4Keyframe> keyframes;
-
-    friend bool operator==(const CompiledColor4Curve&, const CompiledColor4Curve&) = default;
-};
-
-class ScalarCurveIndex final {
-  public:
-    [[nodiscard]] static constexpr ScalarCurveIndex fromRaw(const std::size_t value) noexcept {
-        return ScalarCurveIndex(value);
-    }
-
-    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
-    friend constexpr auto operator<=>(const ScalarCurveIndex&,
-                                      const ScalarCurveIndex&) noexcept = default;
-
-  private:
-    explicit constexpr ScalarCurveIndex(const std::size_t value) noexcept : value_(value) {}
-
-    std::size_t value_ = 0;
-};
-
-class Vec2CurveIndex final {
-  public:
-    [[nodiscard]] static constexpr Vec2CurveIndex fromRaw(const std::size_t value) noexcept {
-        return Vec2CurveIndex(value);
-    }
-
-    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
-    friend constexpr auto operator<=>(const Vec2CurveIndex&,
-                                      const Vec2CurveIndex&) noexcept = default;
-
-  private:
-    explicit constexpr Vec2CurveIndex(const std::size_t value) noexcept : value_(value) {}
-
-    std::size_t value_ = 0;
-};
-
-class Color4CurveIndex final {
-  public:
-    [[nodiscard]] static constexpr Color4CurveIndex fromRaw(const std::size_t value) noexcept {
-        return Color4CurveIndex(value);
-    }
-
-    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
-    friend constexpr auto operator<=>(const Color4CurveIndex&,
-                                      const Color4CurveIndex&) noexcept = default;
-
-  private:
-    explicit constexpr Color4CurveIndex(const std::size_t value) noexcept : value_(value) {}
-
-    std::size_t value_ = 0;
-};
 
 // Each of the three typed operands gained ONE more alternative in task S7: a value-graph output,
 // for a parameter a driver binding supplies per frame. A new alternative appearing is deliberately

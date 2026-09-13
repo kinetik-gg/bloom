@@ -670,11 +670,37 @@ explained, the same way a missing module or a mute bypass already behaves.
 | Reversed Clamp bounds | The value UNCLAMPED; passing it through is visibly wrong, where silently swapping the bounds would look correct |
 | Frame number not representable at the request time | `0`, reported |
 
+#### Animatable Value Literals
+
+A literal **Scalar**, **Vector 2** and **Colour** node's own authored value is ANIMATABLE: their schema
+keys join `isScalarAnimatableSchemaKey`, `isVec2AnimatableSchemaKey` and `isColor4AnimatableSchemaKey`
+respectively, so the existing keyframe commands, the existing curve kinds, the existing exact rational
+sampler and the existing keyframe diamond all serve them without a second path. A value literal on a
+curve lowers to a curve index in `CompiledValueOperand`, and the value graph samples it at the frame
+being rendered -- so a Scalar node keyed 0 to 1 over ten frames, driving a layer's opacity, produces a
+composited alpha of `frame / 10` at every one of them.
+
+Editing an animated literal's number on its card writes a KEY at the session time rather than
+replacing the curve with a constant, by the same rule every layer row already follows; its row shows
+the sampled value at the session time.
+
+Four literal kinds stay constant-or-driven, and deliberately: **Vector 3**, **Integer**, **Boolean**
+and **String** each need a curve KIND the document does not have (a Vec3 curve, or a Hold-only integer
+or boolean curve), which is a document-format change with its own schema ladder step rather than a
+widening of the animatable set. Every generic OPERAND schema also stays constant-or-driven: an operand
+is a value a node reads, and the artist already shapes it with a curve upstream -- wire an animated
+Scalar node into the socket -- so a curve of its own would be a second authoring path to one picture.
+
+The keyframe surface for a value literal is its NODE CARD's diamond. The Timeline's rows are layers
+and the Properties panel's rows are a layer's roles, so neither has a place to hang a value node's
+lane today; giving them one is a timeline-model change rather than an animation one.
+
 #### Evaluable Parameter Kinds
 
 `CompiledScalarParameter`, `CompiledVec2Parameter` and `CompiledColorParameter` each gained one
-alternative for a value-graph output. A new alternative appearing is not a plan-semantics change, so
-neither the plan nor the evaluator semantics version moved and no cached frame digest shifted.
+alternative for a value-graph output, and `CompiledValueOperand` gained three for the curve tables. A
+new alternative appearing is not a plan-semantics change, so neither the plan nor the evaluator
+semantics version moved and no cached frame digest shifted.
 
 The remaining kinds -- a Layer Output's `Integer` blend mode, a Text source's `String` content -- are
 linkable in the editor and durable in the document, but nothing yet carries their value into a

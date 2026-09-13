@@ -1,4 +1,7 @@
+#include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
+
+#include <deque>
 
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/core/value_primitives.hpp>
@@ -15,10 +18,15 @@
 namespace {
 
 using namespace bloom;
+using runtime::Color4CurveIndex;
 using runtime::CompiledValue;
 using runtime::CompiledValueOperand;
+using runtime::sampleAnimationCurve;
+using runtime::ScalarCurveIndex;
+using runtime::ValueGraphCurves;
 using runtime::ValueGraphDiagnostic;
 using runtime::ValueOutputIndex;
+using runtime::Vec2CurveIndex;
 
 using Scalar = core::primitives::ScalarPrimitive;
 
@@ -57,17 +65,61 @@ using Scalar = core::primitives::ScalarPrimitive;
 // reference answers with the entry already written for it. An index past what has been written
 // cannot happen in a well-formed plan -- the operations are topologically ordered -- so nullptr
 // here means the plan is malformed and the caller reports it.
+// Samples one curve-backed operand into `sampled`, which is a deque so the pointer this returns
+// stays valid for the whole of the operation that asked for it. A curve index the plan's own tables
+// do not carry, or a sample the curve refuses, answers nothing -- and the caller reports it as a
+// malformed operand exactly as it reports a bad output index.
+[[nodiscard]] const CompiledValue* sample(const CompiledValueOperand& operand,
+                                          const ValueGraphCurves& curves,
+                                          const core::RationalTime time,
+                                          std::deque<CompiledValue>& sampled) {
+    if (const auto* index = std::get_if<ScalarCurveIndex>(&operand.source)) {
+        if (index->value() >= curves.scalar.size()) {
+            return nullptr;
+        }
+        const auto value = sampleAnimationCurve(curves.scalar[index->value()], time);
+        if (!value || !value.value.has_value()) {
+            return nullptr;
+        }
+        return &sampled.emplace_back(value.value.value());
+    }
+    if (const auto* index = std::get_if<Vec2CurveIndex>(&operand.source)) {
+        if (index->value() >= curves.vec2.size()) {
+            return nullptr;
+        }
+        const auto value = sampleAnimationCurve(curves.vec2[index->value()], time);
+        if (!value || !value.value.has_value()) {
+            return nullptr;
+        }
+        return &sampled.emplace_back(value.value.value());
+    }
+    const auto* index = std::get_if<Color4CurveIndex>(&operand.source);
+    if (index == nullptr || index->value() >= curves.color4.size()) {
+        return nullptr;
+    }
+    const auto value = sampleAnimationCurve(curves.color4[index->value()], time);
+    if (!value || !value.value.has_value()) {
+        return nullptr;
+    }
+    return &sampled.emplace_back(value.value.value());
+}
+
 [[nodiscard]] const CompiledValue* read(const CompiledValueOperand& operand,
                                         const std::vector<CompiledValue>& outputs,
-                                        const std::size_t written) {
+                                        const std::size_t written, const ValueGraphCurves& curves,
+                                        const core::RationalTime time,
+                                        std::deque<CompiledValue>& sampled) {
     if (const auto* constant = std::get_if<CompiledValue>(&operand.source)) {
         return constant;
     }
-    const auto index = std::get<ValueOutputIndex>(operand.source).value();
-    if (index >= written || index >= outputs.size()) {
-        return nullptr;
+    if (const auto* output = std::get_if<ValueOutputIndex>(&operand.source)) {
+        const auto index = output->value();
+        if (index >= written || index >= outputs.size()) {
+            return nullptr;
+        }
+        return &outputs[index];
     }
-    return &outputs[index];
+    return sample(operand, curves, time, sampled);
 }
 
 // Strict readers. A Boolean is NOT silently a number and an Integer is NOT silently a Scalar: every
@@ -131,8 +183,8 @@ struct ScalarOutcome final {
 class Evaluator final {
   public:
     Evaluator(const std::size_t outputCount, const core::RationalTime time,
-              const document::FrameRate rate)
-        : time_(time), rate_(rate) {
+              const document::FrameRate rate, const ValueGraphCurves curves)
+        : time_(time), rate_(rate), curves_(curves) {
         outputs_.assign(outputCount, CompiledValue{0.0});
     }
 
@@ -163,8 +215,8 @@ class Evaluator final {
                                 std::move(summary), std::move(detail)});
     }
 
-    [[nodiscard]] const CompiledValue* operandOf(const CompiledValueOperand& operand) const {
-        return read(operand, outputs_, written_);
+    [[nodiscard]] const CompiledValue* operandOf(const CompiledValueOperand& operand) {
+        return read(operand, outputs_, written_, curves_, time_, sampled_);
     }
 
     // Bounds-checked against the operation's OWN run, not just against the table: a kernel's own
@@ -211,6 +263,10 @@ class Evaluator final {
 
     core::RationalTime time_;
     document::FrameRate rate_;
+    ValueGraphCurves curves_;
+    // A deque, not a vector: every sampled curve value must keep a stable address for as long as
+    // the operation that read it is running, and a vector would move them on the next sample.
+    std::deque<CompiledValue> sampled_;
     std::vector<CompiledValue> outputs_;
     std::vector<ValueGraphDiagnostic> diagnostics_;
     std::size_t written_ = 0;
@@ -790,8 +846,9 @@ std::optional<std::int64_t> valueGraphFrameIndex(const core::RationalTime time,
 ValueGraphEvaluation evaluateValueGraph(const std::span<const CompiledValueOperation> operations,
                                         const std::size_t outputCount,
                                         const core::RationalTime time,
-                                        const document::FrameRate rate) {
-    Evaluator evaluator(outputCount, time, rate);
+                                        const document::FrameRate rate,
+                                        const ValueGraphCurves curves) {
+    Evaluator evaluator(outputCount, time, rate, curves);
     evaluator.run(operations);
     return evaluator.release();
 }

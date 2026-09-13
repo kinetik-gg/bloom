@@ -299,6 +299,15 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::optional<core::Color4d>
     effectiveColorValue(document::ParameterId parameterId) const;
 
+    // Writes one authored value onto an EXACT parameter, by the same constant-or-keyframe rule
+    // every layer row already follows (task FIX1, item G): a constant source is rewritten, an
+    // animated one takes a key at the session time, and a driven one is refused with the same
+    // wording. The node card's generic operand editor calls this, so editing an animated Scalar
+    // node's number at a new time adds a key there instead of replacing its curve with a constant.
+    [[nodiscard]] bool setParameterValue(document::ParameterId parameterId,
+                                         document::ParameterValue value,
+                                         const QString& commandLabel);
+
     // Keyframe delete/move gestures (issue #84; docs/architecture/animation-and-time.md). Command
     // construction lives here, not in the widget -- the same "one place" precedent as
     // executePositionCommand(). Both are a no-op false with no transaction and the selection intact

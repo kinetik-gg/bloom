@@ -869,6 +869,28 @@ template <typename Value>
     if (parameterFailure.has_value()) {
         return PreflightOutcome::failure(std::move(*parameterFailure));
     }
+    // The VALUE graph references curves too (task FIX1, item G): a literal Scalar, Vector 2 or
+    // Colour node whose authored value is on a curve lowers to a curve index, and its curve is as
+    // referenced as any layer parameter's. Counted here, before the unreferenced-curve rule below
+    // runs, so that rule keeps meaning "no compiled curve is dead" rather than "no curve outside
+    // the image chain exists".
+    for (const auto& operation : plan->valueOperations()) {
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
+            if (const auto* scalar = std::get_if<ScalarCurveIndex>(&operand.source);
+                scalar != nullptr && scalar->value() < scalarCurveReferences.size()) {
+                scalarCurveReferences[scalar->value()] = 1;
+            } else if (const auto* vector = std::get_if<Vec2CurveIndex>(&operand.source);
+                       vector != nullptr && vector->value() < vec2CurveReferences.size()) {
+                vec2CurveReferences[vector->value()] = 1;
+            } else if (const auto* color = std::get_if<Color4CurveIndex>(&operand.source);
+                       color != nullptr && color->value() < color4CurveReferences.size()) {
+                color4CurveReferences[color->value()] = 1;
+            }
+        });
+    }
     for (std::size_t index = 0; index < scalarCurveReferences.size(); ++index) {
         if (scalarCurveReferences[index] == 0) {
             EvaluationSubject subject;
@@ -1070,8 +1092,9 @@ template <typename Value>
     // fallback, so a divisor that reached zero degrades one value rather than failing the frame --
     // which is why they are reported as warnings beside a rendered picture instead of becoming a
     // preflight failure.
-    auto valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(),
-                                         request.time, plan->format().frameRate());
+    auto valueGraph = evaluateValueGraph(
+        plan->valueOperations(), plan->valueOutputCount(), request.time, plan->format().frameRate(),
+        ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves()});
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
     }

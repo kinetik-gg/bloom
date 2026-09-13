@@ -141,6 +141,30 @@ resolveValueOutput(const document::OutputPortRef& source,
 // otherwise the authored constant behind it. This is the single place the "unlinked means the widget's
 // value, linked means the wire's value" rule is implemented for evaluation, matching the editor's own
 // rule exactly.
+// A curve-backed authored value, as the index of its compiled curve (task FIX1, item G). Answers
+// nothing when the parameter is not on a curve, or when its kind has no curve table -- the caller
+// then falls through to the constant it must be.
+[[nodiscard]] std::optional<runtime::CompiledValueOperand>
+curveOperand(const document::ParameterRecord& parameter) const {
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    if (const auto scalar = scalarCurveIndices_.find(source->curveId);
+        scalar != scalarCurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, scalar->second};
+    }
+    if (const auto vector = vec2CurveIndices_.find(source->curveId);
+        vector != vec2CurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, vector->second};
+    }
+    if (const auto color = color4CurveIndices_.find(source->curveId);
+        color != color4CurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, color->second};
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledValueOperand>
 valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& definition,
              const std::string_view port) {
@@ -173,6 +197,9 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
     // a parameter socket for exactly that reason.
     if (const auto driven = driverOutput(*parameter, declared->valueKind)) {
         return runtime::CompiledValueOperand{binding->parameterId, *driven};
+    }
+    if (auto curve = curveOperand(*parameter)) {
+        return curve;
     }
     const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constant == nullptr) {
@@ -215,9 +242,16 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::ValueConstant: {
         const auto* binding = runtime::detail::findParameterBinding(node, kValueParameterRole);
         const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
-        const auto* constant = parameter == nullptr
-                                   ? nullptr
-                                   : std::get_if<ConstantValueSource>(&parameter->source);
+        if (parameter == nullptr) {
+            return std::nullopt;
+        }
+        // Task FIX1, item G: a literal whose value is on a curve lowers to its curve index, and the
+        // evaluator samples it at the frame being rendered -- so a Scalar node keyed 0 to 1 over ten
+        // frames drives a layer's opacity per frame, exactly as a Time node already could.
+        if (auto curve = curveOperand(*parameter)) {
+            return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{*curve}};
+        }
+        const auto* constant = std::get_if<ConstantValueSource>(&parameter->source);
         if (constant == nullptr) {
             return std::nullopt;
         }

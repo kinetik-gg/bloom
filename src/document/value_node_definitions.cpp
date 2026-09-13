@@ -35,12 +35,19 @@ using bloom::document::SocketValueKind;
     return {std::string(name), kind};
 }
 
-// An operand's backing parameter. supportsAnimation is always false: no value schema is animatable,
-// because a value graph already lets an artist shape a number upstream of the operand.
+// An operand's backing parameter. supportsAnimation is read from the schema predicates rather than
+// spelled here, so a definition cannot drift from document::isAnimatableSchemaKey() -- which after
+// task FIX1, item G accepts the Scalar, Vector 2 and Colour LITERALS and nothing else in this
+// library. Every generic operand schema is still constant-or-driven.
 [[nodiscard]] ParameterDefinition parameter(const std::string_view role,
                                             const std::string_view schemaKey,
                                             const ParameterValueKind kind, ParameterValue value) {
-    return {std::string(role), std::string(schemaKey), kind, true, false, std::move(value)};
+    return {std::string(role),
+            std::string(schemaKey),
+            kind,
+            true,
+            bloom::document::isAnimatableSchemaKey(schemaKey),
+            std::move(value)};
 }
 
 struct KindVocabulary final {
@@ -526,9 +533,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         }
     }
     for (const auto& declared : definition.parameters) {
-        // No value schema is animatable; a definition claiming otherwise would promise a curve kind
-        // that does not exist.
-        if (declared.supportsAnimation) {
+        // Animatability is the schema predicates' answer, never a second opinion: a definition that
+        // claimed a curve kind the document does not have would promise an editor gesture that
+        // cannot be carried out.
+        if (declared.supportsAnimation != isAnimatableSchemaKey(declared.schemaKey)) {
             return false;
         }
         const auto socket =

@@ -288,10 +288,19 @@ void testValueLoweringShapeContract(Expectations& expectations) {
         refuses(std::move(extraSocket), "a literal Value node may not take an input at all");
     }
     {
-        auto animatable = literal;
+        // ADAPTED (task FIX1, item G): the Scalar, Vector 2 and Colour LITERALS are animatable now,
+        // so the clause is no longer "never" but "exactly what the schema predicates say". A
+        // definition that disagrees with them in either direction is refused, which is what these
+        // two pin.
+        auto notAnimatable = literal;
+        notAnimatable.parameters.front().supportsAnimation = false;
+        refuses(std::move(notAnimatable),
+                "a Scalar literal that denies its own animatable schema is refused");
+        auto animatable =
+            builtInDefinition(document::kStringValueNodeType, document::kValueNodeSchemaVersion);
         animatable.parameters.front().supportsAnimation = true;
         refuses(std::move(animatable),
-                "no value schema is animatable, so a definition may not claim one is");
+                "and a String literal claiming a curve kind that does not exist is refused too");
     }
     {
         auto structural = literal;

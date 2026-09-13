@@ -52,10 +52,17 @@ inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.bl
 // parameter's constant, and linking a value-graph output into the matching socket replaces that
 // constant with a driver binding. The two are the same storage, never two parallel ones.
 //
-// None of them is animatable. A value node's output is already a graph the artist can shape with a
-// curve UPSTREAM of it (wire a Scalar node's animated output into the operand), so giving each
-// operand its own curve kind as well would be a second authoring path to the same picture -- and
-// three of the kinds (Vec3d, Boolean, Integer) have no curve kind at all.
+// The LITERAL value schemas whose kind already has a curve -- Scalar, Vector 2 and Colour -- are
+// animatable (task FIX1, item G): a Scalar node the artist keys 0 to 1 over ten frames, driving a
+// layer's opacity, is the whole of what "primitives should be able to be animated too" asks for,
+// and it reuses the existing curve kinds, commands and sampling rather than inventing a second
+// authoring path. Vector 3, Integer, Boolean and String literals stay constant-or-driven, because
+// each needs a curve KIND that does not exist yet.
+//
+// The generic OPERAND schemas below stay constant-or-driven whatever their kind. An operand is a
+// value a node reads, and the artist already shapes it with a curve upstream -- wire an animated
+// Scalar node into the socket -- so giving it its own curve as well would be a second authoring
+// path to the same picture.
 // ---------------------------------------------------------------------------------------------
 
 // The literal Value nodes. One schema per authored kind, because the kind IS the meaning here:
@@ -156,20 +163,29 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 // exactly the text CONTENT schema (a String has no interpolation) and every unregistered key.
 [[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
-           schemaKey == kScaleParameterSchemaKey;
+           schemaKey == kScaleParameterSchemaKey || schemaKey == kVector2ValueParameterSchemaKey;
 }
 
 [[nodiscard]] constexpr bool
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey ||
-           schemaKey == kTextSizeParameterSchemaKey;
+           schemaKey == kTextSizeParameterSchemaKey || schemaKey == kScalarValueParameterSchemaKey;
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
 // Both author straight RGBA in kSolidColorEncoding, so one curve kind serves both.
+//
+// Task FIX1, item G: the value LIBRARY's own literals join all three sets. A Scalar node, a Vector
+// 2 node and a Colour node hold exactly the kinds these curves already carry, so animating one is
+// the same gesture, the same command, and the same sampling the layer parameters already have --
+// and a driven parameter downstream of one reads the sampled value per frame. Vector 3, Integer,
+// Boolean and String stay constant-or-driven: each would need a curve KIND that does not exist (a
+// Vec3 curve, or a Hold-only integer/boolean curve), which is a document-format change with its own
+// schema ladder step rather than a widening of this set.
 [[nodiscard]] constexpr bool
 isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kSolidColorParameterSchemaKey || schemaKey == kTextColorParameterSchemaKey;
+    return schemaKey == kSolidColorParameterSchemaKey ||
+           schemaKey == kTextColorParameterSchemaKey || schemaKey == kColorValueParameterSchemaKey;
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {

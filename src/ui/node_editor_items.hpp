@@ -759,6 +759,10 @@ class NodeItem final : public QGraphicsObject {
         row.kind = declared->valueKind;
         const auto label = displayTypeName(role);
         const auto commit = [this, index] { commitOperand(index); };
+        // Task FIX1, item G: a literal value node whose kind has a curve gets the SAME diamond a
+        // layer parameter has, bound to its own parameter. The predicate is the schema's, never a
+        // list here, so a row cannot offer a key the command layer would refuse.
+        const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
         if (const auto items = selectorItems(declared->schemaKey); !items.isEmpty()) {
             row.selector = new kit::KDropdown;
@@ -813,7 +817,8 @@ class NodeItem final : public QGraphicsObject {
             registerControlRole(row.color, role);
             connect(row.color, &kit::KColorChip::colorChanged, this,
                     [commit](const kit::KColor&) { commit(); });
-            valueRows_.push_back({label, row.color, nullptr, {}});
+            valueRows_.push_back(
+                {label, row.color, animatable ? makeCardDiamond(role) : nullptr, role});
             break;
         }
         case document::ParameterValueKind::Integer:
@@ -842,7 +847,12 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(field, role);
                 connect(field, &kit::KValueField::valueChanged, this, [commit] { commit(); });
                 row.numeric[static_cast<std::size_t>(component)] = field;
-                valueRows_.push_back({componentLabel, field, nullptr, {}});
+                // One diamond per PARAMETER, on its first component row: a Vector 2's X and Y are
+                // one curve, exactly as a layer position's are.
+                valueRows_.push_back(
+                    {componentLabel, field,
+                     animatable && component == 0 ? makeCardDiamond(role) : nullptr,
+                     component == 0 ? role : std::string_view{}});
             }
             break;
         }
@@ -970,11 +980,50 @@ class NodeItem final : public QGraphicsObject {
         if (!value.has_value() || !selectSelf()) {
             return;
         }
-        commands::Transaction transaction("Set Node Value", session_->snapshot().revision());
-        transaction.emplace<commands::SetParameterSource>(
-            session_->compositionId(), row.parameterId,
-            document::ConstantValueSource{*std::move(value)});
-        (void)graphScene->submit(std::move(transaction));
+        // Constant or KEY, by the session's own rule (task FIX1, item G): editing an animated value
+        // node's number at a new time adds a key there rather than replacing its curve.
+        (void)session_->setParameterValue(row.parameterId, *std::move(value), tr("Set Node Value"));
+    }
+
+    // One animated operand row, read at the session time through the session's own exact sampler so
+    // the card and the Properties panel cannot disagree about what an animated value is right now.
+    void refreshAnimatedOperandRow(const OperandRow& row) {
+        if (session_ == nullptr) {
+            return;
+        }
+        const auto setComponent = [&row](const std::size_t component, const double value) {
+            if (row.numeric[component] != nullptr) {
+                const QSignalBlocker blocker(row.numeric[component]);
+                row.numeric[component]->setValue(value);
+            }
+        };
+        switch (row.kind) {
+        case document::ParameterValueKind::Float64:
+            if (const auto sampled = session_->effectiveScalarValue(row.parameterId))
+                setComponent(0, *sampled);
+            return;
+        case document::ParameterValueKind::Vec2d:
+            if (const auto sampled = session_->effectiveVec2Value(row.parameterId)) {
+                setComponent(0, sampled->x);
+                setComponent(1, sampled->y);
+            }
+            return;
+        case document::ParameterValueKind::Color4d:
+            if (const auto sampled = session_->effectiveColorValue(row.parameterId);
+                sampled.has_value() && row.color != nullptr) {
+                const QSignalBlocker blocker(row.color);
+                row.color->setColor(kit::KColor{
+                    static_cast<float>(sampled->red), static_cast<float>(sampled->green),
+                    static_cast<float>(sampled->blue), static_cast<float>(sampled->alpha)});
+            }
+            return;
+        case document::ParameterValueKind::Boolean:
+        case document::ParameterValueKind::Integer:
+        case document::ParameterValueKind::Vec3d:
+        case document::ParameterValueKind::String:
+            // No curve kind carries these, so no row of theirs can be animated.
+            return;
+        }
     }
 
     // Reads every operand row back from document truth. Signals are blocked: this runs in response
@@ -1002,6 +1051,10 @@ class NodeItem final : public QGraphicsObject {
             applyTip(row.toggle);
             applyTip(row.selector);
             if (constant == nullptr) {
+                // An ANIMATED operand has no constant to read; its row shows the value sampled at
+                // the session time, exactly as a Properties row does (task FIX1, item G). A DRIVEN
+                // one shows nothing, because its widget is hidden anyway.
+                refreshAnimatedOperandRow(row);
                 continue;
             }
             if (row.selector != nullptr) {

@@ -5,11 +5,13 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/runtime/compiled_curves.hpp>
 
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -70,9 +72,16 @@ class ValueOutputIndex final {
 // operand carries one -- so a diagnostic can name the exact parameter that failed rather than only
 // the node. It is invalid for the one operand with no parameter behind it, a Reroute's
 // pass-through.
+// The three curve alternatives are task FIX1, item G: a literal Scalar, Vector 2 or Colour node may
+// carry a curve of its own, so its authored value is sampled per frame exactly as a layer
+// parameter's is -- same curve kinds, same sampler, same semantics version -- and a downstream
+// driven parameter reads the sampled number rather than a constant. A literal of a kind with no
+// curve (Vector 3, Integer, Boolean, String) and every generic OPERAND stay constant-or-output.
 struct CompiledValueOperand final {
     document::ParameterId id;
-    std::variant<CompiledValue, ValueOutputIndex> source;
+    std::variant<CompiledValue, ValueOutputIndex, ScalarCurveIndex, Vec2CurveIndex,
+                 Color4CurveIndex>
+        source;
 
     friend bool operator==(const CompiledValueOperand&, const CompiledValueOperand&) = default;
 };
@@ -235,6 +244,66 @@ using CompiledValueKernel =
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion>;
+
+// Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
+// caller that has to walk them -- the evaluator's preflight, which has to know which animation
+// curves the value graph references before it can call an unreferenced one a malformed plan -- does
+// not carry its own copy of the kernel list that would silently go stale when a kernel is added.
+template <typename Visit> void forEachValueOperand(const CompiledValueKernel& kernel, Visit visit) {
+    std::visit(
+        [&visit](const auto& step) {
+            using Step = std::decay_t<decltype(step)>;
+            if constexpr (std::is_same_v<Step, CompiledValueTime>) {
+                // The one kernel with no operands: its value is the frame being rendered.
+            } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
+                                 std::is_same_v<Step, CompiledValueSeparate> ||
+                                 std::is_same_v<Step, CompiledValuePromotion>) {
+                visit(step.value);
+            } else if constexpr (std::is_same_v<Step, CompiledValueScalarMath>) {
+                for (const auto& operand : step.operands)
+                    visit(operand);
+            } else if constexpr (std::is_same_v<Step, CompiledValueCombine>) {
+                for (const auto& operand : step.components)
+                    visit(operand);
+            } else if constexpr (std::is_same_v<Step, CompiledValueVectorMath>) {
+                visit(step.left);
+                visit(step.right);
+                visit(step.factor);
+            } else if constexpr (std::is_same_v<Step, CompiledValueVectorReduce>) {
+                visit(step.left);
+                visit(step.right);
+            } else if constexpr (std::is_same_v<Step, CompiledValueMapRange>) {
+                visit(step.value);
+                visit(step.fromMinimum);
+                visit(step.fromMaximum);
+                visit(step.toMinimum);
+                visit(step.toMaximum);
+            } else if constexpr (std::is_same_v<Step, CompiledValueClamp>) {
+                visit(step.value);
+                visit(step.minimum);
+                visit(step.maximum);
+            } else if constexpr (std::is_same_v<Step, CompiledValueMix>) {
+                visit(step.factor);
+                visit(step.start);
+                visit(step.end);
+            } else if constexpr (std::is_same_v<Step, CompiledValueCompare>) {
+                visit(step.left);
+                visit(step.right);
+                visit(step.epsilon);
+            } else if constexpr (std::is_same_v<Step, CompiledValueSwitch>) {
+                visit(step.condition);
+                visit(step.ifFalse);
+                visit(step.ifTrue);
+            } else {
+                static_assert(std::is_same_v<Step, CompiledValueRandom>,
+                              "every value kernel must enumerate its operands here");
+                visit(step.seed);
+                visit(step.minimum);
+                visit(step.maximum);
+            }
+        },
+        kernel);
+}
 
 // One step of the value graph. `firstOutput` and `outputCount` are the run of entries in the plan's
 // flat value-output table this step fills; a promotion the compiler synthesized carries no document
