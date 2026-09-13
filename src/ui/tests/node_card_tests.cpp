@@ -167,6 +167,10 @@ void testSocketsBrightenAndDimDuringALinkDrag() {
            "and the socket in the artist's hand keeps its resting ink -- it is not a target");
 
     f.release(input->scenePos());
+    // The release connects the ports, which rebuilds the projection and frees every socket item;
+    // re-fetch the survivors instead of reading the pointers cached before the release.
+    output = f.socket(source, false);
+    input = f.socket(target, true);
     expect(output->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
                input->dragAffinity() == node_editor::SocketItem::DragAffinity::Idle &&
                input->paintedInk() == resting,
