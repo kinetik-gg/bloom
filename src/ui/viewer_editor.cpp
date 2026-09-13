@@ -1084,8 +1084,7 @@ void ViewerEditor::beginPan(const Qt::MouseButton button, const QPointF screenPo
 void ViewerEditor::updatePanCursor() {
     if (panActive_) {
         setCursor(Qt::ClosedHandCursor);
-    } else if (spaceHeld_) {
-        setCursor(Qt::OpenHandCursor);
+
     } else {
         unsetCursor();
     }
@@ -1094,8 +1093,7 @@ void ViewerEditor::updatePanCursor() {
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
-            geometry.has_value() && (event->button() == Qt::MiddleButton ||
-                                     (event->button() == Qt::LeftButton && spaceHeld_))) {
+            geometry.has_value() && (event->button() == Qt::MiddleButton)) {
             beginPan(event->button(), event->position(), *geometry);
             event->accept();
             return;
@@ -1195,12 +1193,7 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (!dragActive_ && !panActive_) {
-        if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
-            spaceHeld_ = true;
-            updatePanCursor();
-            event->accept();
-            return;
-        }
+
         // Ctrl+0 fits and Ctrl+1 is actual size, in this canvas and in the node canvas alike (task
         // S1, item 8). F and Z are retired in both: the Adobe-standard pair is what an artist
         // arriving from another compositor reaches for, and a single-letter binding that far up the
@@ -1220,16 +1213,6 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         }
     }
     QWidget::keyPressEvent(event);
-}
-
-void ViewerEditor::keyReleaseEvent(QKeyEvent* event) {
-    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
-        spaceHeld_ = false;
-        updatePanCursor();
-        event->accept();
-        return;
-    }
-    QWidget::keyReleaseEvent(event);
 }
 
 void ViewerEditor::resizeEvent(QResizeEvent* event) {

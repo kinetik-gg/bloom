@@ -120,10 +120,7 @@ class TimelineEditor final : public QWidget {
     QToolButton* addButton_ = nullptr;
     QToolButton* undoButton_ = nullptr;
     QToolButton* redoButton_ = nullptr;
-    // Owned here rather than shared with any sibling TimelineEditor a workspace split could open
-    // (issue #105): each TimelineEditor instance gets its own transport, matching how every other
-    // per-panel affordance in this class is already independently driven off the shared
-    // CompositionSession/CompositionPreviewController rather than a single cross-panel singleton.
+    // Borrowed from the preview session; every panel controls the same transport.
     PlaybackController* playback_ = nullptr;
     // Borrowed: the RAM Preview command is application-wide (the Composition menu reaches the same
     // one), so this panel never owns it. Null when none was attached.

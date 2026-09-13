@@ -2,6 +2,9 @@
 
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
+#include <QObject>
+#include <QTimer>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -62,7 +65,9 @@ using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPrevie
 // processor publishes once per session, so an entry's display identity can change at most once, and
 // when it does every earlier entry is stale. Inserting a frame whose qualification differs from the
 // tag therefore clears the cache and adopts the new tag.
-class PreviewFrameCache final {
+class PreviewFrameCache final : public QObject {
+    Q_OBJECT
+
   public:
     struct Statistics final {
         std::uint64_t hits = 0;
@@ -96,6 +101,9 @@ class PreviewFrameCache final {
     void insert(const PreparedPreviewFrameHandle& frame);
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
+    // Cached times for exactly this project/composition/revision/resolution/display policy.
+    // The probe time is ignored. UI consumers do not scan the composition's entire duration.
+    [[nodiscard]] std::vector<core::RationalTime> timesFor(const PreviewFrameCacheKey& probe) const;
 
     // Changing the budget evicts immediately if the new one is smaller.
     void setByteBudget(std::size_t bytes);
@@ -111,7 +119,14 @@ class PreviewFrameCache final {
     [[nodiscard]] static std::size_t
     frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
 
+  signals:
+    // Cache mutations coalesce for 50ms; a burst produces one ruler repaint notification.
+    void contentsChanged();
+    void byteBudgetChanged();
+
   private:
+    void scheduleNotification();
+    QTimer notificationTimer_;
     struct Entry final {
         PreviewFrameCacheKey key;
         // Display-only: the packed buffer plus its identity, never the process image it was mapped

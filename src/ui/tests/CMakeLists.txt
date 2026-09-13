@@ -671,3 +671,14 @@ bloom_add_test(
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(bloom_background_preview_test background_preview_tests.cpp)
+target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_background_preview_test)
+bloom_add_test(
+    NAME bloom.ui.background-preview
+    COMMAND bloom_background_preview_test
+    LABELS ui integration animation
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
