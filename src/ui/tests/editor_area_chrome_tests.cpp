@@ -14,8 +14,10 @@
 #include <QMenu>
 #include <QPixmap>
 #include <QPoint>
+#include <QScrollArea>
 #include <QSignalSpy>
 #include <QSize>
+#include <QSizePolicy>
 #include <QString>
 #include <QToolButton>
 #include <QWidget>
@@ -534,6 +536,76 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
     }
 }
 
+// task WIDTH-1 (owner: "let it have min width of something like 300px ... instead of kicking
+// borders around"): the pin for EditorArea::minimumSizeHint()'s new fixed floor. A hosted editor
+// whose own natural minimum width is nowhere near 300px (bloom.probe, a plain QWidget) and one
+// that demands 900px (a stand-in for a Properties selection with long parameter names and many
+// value cells) must both report the exact same PanelMinWidth -- proof the panel's own reported
+// minimum never depends on what is hosted inside it, so a QSplitter can never be asked to move a
+// handle over a selection change.
+void testPanelMinWidthIsFixedRegardlessOfHostedEditorHints(Expectations& expectations) {
+    EditorRegistry registry = makeRegistry();
+    (void)registry.registerEditor(
+        {"bloom.wide", "Wide", [](QWidget* parent) -> QWidget* {
+             auto* widget = new QWidget(parent);
+             widget->setMinimumWidth(900);
+             return widget;
+         }});
+    EditorArea area(registry, "bloom.probe", QString{});
+    const int narrowHostedMinimum = area.minimumSizeHint().width();
+    expectations.expect(narrowHostedMinimum == kit::px(kit::Size::PanelMinWidth),
+                        "hosting a plain, narrow editor still reports exactly PanelMinWidth");
+
+    expectations.expect(area.setEditorId("bloom.wide"),
+                        "switching to a 900px-minimum hosted editor succeeds");
+    const int wideHostedMinimum = area.minimumSizeHint().width();
+    expectations.expect(wideHostedMinimum == kit::px(kit::Size::PanelMinWidth),
+                        "hosting a 900px-minimum editor STILL reports exactly PanelMinWidth -- "
+                        "task WIDTH-1's whole point");
+    expectations.expect(narrowHostedMinimum == wideHostedMinimum,
+                        "switching the hosted editor never moves what the panel itself reports as "
+                        "its own minimum size, which is what keeps a QSplitter handle from moving");
+}
+
+// task WIDTH-1: Properties is the one hosted editor that is a form rather than a canvas, so
+// EditorArea hosts it inside its own QScrollArea (Ignored on the horizontal axis, widgetResizable)
+// rather than parenting it directly -- see editor_area.cpp's rebuildEditor(). This exercises that
+// wrapping with a stand-in "bloom.properties" editor (a plain 900px-minimum QWidget) rather than
+// the real PropertiesEditor, which has its own fixture-heavy CompositionSession dependency covered
+// separately in properties_editor_tests.cpp.
+void testPropertiesIsHostedInsideAnIgnoredScrollArea(Expectations& expectations) {
+    EditorRegistry registry = makeRegistry();
+    (void)registry.registerEditor(
+        {"bloom.properties", "Properties", [](QWidget* parent) -> QWidget* {
+             auto* widget = new QWidget(parent);
+             widget->setMinimumWidth(900);
+             return widget;
+         }});
+    EditorArea area(registry, "bloom.properties", QString{});
+
+    auto* scrollArea = area.findChild<QScrollArea*>(QStringLiteral("editorContentScrollArea"));
+    expectations.expect(scrollArea != nullptr,
+                        "Properties is hosted inside a QScrollArea named editorContentScrollArea "
+                        "(new objectName, task WIDTH-1)");
+    if (scrollArea == nullptr) {
+        return;
+    }
+    expectations.expect(scrollArea->sizePolicy().horizontalPolicy() == QSizePolicy::Ignored,
+                        "the scroll area is Ignored on the horizontal axis so its own minimum "
+                        "width never propagates up through the panel's content layout");
+    expectations.expect(scrollArea->widgetResizable(),
+                        "the scroll area actually resizes the hosted editor down to the room it "
+                        "gets rather than always keeping it at its natural size");
+    expectations.expect(area.minimumSizeHint().width() == kit::px(kit::Size::PanelMinWidth),
+                        "the panel still reports exactly PanelMinWidth with Properties hosted");
+
+    expectations.expect(area.setEditorId("bloom.probe"),
+                        "switching away from Properties succeeds");
+    expectations.expect(
+        area.findChild<QScrollArea*>(QStringLiteral("editorContentScrollArea")) == nullptr,
+        "the scroll area host is torn down, not left behind, once Properties is no longer hosted");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -556,5 +628,7 @@ int main(int argc, char** argv) {
     testAHeaderMenuLessEditorHasNoExtraHeaderChild(expectations);
     testSwitchingEditorsRetiresTheOldHeaderMenuWidget(expectations);
     testTheFourCornersAreClippedToWindowBackground(expectations);
+    testPanelMinWidthIsFixedRegardlessOfHostedEditorHints(expectations);
+    testPropertiesIsHostedInsideAnIgnoredScrollArea(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

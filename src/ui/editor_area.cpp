@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QSize>
 #include <QSizePolicy>
 #include <QString>
@@ -351,14 +352,38 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
     }
 }
 
+QSize EditorArea::minimumSizeHint() const {
+    // task WIDTH-1 (owner: "min width of something like 300px in figma pixel ... instead of
+    // kicking borders around"). QFrame's default minimumSizeHint() delegates to layout_'s own
+    // computed minimum, which used to grow or shrink with whatever the hosted editor's own hints
+    // demanded -- a Properties selection with more KValueField cells, or a longer parameter label,
+    // could nudge EditorArea's reported minimum past what a narrower QSplitter pane currently had,
+    // and QSplitter answers a pane's growing minimum by moving every OTHER handle in the tree to
+    // make room, not just this one. Reporting a fixed PanelMinWidth-by-chrome-height floor here,
+    // computed without ever consulting editorWidget_, is what keeps a selection change from moving
+    // a splitter handle: this panel always claims exactly PanelMinWidth, full stop.
+    //
+    // Height is the header row plus the footer's own height when this editor offered one (Viewer
+    // is the only one today) -- the content region itself contributes no height floor, since
+    // nothing about the vertical axis was ever the bug being fixed here.
+    int height = kit::px(kit::Size::EditorHeader);
+    if (footer_ != nullptr) {
+        height += footer_->sizeHint().height();
+    }
+    return {kit::px(kit::Size::PanelMinWidth), height};
+}
+
 void EditorArea::rebuildEditor(int editorIndex) {
-    if (editorWidget_ != nullptr) {
-        contentLayout_->removeWidget(editorWidget_);
-        // The old editor widget is destroyed BEFORE the footer it may have handed out below: Qt
-        // severs every signal connection made through it as part of its own destructor, so nothing
-        // it might otherwise still notify (e.g. a footer widget's repaint-on-state-change wiring)
-        // can fire against a footer that is about to be deleted out from under it.
-        delete editorWidget_;
+    if (editorHost_ != nullptr) {
+        contentLayout_->removeWidget(editorHost_);
+        // The old editor widget (task WIDTH-1: and its QScrollArea host, when Properties gave it
+        // one below -- deleting the host cascades to the editor widget it owns) is destroyed
+        // BEFORE the footer it may have handed out below: Qt severs every signal connection made
+        // through it as part of its own destructor, so nothing it might otherwise still notify
+        // (e.g. a footer widget's repaint-on-state-change wiring) can fire against a footer that
+        // is about to be deleted out from under it.
+        delete editorHost_;
+        editorHost_ = nullptr;
         editorWidget_ = nullptr;
     }
     if (footer_ != nullptr) {
@@ -393,7 +418,33 @@ void EditorArea::rebuildEditor(int editorIndex) {
         editorWidget_ = unavailable;
     }
     editorWidget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    contentLayout_->addWidget(editorWidget_);
+
+    // task WIDTH-1: Properties is the one editor that is a FORM, not a canvas -- its own natural
+    // width grows with however many KValueField cells the current selection needs and how long a
+    // parameter's label happens to be, and left unwrapped that width propagates straight up
+    // through contentLayout_ into EditorArea's own layout-computed minimum size, which is exactly
+    // what let a selection change move a QSplitter handle. Every canvas editor (node graph,
+    // timeline, viewer) already scales its own content down to whatever room it gets and stays
+    // hosted directly, unwrapped. Properties instead gets a QScrollArea host: Ignored on the
+    // horizontal axis so the scroll area's OWN minimum width never asks contentLayout_ for more
+    // than it currently has (EditorArea::minimumSizeHint() below no longer depends on this either
+    // way, but the layout that actually sizes editorHost_ during a real resize does), and
+    // widgetResizable so the hosted PropertiesEditor is actually resized down to the room
+    // available -- shrinking its value cells toward their own floor
+    // (kit::KValueField::minimumSizeHint(), Size::ValueCellMin) and eliding its row labels before
+    // ever falling back to the scroll area's own horizontal scrollbar.
+    if (selectedEditorId == "bloom.properties") {
+        auto* scrollArea = new QScrollArea(contentLayout_->parentWidget());
+        scrollArea->setObjectName(QStringLiteral("editorContentScrollArea"));
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+        scrollArea->setWidget(editorWidget_);
+        editorHost_ = scrollArea;
+    } else {
+        editorHost_ = editorWidget_;
+    }
+    contentLayout_->addWidget(editorHost_);
     watchForActivation(editorWidget_);
 
     // FORMAL AMENDMENT 1: the footer slot is OPTIONAL. An editor widget that also implements
