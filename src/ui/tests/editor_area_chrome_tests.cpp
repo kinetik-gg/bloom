@@ -104,6 +104,38 @@ EditorRegistry makeFooterProvidingRegistry() {
     return registry;
 }
 
+// Task NODES-1: the header's counterpart to FakeFooterProvidingEditor above -- a minimal test
+// double proving the generic EditorHeaderMenuProvider seam without needing the real node editor's
+// menus/actions (that pin belongs in node_interaction_tests.cpp, which already exercises them).
+class FakeHeaderMenuProvidingEditor final : public QWidget, public EditorHeaderMenuProvider {
+  public:
+    explicit FakeHeaderMenuProvidingEditor(QWidget* parent) : QWidget(parent) {}
+
+    QWidget* takeHeaderMenuWidget() override {
+        if (widgetTaken_) {
+            return nullptr;
+        }
+        widgetTaken_ = true;
+        auto* widget = new QWidget();
+        // EditorArea reparents this widget into the header without renaming it (unlike the footer,
+        // which stamps "editorFooter" over whatever objectName the provider used) -- so a plain
+        // property, not an objectName, is what a test can look for either way.
+        widget->setProperty("fakeHeaderMenuMarker", true);
+        return widget;
+    }
+
+  private:
+    bool widgetTaken_ = false;
+};
+
+EditorRegistry makeHeaderMenuProvidingRegistry() {
+    EditorRegistry registry;
+    (void)registry.registerEditor(
+        {"bloom.headerMenuProbe", "Header Menu Probe",
+         [](QWidget* parent) -> QWidget* { return new FakeHeaderMenuProvidingEditor(parent); }});
+    return registry;
+}
+
 // task U8, issue #131 (fixes 4/5/6): panelContextMenuButton and closeAreaButton are gone. The
 // only surviving header QToolButton is maximizeAreaButton, and it now toggles/restores
 // fullscreen -- Fullscreen/Exit Fullscreen wording, not Maximize/Restore.
@@ -405,6 +437,63 @@ void testAFooterLessEditorHasNoEditorFooterChildAtAll(Expectations& expectations
                         "at all");
 }
 
+// Task NODES-1: the header's counterpart to the two footer tests above, pinning
+// EditorHeaderMenuProvider the same way.
+void testAHeaderMenuProvidingEditorGetsItsWidgetHostedInTheHeader(Expectations& expectations) {
+    const EditorRegistry registry = makeHeaderMenuProvidingRegistry();
+    EditorArea area(registry, "bloom.headerMenuProbe", QString{});
+    auto* header = area.findChild<QWidget*>(QStringLiteral("editorHeader"));
+    expectations.expect(header != nullptr, "the header exists");
+    if (header == nullptr) {
+        return;
+    }
+    QWidget* hosted = nullptr;
+    for (auto* candidate : header->findChildren<QWidget*>()) {
+        if (candidate->property("fakeHeaderMenuMarker").toBool()) {
+            hosted = candidate;
+            break;
+        }
+    }
+    expectations.expect(hosted != nullptr,
+                        "the header-menu-providing editor's widget is hosted in the header -- the "
+                        "exact widget the provider handed back, not a copy or a wrapper");
+}
+
+void testAHeaderMenuLessEditorHasNoExtraHeaderChild(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    EditorArea area(registry, "bloom.probe", QString{});
+    auto* header = area.findChild<QWidget*>(QStringLiteral("editorHeader"));
+    expectations.expect(header != nullptr, "the header exists");
+    if (header == nullptr) {
+        return;
+    }
+    for (auto* candidate : header->findChildren<QWidget*>()) {
+        expectations.expect(!candidate->property("fakeHeaderMenuMarker").toBool(),
+                            "an editor that never implements EditorHeaderMenuProvider adds nothing "
+                            "extra to the header");
+    }
+}
+
+// Switching AWAY from a header-menu-providing editor tears down its header widget along with it --
+// the same rebuildEditor() sequence that already retires an old footer.
+void testSwitchingEditorsRetiresTheOldHeaderMenuWidget(Expectations& expectations) {
+    EditorRegistry registry = makeHeaderMenuProvidingRegistry();
+    (void)registry.registerEditor(
+        {"bloom.probe", "Probe", [](QWidget* parent) -> QWidget* { return new QWidget(parent); }});
+    EditorArea area(registry, "bloom.headerMenuProbe", QString{});
+    expectations.expect(area.setEditorId("bloom.probe"),
+                        "switching to a header-menu-less editor succeeds");
+    auto* header = area.findChild<QWidget*>(QStringLiteral("editorHeader"));
+    expectations.expect(header != nullptr, "the header still exists after switching");
+    if (header == nullptr) {
+        return;
+    }
+    for (auto* candidate : header->findChildren<QWidget*>()) {
+        expectations.expect(!candidate->property("fakeHeaderMenuMarker").toBool(),
+                            "the old editor's header-menu widget was torn down, not left behind");
+    }
+}
+
 // task C1, item C5 (owner: "cut rounded corners because the background is not clipped by the
 // panel"): an offscreen grab of a real EditorArea -- header, content, and footer all painting
 // their own full-bleed Surface/Background rectangles -- still shows exactly the window Background
@@ -463,6 +552,9 @@ int main(int argc, char** argv) {
     testHeaderProportionsMatchTheDesignCrops(expectations);
     testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(expectations);
     testAFooterLessEditorHasNoEditorFooterChildAtAll(expectations);
+    testAHeaderMenuProvidingEditorGetsItsWidgetHostedInTheHeader(expectations);
+    testAHeaderMenuLessEditorHasNoExtraHeaderChild(expectations);
+    testSwitchingEditorsRetiresTheOldHeaderMenuWidget(expectations);
     testTheFourCornersAreClippedToWindowBackground(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
