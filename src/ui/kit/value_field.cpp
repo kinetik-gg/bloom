@@ -233,7 +233,16 @@ QSize KValueField::sizeHint() const {
     return {labelWidth + cellWidth, px(Size::Control)};
 }
 
-QSize KValueField::minimumSizeHint() const { return sizeHint(); }
+QSize KValueField::minimumSizeHint() const {
+    // task WIDTH-1: sizeHint() above is this field's PREFERRED width, sized for the widest number
+    // its own range can produce so the cell never resizes as digits change. minimumSizeHint() is a
+    // different question -- the FLOOR this cell may shrink to when the panel hosting it (Properties
+    // above all) is narrower than every field's combined preferred width. That floor is
+    // Size::ValueCellMin, not the range's own widest string, so a narrow panel degrades every cell
+    // in it to the same legible width instead of each row committing to its own.
+    const int labelWidth = label_.isEmpty() ? 0 : kLabelColumnWidth + px(Spacing::S);
+    return {labelWidth + px(Size::ValueCellMin), px(Size::Control)};
+}
 
 void KValueField::layOutEditor() {
     // The editor IS the cell: exactly its rectangle, so the Field fill and the one Accent hairline

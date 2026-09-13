@@ -147,6 +147,8 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 | `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
+| `PanelMinWidth` | `300` | Every `EditorArea`'s own strict minimum width, in Figma design px |
+| `ValueCellMin` | `72` | The floor a Properties value cell (`kit::KValueField`) may shrink to before its row falls back to horizontal scrolling |
 
 `MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
 and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
@@ -217,6 +219,30 @@ The footer places New Composition, disabled New Folder, and disabled Import on t
 Delete aligned to the right. New Folder explains `Folders arrive with asset organisation`; Import
 explains `Image and sequence import arrives with the media pipeline`. The panel body is a
 two-column tree whose Kind column reads `Composition`, with a search field above it.
+
+#### Panel width rule (task WIDTH-1)
+
+Every `EditorArea` overrides `minimumSizeHint()` to report exactly `PanelMinWidth` wide by its own
+header-plus-footer height, computed without ever consulting the hosted editor's own size hints. A
+`QSplitter` reads that fixed floor, not whatever the hosted editor happens to want, so switching a
+Properties selection -- more `KValueField` cells, a longer parameter label -- can never grow past
+what a narrower pane already had and nudge a splitter handle. The owner's own framing: "let it have
+min width of something like 300px ... so inner sections and users can compromise to also have that
+strict min width instead of kicking borders around."
+
+The rule applies uniformly to every panel kind, but only Properties needs help holding to it:
+Properties is the one hosted editor that is a *form* rather than a canvas, so `EditorArea` hosts it
+inside a `QScrollArea` with `Qt::Ignored` on the horizontal axis (the scroll area's own minimum
+width never asks the panel's content layout for more room than it already has) and
+`widgetResizable` set, so the real `PropertiesEditor` widget is actually resized down to whatever
+width the panel currently has. Inside that width, Properties degrades in this order before ever
+scrolling: each row's label column elides (`Qt::ElideRight`, the untruncated name lives in the
+tooltip), then every value cell shrinks toward `ValueCellMin`; only once a row still doesn't fit at
+that floor does the panel's own scroll area fall back to a horizontal scrollbar, alongside the
+vertical one its sections already use to scroll past a short panel. The node graph, timeline, and
+viewer editors need no such wrapping -- their own canvases already scale down to whatever room they
+get, unwrapped. Node cards keep their own, separate minimum-width rule and are out of this task's
+scope entirely.
 
 ### Viewer footer readouts
 
