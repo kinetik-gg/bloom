@@ -193,6 +193,31 @@ void agree(const Surfaces& surfaces, const std::string& where) {
     check.say(laneRows == animatedCurves,
               "the keyframe panel carries one lane per animated curve of the contextual layer");
 
+    // --- The canvas's own inventory --------------------------------------------------------------
+    std::size_t cards = 0;
+    for (auto* item : surfaces.nodes->graphScene()->items()) {
+        if (dynamic_cast<node_editor::NodeItem*>(item) != nullptr) {
+            ++cards;
+        }
+    }
+    check.say(cards == composition->graph().nodes().size(),
+              "the canvas draws one card per node in the document, and no more");
+
+    // --- Which half of the Properties panel is showing -------------------------------------------
+    const bool hasSelection = !std::holds_alternative<std::monostate>(session.selection().primary);
+    auto* selectionSection =
+        surfaces.properties->findChild<QWidget*>(QStringLiteral("propertiesSelectionSection"));
+    auto* documentSection =
+        surfaces.properties->findChild<QWidget*>(QStringLiteral("propertiesDocumentSection"));
+    check.say(selectionSection != nullptr && documentSection != nullptr,
+              "the panel carries both of its sections");
+    if (selectionSection != nullptr && documentSection != nullptr) {
+        check.say(selectionSection->isVisibleTo(surfaces.properties) == hasSelection,
+                  "the panel shows its selection rows exactly while something is selected");
+        check.say(documentSection->isVisibleTo(surfaces.properties) != hasSelection,
+                  "and the composition's own rows otherwise");
+    }
+
     // --- The selection's own parameter rows, in both surfaces -----------------------------------
     const auto* selectedNode = session.selectedNode();
     if (selectedNode == nullptr) {
@@ -244,6 +269,16 @@ void agree(const Surfaces& surfaces, const std::string& where) {
             }
             return row.component == 0 ? pair->x : pair->y;
         }();
+        // A driven row shows its socket and nothing else; an unlinked one shows its control. The
+        // card decides that by ROLE on every refresh, so a connect or a disconnect that did not
+        // reach it leaves a control the artist can type into over a value the graph owns.
+        const bool driven =
+            std::holds_alternative<document::DriverBindingSource>(parameter->source);
+        if (card != nullptr) {
+            const auto* proxy = card->graphicsProxyWidget();
+            check.say(proxy != nullptr && proxy->isVisible() != driven,
+                      "a card's control is shown exactly while its input is unlinked");
+        }
         if (card != nullptr) {
             check.say(card->isEnabled() == value.has_value(),
                       "a card cell is live exactly when its parameter has a readable value");
@@ -397,9 +432,25 @@ int run(int argc, char** argv) {
     }
 
     // --- Adding and removing a layer -----------------------------------------------------------
-    expect(addDefaultSolidLayer(session), "a third layer is added");
+    for (int extra = 0; extra < 8; ++extra) {
+        expect(addDefaultSolidLayer(session), "more layers are added");
+    }
     QCoreApplication::processEvents();
-    agree(surfaces, "after adding a layer");
+    session.selectNode(*boundary);
+    QCoreApplication::processEvents();
+    agree(surfaces, "after adding layers");
+
+    // A scrolled column re-points its pooled rows at other layers; every row must still draw the
+    // layer it is now bound to.
+    if (auto* scrollBar = surfaces.timeline->verticalScrollBarForTest();
+        scrollBar != nullptr && scrollBar->maximum() > 0) {
+        scrollBar->setValue(scrollBar->maximum());
+        QCoreApplication::processEvents();
+        agree(surfaces, "after scrolling the layer column");
+        scrollBar->setValue(0);
+        QCoreApplication::processEvents();
+        agree(surfaces, "after scrolling back");
+    }
 
     // Remove the layer whose card is SELECTED, which is what makes selection normalization the
     // question: every surface has to stop pointing at it in the same breath.
