@@ -128,7 +128,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
 // The graph canvas. Its navigation conventions are the Viewer's, deliberately and structurally:
 // the wheel step factor and the zoom bounds are the SAME named constants viewer_editor.hpp
 // publishes (kZoomStepFactor, ViewTransform::kMinZoom/kMaxZoom), so the two canvases cannot drift
-// apart by someone re-spelling a number. Wheel zooms about the cursor, Space-hold + left drag or a
+// apart by someone re-spelling a number. Wheel zooms about the cursor, a
 // middle drag pans, Ctrl+0 frames the graph and Ctrl+1 returns to 100% -- the same pair the Viewer
 // answers to, one app, one feel (decision 1; task S1, item 8 retired F and Z in both).
 //
@@ -187,7 +187,6 @@ class NodeGraphicsView final : public QGraphicsView {
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
-    void keyReleaseEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
@@ -198,7 +197,6 @@ class NodeGraphicsView final : public QGraphicsView {
     // in which case the caller must not latch any "the artist moved the view" state.
     [[nodiscard]] bool applyCenteredScale(double scale);
 
-    bool spaceHeld_ = false;
     bool panActive_ = false;
     Qt::MouseButton panButton_ = Qt::NoButton;
     QPointF panOrigin_;

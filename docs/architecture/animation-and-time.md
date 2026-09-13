@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-13
+Updated: 2026-09-14
 
 ## Purpose And Ownership
 
@@ -220,9 +220,10 @@ arithmetic. Existing subframe keys and direct time entry remain exact and are no
 destructively.
 
 Current time is an evaluation-request input, not a persistent preview setting. Every change
-immediately advances the desired request generation. Scrub, playback, and direct manipulation use
+immediately advances the desired request generation. Scrub and direct manipulation use
 `Interactive` priority; discrete typed time entry, key selection, and document refresh use
-`Visible`. The controller uses an injectable 16 ms trailing cadence for pointer storms and retains
+`Visible`. Playback serves cached frames immediately, admits predicted fast misses at `Visible`,
+and skips other misses as described under **Playback never blocks**. The controller uses an injectable 16 ms trailing cadence for pointer storms and retains
 at most one active request handle plus one newest pending request per preview owner. A superseded
 active request is cancelled but remains active until terminal; only then may the pending request be
 submitted. Scrub end bypasses the trailing delay but does not violate that active-request gate.
@@ -354,34 +355,67 @@ second RAM preview of an unedited range is immediate. The range is the compositi
 `[0, duration)`: Bloom has no work-area range to scope it to, since the timeline's work-area strip
 honestly spans the whole duration and the document model has no in/out points.
 
-**Clock rule.** A tick asks whether the NEXT frame is cached.
+### Background caching
 
-- Cached: the target advances by exactly ONE frame -- a cached frame costs a lookup, so there is
-  nothing to drop and skipping one would state something about the composition that is not true. The
-  due moment is still total elapsed time since `play()`, so presentations track the ideal frame grid
-  and no per-tick error accumulates. A host that stalls long enough to owe several frames plays every
-  one of them, at one frame per tick, rather than skipping to the frame the wall clock now demands.
-- Not cached: the elapsed-time policy below is unchanged, and the footer keeps reporting what the
-  coalescing preview path dropped.
+A session-owned background renderer fills the same preview cache while no foreground preview,
+interactive scrub, position override, pointer drag, or explicit RAM Preview is active. It starts at
+the playhead, then visits the next frame, previous frame, and progressively farther frames in both
+directions. During playback it visits frames forward from the moving playhead, wrapping at the
+composition end. An in-flight frame remains useful when playback advances; the next request is
+chosen from the new playhead instead of cancelling slow speculative work on every tick.
 
-A cached request never enters the coalescing path at all -- it is published directly, with no task --
-which is why a fully cached playback run reports zero dropped frames rather than a small number.
+Only one speculative frame may be in flight, at scheduler `Background` priority, below `Visible`
+and `Interactive`. Foreground preview admission and gesture begin cancel it cooperatively. Its
+handle remains the admission gate until terminal, including across revision and resolution changes.
+Preparation runs on the CPU executor with the ordinary pipeline's progress, cancellation, diagnostics,
+and shutdown handling. It never changes session time or publishes Viewer pixels.
+
+Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
+in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
+cycle that evicts its own frames. A revision, resolution, playhead, or memory-budget change restarts
+selection. Old revision entries evict through the existing cache policy. Bloom still has no editable
+work-area in/out points: the supported range is the full composition `[0, duration)`.
+
+The ruler paints a thin `Ok` green segment for each retained frame-grid sample at the current
+project, composition, revision, resolution, and policy. Subframe samples do not certify a whole frame.
+Segment endpoints use `TimelineAxis`; the last ends at the composition duration. Cache mutation
+notifications coalesce over 50 ms, including evictions and clears, so filling a burst does not request
+one ruler repaint per frame. Revision and resolution changes remove obsolete coverage immediately.
+
+### Playback never blocks
+
+Space and the transport button toggle the same session transport. Space belongs to the window and
+works even when every Timeline panel is hidden or replaced; focused text entry keeps the character.
+A gesture press pauses playback before its first time change. `Ctrl+Shift+Space` remains the explicit
+RAM Preview command: finish pre-rendering the range (or its budget-limited prefix), then play.
+
+Each due tick advances the exact session time and asks for its frame:
+
+- A cache hit publishes immediately without evaluation or coalescing.
+- A miss is admitted at `Visible` only when no foreground request is active/pending and the maximum
+  observed delivery duration for the current identity is at most half the time until the next tick.
+  Delivery timing includes queue, preparation, and UI polling; the extra half provides headroom.
+- Unknown, slow, or busy misses are skipped immediately. The previous picture remains visibly stale,
+  the frame is counted dropped, and speculative filling continues. A prediction is not a deadline
+  guarantee: an admitted frame arriving after its deadline or superseded by another tick cannot
+  replace the displayed picture. A valid late result may still enter the cache for a later loop.
+
+The transport retains its two exact clocks. If the next frame is cached, it advances exactly one
+frame per due tick, preserving frame-accurate RAM Preview even after a host stall. Otherwise it jumps
+to the frame demanded by total elapsed time. Both loop without accumulated floating-point time.
+Neither clock waits for cache completion. Explicit RAM Preview is the mode that waits before starting
+playback.
 
 ### Dropped-Frame Counter
 
-The Viewer footer reports "N dropped" while a playback run is in progress. It counts exactly the
-requests the coalescing preview path discarded: a pending request superseded before submission (under
-either the active-task gate or the Interactive trailing-cadence window), a pending Interactive request
-discarded by a Visible bypass, and a finished frame thrown away unpublished because a newer pending
-request exists.
+The Viewer footer reports "N dropped" during playback. The count includes frame indices skipped by
+elapsed-time catch-up, uncached targets skipped at admission, admitted requests that fail or miss
+their deadline, and superseded requests. Each playback request contributes at most once. Cached
+frames contribute nothing. The counter is a count, not a measured frame rate.
 
-It is deliberately a COUNT, not a rate, and it makes no real-time claim. The transport's own decision
-to skip frame indices -- it recomputes its target from total elapsed time, so a slow evaluation makes
-the next tick jump rather than slow the motion down -- never reaches the preview controller as a
-request at all and is therefore not counted here. Counting is armed and reset by `play()` and disarmed
-by `pause()`, so the figure shown always belongs to the run in progress; outside a run the footer says
-nothing rather than a stale or invented number, and during one it reports zero explicitly, because
-silence would read as "not measured".
+`play()` arms and resets counting; `pause()` disarms it and retains the last total. Outside a run the
+footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does
+not affect the count.
 
 ## Direct Manipulation And Preview Overrides
 

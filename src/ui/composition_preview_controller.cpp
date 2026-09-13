@@ -1,6 +1,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <bloom/document/project.hpp>
@@ -40,16 +41,11 @@ QString submissionFailureMessage(const runtime::TaskSubmissionStatus status) {
     return CompositionPreviewController::tr("The preview could not start");
 }
 
-QString firstDiagnosticSummary(const std::vector<runtime::TaskDiagnostic>& diagnostics,
-                               QString fallback) {
-    if (diagnostics.empty() || diagnostics.front().summary.empty()) {
-        return fallback;
-    }
-    return QString::fromStdString(diagnostics.front().summary);
-}
+} // namespace
 
-FrameFreshness freshnessFor(const PreparedPreviewFrameHandle& frame,
-                            const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity) {
+FrameFreshness CompositionPreviewController::freshnessFor(
+    const PreparedPreviewFrameHandle& frame,
+    const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity) {
     if (frame == nullptr) {
         return FrameFreshness::None;
     }
@@ -57,8 +53,6 @@ FrameFreshness freshnessFor(const PreparedPreviewFrameHandle& frame,
                ? FrameFreshness::Current
                : FrameFreshness::Stale;
 }
-
-} // namespace
 
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
@@ -86,13 +80,29 @@ CompositionPreviewController::CompositionPreviewController(
     requestPreview(true, PreviewRequestKind::Visible);
 }
 
-CompositionPreviewController::~CompositionPreviewController() { cancelAndDetachActive(); }
+CompositionPreviewController::~CompositionPreviewController() {
+    playbackController_.reset();
+    cancelAndDetachActive();
+}
+
+PlaybackController& CompositionPreviewController::playbackController() {
+    if (playbackController_ == nullptr) {
+        playbackController_ = std::make_unique<PlaybackController>(session_, *this);
+    }
+    return *playbackController_;
+}
 
 const CompositionPreviewState& CompositionPreviewController::state() const noexcept {
     return state_;
 }
 
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
+
+bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
+    return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
+           !interactiveTimeChangeArmed_ && !session_.positionInteractionOverride().has_value() &&
+           !ramPreviewProgress_.has_value();
+}
 
 PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
     return *frameCache_;
@@ -163,7 +173,9 @@ void CompositionPreviewController::setResolutionPolicy(
     if (shuttingDown_ || settings_.resolutionPolicy == policy) {
         return;
     }
+    preparationEstimate_.reset();
     settings_.resolutionPolicy = policy;
+    preparationEstimate_.reset();
     emit resolutionChanged();
     requestPreview(false, PreviewRequestKind::Visible);
 }
@@ -178,6 +190,7 @@ void CompositionPreviewController::setDisplayedCompositionScale(const double sca
     if (previous == resolution()) {
         return;
     }
+    preparationEstimate_.reset();
     emit resolutionChanged();
     requestPreview(false, PreviewRequestKind::Visible);
 }
@@ -185,6 +198,7 @@ void CompositionPreviewController::setDisplayedCompositionScale(const double sca
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
+        preparationEstimate_.reset();
         // Deliberately NOT from the cache: see requestPreview()'s `allowCachedFrame`.
         requestPreview(false, PreviewRequestKind::Visible, false);
     }
@@ -193,13 +207,14 @@ void CompositionPreviewController::requestRefresh() {
 void CompositionPreviewController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
+        preparationEstimate_.reset();
         requestPreview(true, PreviewRequestKind::Visible);
     }
 }
 
 void CompositionPreviewController::handleCurrentTimeChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (shuttingDown_) {
+    if (shuttingDown_ || playbackActive_) {
         return;
     }
     if (state_.desiredIdentity.has_value() &&
@@ -232,6 +247,8 @@ void CompositionPreviewController::handlePositionInteractionChanged() {
 void CompositionPreviewController::beginInteractiveScrub() {
     Q_ASSERT(QThread::currentThread() == thread());
     interactiveTimeChangeArmed_ = true;
+    emit interactiveScrubStarted();
+    emit foregroundWorkRequested();
 }
 
 void CompositionPreviewController::notifyScrubEnded() {
@@ -281,6 +298,7 @@ CompositionPreviewController::ramPreviewProgress() const noexcept {
 
 void CompositionPreviewController::beginRamPreviewProgress(const std::uint64_t totalFrames) {
     Q_ASSERT(QThread::currentThread() == thread());
+    emit foregroundWorkRequested();
     ramPreviewProgress_ = RamPreviewProgress{.cachedFrames = 0, .totalFrames = totalFrames};
     emit ramPreviewProgressChanged();
 }
@@ -307,14 +325,7 @@ const CompositionPreviewSettings& CompositionPreviewController::settings() const
     return settings_;
 }
 
-void CompositionPreviewController::noteDroppedFrame() {
-    if (!countingDroppedFrames_ ||
-        droppedFrameCount_ == std::numeric_limits<std::uint64_t>::max()) {
-        return;
-    }
-    ++droppedFrameCount_;
-    emit droppedFrameCountChanged();
-}
+void CompositionPreviewController::noteDroppedFrame() { noteDroppedFrames(1); }
 
 void CompositionPreviewController::flushCadence() {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -332,7 +343,11 @@ void CompositionPreviewController::beginShutdown() {
         return;
     }
 
+    if (playbackController_ != nullptr) {
+        playbackController_->pause();
+    }
     shuttingDown_ = true;
+    emit foregroundWorkRequested();
     disconnect(&session_, nullptr, this, nullptr);
     interactiveCadenceTimer_.stop();
     interactiveTimeChangeArmed_ = false;
@@ -353,6 +368,11 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                                                   const bool allowCachedFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
 
+    if (active_.has_value() && active_->playbackOutstanding) {
+        active_->playbackOutstanding = false;
+        active_->handle.cancel();
+        noteDroppedFrame();
+    }
     const document::Snapshot snapshot = session_.snapshot();
     const document::CompositionId compositionId = session_.compositionId();
     PreparedPreviewFrameHandle retainedFrame = clearLastGoodFrame ? nullptr : state_.frame;
@@ -462,6 +482,16 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         }
     }
 
+    if (kind == PreviewRequestKind::Playback &&
+        (active_.has_value() || pending_.has_value() || !preparationEstimate_.has_value() ||
+         *preparationEstimate_ > playbackBudget_ / 2)) {
+        noteDroppedFrame();
+        publishTerminal(PreviewActivity::Cancelled,
+                        tr("Playback skipped this frame; showing the previous frame"));
+        return;
+    }
+
+    emit foregroundWorkRequested();
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
@@ -532,6 +562,7 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     auto preparation = preparation_;
     const std::size_t pixelStorageByteLimit = pendingRequest.pixelStorageByteLimit;
     const auto interactionOverride = pendingRequest.interactionOverride;
+    const auto submittedAt = std::chrono::steady_clock::now();
     auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
         std::move(request),
         [snapshot = std::move(pendingRequest.snapshot), desiredIdentity, pixelStorageByteLimit,
@@ -545,6 +576,9 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
         });
 
     if (!submission.accepted()) {
+        if (pendingRequest.kind == PreviewRequestKind::Playback) {
+            noteDroppedFrame();
+        }
         CompositionPreviewState rejected{
             .activity = submission.status == runtime::TaskSubmissionStatus::ShuttingDown
                             ? PreviewActivity::Cancelled
@@ -565,9 +599,15 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     }
 
     const runtime::TaskId taskId = submission.handle.id();
-    active_.emplace(ActiveRequest{.handle = std::move(submission.handle),
-                                  .desiredIdentity = desiredIdentity,
-                                  .carriedInteractionOverride = interactionOverride.has_value()});
+    active_.emplace(
+        ActiveRequest{.handle = std::move(submission.handle),
+                      .desiredIdentity = desiredIdentity,
+                      .carriedInteractionOverride = interactionOverride.has_value(),
+                      .submittedAt = submittedAt,
+                      .playbackDeadline = pendingRequest.kind == PreviewRequestKind::Playback
+                                              ? std::optional{submittedAt + playbackBudget_}
+                                              : std::nullopt,
+                      .playbackOutstanding = pendingRequest.kind == PreviewRequestKind::Playback});
     publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
     taskUiBridge_.wake();
 }
@@ -603,120 +643,6 @@ void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdent
                             ? tr("Rendering the current composition; showing the previous frame")
                             : tr("Rendering the current composition");
     publish(std::move(rendering));
-}
-
-void CompositionPreviewController::consumeReadyResult() {
-    Q_ASSERT(QThread::currentThread() == thread());
-    if (!active_.has_value()) {
-        return;
-    }
-
-    auto result = active_->handle.tryTakeResult();
-    if (!result.has_value()) {
-        return;
-    }
-
-    ActiveRequest completed = std::move(*active_);
-    active_.reset();
-    if (shuttingDown_) {
-        return;
-    }
-    if (pending_.has_value()) {
-        PendingRequest pendingRequest = std::move(*pending_);
-        pending_.reset();
-        // The completed frame is discarded unpublished in favour of the newer pending request: the
-        // work was done and the artist never saw it, which is exactly a dropped frame. Counted
-        // after the pending request is taken, so the optional is provably disengaged across the
-        // call.
-        noteDroppedFrame();
-        submitPreview(std::move(pendingRequest), state_.frame);
-        return;
-    }
-    if (!isCurrent(completed)) {
-        return;
-    }
-    if (!liveSessionMatches(completed.desiredIdentity)) {
-        requestPreview(session_.compositionId() != completed.desiredIdentity.compositionId,
-                       PreviewRequestKind::Visible);
-        return;
-    }
-
-    CompositionPreviewState next{
-        .activity = PreviewActivity::Failed,
-        .freshness = FrameFreshness::None,
-        .desiredIdentity = completed.desiredIdentity,
-        .taskId = completed.handle.id(),
-        .frame = state_.frame,
-        .diagnostics = result->diagnostics(),
-        .message = {},
-    };
-
-    switch (result->state()) {
-    case runtime::TaskState::Succeeded: {
-        const auto& value = result->value();
-        if (!value.has_value() || *value == nullptr) {
-            next.message = tr("Preview rendering returned no result");
-            break;
-        }
-        const auto& preparation = **value;
-        switch (preparation.status()) {
-        case runtime::PreviewPreparationStatus::Prepared: {
-            const auto& frame = preparation.frame();
-            if (frame == nullptr) {
-                next.message = tr("Preview rendering returned no prepared frame");
-                break;
-            }
-            if (frame->desiredIdentity() != completed.desiredIdentity) {
-                next.message = tr("Preview rendering returned pixels for a different request");
-                break;
-            }
-            // Alternative-agnostic (issue #97, task C3): frame may carry either the reference or
-            // the qualified display product (PreparedPreviewFrame's closed alternative), and
-            // displayBufferView() normalizes both to the same validity/shape check rather than
-            // assuming the reference-only displayBuffer() accessor.
-            if (!frame->displayBufferView().has_value()) {
-                next.message = tr("Preview rendering returned an invalid display buffer");
-                break;
-            }
-            next.activity = PreviewActivity::Ready;
-            next.freshness = FrameFreshness::Current;
-            next.frame = frame;
-            next.message = tr("The current composition frame is ready");
-            // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
-            // second pass over the same range is a sequence of lookups (task PERF1, item 3). A
-            // frame rendered under an interactive override is the exception: its pixels belong to a
-            // gesture, and its identity cannot say so.
-            if (!completed.carriedInteractionOverride) {
-                frameCache_->insert(frame);
-            }
-            break;
-        }
-        case runtime::PreviewPreparationStatus::Unsupported:
-            next.activity = PreviewActivity::Unsupported;
-            next.message = firstDiagnosticSummary(
-                next.diagnostics, tr("The composition contains unsupported preview operations"));
-            break;
-        }
-        break;
-    }
-    case runtime::TaskState::Cancelled:
-        next.activity = PreviewActivity::Cancelled;
-        next.message =
-            firstDiagnosticSummary(next.diagnostics, tr("Preview rendering was cancelled"));
-        break;
-    case runtime::TaskState::Failed:
-        next.message = firstDiagnosticSummary(next.diagnostics, tr("Preview rendering failed"));
-        break;
-    case runtime::TaskState::Queued:
-    case runtime::TaskState::Running:
-        next.message = tr("Preview rendering returned an invalid non-terminal result");
-        break;
-    }
-
-    if (next.activity != PreviewActivity::Ready) {
-        next.freshness = freshnessFor(next.frame, next.desiredIdentity);
-    }
-    publish(std::move(next));
 }
 
 void CompositionPreviewController::cancelAndDetachActive() noexcept {

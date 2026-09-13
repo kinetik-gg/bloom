@@ -138,14 +138,13 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // beginPositionInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
     // cadence); move -> updatePositionInteraction; release -> commit + disarm; Escape or a detected
     // resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
-    // middle-button press, or a left-button press while Space is held, begins a PAN gesture instead
+    // middle-button press begins a PAN gesture instead
     // (decision 2) and never touches CompositionSession.
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
-    void keyReleaseEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
 
@@ -197,7 +196,6 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
-    bool spaceHeld_ = false;
     bool panActive_ = false;
     Qt::MouseButton panButton_ = Qt::NoButton;
     QPointF panOrigin_;

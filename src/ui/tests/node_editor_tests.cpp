@@ -249,7 +249,7 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
                         "but a resize never moves a view the artist has taken over");
 }
 
-void testSpaceHoldAndMiddleDragBothPan(Expectations& expectations) {
+void testMiddleDragPans(Expectations& expectations) {
     GraphFixture fixture(makeProject("Node Pan Test"));
     fixture.view()->zoomToActualSize();
 
@@ -257,19 +257,17 @@ void testSpaceHoldAndMiddleDragBothPan(Expectations& expectations) {
     const QPointF move(360.0, 190.0);
     const QPointF anchorBefore = fixture.view()->sceneFromViewport(press);
 
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Space);
-    sendMouse(fixture.view(), QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
-    sendMouse(fixture.view(), QEvent::MouseMove, move, Qt::NoButton, Qt::LeftButton);
+    sendMouse(fixture.view(), QEvent::MouseButtonPress, press, Qt::MiddleButton, Qt::MiddleButton);
+    sendMouse(fixture.view(), QEvent::MouseMove, move, Qt::NoButton, Qt::MiddleButton);
 
     const QPointF anchorAfter = fixture.view()->sceneFromViewport(move);
     expectations.expect(near(anchorBefore.x(), anchorAfter.x(), 0.01) &&
                             near(anchorBefore.y(), anchorAfter.y(), 0.01),
-                        "a space-hold left drag pans by the TOTAL displacement from the press "
+                        "a middle drag pans by the TOTAL displacement from the press "
                         "point: the grabbed scene point stays under the pointer");
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0), "panning never changes the zoom");
 
-    sendMouse(fixture.view(), QEvent::MouseButtonRelease, move, Qt::LeftButton, Qt::NoButton);
-    sendKey(fixture.view(), QEvent::KeyRelease, Qt::Key_Space);
+    sendMouse(fixture.view(), QEvent::MouseButtonRelease, move, Qt::MiddleButton, Qt::NoButton);
     const QPointF afterRelease = fixture.view()->sceneFromViewport(move);
     expectations.expect(near(afterRelease.x(), anchorAfter.x()) &&
                             near(afterRelease.y(), anchorAfter.y()),
@@ -285,7 +283,7 @@ void testSpaceHoldAndMiddleDragBothPan(Expectations& expectations) {
     const QPointF middleAfter = fixture.view()->sceneFromViewport(middleMove);
     expectations.expect(near(middleAnchor.x(), middleAfter.x(), 0.01) &&
                             near(middleAnchor.y(), middleAfter.y(), 0.01),
-                        "a middle drag pans exactly like the space-hold drag");
+                        "a second middle drag preserves the grabbed scene point");
     sendMouse(fixture.view(), QEvent::MouseButtonRelease, middleMove, Qt::MiddleButton,
               Qt::NoButton);
 }
@@ -838,7 +836,7 @@ int runAll() {
     testZoomAboutCursorHoldsTheScenePointUnderTheCursor(expectations);
     testZoomClampsToTheViewersOwnBounds(expectations);
     testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(expectations);
-    testSpaceHoldAndMiddleDragBothPan(expectations);
+    testMiddleDragPans(expectations);
     testEmptyCanvasZoomDoesNotLatchTheViewAway(expectations);
     testSelectionFollowsTheSessionInBothDirections(expectations);
     testConnectorTypingIsPinnedPerSocketKind(expectations);

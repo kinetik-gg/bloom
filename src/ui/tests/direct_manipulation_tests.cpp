@@ -633,7 +633,7 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
 // drag begun at 200% zoom AND a panned view still lands exactly under the cursor. Pan only
 // translates the frozen rectangle's position, never its size, so the SAME zoom-derived
 // composition-per-screen-pixel ratio as the zoom-only test above applies unchanged; this pins that
-// panning (itself driven through the real space-drag gesture, not by reaching into private state)
+// panning (itself driven through the real middle-drag gesture, not by reaching into private state)
 // does not perturb the mapping's scale, only where the gesture reads its frozen displayRect from.
 void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expectations) {
     using namespace bloom;
@@ -660,17 +660,16 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
 
     selectZoomPreset(*fixture.viewer.zoomDropdownForTest(), QStringLiteral("200%"));
 
-    // Pan through the real space-drag gesture (mirrors viewer_editor_tests.cpp's own space-pan
+    // Pan through the real middle-drag gesture (mirrors viewer_editor_tests.cpp's own middle-pan
     // test) rather than reaching into ViewerEditor's private transform_ -- the resulting pan offset
     // is read back afterward via the same public test accessor used to compute the expected
     // mapping below, so this test never needs to duplicate the pan materialization formula.
-    QKeyEvent spaceDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
-    QCoreApplication::sendEvent(&fixture.viewer, &spaceDown);
-    sendPress(fixture.viewer, QPointF(40.0, 40.0));
-    sendMove(fixture.viewer, QPointF(75.0, 15.0));
-    sendRelease(fixture.viewer, QPointF(75.0, 15.0));
-    QKeyEvent spaceUp(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
-    QCoreApplication::sendEvent(&fixture.viewer, &spaceUp);
+    sendMouse(fixture.viewer, QEvent::MouseButtonPress, QPointF(40.0, 40.0), Qt::MiddleButton,
+              Qt::MiddleButton);
+    sendMouse(fixture.viewer, QEvent::MouseMove, QPointF(75.0, 15.0), Qt::NoButton,
+              Qt::MiddleButton);
+    sendMouse(fixture.viewer, QEvent::MouseButtonRelease, QPointF(75.0, 15.0), Qt::MiddleButton,
+              Qt::NoButton);
 
     const auto transform = fixture.viewer.viewTransformForTest();
     expectations.expect(!transform.fitToWindow && transform.zoom == 2.0 &&

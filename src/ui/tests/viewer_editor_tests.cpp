@@ -649,31 +649,28 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
                         "the readout fixture reaches asynchronous scheduler quiescence");
 }
 
-// Space-hold + left-drag pans the view (decision 2) without ever touching CompositionSession's
+// Middle-drag pans the view (decision 2) without ever touching CompositionSession's
 // position-interaction gesture (positionInteractionActive() stays false throughout) -- pan is
 // pure Viewer-local state.
-void testSpaceHoldLeftDragPans(Expectations& expectations) {
+void testMiddleDragPans(Expectations& expectations) {
     using namespace bloom;
-    ViewerFixture fixture(makeTestProject("Space Pan Test"));
+    ViewerFixture fixture(makeTestProject("Middle Pan Test"));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the fixture's initial frame becomes ready");
     expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
                         "the viewer starts in Fit mode with no pan");
 
-    QKeyEvent spaceDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
-    QCoreApplication::sendEvent(&fixture.viewer, &spaceDown);
-
     const QPointF pressPoint(150.0, 120.0);
     const QPointF movePoint(190.0, 96.0);
-    QMouseEvent press(QEvent::MouseButtonPress, pressPoint, pressPoint, Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent press(QEvent::MouseButtonPress, pressPoint, pressPoint, Qt::MiddleButton,
+                      Qt::MiddleButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &press);
-    QMouseEvent move(QEvent::MouseMove, movePoint, movePoint, Qt::NoButton, Qt::LeftButton,
+    QMouseEvent move(QEvent::MouseMove, movePoint, movePoint, Qt::NoButton, Qt::MiddleButton,
                      Qt::NoModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &move);
 
     expectations.expect(!fixture.session.positionInteractionActive(),
-                        "a space-drag pan never begins a CompositionSession position interaction");
+                        "a middle-drag pan never begins a CompositionSession position interaction");
     expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow,
                         "panning materializes the transform out of Fit mode");
     const QPointF pan = fixture.viewer.viewTransformForTest().pan;
@@ -681,11 +678,9 @@ void testSpaceHoldLeftDragPans(Expectations& expectations) {
                             near(pan.y(), movePoint.y() - pressPoint.y()),
                         "pan tracks the TOTAL screen displacement from the press point");
 
-    QMouseEvent release(QEvent::MouseButtonRelease, movePoint, movePoint, Qt::LeftButton,
+    QMouseEvent release(QEvent::MouseButtonRelease, movePoint, movePoint, Qt::MiddleButton,
                         Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &release);
-    QKeyEvent spaceUp(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
-    QCoreApplication::sendEvent(&fixture.viewer, &spaceUp);
     expectations.expect(near(fixture.viewer.viewTransformForTest().pan.x(), pan.x()) &&
                             near(fixture.viewer.viewTransformForTest().pan.y(), pan.y()),
                         "releasing ends the pan gesture without resetting the accumulated pan");
@@ -693,7 +688,7 @@ void testSpaceHoldLeftDragPans(Expectations& expectations) {
     fixture.controller.beginShutdown();
     fixture.bridge.beginShutdown();
     expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
-                        "the space-pan fixture reaches asynchronous scheduler quiescence");
+                        "the middle-pan fixture reaches asynchronous scheduler quiescence");
 }
 
 // Task S1, item 8: Ctrl+0 fits and Ctrl+1 is actual size, the same pair the node canvas answers to.
@@ -933,7 +928,7 @@ int main(int argc, char** argv) {
     testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(expectations);
     testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(expectations);
     testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(expectations);
-    testSpaceHoldLeftDragPans(expectations);
+    testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
     return expectations.failures() == 0 ? 0 : 1;

@@ -7,6 +7,7 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -671,6 +672,10 @@ collectAnimatedParameters(const CompositionSession& session) {
 TimelineRuler::TimelineRuler(CompositionSession& session,
                              CompositionPreviewController& previewController, QWidget* parent)
     : QWidget(parent), session_(session), previewController_(previewController) {
+    connect(&previewController_.frameCache(), &PreviewFrameCache::contentsChanged, this,
+            qOverload<>(&TimelineRuler::update));
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
+            qOverload<>(&TimelineRuler::update));
     setObjectName("timelineRuler");
     setAccessibleName(tr("Scrub ruler"));
     setFixedHeight(kRulerHeight);
@@ -734,10 +739,52 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
                          QString::number(label.index));
     }
 
+    for (const auto& segment : cachedFrameRects()) {
+        painter.fillRect(segment, kit::color(kit::Color::Ok));
+    }
+
     // Playhead (task T1): the shared 1px Accent stroke, continuing down through every lane below.
     // Its single head marker is painted once by TimelineWorkAreaRow, the row directly above this
     // one -- two stacked markers (one here, one there) would read as two playheads.
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
+}
+
+std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
+    std::vector<QRectF> segments;
+    const auto* composition = session_.composition();
+    const auto probe = previewController_.cacheKeyForTime(session_.currentTime());
+    if (composition == nullptr || !probe.has_value()) {
+        return segments;
+    }
+    const auto axis = TimelineAxis::create(*composition, width());
+    const auto rate = composition->format().frameRate();
+    const auto mapping = core::FrameTimeMapping::create(composition->duration(), rate.numerator(),
+                                                        rate.denominator());
+    if (!axis.has_value() || !mapping.hasValue()) {
+        return segments;
+    }
+    const qreal barHeight = kit::px(kit::Spacing::XXS);
+    for (const auto time : previewController_.frameCache().timesFor(*probe)) {
+        const auto index = mapping.value()->nearestFrameIndex(time);
+        const auto exact = mapping.value()->timeForFrame(index);
+        if (!exact.hasValue() || *exact.value() != time) {
+            continue; // A cached subframe does not certify an entire frame-grid sample.
+        }
+        auto end = composition->duration();
+        if (index < mapping.value()->maximumFrameIndex()) {
+            const auto next = mapping.value()->timeForFrame(index + 1);
+            if (!next.hasValue()) {
+                continue;
+            }
+            end = *next.value();
+        }
+        const auto left = axis->pixelForTime(time);
+        const auto right = axis->pixelForTime(end);
+        if (right > left) {
+            segments.emplace_back(left, height() - barHeight, right - left, barHeight);
+        }
+    }
+    return segments;
 }
 
 std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {

@@ -5,6 +5,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
+#include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -14,6 +15,7 @@
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -120,6 +122,8 @@ int main(int argc, char* argv[]) {
         qualifiedDisplayProcessorProvider);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline, {}, previewFrameCache);
+    bloom::ui::BackgroundPreviewController backgroundPreviewController(
+        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
@@ -169,6 +173,20 @@ int main(int argc, char* argv[]) {
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController);
+    auto& playback = previewController.playbackController();
+    playback.installWindowShortcut(window);
+    QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
+                     &playback, [&] {
+                         if (ramPreviewController.isCaching()) {
+                             playback.pause();
+                         }
+                     });
+    QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::cachingFinished,
+                     &playback, [&playback](const bool completed) {
+                         if (completed) {
+                             playback.play();
+                         }
+                     });
     (void)window.restoreApplicationState(settings);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,

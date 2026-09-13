@@ -16,8 +16,10 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -26,7 +28,10 @@
 #include <QEventLoop>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QTest>
+#include <QTextEdit>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -406,6 +411,16 @@ void testScrubDuringPlaybackPauses(Expectations& expectations) {
                         "the scrub's own target time is left exactly as the scrub set it -- "
                         "playback does not fight or revert it");
 
+    playback.play();
+    fixture.controller.beginInteractiveScrub();
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped,
+                        "gesture press pauses playback before its first time change");
+    (void)fixture.session.setCurrentTime(time(1, 25));
+    fixture.controller.notifyScrubEnded();
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->time == time(1, 25),
+                        "the first scrub frame still requests a preview");
+
     finishFixture(fixture, expectations);
 }
 
@@ -499,11 +514,7 @@ void testOverflowingDurationCompositionPlaybackIsNoOp(Expectations& expectations
     finishFixture(fixture, expectations);
 }
 
-// Integration test: with the real CompositionPreviewController, playing produces Interactive-kind
-// requests honoring the one-active/newest-pending gate -- asserted via the controller's existing
-// observable seams (runtime::TaskScheduler::snapshots(), each TaskSnapshot's sourceVersion/
-// priority), with NO gate modification, mirroring composition_preview_controller_tests.cpp's own
-// testNewestPendingRequestGate()/testInteractiveCadenceCoalescesBurstAndVisibleBypasses() idiom.
+// Hold initial work on the worker: playback must skip immediately without queuing behind it.
 struct WorkerGate final {
     void enterAndWait() {
         std::unique_lock lock(mutex_);
@@ -541,7 +552,7 @@ snapshotForGeneration(const bloom::runtime::TaskScheduler& scheduler,
     return std::nullopt;
 }
 
-void testIntegrationPlaybackDrivesInteractivePriorityUnderGate(Expectations& expectations) {
+void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Playback Interactive Gate", time(4));
     const auto compositionId = newProject.initialCompositionId;
@@ -584,19 +595,14 @@ void testIntegrationPlaybackDrivesInteractivePriorityUnderGate(Expectations& exp
                                     : 0;
     expectations.expect(tickGeneration != 0, "the tick's own request identity is observable");
     expectations.expect(scheduler.snapshots().size() == 1,
-                        "the tick's request is held as the newest pending request behind the "
-                        "still-active initial request -- the gate is not bypassed");
+                        "the tick skips the busy foreground gate without adding pending work");
 
     firstRequest.release();
-    expectations.expect(
-        waitUntil([&] { return scheduler.snapshots().size() == 2; }),
-        "the pending request submits once the active initial request reaches terminal");
+    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+                        "the initial request terminates without a playback request behind it");
     const auto tickSnapshot = snapshotForGeneration(scheduler, tickGeneration);
-    expectations.expect(tickSnapshot.has_value() &&
-                            tickSnapshot->priority == runtime::TaskPriority::Interactive,
-                        "playback's own session-time change submits at Interactive priority, "
-                        "through the SAME arming CompositionPreviewController::"
-                        "beginInteractiveScrub() already grants scrub -- no new request kind");
+    expectations.expect(!tickSnapshot.has_value() && controller.droppedFrameCount() == 1,
+                        "the skipped tick is counted once and is never submitted later");
 
     playback.pause();
     controller.beginShutdown();
@@ -616,6 +622,8 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Playback Widget", time(4)));
 
     QWidget host;
+    auto& sharedPlayback = fixture.controller.playbackController();
+    sharedPlayback.installWindowShortcut(host);
     auto* layout = new QVBoxLayout(&host);
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
@@ -662,6 +670,60 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     expectations.expect(probeLineEdit->text() == QStringLiteral(" "),
                         "the focused line edit consumed Space as ordinary text input, confirming "
                         "it -- not a dropped/ignored event -- is what won the key");
+
+    auto* secondTimeline =
+        new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
+    layout->addWidget(secondTimeline);
+    auto* secondButton = secondTimeline->findChild<QToolButton*>("playPauseButton");
+    expectations.expect(secondButton != nullptr && secondButton->isChecked(),
+                        "a second Timeline reflects the already playing shared transport");
+    expectations.expect(host.findChildren<QAction*>("playPauseAction").size() == 1,
+                        "multiple Timeline panels do not duplicate Space shortcuts");
+    auto* viewer = new ui::ViewerEditor(fixture.session, fixture.controller, &host);
+    auto* nodes = new ui::NodeGraphEditor(fixture.session, &host);
+    auto* plainButton = new QPushButton(QStringLiteral("Non-text button"), &host);
+    layout->addWidget(viewer);
+    layout->addWidget(nodes);
+    layout->addWidget(plainButton);
+    for (QWidget* panel : {static_cast<QWidget*>(viewer), static_cast<QWidget*>(nodes->graphView()),
+                           static_cast<QWidget*>(plainButton)}) {
+        panel->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        const auto before = sharedPlayback.state();
+        QTest::keyClick(panel, Qt::Key_Space);
+        QCoreApplication::processEvents();
+        expectations.expect(sharedPlayback.state() != before,
+                            "Space toggles from Viewer, Nodes, and non-text button focus");
+    }
+    auto* richText = new QTextEdit(&host);
+    auto* plainText = new QPlainTextEdit(&host);
+    layout->addWidget(richText);
+    layout->addWidget(plainText);
+    for (QWidget* text : {static_cast<QWidget*>(richText), static_cast<QWidget*>(plainText)}) {
+        text->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        const auto before = sharedPlayback.state();
+        QTest::keyClick(text, Qt::Key_Space);
+        QCoreApplication::processEvents();
+        expectations.expect(sharedPlayback.state() == before, "multiline text entry keeps Space");
+    }
+    expectations.expect(richText->toPlainText() == QStringLiteral(" ") &&
+                            plainText->toPlainText() == QStringLiteral(" "),
+                        "both multiline editors receive the actual character");
+    editor->hide();
+    secondTimeline->hide();
+    viewer->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    const auto beforeHidden = sharedPlayback.state();
+    QTest::keyClick(viewer, Qt::Key_Space);
+    expectations.expect(sharedPlayback.state() != beforeHidden,
+                        "hidden Timelines do not disable Space");
+    delete editor;
+    delete secondTimeline;
+    const auto beforeRemoved = sharedPlayback.state();
+    QTest::keyClick(viewer, Qt::Key_Space);
+    expectations.expect(sharedPlayback.state() != beforeRemoved,
+                        "Space and transport survive removal of every Timeline panel");
 
     finishFixture(fixture, expectations);
 }
@@ -1044,7 +1106,7 @@ int main(int argc, char** argv) {
     testScrubDuringPlaybackPauses(expectations);
     testStopsOnCompositionSwitch(expectations);
     testOverflowingDurationCompositionPlaybackIsNoOp(expectations);
-    testIntegrationPlaybackDrivesInteractivePriorityUnderGate(expectations);
+    testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(expectations);
     testPlaybackToggleButtonAndSpaceShortcut(expectations);
     testStepForwardFromZeroLandsOnFrameOne(expectations);
     testStepBackwardAtZeroClampsWithNoSignalChurn(expectations);
