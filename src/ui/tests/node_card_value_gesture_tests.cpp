@@ -343,6 +343,7 @@ void textCardRows(App& app) {
         return;
     }
     click(app, content);
+    expect(content->hasFocus(), "clicking the Text card's content row focuses its editor");
     QTest::keyClicks(app.editor.graphView(), QStringLiteral("HELLO"));
     QCoreApplication::processEvents();
     key(app, Qt::Key_Return);
@@ -353,6 +354,23 @@ void textCardRows(App& app) {
     const auto* held = constant == nullptr ? nullptr : std::get_if<std::string>(&constant->value);
     expect(held != nullptr && held->find("HELLO") != std::string::npos,
            "typed text on the Text card reaches the document");
+
+    // The commit an artist actually makes most often: type, then click somewhere else. A QLineEdit
+    // emits editingFinished from its own focusOutEvent, so this only lands if the row ever held
+    // focus in the first place.
+    click(app, content);
+    QTest::keyClicks(app.editor.graphView(), QStringLiteral("WORLD"));
+    QCoreApplication::processEvents();
+    app.press(QPointF(-400.0, -400.0));
+    app.release(QPointF(-400.0, -400.0));
+    QCoreApplication::processEvents();
+    const auto* after = parameterFor(app, *textNode, document::kTextParameterRole);
+    const auto* afterConstant =
+        after == nullptr ? nullptr : std::get_if<document::ConstantValueSource>(&after->source);
+    const auto* afterHeld =
+        afterConstant == nullptr ? nullptr : std::get_if<std::string>(&afterConstant->value);
+    expect(afterHeld != nullptr && afterHeld->find("WORLD") != std::string::npos,
+           "clicking away from the Text card's content row commits what was typed into it");
 }
 
 // A Math card's OPERAND cells, not only its operation dropdown: the generic editor built from the

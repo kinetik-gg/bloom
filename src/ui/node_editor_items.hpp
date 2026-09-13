@@ -359,6 +359,17 @@ class NodeItem final : public QGraphicsObject {
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override;
 
   protected:
+    // See addProxy(): the click focus a hosted widget cannot get from Qt's own delivery path.
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* widget = qobject_cast<QWidget*>(watched);
+            if (widget != nullptr && widget->isEnabled() &&
+                (widget->focusPolicy() & Qt::ClickFocus) != 0 && !widget->hasFocus()) {
+                widget->setFocus(Qt::MouseFocusReason);
+            }
+        }
+        return QGraphicsObject::eventFilter(watched, event);
+    }
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
     void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
         if (authoringEnabled_)
@@ -522,6 +533,16 @@ class NodeItem final : public QGraphicsObject {
 
     void addProxy(QWidget* widget) {
         hostTranslucent(*widget);
+        // Click-to-focus, which a hosted widget otherwise never gets. Qt focuses a widget on press
+        // inside QWidgetWindow's delivery path (QApplicationPrivate::giveFocusAccordingToFocus-
+        // Policy), and an embedded widget never travels that path; QGraphicsProxyWidget::focusIn-
+        // Event then only forwards focus to widget->focusWidget(), which is null for a widget that
+        // has never held it. The kit's own controls hide that gap because each of them calls
+        // setFocus() from its own mousePressEvent -- a plain QLineEdit does not, and a text row
+        // that never holds focus never emits editingFinished, so typing into it and clicking away
+        // threw the edit away. One rule here, for every widget the card hosts, rather than a
+        // setFocus() bolted onto each control.
+        widget->installEventFilter(this);
         auto* proxy = new QGraphicsProxyWidget(this);
         proxy->setWidget(widget);
     }
