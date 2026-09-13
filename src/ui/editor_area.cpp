@@ -143,7 +143,13 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
 
     header_ = new QWidget(this);
     header_->setObjectName("editorHeader");
-    headerLayout_ = new QHBoxLayout(header_);
+    headerCellsLayout_ = new QHBoxLayout(header_);
+    headerCellsLayout_->setContentsMargins(0, 0, 0, 0);
+    headerCellsLayout_->setSpacing(0);
+    headerLeft_ = new QWidget(header_);
+    headerLeft_->setObjectName("editorHeaderLeftCell");
+    headerCellsLayout_->addWidget(headerLeft_, 1);
+    headerLayout_ = new QHBoxLayout(headerLeft_);
     auto*& headerLayout = headerLayout_;
     // task U8, issue #131, formal amendment 2, A10: 10px side padding (Spacing::PanelHeader,
     // reused on all four edges now that the switcher and the header button are no longer sized
@@ -372,6 +378,16 @@ void EditorArea::rebuildEditor(int editorIndex) {
         headerMenus_ = nullptr;
     }
 
+    if (headerRight_ != nullptr) {
+        headerCellsLayout_->removeWidget(headerRight_);
+        delete headerRight_;
+        headerRight_ = nullptr;
+    }
+    headerLayout_->setStretch(headerMenus_ == nullptr ? 1 : 2, 1);
+    headerLeft_->setMinimumWidth(0);
+    headerLeft_->setMaximumWidth(QWIDGETSIZE_MAX);
+    headerCellsLayout_->setContentsMargins(0, 0, 0, 0);
+
     if (editorIndex < 0) {
         return;
     }
@@ -418,9 +434,25 @@ void EditorArea::rebuildEditor(int editorIndex) {
     if (auto* menuProvider = dynamic_cast<EditorHeaderMenuProvider*>(editorWidget_)) {
         if (auto* offeredMenus = menuProvider->takeHeaderMenuWidget()) {
             headerMenus_ = offeredMenus;
-            headerMenus_->setParent(header_);
+            headerMenus_->setParent(headerLeft_);
             headerLayout_->insertWidget(1, headerMenus_);
             headerLayout_->setAlignment(headerMenus_, Qt::AlignVCenter);
+        }
+    }
+
+    if (auto* splitProvider = dynamic_cast<EditorHeaderSplitProvider*>(editorWidget_)) {
+        if (auto* offeredRight = splitProvider->takeHeaderRightWidget()) {
+            headerRight_ = offeredRight;
+            headerRight_->setParent(header_);
+            headerLeft_->setFixedWidth(splitProvider->headerSplitPosition());
+            if (headerMenus_ != nullptr) {
+                headerLayout_->setStretchFactor(headerMenus_, 1);
+                headerLayout_->setStretch(2, 0);
+            }
+            const int inset = static_cast<int>(kit::kHairlineWidth);
+            headerCellsLayout_->setContentsMargins(inset, 0, inset, 0);
+            headerCellsLayout_->addWidget(headerRight_, 1);
+            watchForActivation(headerRight_);
         }
     }
 

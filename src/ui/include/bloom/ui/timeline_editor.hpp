@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 
 #include <bloom/document/ids.hpp>
@@ -52,7 +53,9 @@ struct TimelineLayerEntry final {
 // RIGHT lane region sharing one vertical scrollbar, under a transport header row and a
 // column-header row whose right half is the ruler. Frame 0 is at the lane region's left edge, never
 // under the layer column.
-class TimelineEditor final : public QWidget {
+class TimelineEditor final : public QWidget,
+                             public EditorHeaderMenuProvider,
+                             public EditorHeaderSplitProvider {
     Q_OBJECT
 
   public:
@@ -69,6 +72,9 @@ class TimelineEditor final : public QWidget {
     // can be fixed; QObject's automatic disconnection happens far too late, in ~QObject, after
     // every child is gone.
     ~TimelineEditor() override;
+    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
+    [[nodiscard]] QWidget* takeHeaderRightWidget() override;
+    [[nodiscard]] int headerSplitPosition() const override { return layerColumnWidth(); }
 
     // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the
     // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
@@ -107,6 +113,10 @@ class TimelineEditor final : public QWidget {
     void updateTimeReadout();
 
     CompositionSession& session_;
+    QWidget* headerFallback_ = nullptr;
+    QWidget* headerMenus_ = nullptr;
+    QWidget* headerRight_ = nullptr;
+    QWidget* compositionName_ = nullptr;
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;

@@ -935,6 +935,7 @@ void TimelineWorkAreaRow::paintEvent(QPaintEvent* event) {
     if (!axis.has_value()) {
         return;
     }
+    paintPlayheadLine(painter, *axis, session_.currentTime(), height());
     // The playhead's single head marker, at the very top of the stroke that continues through the
     // ruler and every lane below: a small Accent triangle pointing down toward the line it heads.
     const qreal x = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;

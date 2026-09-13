@@ -21,6 +21,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -268,6 +269,54 @@ void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
     }
 
     delete editor;
+    finishFixture(fixture);
+}
+
+void testHeaderSplitInEditorArea(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Header composition with a deliberately long name"));
+    ui::EditorRegistry registry;
+    (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
+                                       return new ui::TimelineEditor(
+                                           fixture.session, fixture.controller, nullptr, parent);
+                                   }});
+    (void)registry.registerEditor(
+        {"bloom.probe", "Probe", [](QWidget* parent) { return new QWidget(parent); }});
+    ui::EditorArea area(registry, "bloom.timeline");
+    area.show();
+    for (const int width : {1200, 900}) {
+        area.resize(width, 400);
+        QCoreApplication::processEvents();
+        auto* editor = area.findChild<ui::TimelineEditor*>();
+        auto* ruler = editor->rulerForTest();
+        auto* lanes = editor->laneRegionForTest();
+        auto* header = area.findChild<QWidget*>("editorHeader");
+        auto* name = area.findChild<QWidget*>("timelineCompositionName");
+        auto* fullscreen = area.findChild<QToolButton*>("maximizeAreaButton");
+        const int laneX = lanes->mapTo(&area, QPoint()).x();
+        expectations.expect(header->isAncestorOf(ruler), "the ruler belongs to the area header");
+        expectations.expect(ruler->mapTo(&area, QPoint()).x() == laneX &&
+                                ruler->width() == lanes->width(),
+                            "header ruler and lanes share both origin and width");
+        expectations.expect(ruler->mapTo(header, QPoint()).y() >= 0 &&
+                                ruler->mapTo(header, QPoint(0, ruler->height())).y() <=
+                                    header->height(),
+                            "the ruler fits entirely inside the header");
+        expectations.expect(name != nullptr && header->isAncestorOf(name) && name->isVisible(),
+                            "the composition name is visible in the header");
+        expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() <= laneX,
+                            "fullscreen stays in the left header cell");
+        auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
+        expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
+                            "column headings are the body's first row");
+        expectations.expect(editor->takeHeaderRightWidget() == nullptr &&
+                                editor->takeHeaderMenuWidget() == nullptr,
+                            "both header transfers are idempotent");
+    }
+    expectations.expect(area.setEditorId("bloom.probe"), "the split editor can be replaced");
+    expectations.expect(area.findChild<ui::TimelineRuler*>() == nullptr,
+                        "replacement destroys the transferred ruler");
+    expectations.expect(area.setEditorId("bloom.timeline"), "the split editor can be restored");
     finishFixture(fixture);
 }
 
@@ -1083,6 +1132,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
+        testHeaderSplitInEditorArea(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);
         testRowsAreFlatThirtyTwoPixelRows(expectations);
         testOneScrollbarMovesBothHalvesTogether(expectations);

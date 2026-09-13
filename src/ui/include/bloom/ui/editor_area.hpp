@@ -65,6 +65,15 @@ class EditorHeaderMenuProvider {
     [[nodiscard]] virtual QWidget* takeHeaderMenuWidget() = 0;
 };
 
+// Optional header split, measured from the editor body's left edge. The right widget is
+// transferred once, like header menus; EditorArea adds its own border inset to both cells.
+class EditorHeaderSplitProvider {
+  public:
+    virtual ~EditorHeaderSplitProvider() = default;
+    [[nodiscard]] virtual QWidget* takeHeaderRightWidget() = 0;
+    [[nodiscard]] virtual int headerSplitPosition() const = 0;
+};
+
 class EditorArea final : public QFrame {
     Q_OBJECT
 
@@ -115,6 +124,9 @@ class EditorArea final : public QFrame {
     // (contextMenuEvent, routed through EditorArea's own eventFilter -- see watchForActivation());
     // there is no longer a dedicated button that owns the menu.
     QWidget* header_ = nullptr;
+    QWidget* headerLeft_ = nullptr;
+    QWidget* headerRight_ = nullptr;
+    QHBoxLayout* headerCellsLayout_ = nullptr;
     // Self-containment (task C1, item C5, corrected by FORMAL AMENDMENT 1): OPTIONAL. Non-null
     // only while the current editor widget implements EditorFooterProvider and offered a real
     // footer widget (ViewerEditor is the only one today); nullptr for every other editor, which
