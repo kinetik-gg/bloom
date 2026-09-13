@@ -5,6 +5,7 @@
 namespace bloom::runtime {
 
 using document::InputPortDefinition;
+using document::isValueLowering;
 using document::LayerSlotInputDefinition;
 using document::NodeDefinition;
 using document::NodeDefinitionRegistry;

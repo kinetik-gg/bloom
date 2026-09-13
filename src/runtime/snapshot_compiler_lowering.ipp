@@ -14,6 +14,22 @@
         outgoing[edge->source.nodeId].push_back(destinationNode(edge->destination));
         ++indegree[destinationNode(edge->destination)];
     }
+    // Driver bindings are edges for ordering purposes (task S7): a node whose parameter is driven
+    // depends on the value node that drives it, so it has to come after it. Feeding them into THIS
+    // map rather than ordering the value graph separately is what makes a cycle through a driver a
+    // cycle the one existing check reports.
+    for (const auto* node : reachableNodes_) {
+        if (cancelled()) {
+            return std::nullopt;
+        }
+        for (const auto& reference : driverReferences(*node)) {
+            if (!indegree.contains(reference.source.nodeId)) {
+                continue;
+            }
+            outgoing[reference.source.nodeId].push_back(node->id);
+            ++indegree[node->id];
+        }
+    }
 
     auto laterId = [](const document::NodeId left, const document::NodeId right) {
         return left.value() > right.value();
@@ -145,6 +161,10 @@ lower(const std::vector<document::NodeId>& order) {
         if (!definition || definition->lowering == runtime::NodeLoweringKind::LayerStack ||
             definition->lowering == runtime::NodeLoweringKind::CompositionOutput)
             continue;
+        // A value node carries no pixels, so "empty image" is not a state it can be in -- and a muted
+        // one must not be classified as one, or the parameter it drives would lose its source.
+        if (isValueNode(*definition))
+            continue;
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput)
             continue;
         const auto input = firstImageInput(*node);
@@ -160,6 +180,14 @@ lower(const std::vector<document::NodeId>& order) {
     }
     auto curveTables = compileReachableCurves();
     if (!curveTables.has_value()) {
+        return {};
+    }
+    // The value graph is compiled FIRST, and in the same order: every parameter the image pass lowers
+    // may name one of its outputs, so the whole of it has to exist before a single image operation is
+    // built. It shares no address space with the image chain -- a ValueOutputIndex and an
+    // OperationIndex are different things -- which is exactly why the two passes can be sequential
+    // rather than interleaved.
+    if (!compileValueGraph(order)) {
         return {};
     }
     std::vector<runtime::CompiledOperation> operations;
@@ -178,6 +206,24 @@ lower(const std::vector<document::NodeId>& order) {
         }
         if (emptyImages_.contains(nodeId))
             continue;
+        if (isValueNode(*definition->second))
+            continue;
+        // An Image Reroute is ELIDED rather than compiled: its consumers read its input's operation
+        // directly, so it costs nothing at evaluation -- the same treatment a muted node's bypass
+        // already gets, and the generalisation of DissolveNode's single Image pair to a node that
+        // exists only to tidy a wire.
+        if (isImageReroute(*definition->second)) {
+            const auto* rerouteEdge = fixedInputEdge(nodeId, document::kValuePortName);
+            const auto source = rerouteEdge == nullptr
+                                    ? indices.end()
+                                    : indices.find(rerouteEdge->source.nodeId);
+            if (source == indices.end()) {
+                addTopologyFailure(nodeId, "Image Reroute input was not lowered.");
+                return {};
+            }
+            indices.emplace(nodeId, source->second);
+            continue;
+        }
         if (isMuted(nodeId) &&
             definition->second->lowering != runtime::NodeLoweringKind::LayerStack &&
             definition->second->lowering != runtime::NodeLoweringKind::CompositionOutput) {
@@ -235,7 +281,8 @@ lower(const std::vector<document::NodeId>& order) {
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
             composition_->format(), std::move(operations), output->second,
             std::move(curveTables->scalar), std::move(curveTables->vec2),
-            std::move(curveTables->color4), runtime::kCompiledCompositionPlanSemanticsVersion,
+            std::move(curveTables->color4), std::move(valueOperations_), valueOutputCount_,
+            runtime::kCompiledCompositionPlanSemanticsVersion,
             runtime::kAnimationSamplingSemanticsVersion});
 }
 
@@ -255,6 +302,24 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::CompositionOutput:
         return lowerCompositionOutput(node, indices);
     case NodeLoweringKind::Unsupported:
+    // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
+    // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree
+    // about which graph a node belongs to, which is a topology failure rather than a silent skip.
+    case NodeLoweringKind::ValueConstant:
+    case NodeLoweringKind::ValueTime:
+    case NodeLoweringKind::ValueScalarMath:
+    case NodeLoweringKind::ValueVectorMath:
+    case NodeLoweringKind::ValueVectorReduce:
+    case NodeLoweringKind::ValueMapRange:
+    case NodeLoweringKind::ValueClamp:
+    case NodeLoweringKind::ValueMix:
+    case NodeLoweringKind::ValueColorMix:
+    case NodeLoweringKind::ValueCompare:
+    case NodeLoweringKind::ValueSwitch:
+    case NodeLoweringKind::ValueSeparate:
+    case NodeLoweringKind::ValueCombine:
+    case NodeLoweringKind::ValueRandom:
+    case NodeLoweringKind::ValueReroute:
         break;
     }
     addTopologyFailure(node.id, "Unsupported lowering reached plan publication.");
@@ -397,8 +462,11 @@ parameterConstant(const document::ParameterBinding* binding) const noexcept {
     return constant == nullptr ? nullptr : std::get_if<Value>(&constant->value);
 }
 
+// No longer const: resolving a driver may SYNTHESIZE a promotion operation into the value graph, and
+// a widening that needs an operation is better compiled once here than hidden inside whoever reads
+// the value.
 [[nodiscard]] std::optional<runtime::CompiledScalarParameter>
-compiledScalarParameter(const document::ParameterBinding* binding) const noexcept {
+compiledScalarParameter(const document::ParameterBinding* binding) {
     if (binding == nullptr) {
         return std::nullopt;
     }
@@ -419,6 +487,12 @@ compiledScalarParameter(const document::ParameterBinding* binding) const noexcep
                    ? std::nullopt
                    : std::optional(runtime::CompiledScalarParameter{parameter->id, *value});
     }
+    // Task S7: the third arm. A driver binding resolves to the value-graph output it names, through a
+    // promotion operation when the kinds differ -- so an Integer node can drive a Scalar operand
+    // without the widening being invisible.
+    if (const auto driven = driverOutput(*parameter, runtime::SocketValueKind::Scalar)) {
+        return runtime::CompiledScalarParameter{parameter->id, *driven};
+    }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
     const auto index =
         source == nullptr ? scalarCurveIndices_.end() : scalarCurveIndices_.find(source->curveId);
@@ -428,7 +502,7 @@ compiledScalarParameter(const document::ParameterBinding* binding) const noexcep
 }
 
 [[nodiscard]] std::optional<runtime::CompiledVec2Parameter>
-compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept {
+compiledVec2Parameter(const document::ParameterBinding* binding) {
     if (binding == nullptr) {
         return std::nullopt;
     }
@@ -449,6 +523,9 @@ compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept 
                    ? std::nullopt
                    : std::optional(runtime::CompiledVec2Parameter{parameter->id, *value});
     }
+    if (const auto driven = driverOutput(*parameter, runtime::SocketValueKind::Vector2)) {
+        return runtime::CompiledVec2Parameter{parameter->id, *driven};
+    }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
     const auto index =
         source == nullptr ? vec2CurveIndices_.end() : vec2CurveIndices_.find(source->curveId);
@@ -458,7 +535,7 @@ compiledVec2Parameter(const document::ParameterBinding* binding) const noexcept 
 }
 
 [[nodiscard]] std::optional<runtime::CompiledColorParameter>
-compiledColorParameter(const document::ParameterBinding* binding) const noexcept {
+compiledColorParameter(const document::ParameterBinding* binding) {
     if (binding == nullptr) {
         return std::nullopt;
     }
@@ -476,6 +553,9 @@ compiledColorParameter(const document::ParameterBinding* binding) const noexcept
         return value == nullptr
                    ? std::nullopt
                    : std::optional(runtime::CompiledColorParameter{parameter->id, *value});
+    }
+    if (const auto driven = driverOutput(*parameter, runtime::SocketValueKind::Color)) {
+        return runtime::CompiledColorParameter{parameter->id, *driven};
     }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
     const auto index =

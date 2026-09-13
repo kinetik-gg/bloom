@@ -391,6 +391,20 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     return true;
 }
 
+// One driven parameter's value, read out of the frame's already-evaluated value graph. A value of
+// the wrong alternative cannot be substituted here -- there is no defensible fallback for "this
+// parameter wanted a colour and the graph produced a string" -- so it is reported as an invalid
+// plan, which is what a compiler that honoured the document's typing could never produce.
+template <typename Value>
+[[nodiscard]] static const Value* resolvedValue(const ValueOutputIndex output,
+                                                const ResolvedEvaluation& resolved) noexcept {
+    const auto index = output.value();
+    if (index >= resolved.valueOutputs.size()) {
+        return nullptr;
+    }
+    return std::get_if<Value>(&resolved.valueOutputs[index]);
+}
+
 template <typename Value> struct ResolvedParameter final {
     Value value;
     document::ParameterId parameterId;
@@ -404,6 +418,12 @@ resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositi
     if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source)) {
         return ResolvedParameter<document::Vec2d>{*constant, parameter.id, std::nullopt,
                                                   std::nullopt};
+    }
+    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+        const auto* value = resolvedValue<document::Vec2d>(*driven, resolved);
+        return value == nullptr ? std::nullopt
+                                : std::optional(ResolvedParameter<document::Vec2d>{
+                                      *value, parameter.id, std::nullopt, std::nullopt});
     }
     const auto* curve = std::get_if<Vec2CurveIndex>(&parameter.source);
     if (curve == nullptr) {
@@ -425,6 +445,12 @@ resolveParameter(const CompiledColorParameter& parameter, const CompiledComposit
         return ResolvedParameter<core::Color4d>{*constant, parameter.id, std::nullopt,
                                                 std::nullopt};
     }
+    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+        const auto* value = resolvedValue<core::Color4d>(*driven, resolved);
+        return value == nullptr ? std::nullopt
+                                : std::optional(ResolvedParameter<core::Color4d>{
+                                      *value, parameter.id, std::nullopt, std::nullopt});
+    }
     const auto* curve = std::get_if<Color4CurveIndex>(&parameter.source);
     if (curve == nullptr) {
         return std::nullopt;
@@ -443,6 +469,12 @@ resolveParameter(const CompiledScalarParameter& parameter, const CompiledComposi
                  const ResolvedEvaluation& resolved) noexcept {
     if (const auto* constant = std::get_if<double>(&parameter.source)) {
         return ResolvedParameter<double>{*constant, parameter.id, std::nullopt, std::nullopt};
+    }
+    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+        const auto* value = resolvedValue<double>(*driven, resolved);
+        return value == nullptr ? std::nullopt
+                                : std::optional(ResolvedParameter<double>{
+                                      *value, parameter.id, std::nullopt, std::nullopt});
     }
     const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source);
     if (curve == nullptr) {
@@ -662,6 +694,21 @@ template <typename Value>
             }
             return true;
         }
+        // A driven parameter claims no curve: its value comes from the value graph, which owns its
+        // own bounds checking. Returning here rather than reaching the std::get below is what keeps
+        // a value-graph arm from being read as a curve index.
+        if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+            if (driven->value() >= plan->valueOutputCount()) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                              "Parameter references an invalid value-graph output",
+                                              {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
         const auto curveIndex = std::get<ScalarCurveIndex>(parameter.source).value();
         auto& references = scalarCurveReferences[curveIndex];
         if (references != 0) {
@@ -698,6 +745,21 @@ template <typename Value>
             }
             return true;
         }
+        // A driven parameter claims no curve: its value comes from the value graph, which owns its
+        // own bounds checking. Returning here rather than reaching the std::get below is what keeps
+        // a value-graph arm from being read as a curve index.
+        if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+            if (driven->value() >= plan->valueOutputCount()) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                              "Parameter references an invalid value-graph output",
+                                              {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
         const auto curveIndex = std::get<Vec2CurveIndex>(parameter.source).value();
         auto& references = vec2CurveReferences[curveIndex];
         if (references != 0) {
@@ -729,6 +791,21 @@ template <typename Value>
                 parameterFailure =
                     diagnostic(EvaluationDiagnosticCode::InvalidParameter,
                                "Color is not a valid authoring color", {}, std::move(subject));
+                return false;
+            }
+            return true;
+        }
+        // A driven parameter claims no curve: its value comes from the value graph, which owns its
+        // own bounds checking. Returning here rather than reaching the std::get below is what keeps
+        // a value-graph arm from being read as a curve index.
+        if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
+            if (driven->value() >= plan->valueOutputCount()) {
+                auto subject = operationSubject;
+                subject.parameterId = parameter.id;
+                subject.field = std::string(field);
+                parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                              "Parameter references an invalid value-graph output",
+                                              {}, std::move(subject));
                 return false;
             }
             return true;
@@ -988,6 +1065,17 @@ template <typename Value>
                            " byteLimit=" + std::to_string(request.pixelStorageByteLimit)));
     }
 
+    // The value graph, evaluated once for this frame from the SAME request time the curves above
+    // were sampled at. Its diagnostics are scoped per node and substitute each node's documented
+    // fallback, so a divisor that reached zero degrades one value rather than failing the frame --
+    // which is why they are reported as warnings beside a rendered picture instead of becoming a
+    // preflight failure.
+    auto valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(),
+                                         request.time, plan->format().frameRate());
+    if (cancellation.isCancellationRequested()) {
+        return PreflightOutcome::cancellation();
+    }
+
     return PreflightOutcome::success(
         ResolvedEvaluation{.imageDescriptor = *descriptorResult.value(),
                            .horizontalScale = horizontalScale,
@@ -996,7 +1084,8 @@ template <typename Value>
                            .remainingConsumers = std::move(consumers),
                            .scalarCurveValues = std::move(scalarCurveValues),
                            .vec2CurveValues = std::move(vec2CurveValues),
-                           .color4CurveValues = std::move(color4CurveValues)});
+                           .color4CurveValues = std::move(color4CurveValues),
+                           .valueOutputs = std::move(valueGraph.outputs)});
 }
 
 [[nodiscard]] EvaluationResult unexpectedAllocationFailure() {

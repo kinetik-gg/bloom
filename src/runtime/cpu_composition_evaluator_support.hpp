@@ -4,6 +4,7 @@
 
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/text_raster.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -37,6 +38,10 @@ struct ResolvedEvaluation final {
     std::vector<ResolvedCurveSample<double>> scalarCurveValues;
     std::vector<ResolvedCurveSample<document::Vec2d>> vec2CurveValues;
     std::vector<ResolvedCurveSample<core::Color4d>> color4CurveValues;
+    // The value graph, already evaluated for this frame (task S7). One entry per plan value output,
+    // computed in preflight beside the curve samples and from the SAME request time -- so a Time
+    // node and an animation curve in one plan can never disagree about when "now" is.
+    std::vector<CompiledValue> valueOutputs;
 };
 
 struct PreflightOutcome final {
