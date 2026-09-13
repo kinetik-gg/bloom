@@ -212,6 +212,7 @@ target_sources(
         application_shutdown_coordinator.cpp
         composition_authoring.cpp
         composition_editor_support.cpp
+        composition_plan_cache.cpp
         composition_preview_controller.cpp
         composition_preview_pipeline.cpp
         composition_session.cpp
@@ -230,6 +231,7 @@ target_sources(
         node_editor_add.cpp
         node_editor_menus.cpp
         playback_controller.cpp
+        preview_frame_cache.cpp
         project_host.cpp
         properties_editor.cpp
         qualified_display_processor_bootstrap.cpp
@@ -248,6 +250,7 @@ target_sources(
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp
+            include/bloom/ui/composition_plan_cache.hpp
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
@@ -261,6 +264,7 @@ target_sources(
             include/bloom/ui/media_editor.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
+            include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/properties_editor.hpp
             include/bloom/ui/qualified_display_processor_bootstrap.hpp

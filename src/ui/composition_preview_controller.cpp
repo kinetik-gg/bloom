@@ -8,6 +8,7 @@
 #include <QThread>
 
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -60,9 +61,13 @@ FrameFreshness freshnessFor(const PreparedPreviewFrameHandle& frame,
 
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
-    PreviewPreparationFunction preparation, CompositionPreviewSettings settings, QObject* parent)
+    PreviewPreparationFunction preparation, CompositionPreviewSettings settings,
+    PreviewFrameCacheHandle frameCache, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
-      preparation_(std::move(preparation)), settings_(settings) {
+      preparation_(std::move(preparation)), settings_(settings),
+      frameCache_(frameCache != nullptr
+                      ? std::move(frameCache)
+                      : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -87,6 +92,29 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 }
 
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
+
+PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
+    return *frameCache_;
+}
+
+std::optional<PreviewFrameCacheKey>
+CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) const {
+    const auto& snapshot = session_.snapshot();
+    const auto compositionId = session_.compositionId();
+    if (snapshot.project().findComposition(compositionId) == nullptr) {
+        return std::nullopt;
+    }
+    return PreviewFrameCacheKey{
+        .projectId = snapshot.project().id(),
+        .compositionId = compositionId,
+        .sourceRevision = snapshot.revision(),
+        .time = time,
+        .output = runtime::PreviewOutput::Composition,
+        .resolution = settings_.resolution,
+        .quality = settings_.quality,
+        .colorIntent = settings_.colorIntent,
+    };
+}
 
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -308,6 +336,30 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         interactionOverride = session_.positionInteractionOverride();
     }
 
+    // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request whose
+    // key is cached is answered right here: no task, no coalescing, no cadence -- which is what makes
+    // cached playback frame-accurate rather than best-effort. An overridden request is never served
+    // from the cache, because its pixels are the gesture's, not the revision's.
+    if (!interactionOverride.has_value()) {
+        if (auto cached = frameCache_->take(desiredIdentity); cached != nullptr) {
+            interactiveCadenceTimer_.stop();
+            if (pending_.has_value()) {
+                // A request that was waiting to be submitted and never will be: the frame it asked
+                // for was never delivered, which is exactly what droppedFrameCount() counts.
+                noteDroppedFrame();
+                pending_.reset();
+            }
+            // An in-flight task is for an older ask. Cancelling it leaves the admission gate closed
+            // until its terminal result is observed, which consumeReadyResult() already handles; the
+            // cached frame is published now regardless.
+            if (active_.has_value()) {
+                active_->handle.cancel();
+            }
+            publishCachedFrame(desiredIdentity, std::move(cached));
+            return;
+        }
+    }
+
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
@@ -417,6 +469,20 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     taskUiBridge_.wake();
 }
 
+void CompositionPreviewController::publishCachedFrame(
+    const runtime::PreviewRequestIdentity& desiredIdentity, PreparedPreviewFrameHandle frame) {
+    CompositionPreviewState ready{
+        .activity = PreviewActivity::Ready,
+        .freshness = FrameFreshness::Current,
+        .desiredIdentity = desiredIdentity,
+        .taskId = std::nullopt,
+        .frame = std::move(frame),
+        .diagnostics = {},
+        .message = tr("The current composition frame is ready"),
+    };
+    publish(std::move(ready));
+}
+
 void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
                                                     std::optional<runtime::TaskId> taskId,
                                                     PreparedPreviewFrameHandle retainedFrame) {
@@ -513,6 +579,9 @@ void CompositionPreviewController::consumeReadyResult() {
             next.freshness = FrameFreshness::Current;
             next.frame = frame;
             next.message = tr("The current composition frame is ready");
+            // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
+            // second pass over the same range is a sequence of lookups (task PERF1, item 3).
+            frameCache_->insert(frame);
             break;
         }
         case runtime::PreviewPreparationStatus::Unsupported:

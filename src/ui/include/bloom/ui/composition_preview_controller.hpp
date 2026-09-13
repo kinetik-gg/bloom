@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -42,12 +43,14 @@ struct CompositionPreviewSettings final {
     // Interactive requests inside this window coalesces to only the newest, submitted once the
     // window elapses. Tests inject a tiny interval; production keeps the default.
     std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};
+    // The RAM preview cache's memory budget, used only when this controller has to create its own
+    // cache (see the constructor). The application reads it from QSettings.
+    std::size_t ramPreviewByteBudget = kDefaultPreviewFrameCacheByteBudget;
 
     friend bool operator==(const CompositionPreviewSettings&,
                            const CompositionPreviewSettings&) = default;
 };
 
-using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPreviewFrame>;
 using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
 // The fourth parameter carries the session's active-interaction override (docs/architecture/
 // animation-and-time.md, "Direct Manipulation And Preview Overrides"): populated only for
@@ -87,14 +90,27 @@ class CompositionPreviewController final : public QObject {
     Q_OBJECT
 
   public:
+    // `frameCache` is the RAM preview cache (task PERF1): a request whose key is already cached is
+    // answered from it immediately, with no evaluation and without entering the coalescing path, and
+    // every frame this controller publishes is put into it -- so playing a range once makes the second
+    // pass a sequence of lookups. Pass one to share it with the RAM preview controller; omit it and
+    // this controller owns a cache of its own.
     CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
                                  CompositionPreviewSettings settings = {},
+                                 PreviewFrameCacheHandle frameCache = nullptr,
                                  QObject* parent = nullptr);
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
+    // The identity this controller WOULD request for `time` in the live composition, which is what a
+    // caller asks the cache about when it wants to know whether a frame is already there (the RAM
+    // preview controller, and the transport deciding which clock to keep). Only the request generation
+    // is missing from it, and the cache key does not carry one.
+    [[nodiscard]] std::optional<PreviewFrameCacheKey>
+    cacheKeyForTime(core::RationalTime time) const;
 
     // --- Dropped-frame accounting (task S5, item 3b) -------------------------------------------
     //
@@ -169,6 +185,10 @@ class CompositionPreviewController final : public QObject {
     void consumeReadyResult();
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
+    // Publishes `frame` as the answer to `desiredIdentity` with no task at all. Used only when the
+    // cache already holds the exact frame the request asks for.
+    void publishCachedFrame(const runtime::PreviewRequestIdentity& desiredIdentity,
+                            PreparedPreviewFrameHandle frame);
     void flushCadence();
     // One place increments the counter, so the three drop sites cannot disagree about whether a
     // discard counts.
@@ -182,6 +202,7 @@ class CompositionPreviewController final : public QObject {
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
     CompositionPreviewSettings settings_;
+    PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
