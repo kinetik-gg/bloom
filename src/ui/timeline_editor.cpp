@@ -1074,6 +1074,38 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
                  kTimelineRowHeight - 2 * inset);
 }
 
+std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) const {
+    std::set<core::RationalTime> times;
+    if (row < 0 || row >= static_cast<int>(entries_.size()))
+        return {};
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    const auto* composition = session_.composition();
+    if (!composition || entry.rowKind != TimelineLayerEntry::Kind::Layer || entry.expanded)
+        return {};
+    for (const auto nodeId : {session_.boundaryNodeForLayer(entry.layerId),
+                              session_.directSourceNodeForLayer(entry.layerId)}) {
+        const auto* node = nodeId ? composition->graph().findNode(*nodeId) : nullptr;
+        if (!node)
+            continue;
+        for (const auto& binding : node->parameters) {
+            const auto* parameter = composition->parameters().find(binding.parameterId);
+            const auto* source =
+                parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source)
+                          : nullptr;
+            const auto* curve =
+                source ? composition->animationCurves().find(source->curveId) : nullptr;
+            if (curve)
+                std::visit(
+                    [&](const auto& record) {
+                        for (const auto& key : record.keyframes)
+                            times.insert(key.time);
+                    },
+                    *curve);
+        }
+    }
+    return {times.begin(), times.end()};
+}
+
 void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
@@ -1108,6 +1140,19 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                 QRect(bar->right() - grip, bar->top() + grip, 1, bar->height() - 2 * grip),
                 kit::hoverFillFor(fill));
         }
+        if (const auto axis = ruler_.axisForWidth(width())) {
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setPen(kit::color(kit::Color::Keyframe));
+            painter.setBrush(kit::color(kit::Color::Keyframe));
+            const qreal radius = kit::px(kit::Spacing::XXS) + kit::kHairlineWidth;
+            for (const auto time : keySummaryTimes(row)) {
+                if (time.toSeconds() < axis->t0 || time.toSeconds() >= axis->t1)
+                    continue;
+                const qreal x = axis->pixelForTime(time), y = top + kTimelineRowHeight / 2;
+                painter.drawPolygon(QPolygonF{QPointF(x, y - radius), QPointF(x + radius, y),
+                                              QPointF(x, y + radius), QPointF(x - radius, y)});
+            }
+        }
     }
 
     if (guide_) {
@@ -1137,6 +1182,20 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     }
     setFocus(Qt::MouseFocusReason);
     const int row = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
+    if (const auto axis = ruler_.axisForWidth(width())) {
+        const auto center = rowTop(row) + kTimelineRowHeight / 2;
+        if (std::abs(event->position().y() - center) <= kit::px(kit::Spacing::S))
+            for (const auto time : keySummaryTimes(row)) {
+                if (time.toSeconds() < axis->t0 || time.toSeconds() >= axis->t1)
+                    continue;
+                if (std::abs(axis->pixelForTime(time) - event->position().x()) <=
+                    kit::px(kit::Spacing::S)) {
+                    Q_EMIT expansionRequested(entries_[static_cast<std::size_t>(row)].layerId);
+                    event->accept();
+                    return;
+                }
+            }
+    }
     const auto bar = clipBarRect(row);
     const auto* composition = session_.composition();
     const auto mapping = ruler_.axisForWidth(width());
@@ -1460,11 +1519,13 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     bodyLayout->setSpacing(0);
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
-    connect(stack_, &TimelineLayerStack::expansionRequested, this, [this](document::LayerId layer) {
+    const auto toggleExpansion = [this](document::LayerId layer) {
         if (!expandedLayers_.erase(layer))
             expandedLayers_.insert(layer);
         rebuild();
-    });
+    };
+    connect(stack_, &TimelineLayerStack::expansionRequested, this, toggleExpansion);
+    connect(lanes_, &TimelineLaneRegion::expansionRequested, this, toggleExpansion);
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         expandedLayers_.clear();
         rebuild();

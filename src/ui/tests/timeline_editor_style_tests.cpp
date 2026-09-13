@@ -1557,7 +1557,6 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Lane gestures"));
     auto& session = fixture.session;
     (void)session.addSolidLayer("Keys", {0.2, 0.3, 0.4, 1});
-    const auto layer = std::get<document::LayerId>(session.selection().primary);
     const auto opacity = session.parameterForSelection(document::kOpacityParameterRole)->id;
     const auto rotation = session.parameterForSelection(document::kRotationParameterRole)->id;
     expectations.expect(session.pasteKeyframes({{opacity, time(1), 0.2},
@@ -1571,7 +1570,24 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     ui::TimelineEditor editor(session, fixture.controller);
     editor.resize(1400, 700);
     editor.show();
-    editor.layerStackForTest()->expansionRequested(layer);
+    QCoreApplication::processEvents();
+    const auto summary = editor.laneRegionForTest()->keySummaryTimes(0);
+    expectations.expect(summary == std::vector<core::RationalTime>{time(1), time(3), time(5)},
+                        "collapsed summary is the sorted union of all parameter keys");
+    const auto summaryRevision = session.snapshot().revision();
+    const auto summarySelection = session.selection();
+    const auto summaryAxis =
+        editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonPress,
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2);
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonRelease,
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2);
+    expectations.expect(editor.layerStackForTest()->rowCount() > 1 &&
+                            editor.laneRegionForTest()->keySummaryTimes(0).empty(),
+                        "clicking a summary expands its layer and exposes parameter lanes");
+    expectations.expect(session.snapshot().revision() == summaryRevision &&
+                            session.selection() == summarySelection,
+                        "summary click changes only expansion");
     QCoreApplication::processEvents();
     auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
     const auto axis = editor.rulerForTest()->axisForWidth(panel->width());

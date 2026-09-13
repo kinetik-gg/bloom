@@ -280,6 +280,10 @@ class TimelineLaneRegion final : public QWidget {
     // The clip bar rect of row `row`, in this widget's own coordinates -- the pinned geometry for
     // "the bar spans the composition range on its own lane".
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
+    [[nodiscard]] std::vector<core::RationalTime> keySummaryTimes(int row) const;
+
+  Q_SIGNALS:
+    void expansionRequested(document::LayerId layer);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
