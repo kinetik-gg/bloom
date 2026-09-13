@@ -4,9 +4,9 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
-#include <QEvent>
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QEvent>
 #include <QFile>
 #include <QFrame>
 #include <QImage>

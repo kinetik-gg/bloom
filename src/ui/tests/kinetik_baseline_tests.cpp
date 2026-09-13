@@ -5,9 +5,9 @@
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
-#include <QEvent>
 #include <QApplication>
 #include <QComboBox>
+#include <QEvent>
 #include <QImage>
 #include <QLineEdit>
 #include <QMenuBar>
