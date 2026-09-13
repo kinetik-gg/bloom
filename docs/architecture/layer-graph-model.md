@@ -557,6 +557,15 @@ Add surfaces list entries in that category order and alphabetically inside each 
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
 heading, and the list is exactly as tall as the rows and headings it holds.
 
+The canvas's own context menu offers those categories as a **cascading `Add Node` submenu**, one
+section per category in the same order, entries alphabetical inside each section, and every entry adds
+its node at the click position through the same path the search uses. A type the command layer would
+refuse -- a singleton already in the composition -- is listed DISABLED with the command's own refusal
+in its tooltip, read from a dry run of the add operation rather than from a second copy of the rule.
+The search popup belongs to Tab alone: right-clicking to add a node the artist can already name should
+not make them type it. Menu rows, the submenu caret and `Size::MenuMinWidth` come from the
+application-wide proxy style (`kit/mnemonic_style.hpp`), so these are ordinary `QMenu`s.
+
 A typed query reorders that list by RELEVANCE OF THE NAME, never of the keywords. An entry is still
 found by the socket kinds it carries -- that is what the keywords are for -- but a keyword match can
 never outrank a name match: sections are ordered by their own best name score and entries inside a

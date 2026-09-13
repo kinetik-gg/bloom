@@ -383,15 +383,34 @@ void testSearchKeyboardAndMenus() {
     expect(!named(menu, "nodeDuplicateAction"), "driver duplication is absent from the node menu");
     delete menu;
     menu = f.editor.contextMenuForTest();
-    expect(named(menu, "nodeAddSearchAction") && named(menu, "nodeSelectAllAction") &&
+    // ADAPTED (task FIX1, item D): the canvas menu offers a categorized "Add Node" SUBMENU, not the
+    // search popup -- Tab is where the search lives. The sections are the registry's own categories
+    // in the search popup's own order, and a singleton already in the composition is listed
+    // disabled with the command's refusal in its tooltip.
+    expect(!named(menu, "nodeAddSearchAction") && named(menu, "nodeSelectAllAction") &&
                named(menu, "nodeFitAction") && named(menu, "nodeActualSizeAction") &&
                named(menu, "nodeZoomInAction") && named(menu, "nodeZoomOutAction"),
-           "canvas menu offers Add search, view actions and Select All");
+           "canvas menu offers view actions and Select All, and no Add search");
+    auto* addMenu = menu->findChild<QMenu*>(QStringLiteral("nodeAddMenu"));
+    expect(addMenu != nullptr, "and an Add Node submenu");
+    if (addMenu != nullptr) {
+        QStringList sections;
+        for (auto* entry : addMenu->actions())
+            if (entry->menu() != nullptr)
+                sections.append(entry->text());
+        QStringList expected;
+        for (const auto category : node_editor::nodeCategoryOrder())
+            expected.append(node_editor::nodeCategoryName(category));
+        expect(sections == expected, "whose sections are the registry's categories, in order");
+        auto* output = named(menu, "nodeAddCompositionOutputAction");
+        expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
+               "a singleton already present is listed disabled with its refusal");
+    }
     const auto aliasRevision = f.session.snapshot().revision();
     if (auto* solid = named(menu, "nodeAddSolidLayerAction"))
         solid->trigger();
     expect(f.session.snapshot().revision().value() == aliasRevision.value() + 1,
-           "preserved Add action contracts capture the revision when their menu is constructed");
+           "and one entry adds its node at the click position in one transaction");
     delete menu;
 }
 } // namespace bloom::ui::test

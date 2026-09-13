@@ -2,7 +2,9 @@
 #include "node_editor_items.hpp"
 #include <QCursor>
 #include <QMenu>
+#include <algorithm>
 #include <bloom/ui/kit/search_popup.hpp>
+#include <vector>
 
 namespace bloom::ui {
 using namespace node_editor;
@@ -23,7 +25,14 @@ QString addActionName(const std::string_view type) {
         return QStringLiteral("nodeAddLayerOutputAction");
     if (type == document::kLayerStackNodeType)
         return QStringLiteral("nodeAddLayerStackAction");
-    return QStringLiteral("nodeAddCompositionOutputAction");
+    if (type == document::kCompositionOutputNodeType)
+        return QStringLiteral("nodeAddCompositionOutputAction");
+    // Every other registered type gets its own name derived from its type id. Before task FIX1 this
+    // function fell through to the composition-output name, so all forty value nodes shared one
+    // object name -- which made the menu unaddressable from a test and said nothing about which row
+    // was which.
+    return QStringLiteral("nodeAddAction.") +
+           QString::fromUtf8(type.data(), static_cast<qsizetype>(type.size()));
 }
 } // namespace
 
@@ -289,30 +298,65 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                    [this] { removeSelectedNodes(); });
         return menu;
     }
-    if (scene_->canSubmit()) {
-        action(tr("Add…"), QStringLiteral("nodeAddSearchAction"), [this] {
-            openAddSearch(addPosition_,
-                          view_->viewport()->mapToGlobal(view_->mapFromScene(addPosition_)));
-        })->setEnabled(session_.composition() != nullptr);
-    }
-    // Preserve existing action names. Without an application submission adapter, only the existing
-    // session Add Solid path is offered; a search promising cursor placement would be misleading.
-    auto* addMenu = scene_->canSubmit() ? new QMenu(menu) : menu->addMenu(tr("Add"));
+    // Task FIX1, item D: "Add Node" is a CASCADING SUBMENU grouped by the registry's own
+    // categories, in the same order the search popup's sections are read in. It is not the search
+    // popup: right- clicking to add a known node should not make the artist type its name, and Tab
+    // is where the search lives. Both surfaces call addNode() with the same click position and read
+    // their refusals from the same dry run of AddEditorNode, so neither can disagree with the other
+    // about what is addable. Kit menu styling is the application-wide proxy style
+    // (kit/mnemonic_style.hpp)
+    // -- rows, the submenu caret and Size::MenuMinWidth come from it, so an ordinary QMenu is
+    // already a Kinetik menu and a second opinion here would be the drift that file exists to
+    // prevent.
+    auto* addMenu = menu->addMenu(tr("Add Node"));
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
-    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
-        auto* item = addMenu->addAction(nodeTypeDisplayName(definition.key.typeId));
-        item->setObjectName(addActionName(definition.key.typeId));
-        if (!scene_->canSubmit()) {
-            // Without a submission adapter only the two session-level Add paths exist, and both of
-            // them now work: task S3 gave the text source a CPU rasterizer, so the Text row is
-            // enabled and carries no refusal tooltip.
-            const bool solid = definition.key.typeId == document::kSolidSourceNodeType;
-            const bool text = definition.key.typeId == document::kTextSourceNodeType;
-            item->setVisible(solid || text);
-            item->setEnabled((solid || text) && session_.composition() != nullptr);
+    addMenu->setEnabled(session_.composition() != nullptr);
+    const auto refusalFor = [this](const std::string& typeId) {
+        if (session_.composition() == nullptr)
+            return tr("No active composition");
+        document::Document isolated(session_.snapshot().project(),
+                                    session_.snapshot().ids().highWater());
+        auto draft = isolated.draft(isolated.snapshot());
+        const auto result =
+            AddEditorNode(session_.compositionId(), typeId, {addPosition_.x(), addPosition_.y()})
+                .apply(draft);
+        return result.issues.empty() ? QString{}
+                                     : QString::fromStdString(result.issues.front().message);
+    };
+    for (const auto category : nodeCategoryOrder()) {
+        std::vector<const document::NodeDefinition*> section;
+        for (const auto& definition : document::builtInNodeDefinitions().definitions())
+            if (definition.category == category)
+                section.push_back(&definition);
+        if (section.empty())
+            continue;
+        std::ranges::sort(section, [](const auto* left, const auto* right) {
+            return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
+        });
+        auto* sectionMenu = addMenu->addMenu(nodeCategoryName(category));
+        sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") +
+                                   nodeCategoryName(category));
+        for (const auto* candidate : section) {
+            auto* item = sectionMenu->addAction(nodeTypeDisplayName(candidate->key.typeId));
+            item->setObjectName(addActionName(candidate->key.typeId));
+            if (scene_->canSubmit()) {
+                // Cardinality and every other refusal, read back from the command itself rather
+                // than restated here: a singleton already in the composition is listed and
+                // disabled, with the command's own words in its tooltip.
+                const auto refusal = refusalFor(candidate->key.typeId);
+                item->setToolTip(refusal);
+                item->setEnabled(refusal.isEmpty());
+            } else {
+                // Without a submission adapter only the two session-level Add paths exist.
+                const bool solid = candidate->key.typeId == document::kSolidSourceNodeType;
+                const bool text = candidate->key.typeId == document::kTextSourceNodeType;
+                item->setVisible(solid || text);
+                item->setEnabled((solid || text) && session_.composition() != nullptr);
+            }
+            connect(
+                item, &QAction::triggered, this,
+                [this, type = QString::fromStdString(candidate->key.typeId)] { addNode(type); });
         }
-        connect(item, &QAction::triggered, this,
-                [this, type = QString::fromStdString(definition.key.typeId)] { addNode(type); });
     }
     menu->addSeparator();
     action(tr("Fit"), QStringLiteral("nodeFitAction"), [this] { view_->frameGraph(); });
