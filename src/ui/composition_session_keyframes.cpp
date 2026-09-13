@@ -1,0 +1,152 @@
+#include <QThread>
+#include <algorithm>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/timeline_frame_math.hpp>
+
+namespace bloom::ui {
+void CompositionSession::selectKeyframe(document::AnimationCurveId curve, document::KeyframeId key,
+                                        bool extend) {
+    auto keys = extend ? selection_.keyframes : std::vector<KeyframeSelection>{};
+    const KeyframeSelection target{curve, key};
+    if (!keyframeSelectionExists(target)) {
+        reportUnavailable(tr("The selected keyframe is no longer available"));
+        return;
+    }
+    std::erase(keys, target);
+    keys.push_back(target);
+    selectKeyframes(std::move(keys));
+}
+void CompositionSession::selectKeyframes(const std::vector<KeyframeSelection>& keys) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    std::vector<KeyframeSelection> valid;
+    for (const auto& key : keys) {
+        if (!keyframeSelectionExists(key))
+            continue;
+        if (std::ranges::find(valid, key) == valid.end())
+            valid.push_back(key);
+    }
+    if (valid.empty()) {
+        clearSelection();
+        return;
+    }
+    const auto primary = valid.back();
+    const auto parameter = parameterForCurve(primary.curveId);
+    CompositionSelection next{.primary = primary,
+                              .contextualLayer = parameter ? contextualLayerForParameter(*parameter)
+                                                           : std::nullopt,
+                              .keyframes = std::move(valid)};
+    if (selection_ != next || !selectedNodes_.empty()) {
+        selection_ = std::move(next);
+        selectedNodes_.clear();
+        Q_EMIT selectionChanged();
+    }
+}
+std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() const {
+    std::vector<commands::KeyframePaste> result;
+    const auto* current = composition();
+    if (!current)
+        return result;
+    for (const auto& address : selection_.keyframes) {
+        const auto parameter = parameterForCurve(address.curveId);
+        const auto* record = current->animationCurves().find(address.curveId);
+        if (!parameter || !record)
+            continue;
+        std::visit(
+            [&](const auto& curve) {
+                for (const auto& key : curve.keyframes)
+                    if (key.id == address.keyframeId)
+                        result.push_back(
+                            {*parameter, key.time, key.value, key.outgoingInterpolation});
+            },
+            *record);
+    }
+    return result;
+}
+bool CompositionSession::moveKeyframes(std::vector<commands::KeyframeMove> keys,
+                                       document::Revision revision) {
+    commands::Transaction transaction("Move Keyframes", revision);
+    transaction.emplace<commands::MoveKeyframes>(compositionId_, std::move(keys));
+    return execute(std::move(transaction));
+}
+bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
+                                        document::Revision revision) {
+    commands::Transaction transaction("Paste Keyframes", revision);
+    transaction.emplace<commands::PasteKeyframes>(compositionId_, keys);
+    if (!execute(std::move(transaction)))
+        return false;
+    std::vector<KeyframeSelection> selection;
+    const auto* current = composition();
+    if (!current)
+        return true;
+    for (const auto& paste : keys) {
+        const auto* parameter = current->parameters().find(paste.parameterId);
+        const auto* source =
+            parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source) : nullptr;
+        const auto* record = source ? current->animationCurves().find(source->curveId) : nullptr;
+        if (!record)
+            continue;
+        std::visit(
+            [&](const auto& curve) {
+                for (const auto& key : curve.keyframes)
+                    if (key.time == paste.time)
+                        selection.push_back({curve.id, key.id});
+            },
+            *record);
+    }
+    selectKeyframes(std::move(selection));
+    return true;
+}
+bool CompositionSession::deleteSelectedKeyframes() {
+    std::vector<commands::KeyframeAddress> keys;
+    keys.reserve(selection_.keyframes.size());
+    for (const auto& key : selection_.keyframes)
+        keys.push_back({key.curveId, key.keyframeId});
+    if (keys.empty())
+        return false;
+    commands::Transaction transaction("Delete Keyframes", snapshot_.revision());
+    transaction.emplace<commands::DeleteKeyframes>(compositionId_, std::move(keys));
+    return execute(std::move(transaction));
+}
+bool CompositionSession::setSelectedKeyframesInterpolation(
+    document::KeyframeInterpolation interpolation) {
+    std::vector<commands::KeyframeAddress> keys;
+    keys.reserve(selection_.keyframes.size());
+    for (const auto& key : selection_.keyframes)
+        keys.push_back({key.curveId, key.keyframeId});
+    if (keys.empty())
+        return false;
+    commands::Transaction transaction("Set Keyframes Interpolation", snapshot_.revision());
+    transaction.emplace<commands::SetKeyframesInterpolation>(compositionId_, std::move(keys),
+                                                             interpolation);
+    return execute(std::move(transaction));
+}
+void CompositionSession::copySelectedKeyframes() { keyframeClipboard_ = selectedKeyframeData(); }
+bool CompositionSession::pasteCopiedKeyframes() {
+    const auto* current = composition();
+    if (!current || keyframeClipboard_.empty())
+        return false;
+    auto keys = keyframeClipboard_;
+    const auto first = std::ranges::min_element(keys, {}, &commands::KeyframePaste::time)->time;
+    const auto rate = current->format().frameRate();
+    const auto duration = current->duration();
+    const auto origin = nearestFrameIndexForTime(rate, duration, first);
+    const auto destination = nearestFrameIndexForTime(rate, duration, currentTime_);
+    const auto maximum = maxFrameIndex(rate, duration);
+    if (!origin || !destination || !maximum)
+        return false;
+    for (auto& key : keys) {
+        const auto frame = nearestFrameIndexForTime(rate, duration, key.time);
+        if (!frame || *frame < *origin || *frame - *origin > *maximum - *destination) {
+            reportUnavailable(tr("Pasted keys would exceed the composition"));
+            return false;
+        }
+        const auto time = frameTimeForIndex(rate, duration, *destination + (*frame - *origin));
+        if (!time)
+            return false;
+        key.time = *time;
+    }
+    return pasteKeyframes(std::move(keys), snapshot_.revision());
+}
+} // namespace bloom::ui

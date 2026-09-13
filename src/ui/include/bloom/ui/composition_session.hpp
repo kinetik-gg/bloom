@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
@@ -60,6 +61,7 @@ using SelectionTarget = std::variant<std::monostate, document::LayerId, document
 struct CompositionSelection {
     SelectionTarget primary;
     std::optional<document::LayerId> contextualLayer;
+    std::vector<KeyframeSelection> keyframes{};
 
     friend bool operator==(const CompositionSelection&, const CompositionSelection&) = default;
 };
@@ -167,7 +169,19 @@ class CompositionSession final : public QObject {
     // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key
     // reports unavailable and leaves the selection untouched, mirroring selectLayer/selectNode/
     // selectParameter's own not-found handling.
-    void selectKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId);
+    void selectKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId,
+                        bool extend = false);
+    void selectKeyframes(const std::vector<KeyframeSelection>& keys);
+    [[nodiscard]] std::vector<commands::KeyframePaste> selectedKeyframeData() const;
+    [[nodiscard]] bool moveKeyframes(std::vector<commands::KeyframeMove> keys,
+                                     document::Revision revision);
+    [[nodiscard]] bool pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
+                                      document::Revision revision);
+    [[nodiscard]] bool deleteSelectedKeyframes();
+    [[nodiscard]] bool
+    setSelectedKeyframesInterpolation(document::KeyframeInterpolation interpolation);
+    void copySelectedKeyframes();
+    [[nodiscard]] bool pasteCopiedKeyframes();
 
     [[nodiscard]] const document::NodeRecord* selectedNode() const noexcept;
     [[nodiscard]] std::optional<document::LayerId> layerForNode(document::NodeId nodeId) const;
@@ -504,6 +518,7 @@ class CompositionSession final : public QObject {
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
+    std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
     std::optional<PositionInteraction> positionInteraction_;
 };

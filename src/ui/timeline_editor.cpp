@@ -430,12 +430,14 @@ class TimelineLayerRow final : public QWidget {
         painter.setPen(kit::color(kit::Color::Foreground));
         const int swatch = kit::px(kit::Spacing::S);
         painter.fillRect(QRect(kNameCellX, (height() - swatch) / 2, swatch, swatch), color_);
-        const auto chevron = kit::iconPixmap(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight,
-            kit::Size::IconMedium, kit::Color::Muted);
-        painter.drawPixmap(kNameCellX + swatch + kCellGap, (height() - chevron.height()) / 2, chevron);
+        const auto chevron =
+            kit::iconPixmap(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight,
+                            kit::Size::IconMedium, kit::Color::Muted);
+        painter.drawPixmap(kNameCellX + swatch + kCellGap, (height() - chevron.height()) / 2,
+                           chevron);
         const int indent = kit::px(kit::Size::IconMedium);
-        const QRect nameRect(kNameCellX + swatch + kCellGap + indent, 0, kNameCellWidth - swatch - kCellGap - indent,
-                             height());
+        const QRect nameRect(kNameCellX + swatch + kCellGap + indent, 0,
+                             kNameCellWidth - swatch - kCellGap - indent, height());
         const QFontMetrics metrics = painter.fontMetrics();
         painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                          metrics.elidedText(name_, Qt::ElideRight, nameRect.width()));
@@ -596,17 +598,24 @@ void TimelineLayerStack::relayoutRows() {
     for (std::size_t slot = 0; slot < rowPool_.size(); ++slot) {
         auto* row = rowPool_[slot];
         auto* property = propertyPool_[slot];
-        if (static_cast<int>(slot) >= needed) { row->hide(); if (property) property->hide(); continue; }
+        if (static_cast<int>(slot) >= needed) {
+            row->hide();
+            if (property)
+                property->hide();
+            continue;
+        }
         const int index = first + static_cast<int>(slot);
         const auto& entry = entries_[static_cast<std::size_t>(index)];
         if (entry.rowKind == TimelineLayerEntry::Kind::Layer) {
-            if (property) property->hide();
+            if (property)
+                property->hide();
             row->bind(entry, isLayerSelected(session_, entry.layerId));
             row->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             row->show();
         } else {
             row->hide();
-            if (!property) property = propertyPool_[slot] = new TimelinePropertyRow(session_, this);
+            if (!property)
+                property = propertyPool_[slot] = new TimelinePropertyRow(session_, this);
             property->bind(entry);
             property->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             property->show();
@@ -645,9 +654,11 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     }
     const auto& entry = entries_[static_cast<std::size_t>(index)];
     const auto id = entry.layerId;
-    if (entry.rowKind != TimelineLayerEntry::Kind::Layer) return;
+    if (entry.rowKind != TimelineLayerEntry::Kind::Layer)
+        return;
     const int chevronX = kNameCellX + kit::px(kit::Spacing::S) + kCellGap;
-    if (event->position().x() >= chevronX && event->position().x() < chevronX + kit::px(kit::Size::IconMedium)) {
+    if (event->position().x() >= chevronX &&
+        event->position().x() < chevronX + kit::px(kit::Size::IconMedium)) {
         Q_EMIT expansionRequested(id);
         return;
     }
@@ -711,6 +722,10 @@ void TimelineLayerStack::mouseMoveEvent(QMouseEvent* event) {
         (static_cast<int>(event->position().y()) + scrollOffset_ + kTimelineRowHeight / 2) /
             kTimelineRowHeight,
         0, rowCount());
+    while (insertionRow_ < rowCount() &&
+           entries_[static_cast<std::size_t>(insertionRow_)].rowKind !=
+               TimelineLayerEntry::Kind::Layer)
+        ++insertionRow_;
     if (!insertion_) {
         insertion_ = new QWidget(this);
         insertion_->setObjectName("timelineLayerInsertionIndicator");
@@ -778,12 +793,14 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
 void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
     const int row = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
     if (event->button() == Qt::LeftButton && row >= 0 && row < rowCount() &&
+        entries_[static_cast<std::size_t>(row)].rowKind == TimelineLayerEntry::Kind::Layer &&
         event->position().x() >= kNameCellX && event->position().x() < kNameCellX + kNameCellWidth)
         renameLayer(entries_[static_cast<std::size_t>(row)].layerId);
 }
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
     const int row = (event->pos().y() + scrollOffset_) / kTimelineRowHeight;
-    if (row < 0 || row >= rowCount())
+    if (row < 0 || row >= rowCount() ||
+        entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
         return;
     const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
     if (!isLayerSelected(session_, layerId))
@@ -903,7 +920,12 @@ void TimelineLayerStack::keyPressEvent(QKeyEvent* event) {
         QWidget::keyPressEvent(event);
         return;
     }
-    setCurrentRow(*target);
+    const int direction = event->key() == Qt::Key_Down ? 1 : -1;
+    while (*target >= 0 && *target < rowCount() &&
+           entries_[static_cast<std::size_t>(*target)].rowKind != TimelineLayerEntry::Kind::Layer)
+        *target += direction;
+    if (*target >= 0 && *target < rowCount())
+        setCurrentRow(*target);
     event->accept();
 }
 
@@ -973,10 +995,12 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
 
 void TimelineLaneRegion::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    if (!keyframeArea_) return;
+    if (!keyframeArea_)
+        return;
     keyframeArea_->setGeometry(rect());
     keyframePanel_->setGeometry(rect());
-    if (keyframePanel_) keyframePanel_->setGridEntries(entries_, scrollOffset_);
+    if (keyframePanel_)
+        keyframePanel_->setGridEntries(entries_, scrollOffset_);
 }
 
 int TimelineLaneRegion::contentHeight() const noexcept {
@@ -989,18 +1013,19 @@ int TimelineLaneRegion::rowTop(const int row) const noexcept {
 
 void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
     if (!keyframePanel_) {
-    keyframeArea_ = new QWidget(this);
-    keyframeArea_->setObjectName("timelineKeyframeArea");
-    keyframePanel_ = new TimelineKeyframePanel(session_, keyframeArea_);
-    keyframePanel_->setRuler(ruler_);
-    keyframePanel_->setGridEntries({}, 0);
+        keyframeArea_ = new QWidget(this);
+        keyframeArea_->setObjectName("timelineKeyframeArea");
+        keyframePanel_ = new TimelineKeyframePanel(session_, keyframeArea_);
+        keyframePanel_->setRuler(ruler_);
+        keyframePanel_->setGridEntries({}, 0);
         keyframeArea_->setGeometry(rect());
         keyframePanel_->setGeometry(rect());
     }
     drag_.reset();
     guide_.reset();
     entries_ = std::move(entries);
-    if (keyframePanel_) keyframePanel_->setGridEntries(entries_, scrollOffset_);
+    if (keyframePanel_)
+        keyframePanel_->setGridEntries(entries_, scrollOffset_);
     update();
 }
 
@@ -1009,7 +1034,8 @@ void TimelineLaneRegion::setScrollOffset(const int offset) {
         return;
     }
     scrollOffset_ = offset;
-    if (keyframePanel_) keyframePanel_->setGridEntries(entries_, scrollOffset_);
+    if (keyframePanel_)
+        keyframePanel_->setGridEntries(entries_, scrollOffset_);
     update();
 }
 
@@ -1027,7 +1053,8 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     }
     const auto* layer =
         composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
-    if (!layer || entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
+    if (!layer ||
+        entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
         return std::nullopt;
     const auto range =
         drag_ && drag_->layer == layer->layerId
@@ -1434,10 +1461,14 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
     connect(stack_, &TimelineLayerStack::expansionRequested, this, [this](document::LayerId layer) {
-        if (!expandedLayers_.erase(layer)) expandedLayers_.insert(layer);
+        if (!expandedLayers_.erase(layer))
+            expandedLayers_.insert(layer);
         rebuild();
     });
-    connect(&session_, &CompositionSession::compositionChanged, this, [this] { expandedLayers_.clear(); rebuild(); });
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        expandedLayers_.clear();
+        rebuild();
+    });
     stack_->addAction(deleteLayerAction_);
     lanes_->addAction(deleteLayerAction_);
     auto* bodyGutter = new QWidget(body);
@@ -1623,7 +1654,8 @@ void TimelineEditor::updateSelection() {
     if (current < 0) {
         return;
     }
-    if (std::holds_alternative<KeyframeSelection>(session_.selection().primary)) return;
+    if (std::holds_alternative<KeyframeSelection>(session_.selection().primary))
+        return;
     const int top = current * kTimelineRowHeight;
     const int viewport = stack_->height();
     if (top < scrollBar_->value()) {

@@ -1,6 +1,6 @@
-#include <bloom/ui/timeline_ruler.hpp>
-#include <bloom/ui/timeline_editor.hpp>
 #include <QRegion>
+#include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -302,15 +302,15 @@ class TimelineKeyframeRow final : public QWidget {
         // segment of it (no head marker here -- that lives once, in the work-area header row).
         paintPlayheadLine(painter, *axis, session_.currentTime(), height());
 
-        const auto* keySelection = std::get_if<KeyframeSelection>(&session_.selection().primary);
         const qreal centerY = height() / 2.0;
         for (const auto& key : collectKeys()) {
             if (key.time.toSeconds() < axis->t0 || key.time.toSeconds() >= axis->t1) {
                 continue;
             }
             const qreal x = axis->pixelForTime(key.time);
-            const bool selected = keySelection != nullptr && keySelection->curveId == curveId_ &&
-                                  keySelection->keyframeId == key.id;
+            const bool selected = std::ranges::find(session_.selection().keyframes,
+                                                    KeyframeSelection{curveId_, key.id}) !=
+                                  session_.selection().keyframes.end();
             // Decision 2: "gold diamonds, Accent selection" -- Keyframe is the token every other
             // keyframe indicator in the interface already uses (PropertiesEditor's own
             // updateKeyframeIndicator()) for exactly this "gold" meaning.
@@ -342,6 +342,9 @@ class TimelineKeyframeRow final : public QWidget {
                                 kit::Radius::Small);
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(chip, Qt::AlignCenter, label_);
+        if (auto* panel = qobject_cast<TimelineKeyframePanel*>(parentWidget());
+            panel && panel->gridMode())
+            panel->paintGridOverlay(painter, *this);
     }
 
     void mousePressEvent(QMouseEvent* event) override {
@@ -970,6 +973,28 @@ void TimelineKeyframePanel::setRuler(TimelineRuler& ruler) {
 }
 
 void TimelineKeyframePanel::keyPressEvent(QKeyEvent* event) {
+    if (gridMode_) {
+        if (event->key() == Qt::Key_Escape) {
+            cancelGesture();
+            event->accept();
+            return;
+        }
+        if (event->matches(QKeySequence::Copy)) {
+            session_.copySelectedKeyframes();
+            event->accept();
+            return;
+        }
+        if (event->matches(QKeySequence::Paste)) {
+            (void)session_.pasteCopiedKeyframes();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+            (void)session_.deleteSelectedKeyframes();
+            event->accept();
+            return;
+        }
+    }
     if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
         // deleteSelectedKeyframe() is a no-op false (no transaction, selection intact) when
         // nothing is selected or the command layer refuses (e.g. the curve's last key) -- the
@@ -981,45 +1006,69 @@ void TimelineKeyframePanel::keyPressEvent(QKeyEvent* event) {
     QWidget::keyPressEvent(event);
 }
 
-void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>& entries, int scrollOffset) {
+void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>& entries,
+                                           int scrollOffset) {
     gridMode_ = true;
+    gridRows_.clear();
+    gridParameters_.clear();
+    gridScroll_ = scrollOffset;
     std::vector<document::AnimationCurveId> curves;
     std::vector<int> indices;
     const auto* composition = session_.composition();
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].rowKind != TimelineLayerEntry::Kind::Parameter) continue;
+        if (entries[i].rowKind != TimelineLayerEntry::Kind::Parameter)
+            continue;
         document::AnimationCurveId curveId{};
-        const auto* parameter = composition ? composition->parameters().find(entries[i].parameterId) : nullptr;
-        if (parameter) if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) curveId = source->curveId;
+        const auto* parameter =
+            composition ? composition->parameters().find(entries[i].parameterId) : nullptr;
+        if (parameter)
+            if (const auto* source =
+                    std::get_if<document::AnimationCurveSource>(&parameter->source))
+                curveId = source->curveId;
         curves.push_back(curveId);
         indices.push_back(static_cast<int>(i));
+        gridParameters_.push_back(entries[i].parameterId);
     }
+    gridRows_ = indices;
     if (curves != lastCurveIds_) {
-        delete rowsLayout_; rowsLayout_ = nullptr;
-        for (auto* row : rows_) { row->hide(); row->setParent(nullptr); row->deleteLater(); }
+        delete rowsLayout_;
+        rowsLayout_ = nullptr;
+        for (auto* row : rows_) {
+            row->hide();
+            row->setParent(nullptr);
+            row->deleteLater();
+        }
         rows_.clear();
         lastCurveIds_ = curves;
         for (auto curve : curves) {
             auto* row = new TimelineKeyframeRow(session_, {}, curve, this);
-            if (ruler_) row->setRuler(*ruler_);
+            row->setObjectName("timelineKeyframeRow");
+            row->installEventFilter(this);
+            if (ruler_)
+                row->setRuler(*ruler_);
             rows_.push_back(row);
         }
     }
     QRegion mask;
     for (std::size_t i = 0; i < rows_.size(); ++i) {
-        const QRect geometry(0, indices[i] * kTimelineRowHeight - scrollOffset, width(), kTimelineRowHeight);
+        const QRect geometry(0, indices[i] * kTimelineRowHeight - scrollOffset, width(),
+                             kTimelineRowHeight);
         rows_[i]->setGeometry(geometry);
         rows_[i]->show();
         mask += geometry;
     }
     // An empty Qt mask means unmasked; hide instead so collapsed layer bars retain input.
     setMask(mask);
-    if (parentWidget()) { parentWidget()->setMask(mask); parentWidget()->setVisible(!rows_.empty()); }
+    if (parentWidget()) {
+        parentWidget()->setMask(mask);
+        parentWidget()->setVisible(!rows_.empty());
+    }
     setVisible(!rows_.empty());
 }
 
 void TimelineKeyframePanel::rebuild() {
-    if (gridMode_) return;
+    if (gridMode_)
+        return;
     const auto specs = collectAnimatedParameters(session_);
     std::vector<document::AnimationCurveId> currentCurveIds;
     currentCurveIds.reserve(specs.size());

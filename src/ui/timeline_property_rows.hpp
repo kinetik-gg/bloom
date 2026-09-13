@@ -1,7 +1,7 @@
 #pragma once
 
-#include <bloom/ui/timeline_editor.hpp>
 #include <array>
+#include <bloom/ui/timeline_editor.hpp>
 
 class QLabel;
 namespace bloom::ui {
@@ -10,16 +10,18 @@ namespace kit {
 class KValueField;
 class KDropdown;
 class KColorChip;
-}
+} // namespace kit
 
-[[nodiscard]] std::vector<TimelineLayerEntry> timelinePropertyEntries(
-    const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
-    const std::set<document::LayerId>& expanded);
+[[nodiscard]] std::vector<TimelineLayerEntry>
+timelinePropertyEntries(const CompositionSession& session,
+                        const std::vector<TimelineLayerEntry>& layers,
+                        const std::set<document::LayerId>& expanded);
 
 class TimelinePropertyRow final : public QWidget {
   public:
     TimelinePropertyRow(CompositionSession& session, QWidget* parent);
     void bind(const TimelineLayerEntry& entry);
+
   private:
     void commitValues();
     CompositionSession& session_;
@@ -31,4 +33,4 @@ class TimelinePropertyRow final : public QWidget {
     kit::KColorChip* color_;
     bool binding_ = false;
 };
-}
+} // namespace bloom::ui

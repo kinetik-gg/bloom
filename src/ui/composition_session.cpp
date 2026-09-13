@@ -127,6 +127,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     compositionId_ = compositionId;
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
+    keyframeClipboard_.clear();
     selectedNodes_.clear();
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
@@ -175,6 +176,7 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     currentTime_ = core::RationalTime::fromInteger(0);
     const bool hadSelection = selection_.primary.index() != 0;
     selection_ = {};
+    keyframeClipboard_.clear();
     selectedNodes_.clear();
     emit compositionChanged();
     if (timeChanged) {
@@ -286,26 +288,6 @@ void CompositionSession::selectParameter(const document::ParameterId parameterId
 
     CompositionSelection next{.primary = parameterId,
                               .contextualLayer = contextualLayerForParameter(parameterId)};
-    if (selection_ != next || !selectedNodes_.empty()) {
-        selection_ = next;
-        selectedNodes_.clear();
-        emit selectionChanged();
-    }
-}
-
-void CompositionSession::selectKeyframe(const document::AnimationCurveId curveId,
-                                        const document::KeyframeId keyframeId) {
-    Q_ASSERT(QThread::currentThread() == thread());
-    const KeyframeSelection target{curveId, keyframeId};
-    if (!keyframeSelectionExists(target)) {
-        reportUnavailable(QStringLiteral("The selected keyframe is no longer available"));
-        return;
-    }
-
-    const auto parameterId = parameterForCurve(curveId);
-    const auto contextualLayer =
-        parameterId.has_value() ? contextualLayerForParameter(*parameterId) : std::nullopt;
-    CompositionSelection next{.primary = target, .contextualLayer = contextualLayer};
     if (selection_ != next || !selectedNodes_.empty()) {
         selection_ = next;
         selectedNodes_.clear();
@@ -1618,6 +1600,16 @@ CompositionSession::contextualLayerForParameter(const document::ParameterId para
 void CompositionSession::normalizeSelection() {
     const auto before = selectedNodes_;
     const auto oldSelection = selection_;
+    std::erase_if(selection_.keyframes,
+                  [this](const auto& key) { return !keyframeSelectionExists(key); });
+    if (std::holds_alternative<KeyframeSelection>(selection_.primary) &&
+        !selectionExists(selection_) && !selection_.keyframes.empty()) {
+        const auto key = selection_.keyframes.back();
+        selection_.primary = key;
+        const auto parameter = parameterForCurve(key.curveId);
+        selection_.contextualLayer =
+            parameter ? contextualLayerForParameter(*parameter) : std::nullopt;
+    }
     const auto* current = composition();
     std::erase_if(selectedNodes_,
                   [&](const auto id) { return !current || !current->graph().findNode(id); });
