@@ -237,9 +237,9 @@ void RamPreviewController::consumeReadyResult() {
     ++cachedFrameCount_;
     publishProgress();
     if (previewController_.frameCache().statistics().evictions != evictionsAtStart_) {
-        // The range has outgrown the memory budget. Every further frame would evict one this run has
-        // already cached, so the run stops with the prefix that fits rather than spending the rest of
-        // the range throwing away its own beginning.
+        // The range has outgrown the memory budget. Every further frame would evict one this run
+        // has already cached, so the run stops with the prefix that fits rather than spending the
+        // rest of the range throwing away its own beginning.
         finish(true);
         return;
     }

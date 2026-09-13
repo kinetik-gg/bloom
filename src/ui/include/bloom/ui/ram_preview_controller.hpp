@@ -65,10 +65,11 @@ class RamPreviewController final : public QObject {
 
   signals:
     void stateChanged();
-    // True when the run finished on its own -- the whole range cached, or as much of it as the memory
-    // budget holds -- and false when it ended early (cancelled, or a frame could not be prepared).
-    // The Timeline's transport plays on true: a partly cached range is still worth playing, and the
-    // transport's own clock rule already decides frame by frame which frames it can present exactly.
+    // True when the run finished on its own -- the whole range cached, or as much of it as the
+    // memory budget holds -- and false when it ended early (cancelled, or a frame could not be
+    // prepared). The Timeline's transport plays on true: a partly cached range is still worth
+    // playing, and the transport's own clock rule already decides frame by frame which frames it
+    // can present exactly.
     void cachingFinished(bool completed);
 
   private:

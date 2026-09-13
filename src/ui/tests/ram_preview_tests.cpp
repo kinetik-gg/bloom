@@ -479,8 +479,8 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     finishFixture(fixture, expectations);
 }
 
-// A range that cannot fit the cache's budget is cached as the prefix that does fit, and the run stops
-// there rather than spending the rest of the range evicting its own beginning.
+// A range that cannot fit the cache's budget is cached as the prefix that does fit, and the run
+// stops there rather than spending the rest of the range evicting its own beginning.
 void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Budget", time(24, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
