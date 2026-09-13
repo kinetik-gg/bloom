@@ -167,11 +167,38 @@ void scrubOnALayerCard(App& app, const document::NodeId layer) {
         return;
     }
     const double before = opacity->value();
+    const std::size_t historyBefore = app.stack.size();
+    const auto documentBefore = scalarOf(app, layer, document::kOpacityParameterRole);
     scrub(app, opacity, -30);
     expect(opacity->value() < before, "scrubbing left lowers the Opacity cell's value");
     const auto stored = scalarOf(app, layer, document::kOpacityParameterRole);
     expect(stored.has_value() && closeTo(static_cast<float>(*stored * 100.0), opacity->value()),
            "the document holds exactly what the scrubbed cell shows");
+    const std::size_t landed = app.stack.size() - historyBefore;
+    expect(landed == 1, "one scrub gesture lands exactly one undoable command");
+    expect(app.session.undo(), "that one command is one undo step");
+    expect(scalarOf(app, layer, document::kOpacityParameterRole) == documentBefore,
+           "and undoing it puts the whole gesture back");
+    expect(app.session.redo(), "redo restores the scrubbed value");
+
+    // A scrub abandoned with Esc puts the cell back and writes nothing at all.
+    const double armed = opacity->value();
+    const std::size_t armedHistory = app.stack.size();
+    const QPointF start = controlCenter(opacity);
+    app.press(start);
+    app.move(start + QPointF(-40.0, 0.0));
+    QCoreApplication::processEvents();
+    expect(opacity->isScrubbing(), "the pointer has travelled far enough to be scrubbing");
+    expect(opacity->value() < armed, "the cell follows the pointer while the scrub is in flight");
+    expect(app.stack.size() == armedHistory,
+           "nothing is written to the document while the pointer is moving");
+    QTest::keyClick(opacity, Qt::Key_Escape);
+    QCoreApplication::processEvents();
+    app.release(start + QPointF(-40.0, 0.0));
+    QCoreApplication::processEvents();
+    expect(closeTo(static_cast<float>(opacity->value()), armed),
+           "Esc puts back exactly the value the press started from");
+    expect(app.stack.size() == armedHistory, "an abandoned scrub lands no command at all");
 }
 
 // --- (c) the operand dropdown and the color chip ------------------------------------------------

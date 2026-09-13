@@ -136,7 +136,15 @@ int KValueField::decimals() const noexcept { return decimals_; }
 
 double KValueField::value() const noexcept { return value_; }
 
-void KValueField::setValue(const double value) { commitValue(value); }
+void KValueField::setValue(const double value) {
+    // See the header: a live scrub owns the cell. A projection that arrived mid-drag -- another
+    // surface's edit, a time change -- would otherwise snap the number back under the pointer and
+    // the rest of the gesture would carry on from the wrong base.
+    if (scrubbing_) {
+        return;
+    }
+    commitValue(value);
+}
 
 void KValueField::commitValue(const double value) {
     const double clamped = std::clamp(value, minimum_, maximum_);
@@ -320,6 +328,7 @@ void KValueField::mouseMoveEvent(QMouseEvent* event) {
             return;
         }
         scrubbing_ = true;
+        Q_EMIT scrubStarted();
     }
     // Measured from the press, not from the previous move: a scrub that wanders back to where it
     // started puts the value back exactly, with no accumulated rounding drift.
@@ -335,7 +344,10 @@ void KValueField::mouseReleaseEvent(QMouseEvent* event) {
     const bool wasScrubbing = scrubbing_;
     pressed_ = false;
     scrubbing_ = false;
-    if (!wasScrubbing) {
+    if (wasScrubbing) {
+        // The one moment in the gesture at which a value is worth writing down.
+        Q_EMIT scrubFinished();
+    } else {
         // A press that never travelled is a click, and a click opens the editor.
         beginEdit();
     }
@@ -439,10 +451,12 @@ void KValueField::keyPressEvent(QKeyEvent* event) {
         return;
     case Qt::Key_Escape:
         if (scrubbing_) {
-            // Abandoning a scrub puts back exactly the value the press started from.
+            // Abandoning a scrub puts back exactly the value the press started from, and writes
+            // nothing: the gesture never produced a command to undo.
             pressed_ = false;
             scrubbing_ = false;
             commitValue(pressValue_);
+            Q_EMIT scrubCancelled();
             event->accept();
             return;
         }
@@ -471,8 +485,14 @@ void KValueField::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         hovered_ = false;
         pressed_ = false;
+        const bool wasScrubbing = scrubbing_;
         scrubbing_ = false;
         endEdit(false);
+        if (wasScrubbing) {
+            // A cell disabled mid-drag loses its gesture; it must not leave a surface waiting for a
+            // release that will never arrive.
+            Q_EMIT scrubCancelled();
+        }
     }
     QWidget::changeEvent(event);
 }

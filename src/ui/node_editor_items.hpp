@@ -531,6 +531,26 @@ class NodeItem final : public QGraphicsObject {
                              : session_->setSelectedSolidColor(value, target()));
     }
 
+    // One rule for every numeric cell this card carries (ADR 0017: "Do not mutate the document on
+    // pointer motion. On release, commit exactly one typed document transaction"). A cell emits
+    // valueChanged for every pixel of a scrub, so binding a commit straight to it turned one drag
+    // into a drag's worth of undo entries, each one re-projecting every editor mid-gesture. The
+    // gesture's own boundary is what is bound here instead: nothing while the pointer is moving,
+    // exactly one command on release, and none at all for an abandoned scrub.
+    template <typename Commit> void bindCell(kit::KValueField* field, Commit commit) {
+        connect(field, &kit::KValueField::valueChanged, this, [this, commit] {
+            if (!scrubbing_) {
+                commit();
+            }
+        });
+        connect(field, &kit::KValueField::scrubStarted, this, [this] { scrubbing_ = true; });
+        connect(field, &kit::KValueField::scrubCancelled, this, [this] { scrubbing_ = false; });
+        connect(field, &kit::KValueField::scrubFinished, this, [this, commit] {
+            scrubbing_ = false;
+            commit();
+        });
+    }
+
     void addProxy(QWidget* widget) {
         hostTranslucent(*widget);
         // Click-to-focus, which a hosted widget otherwise never gets. Qt focuses a widget on press
@@ -654,10 +674,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(positionY_);
                 registerControlRole(positionX_, document::kPositionParameterRole);
                 registerControlRole(positionY_, document::kPositionParameterRole);
-                connect(positionX_, &kit::KValueField::valueChanged, this,
-                        [this] { commitPosition(); });
-                connect(positionY_, &kit::KValueField::valueChanged, this,
-                        [this] { commitPosition(); });
+                bindCell(positionX_, [this] { commitPosition(); });
+                bindCell(positionY_, [this] { commitPosition(); });
                 valueRows_.push_back({QStringLiteral("X"), positionX_,
                                       makeCardDiamond(document::kPositionParameterRole),
                                       document::kPositionParameterRole});
@@ -672,10 +690,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(anchorY_);
                 registerControlRole(anchorX_, document::kAnchorParameterRole);
                 registerControlRole(anchorY_, document::kAnchorParameterRole);
-                connect(anchorX_, &kit::KValueField::valueChanged, this,
-                        [this] { commitAnchor(); });
-                connect(anchorY_, &kit::KValueField::valueChanged, this,
-                        [this] { commitAnchor(); });
+                bindCell(anchorX_, [this] { commitAnchor(); });
+                bindCell(anchorY_, [this] { commitAnchor(); });
                 valueRows_.push_back({tr("Anchor X"), anchorX_,
                                       makeCardDiamond(document::kAnchorParameterRole),
                                       document::kAnchorParameterRole});
@@ -689,8 +705,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(scaleY_);
                 registerControlRole(scaleX_, document::kScaleParameterRole);
                 registerControlRole(scaleY_, document::kScaleParameterRole);
-                connect(scaleX_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
-                connect(scaleY_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
+                bindCell(scaleX_, [this] { commitScale(); });
+                bindCell(scaleY_, [this] { commitScale(); });
                 valueRows_.push_back({tr("Scale X"), scaleX_,
                                       makeCardDiamond(document::kScaleParameterRole),
                                       document::kScaleParameterRole});
@@ -700,8 +716,7 @@ class NodeItem final : public QGraphicsObject {
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
                 addProxy(rotation_);
                 registerControlRole(rotation_, document::kRotationParameterRole);
-                connect(rotation_, &kit::KValueField::valueChanged, this,
-                        [this] { commitRotation(); });
+                bindCell(rotation_, [this] { commitRotation(); });
                 valueRows_.push_back({tr("Rotation"), rotation_,
                                       makeCardDiamond(document::kRotationParameterRole),
                                       document::kRotationParameterRole});
@@ -710,8 +725,7 @@ class NodeItem final : public QGraphicsObject {
                                          100.0, 1, QStringLiteral("%"));
                 addProxy(opacity_);
                 registerControlRole(opacity_, document::kOpacityParameterRole);
-                connect(opacity_, &kit::KValueField::valueChanged, this,
-                        [this] { commitOpacity(); });
+                bindCell(opacity_, [this] { commitOpacity(); });
                 valueRows_.push_back({tr("Opacity"), opacity_,
                                       makeCardDiamond(document::kOpacityParameterRole),
                                       document::kOpacityParameterRole});
@@ -767,8 +781,7 @@ class NodeItem final : public QGraphicsObject {
                                   document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
                 addProxy(textSize_);
                 registerControlRole(textSize_, document::kTextSizeParameterRole);
-                connect(textSize_, &kit::KValueField::valueChanged, this,
-                        [this] { commitTextSize(); });
+                bindCell(textSize_, [this] { commitTextSize(); });
                 valueRows_.push_back({tr("Size"), textSize_,
                                       makeCardDiamond(document::kTextSizeParameterRole),
                                       document::kTextSizeParameterRole});
@@ -892,7 +905,7 @@ class NodeItem final : public QGraphicsObject {
                                   -1'000'000'000.0, 1'000'000'000.0, integral ? 0 : 4, QString{});
                 addProxy(field);
                 registerControlRole(field, role);
-                connect(field, &kit::KValueField::valueChanged, this, [commit] { commit(); });
+                bindCell(field, commit);
                 row.numeric[static_cast<std::size_t>(component)] = field;
                 // One diamond per PARAMETER, on its first component row: a Vector 2's X and Y are
                 // one curve, exactly as a layer position's are.
@@ -1581,6 +1594,9 @@ class NodeItem final : public QGraphicsObject {
     QGraphicsProxyWidget* renameProxy_ = nullptr;
     bool fieldsBuilt_ = false;
     bool refreshing_ = false;
+    // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
+    // the whole card, because a card has one pointer on it.
+    bool scrubbing_ = false;
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
     std::vector<OperandRow> operandRows_;
