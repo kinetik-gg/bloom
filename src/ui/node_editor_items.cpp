@@ -1,0 +1,892 @@
+#include "node_editor_items.hpp"
+#include <QCoreApplication>
+#include <QPainterPathStroker>
+#include <QShortcut>
+#include <bloom/commands/node_operations.hpp>
+
+namespace bloom::ui {
+kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
+    switch (kind) {
+    case runtime::SocketValueKind::Image:
+        return kit::Color::SocketImage;
+    case runtime::SocketValueKind::Color:
+        return kit::Color::SocketColor;
+    case runtime::SocketValueKind::Scalar:
+        return kit::Color::SocketScalar;
+    case runtime::SocketValueKind::Vector2:
+    // Task S7: both vector widths share one token so they read as a family. The socket's NAME and
+    // tooltip are what distinguish them, and a cross-width link is refused by the kind check
+    // regardless -- two adjacent violets would have said "these connect" when they do not.
+    case runtime::SocketValueKind::Vector3:
+        return kit::Color::SocketVector;
+    case runtime::SocketValueKind::String:
+        return kit::Color::SocketString;
+    case runtime::SocketValueKind::Integer:
+        return kit::Color::SocketInteger;
+    case runtime::SocketValueKind::Boolean:
+        return kit::Color::SocketBoolean;
+    }
+    return kit::Color::SocketImage;
+}
+
+namespace node_editor {
+QString nodeCategoryName(const document::NodeCategory category) {
+    switch (category) {
+    case document::NodeCategory::Sources:
+        return QCoreApplication::translate("node_editor", "Sources");
+    case document::NodeCategory::Layers:
+        return QCoreApplication::translate("node_editor", "Layers");
+    case document::NodeCategory::Compositing:
+        return QCoreApplication::translate("node_editor", "Compositing");
+    case document::NodeCategory::Values:
+        return QCoreApplication::translate("node_editor", "Values");
+    case document::NodeCategory::Output:
+        return QCoreApplication::translate("node_editor", "Output");
+    case document::NodeCategory::Utilities:
+        return QCoreApplication::translate("node_editor", "Utilities");
+    }
+    return {};
+}
+
+std::span<const document::NodeCategory> nodeCategoryOrder() {
+    static constexpr std::array kOrder{
+        document::NodeCategory::Sources,     document::NodeCategory::Layers,
+        document::NodeCategory::Compositing, document::NodeCategory::Values,
+        document::NodeCategory::Output,      document::NodeCategory::Utilities};
+    return kOrder;
+}
+
+QString displayTypeName(const std::string_view typeId) {
+    QString name = QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size()));
+    if (name.startsWith(QStringLiteral("bloom."))) {
+        name.remove(0, 6);
+    }
+    name.replace('-', ' ');
+    if (!name.isEmpty()) {
+        name[0] = name[0].toUpper();
+    }
+    return name;
+}
+
+// Task S1, item 7. displayTypeName() above spells a name out of an identifier, which is the right
+// answer for a parameter role and the wrong one for a node the artist reads on a card: "Solid
+// source" names the implementation, "Solid" names the thing. Four built-ins are therefore named
+// here. Type ids are untouched -- this is vocabulary, not identity.
+QString nodeTypeDisplayName(const std::string_view typeId) {
+    if (typeId == document::kSolidSourceNodeType)
+        return QCoreApplication::translate("node_editor", "Solid");
+    if (typeId == document::kLayerOutputNodeType)
+        return QCoreApplication::translate("node_editor", "Layer");
+    if (typeId == document::kLayerStackNodeType)
+        return QCoreApplication::translate("node_editor", "Merge");
+    if (typeId == document::kCompositionOutputNodeType)
+        return QCoreApplication::translate("node_editor", "Output");
+    // Task S7's library. Spelled out for the same reason the four above are: displayTypeName()
+    // reads a name out of an identifier, which gives "Value scalar" and "Separate xy" -- the
+    // implementation's spelling rather than the artist's. Type ids are untouched; this is
+    // vocabulary, not identity.
+    struct LibraryName final {
+        std::string_view typeId;
+        const char* name;
+    };
+    static const std::array kLibraryNames{
+        LibraryName{document::kIntegerValueNodeType, "Integer"},
+        LibraryName{document::kScalarValueNodeType, "Scalar"},
+        LibraryName{document::kVector2ValueNodeType, "Vector 2"},
+        LibraryName{document::kVector3ValueNodeType, "Vector 3"},
+        LibraryName{document::kStringValueNodeType, "String"},
+        LibraryName{document::kColorValueNodeType, "Color"},
+        LibraryName{document::kBooleanValueNodeType, "Boolean"},
+        LibraryName{document::kTimeValueNodeType, "Time"},
+        LibraryName{document::kScalarMathNodeType, "Math"},
+        LibraryName{document::kVector2MathNodeType, "Vector 2 Math"},
+        LibraryName{document::kVector3MathNodeType, "Vector 3 Math"},
+        LibraryName{document::kVector2ReduceNodeType, "Vector 2 Measure"},
+        LibraryName{document::kVector3ReduceNodeType, "Vector 3 Measure"},
+        LibraryName{document::kMapRangeNodeType, "Map Range"},
+        LibraryName{document::kClampNodeType, "Clamp"},
+        LibraryName{document::kMixNodeType, "Mix"},
+        LibraryName{document::kColorMixNodeType, "Mix Color"},
+        LibraryName{document::kCompareNodeType, "Compare"},
+        LibraryName{document::kScalarSwitchNodeType, "Switch Scalar"},
+        LibraryName{document::kIntegerSwitchNodeType, "Switch Integer"},
+        LibraryName{document::kBooleanSwitchNodeType, "Switch Boolean"},
+        LibraryName{document::kVector2SwitchNodeType, "Switch Vector 2"},
+        LibraryName{document::kVector3SwitchNodeType, "Switch Vector 3"},
+        LibraryName{document::kColorSwitchNodeType, "Switch Color"},
+        LibraryName{document::kStringSwitchNodeType, "Switch String"},
+        LibraryName{document::kSeparateXyNodeType, "Separate XY"},
+        LibraryName{document::kCombineXyNodeType, "Combine XY"},
+        LibraryName{document::kSeparateXyzNodeType, "Separate XYZ"},
+        LibraryName{document::kCombineXyzNodeType, "Combine XYZ"},
+        LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
+        LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
+        LibraryName{document::kRandomNodeType, "Random"},
+        LibraryName{document::kImageRerouteNodeType, "Reroute Image"},
+        LibraryName{document::kScalarRerouteNodeType, "Reroute Scalar"},
+        LibraryName{document::kIntegerRerouteNodeType, "Reroute Integer"},
+        LibraryName{document::kBooleanRerouteNodeType, "Reroute Boolean"},
+        LibraryName{document::kVector2RerouteNodeType, "Reroute Vector 2"},
+        LibraryName{document::kVector3RerouteNodeType, "Reroute Vector 3"},
+        LibraryName{document::kColorRerouteNodeType, "Reroute Color"},
+        LibraryName{document::kStringRerouteNodeType, "Reroute String"},
+    };
+    const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
+    if (match != kLibraryNames.end())
+        return QCoreApplication::translate("node_editor", match->name);
+    return displayTypeName(typeId);
+}
+
+// A layer boundary node's display name is the layer's own durable name (the exact string the
+// timeline row shows); every other node is named by its type. Both are the node's real name, read
+// from document truth -- neither is invented here.
+QString nodeDisplayName(const document::Composition& composition,
+                        const document::NodeRecord& node) {
+    for (const auto& boundary : composition.graph().layerOutputs()) {
+        if (boundary.nodeId == node.id && !boundary.name.empty()) {
+            return QString::fromStdString(boundary.name);
+        }
+    }
+    return nodeTypeDisplayName(node.typeId);
+}
+
+// A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
+// of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
+QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node) {
+    for (const auto& boundary : composition.graph().layerOutputs())
+        if (boundary.nodeId == node.id && !boundary.name.empty())
+            return nodeTypeDisplayName(document::kLayerOutputNodeType);
+    return {};
+}
+
+const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
+                                                  const document::Composition& composition,
+                                                  const std::string_view role) {
+    const auto binding = std::ranges::find_if(
+        node.parameters, [role](const auto& candidate) { return candidate.role == role; });
+    return binding == node.parameters.end() ? nullptr
+                                            : composition.parameters().find(binding->parameterId);
+}
+
+// The read-only rendering for a bound parameter that has no editable kit primitive behind it (see
+// NodeItem::ensureFields()). Unchanged from the pre-U4 projection.
+QString parameterText(const document::ParameterRecord& parameter) {
+    const auto* constant = std::get_if<document::ConstantValueSource>(&parameter.source);
+    if (constant == nullptr) {
+        return parameterSourceDescription(parameter);
+    }
+
+    return std::visit(
+        [](const auto& value) -> QString {
+            using Value = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Value, bool>) {
+                return value ? QStringLiteral("On") : QStringLiteral("Off");
+            } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+                return QString::number(value);
+            } else if constexpr (std::is_same_v<Value, double>) {
+                return QString::number(value, 'f', 2);
+            } else if constexpr (std::is_same_v<Value, document::Vec2d>) {
+                return QStringLiteral("%1, %2").arg(value.x, 0, 'f', 1).arg(value.y, 0, 'f', 1);
+            } else if constexpr (std::is_same_v<Value, document::Vec3d>) {
+                return QStringLiteral("%1, %2, %3")
+                    .arg(value.x, 0, 'f', 1)
+                    .arg(value.y, 0, 'f', 1)
+                    .arg(value.z, 0, 'f', 1);
+            } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+                return exactColorText(value);
+            } else if constexpr (std::is_same_v<Value, std::string>) {
+                return QString::fromStdString(value).left(24);
+            } else {
+                return QStringLiteral("%1/%2").arg(value.numerator()).arg(value.denominator());
+            }
+        },
+        constant->value);
+}
+
+document::NodeId destinationNodeId(const document::InputPortRef& input) {
+    return std::visit(
+        [](const auto& destination) {
+            using Destination = std::decay_t<decltype(destination)>;
+            if constexpr (std::is_same_v<Destination, document::NodeInputRef>) {
+                return destination.nodeId;
+            } else {
+                return destination.stackNodeId;
+            }
+        },
+        input);
+}
+
+// A kit numeric cell sized for a node card: no internal label column (KValueField's own is a fixed
+// 72px meant for a Properties-style row), because the card paints the row's name itself in a column
+// shared by every row.
+kit::KValueField* makeCardField(const QString& objectName, const QString& accessibleName,
+                                const double minimum, const double maximum, const int decimals,
+                                const QString& unit) {
+    auto* field = new kit::KValueField;
+    field->setObjectName(objectName);
+    field->setAccessibleName(accessibleName);
+    field->setRange(minimum, maximum);
+    field->setDecimals(decimals);
+    field->setSingleStep(1.0);
+    field->setUnit(unit);
+    field->resize(field->sizeHint());
+    return field;
+}
+
+void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) {
+    const QRectF bounds = cardRect();
+    const auto radiusToken = layout_.collapsed ? kit::Radius::Full : kCardRadius;
+    const bool selected = option->state.testFlag(QStyle::State_Selected);
+    painter->setRenderHint(QPainter::Antialiasing, true);
+
+    // SurfaceRaised card + hairline Border, then the Accent inset edge when selected.
+    painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+    kit::fillRoundedSurface(*painter, bounds, kit::color(kit::Color::SurfaceRaised),
+                            kit::color(kit::Color::Border), radiusToken);
+    painter->setOpacity(1.0);
+    const auto selectionOutline = [&] {
+        if (!selected)
+            return;
+        painter->setOpacity(1.0);
+        const qreal inset = kSelectionEdgeWidth / 2.0;
+        painter->setBrush(Qt::NoBrush);
+        painter->setPen(QPen(kit::color(primary_ ? kit::Color::Foreground : kit::Color::Accent),
+                             kSelectionEdgeWidth));
+        const auto radius = static_cast<qreal>(kit::radiusPx(
+            radiusToken, static_cast<int>(std::min(bounds.width(), bounds.height()))));
+        painter->drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset), radius, radius);
+    };
+
+    // The header strip: one step down the surface ladder from the card so it reads as chrome, with
+    // its own hairline foot rather than a second rounded rectangle.
+    QPainterPath header;
+    // Winding, not QPainterPath's default odd-even rule: the header is a rounded rectangle UNION a
+    // square strip that squares off its bottom corners, and the two subpaths overlap. Under
+    // odd-even the overlap cancels and the strip is left unpainted -- a dark band across the bottom
+    // of every header, which is exactly what the pre-U4 projection drew.
+    header.setFillRule(Qt::WindingFill);
+    const auto headerRadius = static_cast<qreal>(
+        kit::radiusPx(radiusToken, static_cast<int>(std::min(bounds.width(), kCardHeaderHeight))));
+    header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), kCardHeaderHeight), headerRadius,
+                          headerRadius);
+    if (!layout_.collapsed)
+        header.addRect(QRectF(0.0, kCardHeaderHeight - headerRadius, bounds.width(), headerRadius));
+    painter->setPen(Qt::NoPen);
+    painter->fillPath(header, kit::color(kit::Color::Surface));
+    kit::applyHairlinePen(*painter, kit::color(kit::Color::Border));
+    if (!layout_.collapsed)
+        painter->drawLine(QPointF(0.0, kCardHeaderHeight),
+                          QPointF(bounds.width(), kCardHeaderHeight));
+
+    painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    painter->setPen(kit::color(kit::Color::Foreground));
+    QRectF titleRect(kCardPadding, 0.0,
+                     bounds.width() - 2.0 * kCardPadding -
+                         (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
+                     kCardHeaderHeight);
+    if (!eyebrow_.isEmpty()) {
+        // A layer card is named after its LAYER, so the eyebrow is the line that still says what
+        // kind of node it is. Faint ink above the name, and the name keeps the lower half of the
+        // header.
+        const qreal eyebrowHeight = QFontMetricsF(painter->font()).height();
+        const QRectF eyebrowRect(titleRect.left(), 0.0, titleRect.width(), eyebrowHeight);
+        painter->setPen(kit::color(kit::Color::Faint));
+        painter->drawText(eyebrowRect, Qt::AlignVCenter | Qt::AlignLeft,
+                          QFontMetricsF(painter->font())
+                              .elidedText(eyebrow_, Qt::ElideRight, eyebrowRect.width()));
+        painter->setPen(kit::color(kit::Color::Foreground));
+        titleRect.setTop(eyebrowHeight);
+    }
+    painter->drawText(
+        titleRect, Qt::AlignVCenter | Qt::AlignLeft,
+        QFontMetricsF(painter->font()).elidedText(title_, Qt::ElideRight, titleRect.width()));
+
+    if (layout_.muted) {
+        const auto badge =
+            kit::iconPixmap(kit::IconId::Hidden, kit::Size::IconSmall, kit::Color::Foreground);
+        painter->drawPixmap(
+            QPointF(bounds.width() - kCardPadding - badge.width() / badge.devicePixelRatio(),
+                    (kCardHeaderHeight - badge.height() / badge.devicePixelRatio()) / 2.0),
+            badge);
+    }
+    if (layout_.collapsed) {
+        selectionOutline();
+        return;
+    }
+    painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+    painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    painter->setPen(kit::color(kit::Color::Muted));
+    for (const auto* socket : sockets_) {
+        const qreal rowExtent = socket->rowHeight();
+        const QRectF row(kCardPadding, socket->pos().y() - rowExtent / 2,
+                         std::max(0.0, width_ - 2 * kCardPadding), rowExtent);
+        painter->drawText(
+            row,
+            static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
+            painter->fontMetrics().elidedText(socket->name, Qt::ElideRight,
+                                              static_cast<int>(row.width())));
+    }
+
+    // Row labels. The controls themselves are real kit widgets in proxies; only their names are
+    // painted here, in the shared right-aligned label column.
+    painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    qreal y = kCardHeaderHeight + static_cast<qreal>(sockets_.size()) * kSocketRowHeight;
+    const QRectF labelColumn(kCardPadding, 0.0, labelColumnWidth_, rowHeight_);
+    const auto drawLabel = [&](const QString& text, const qreal top) {
+        painter->setPen(kit::color(kit::Color::Muted));
+        painter->drawText(labelColumn.translated(0.0, top), Qt::AlignVCenter | Qt::AlignRight,
+                          text);
+    };
+    for (const auto& row : valueRows_) {
+        drawLabel(row.label, y);
+        y += rowHeight_ + kCardRowGap;
+    }
+    if (colorChip_ != nullptr) {
+        drawLabel(colorRowLabel_, y);
+        y += rowHeight_ + kCardRowGap;
+    }
+    for (const auto& [label, value] : readOnlyRows_) {
+        drawLabel(label, y);
+        painter->setFont(kit::font(kit::TypeRole::Value));
+        painter->setPen(kit::color(kit::Color::Foreground));
+        const QRectF valueRect(
+            kCardPadding + labelColumnWidth_ + kCardLabelGap, y,
+            bounds.width() - kCardPadding * 2.0 - labelColumnWidth_ - kCardLabelGap, rowHeight_);
+        painter->drawText(
+            valueRect, Qt::AlignVCenter | Qt::AlignLeft,
+            QFontMetricsF(painter->font()).elidedText(value, Qt::ElideRight, valueRect.width()));
+        painter->setFont(kit::font(kit::TypeRole::UiSmall));
+        y += rowHeight_ + kCardRowGap;
+    }
+    selectionOutline();
+}
+
+QVariant NodeItem::itemChange(const GraphicsItemChange change, const QVariant& value) {
+    if (change == ItemPositionHasChanged || change == ItemSelectedHasChanged) {
+        for (auto* edge : edges_) {
+            if (change == ItemPositionHasChanged) {
+                edge->updatePath();
+            }
+            edge->update();
+        }
+    }
+    return QGraphicsObject::itemChange(change, value);
+}
+
+NodeItem* nodeItemAncestor(QGraphicsItem* item) {
+    for (auto* candidate = item; candidate != nullptr; candidate = candidate->parentItem()) {
+        if (auto* node = dynamic_cast<NodeItem*>(candidate)) {
+            return node;
+        }
+    }
+    return nullptr;
+}
+
+NodeGroupItem* groupItemAncestor(QGraphicsItem* item) {
+    for (auto* candidate = item; candidate != nullptr; candidate = candidate->parentItem()) {
+        if (auto* group = dynamic_cast<NodeGroupItem*>(candidate)) {
+            return group;
+        }
+    }
+    return nullptr;
+}
+
+NodeItem* firstNodeItem(const QList<QGraphicsItem*>& items) {
+    for (auto* item : items) {
+        if (auto* node = nodeItemAncestor(item)) {
+            return node;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace node_editor
+} // namespace bloom::ui
+
+namespace bloom::ui::node_editor {
+QString socketKindName(const document::SocketValueKind kind) {
+    switch (kind) {
+    case document::SocketValueKind::Image:
+        return QStringLiteral("Image");
+    case document::SocketValueKind::Color:
+        return QStringLiteral("Color");
+    case document::SocketValueKind::Scalar:
+        return QStringLiteral("Scalar");
+    case document::SocketValueKind::Vector2:
+        return QStringLiteral("Vector2");
+    case document::SocketValueKind::String:
+        return QStringLiteral("String");
+    case document::SocketValueKind::Integer:
+        return QStringLiteral("Integer");
+    case document::SocketValueKind::Boolean:
+        return QStringLiteral("Boolean");
+    case document::SocketValueKind::Vector3:
+        return QStringLiteral("Vector3");
+    }
+    return {};
+}
+
+QPainterPath linkPath(const QPointF start, const QPointF end) {
+    const qreal handle = std::max(64.0, std::abs(end.x() - start.x()) / 2.0);
+    QPainterPath path(start);
+    path.cubicTo(start + QPointF(handle, 0), end - QPointF(handle, 0), end);
+    return path;
+}
+
+SocketItem::SocketItem(const document::NodeId node, QString portName,
+                       const document::SocketValueKind valueKind,
+                       std::optional<document::InputPortRef> inputRef,
+                       std::optional<document::OutputPortRef> outputRef, const bool structural,
+                       QGraphicsItem* parent)
+    : QGraphicsItem(parent), name(std::move(portName)), kind(valueKind), input(std::move(inputRef)),
+      output(std::move(outputRef)), structural_(structural) {
+    setData(kNodeItemKindRole, QStringLiteral("socket"));
+    setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(node.value()));
+    setData(kNodeSocketNameRole, name);
+    setData(kNodeSocketInputRole, input.has_value());
+    setAcceptHoverEvents(true);
+    setAcceptedMouseButtons(Qt::LeftButton);
+    setZValue(2);
+    setCursor(draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
+    QString tip = name + QStringLiteral(" · ") + socketKindName(kind);
+    if (structural)
+        tip += QStringLiteral("\nStructural Layer Output / stack-slot boundary; remove the layer "
+                              "to remove this connection");
+    description_ = tip;
+    setAuthoringEnabled(true);
+}
+
+qreal SocketItem::pillLength() const {
+    if (!multiInput())
+        return kSocketDiameter;
+    // At least one ordinary row tall, then one pitch per ordered slot: the pill's length is the
+    // stack's depth, read straight off the slot model.
+    return std::max(kSocketRowHeight, static_cast<qreal>(orderedInputs_.size()) * kStackSlotPitch);
+}
+
+qreal SocketItem::rowHeight() const { return std::max(kSocketRowHeight, pillLength()); }
+
+QRectF SocketItem::boundingRect() const {
+    const qreal half = pillLength() / 2.0 + kSocketDiameter / 2.0 + kSocketHitSlop;
+    return {-16.0, -half, 32.0, half * 2.0};
+}
+
+QPainterPath SocketItem::shape() const {
+    QPainterPath hit;
+    if (!multiInput()) {
+        hit.addEllipse(boundingRect());
+        return hit;
+    }
+    // A pill's hit shape is a pill: the same 12px of slop the round socket gets, around a longer
+    // body, rather than one ellipse stretched over the whole of it.
+    const QRectF bounds = boundingRect();
+    hit.addRoundedRect(bounds, bounds.width() / 2.0, bounds.width() / 2.0);
+    return hit;
+}
+
+void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
+    prepareGeometryChange();
+    orderedInputs_ = std::move(inputs);
+    if (multiInput()) {
+        description_ += QStringLiteral("\nOrdered multi-input: %1 in stack order, topmost first")
+                            .arg(orderedInputs_.size());
+    }
+    setToolTip(description_);
+    update();
+}
+
+bool SocketItem::accepts(const document::InputPortRef& ref) const {
+    return (input.has_value() && *input == ref) ||
+           std::ranges::find(orderedInputs_, ref) != orderedInputs_.end();
+}
+
+void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {
+    if (dropIndicator_ == slotIndex)
+        return;
+    dropIndicator_ = slotIndex;
+    update();
+}
+
+std::optional<std::size_t> SocketItem::slotIndexAt(const QPointF localPoint) const {
+    if (!multiInput() || !shape().contains(localPoint))
+        return std::nullopt;
+    const qreal length = pillLength();
+    const qreal pitch = length / static_cast<qreal>(orderedInputs_.size());
+    const auto index = static_cast<std::ptrdiff_t>(
+        std::floor((localPoint.y() + length / 2.0) / std::max(pitch, 0.001)));
+    return static_cast<std::size_t>(std::clamp(
+        index, std::ptrdiff_t{0}, static_cast<std::ptrdiff_t>(orderedInputs_.size()) - 1));
+}
+
+QColor SocketItem::paintedInk() const {
+    const QColor base = kit::color(socketColorToken(kind));
+    switch (affinity_) {
+    case DragAffinity::Compatible:
+        return kit::hoverFillFor(base);
+    case DragAffinity::Incompatible:
+        return kit::withOpacity(base, kit::kDisabledOpacity);
+    case DragAffinity::Idle:
+        break;
+    }
+    return base;
+}
+
+void SocketItem::setDragAffinity(const DragAffinity affinity) {
+    if (affinity_ == affinity)
+        return;
+    affinity_ = affinity;
+    update();
+}
+
+void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(QPen(kit::color(kit::Color::Surface), kit::kHairlineWidth));
+    painter->setBrush(paintedInk());
+    const qreal radius = hovered_ ? 6.0 : kSocketDiameter / 2;
+    if (!multiInput()) {
+        painter->drawEllipse(QPointF(), radius, radius);
+        return;
+    }
+    // The Merge node's one ordered multi-input: a vertical pill, divided into one segment per stack
+    // slot so the port itself shows how many layers it carries and in what order. The segment
+    // divisions are drawn in the card's own Surface ink, the same hairline that rings every socket.
+    const qreal length = pillLength();
+    const QRectF pill(-radius, -length / 2.0, radius * 2.0, length);
+    painter->drawRoundedRect(pill, radius, radius);
+    // Not named `slots`: Qt's moc keyword macro takes that identifier.
+    const auto slotCount = static_cast<qreal>(orderedInputs_.size());
+    kit::applyHairlinePen(*painter, kit::color(kit::Color::Surface));
+    for (std::size_t division = 1; division < orderedInputs_.size(); ++division) {
+        const qreal y = pill.top() + length * static_cast<qreal>(division) / slotCount;
+        painter->drawLine(QPointF(pill.left(), y), QPointF(pill.right(), y));
+    }
+    if (dropIndicator_.has_value()) {
+        // The position the pointer is at in the order. Muted, not Accent: a stack slot is
+        // structural, so this marks where the pointer IS and never promises that releasing there
+        // lands a link -- the pill is dimmed as incompatible at the same moment.
+        const qreal pitch = length / slotCount;
+        const qreal y = pill.top() + pitch * (static_cast<qreal>(*dropIndicator_) + 0.5);
+        painter->setPen(QPen(kit::color(kit::Color::Muted), 2.0, Qt::SolidLine, Qt::RoundCap));
+        painter->drawLine(QPointF(pill.left() - radius, y), QPointF(pill.right() + radius, y));
+    }
+}
+void SocketItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
+    hovered_ = true;
+    setData(kNodeHoveredRole, true);
+    update();
+    QGraphicsItem::hoverEnterEvent(event);
+}
+void SocketItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
+    hovered_ = false;
+    setData(kNodeHoveredRole, false);
+    update();
+    QGraphicsItem::hoverLeaveEvent(event);
+}
+
+void NodeItem::buildSockets(const document::NodeRecord& node,
+                            const document::Composition& composition,
+                            const document::NodeDefinitionRegistry& registry) {
+    for (auto* socket : sockets_)
+        delete socket;
+    sockets_.clear();
+    linkedInputs_.clear();
+    const auto* definition = registry.find(node.typeId, node.schemaVersion);
+    if (!definition)
+        return;
+    const bool boundary =
+        std::ranges::any_of(composition.graph().layerOutputs(),
+                            [&](const auto& layer) { return layer.nodeId == node.id; });
+    for (const auto& port : definition->inputs) {
+        document::InputPortRef input = document::NodeInputRef{node.id, port.name};
+        // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
+        // carries a driver binding; an image transport port is linked when an edge terminates on
+        // it. That split is not an inconsistency -- each has exactly one durable record of where
+        // its value comes from, which is why an edge and a binding can never disagree about a
+        // socket.
+        const auto binding =
+            std::ranges::find(node.parameters, port.name, &document::ParameterBinding::role);
+        const bool linked =
+            binding != node.parameters.end()
+                ? [&] {
+                      const auto* parameter = composition.parameters().find(binding->parameterId);
+                      return parameter != nullptr &&
+                             std::holds_alternative<document::DriverBindingSource>(
+                                 parameter->source);
+                  }()
+                : std::ranges::any_of(composition.graph().edges(), [&](const auto& edge) {
+                      return edge.destination == input;
+                  });
+        if (linked)
+            linkedInputs_.insert(QString::fromStdString(port.name));
+        sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
+                                          port.valueKind, input, std::nullopt, false, this));
+    }
+    if (definition->layerSlotInput && node.id == composition.graph().layerStack().nodeId()) {
+        // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
+        // slot. The slot model underneath is exactly as it was -- these are its own slots, in its
+        // own order -- and every edge that terminates on any of them terminates on this one socket.
+        const auto& port = *definition->layerSlotInput;
+        const auto entries = composition.graph().layerStack().entries();
+        if (!entries.empty()) {
+            std::vector<document::InputPortRef> ordered;
+            ordered.reserve(entries.size());
+            for (const auto& slot : entries)
+                ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
+            auto* pill = new SocketItem(node.id, QString::fromStdString(port.role), port.valueKind,
+                                        ordered.front(), std::nullopt, true, this);
+            pill->setOrderedInputs(std::move(ordered));
+            sockets_.push_back(pill);
+        }
+    }
+    for (const auto& port : definition->outputs)
+        sockets_.push_back(
+            new SocketItem(node.id, QString::fromStdString(port.name), port.valueKind, std::nullopt,
+                           document::OutputPortRef{node.id, port.name}, boundary, this));
+}
+
+NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output,
+                           SocketItem& input, document::EdgeRecord record, const bool isStructural)
+    : edge(std::move(record)), structural(isStructural), source_(source), destination_(destination),
+      output_(output), input_(input) {
+    setData(kNodeItemKindRole, QStringLiteral("edge"));
+    setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(edge.id.value()));
+    setData(kNodeStructuralRole, structural);
+    setAcceptHoverEvents(true);
+    setAcceptedMouseButtons(Qt::NoButton);
+    setZValue(-1);
+    if (structural)
+        setToolTip(output.draggable() ? input.toolTip() : output.toolTip());
+    source_.addEdge(*this);
+    destination_.addEdge(*this);
+    updatePath();
+}
+void NodeEdgeItem::updatePath() { setPath(linkPath(output_.scenePos(), input_.scenePos())); }
+QPainterPath NodeEdgeItem::shape() const {
+    QPainterPathStroker stroke;
+    stroke.setWidth(12);
+    return stroke.createStroke(path());
+}
+void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+    const bool emphasized = hovered_ || source_.isSelected() || destination_.isSelected();
+    const QColor base = kit::color(socketColorToken(output_.kind));
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setBrush(Qt::NoBrush);
+    painter->setPen(QPen(emphasized ? kit::hoverFillFor(base) : base,
+                         emphasized ? 2.0 : kit::kHairlineWidth, Qt::SolidLine, Qt::RoundCap));
+    painter->drawPath(path());
+}
+void NodeEdgeItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
+    emphasize(true);
+    setData(kNodeHoveredRole, true);
+    QGraphicsPathItem::hoverEnterEvent(event);
+}
+void NodeEdgeItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
+    emphasize(false);
+    setData(kNodeHoveredRole, false);
+    QGraphicsPathItem::hoverLeaveEvent(event);
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+void NodeItem::setPreviewWidth(const qreal width) {
+    layout_.width = width;
+    relayout();
+    for (auto* edge : edges_)
+        edge->updatePath();
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+// Retires a rename field for good: detached from the card and taken out of the scene NOW, then
+// deferred-deleted. Hiding it and waiting for the deferred delete left a stale, invisible editor
+// among the card's children, and fieldWidget() answers with the first child that matches a name --
+// so the next rename's own field could not be found at all.
+void NodeItem::retireRenameProxy() {
+    auto* retired = renameProxy_;
+    if (retired == nullptr)
+        return;
+    renameProxy_ = nullptr;
+    retired->hide();
+    retired->setParentItem(nullptr);
+    if (scene() != nullptr)
+        scene()->removeItem(retired);
+    retired->deleteLater();
+}
+
+void NodeItem::startRename() {
+    auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
+    if (!session_ || !session_->composition() || !graphScene || !graphScene->canSubmit())
+        return;
+    std::optional<document::LayerId> layer;
+    for (const auto& boundary : session_->composition()->graph().layerOutputs())
+        if (boundary.nodeId == id_)
+            layer = boundary.layerId;
+    if (!layer)
+        return;
+    if (renameProxy_) {
+        renameProxy_->show();
+        renameProxy_->widget()->setFocus();
+        return;
+    }
+    auto* field = new QLineEdit(title_);
+    field->setObjectName(QStringLiteral("nodeRenameEditor"));
+    field->setAccessibleName(tr("Layer name"));
+    field->setFont(kit::font(kit::TypeRole::UiSmall));
+    field->resize(static_cast<int>(std::ceil(width_ - 2 * kCardPadding)),
+                  static_cast<int>(kCardHeaderHeight));
+    hostTranslucent(*field);
+    renameProxy_ = new QGraphicsProxyWidget(this);
+    renameProxy_->setWidget(field);
+    renameProxy_->setPos(kCardPadding, 0);
+    renameProxy_->setZValue(5);
+    const auto revision = session_->snapshot().revision();
+    const auto composition = session_->compositionId();
+    connect(field, &QLineEdit::editingFinished, this,
+            [this, field, graphScene, layer = *layer, revision, composition] {
+                if (!renameProxy_ || !renameProxy_->isVisible())
+                    return;
+                const auto name = field->text().toStdString();
+                retireRenameProxy();
+                commands::Transaction transaction("Rename Layer", revision);
+                transaction.emplace<commands::RenameLayer>(composition, layer, name);
+                (void)graphScene->submit(std::move(transaction));
+            });
+    auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
+    cancel->setContext(Qt::WidgetShortcut);
+    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
+    field->setFocus(Qt::OtherFocusReason);
+    field->selectAll();
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+void SocketItem::setAuthoringEnabled(const bool enabled) {
+    setCursor(enabled && draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
+    setToolTip(enabled ? description_
+                       : description_ + QStringLiteral("\nNode command submission is unavailable"));
+}
+} // namespace bloom::ui::node_editor
+
+namespace bloom::ui::node_editor {
+NodeGroupItem::NodeGroupItem(const document::NodeGroupId id, CompositionSession* session)
+    : id_(id), session_(session) {
+    setData(kNodeItemKindRole, QStringLiteral("node-group"));
+    setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
+    setAcceptHoverEvents(true);
+    // Behind its members AND behind their links: a frame is the ground they sit on, not a pane over
+    // them. Cards rest at 0 and links at -1.
+    setZValue(-2);
+}
+
+void NodeGroupItem::refresh(const document::NodeGroupRecord& record) {
+    title_ = QString::fromStdString(record.name);
+    members_ = record.members;
+    padding_ = record.padding;
+    setToolTip(QStringLiteral("%1\nNode group %2").arg(title_).arg(id_.value()));
+    update();
+}
+
+void NodeGroupItem::setFrameRect(const QRectF rect) {
+    setPos(rect.topLeft());
+    if (size_ == rect.size())
+        return;
+    prepareGeometryChange();
+    size_ = rect.size();
+    if (renameProxy_ != nullptr && renameProxy_->widget() != nullptr)
+        renameProxy_->widget()->resize(
+            static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
+            static_cast<int>(kGroupTitleHeight));
+    update();
+}
+
+void NodeGroupItem::setAuthoringEnabled(const bool enabled) {
+    authoringEnabled_ = enabled;
+    setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+}
+
+void NodeGroupItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+    const QRectF bounds = boundingRect();
+    if (bounds.isEmpty())
+        return;
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setOpacity(kGroupFillOpacity);
+    kit::fillRoundedSurface(*painter, bounds, kit::color(kit::Color::SurfaceRaised), QColor(),
+                            kGroupRadius);
+    painter->setOpacity(1.0);
+    // The border keeps full opacity: the fill is what recedes, while the hairline is what says
+    // where the frame actually ends -- which is the line a drop is judged against.
+    const auto radius = static_cast<qreal>(
+        kit::radiusPx(kGroupRadius, static_cast<int>(std::min(bounds.width(), bounds.height()))));
+    painter->setBrush(Qt::NoBrush);
+    kit::applyHairlinePen(*painter, kit::color(kit::Color::Border));
+    painter->drawRoundedRect(bounds, radius, radius);
+    if (renameProxy_ != nullptr && renameProxy_->isVisible())
+        return;
+    painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    painter->setPen(kit::color(kit::Color::Muted));
+    painter->drawText(
+        titleRect().adjusted(kCardPadding, 0.0, -kCardPadding, 0.0),
+        static_cast<int>(Qt::AlignVCenter | Qt::AlignLeft),
+        QFontMetricsF(painter->font())
+            .elidedText(title_, Qt::ElideRight, std::max(0.0, bounds.width() - 2 * kCardPadding)));
+}
+
+void NodeGroupItem::retireRenameProxy() {
+    auto* retired = renameProxy_;
+    if (retired == nullptr)
+        return;
+    renameProxy_ = nullptr;
+    retired->hide();
+    retired->setParentItem(nullptr);
+    if (scene() != nullptr)
+        scene()->removeItem(retired);
+    retired->deleteLater();
+    update();
+}
+
+// The same inline-editor shape a layer card's rename uses, over the frame's own title strip: commit
+// on editingFinished (which is what Enter in the field means), cancel on Escape, and one
+// RenameGroup transaction for the commit.
+void NodeGroupItem::startRename() {
+    auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
+    if (session_ == nullptr || session_->composition() == nullptr || graphScene == nullptr ||
+        !graphScene->canSubmit())
+        return;
+    if (renameProxy_ != nullptr) {
+        renameProxy_->show();
+        renameProxy_->widget()->setFocus();
+        return;
+    }
+    auto* field = new QLineEdit(title_);
+    field->setObjectName(QStringLiteral("nodeGroupRenameEditor"));
+    field->setAccessibleName(tr("Node group name"));
+    field->setFont(kit::font(kit::TypeRole::UiSmall));
+    field->resize(static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
+                  static_cast<int>(kGroupTitleHeight));
+    field->setAttribute(Qt::WA_TranslucentBackground, true);
+    field->setAttribute(Qt::WA_NoSystemBackground, true);
+    field->setAutoFillBackground(false);
+    renameProxy_ = new QGraphicsProxyWidget(this);
+    renameProxy_->setWidget(field);
+    renameProxy_->setPos(kCardPadding, 0);
+    renameProxy_->setZValue(5);
+    const auto revision = session_->snapshot().revision();
+    const auto composition = session_->compositionId();
+    connect(field, &QLineEdit::editingFinished, this,
+            [this, field, graphScene, revision, composition] {
+                if (renameProxy_ == nullptr || !renameProxy_->isVisible())
+                    return;
+                const auto name = field->text().toStdString();
+                retireRenameProxy();
+                commands::Transaction transaction("Rename Node Group", revision);
+                transaction.emplace<commands::RenameGroup>(composition, id_, name);
+                (void)graphScene->submit(std::move(transaction));
+            });
+    auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
+    cancel->setContext(Qt::WidgetShortcut);
+    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
+    field->setFocus(Qt::OtherFocusReason);
+    field->selectAll();
+    update();
+}
+} // namespace bloom::ui::node_editor

@@ -186,6 +186,41 @@ void testMenuRowsReserveOneIconColumnAndDrawSubmenus(Expectations& expectations)
     expectations.expect(sawLabelInk, "and the label itself is still full-strength Foreground");
 }
 
+// Task S1, item 3: no menu is narrower than Size::MenuMinWidth, and the rows still reach the
+// frame's own edges so their hover bars stay full width.
+void testEveryMenuIsAtLeastTheMinimumWidth(Expectations& expectations) {
+    QMenu menu;
+    auto* fit = menu.addAction(QStringLiteral("Fit"));
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("100%"));
+    menu.show();
+    QCoreApplication::processEvents();
+
+    const QRect row = menu.actionGeometry(fit);
+    expectations.expect(
+        row.width() >= kit::px(kit::Size::MenuMinWidth),
+        "a menu of short labels still lays its rows out at the minimum width, got " +
+            std::to_string(row.width()));
+    expectations.expect(menu.width() >= kit::px(kit::Size::MenuMinWidth),
+                        "so the popup itself is at least that wide, got " +
+                            std::to_string(menu.width()));
+    // The frame's own hairline on each side is all that separates a row from the popup's edge: the
+    // row is not inset any further, which is what makes its accent hover bar full width.
+    const int frame = menu.style()->pixelMetric(QStyle::PM_MenuPanelWidth, nullptr, &menu) +
+                      menu.style()->pixelMetric(QStyle::PM_MenuHMargin, nullptr, &menu);
+    expectations.expect(row.left() == frame && row.right() == menu.width() - 1 - frame,
+                        "and the row runs edge to edge inside the frame");
+
+    // A long label still widens the menu past the minimum: this is a floor, not a fixed width.
+    QMenu wide;
+    auto* verbose = wide.addAction(
+        QStringLiteral("A deliberately long menu label that outgrows the minimum width"));
+    wide.show();
+    QCoreApplication::processEvents();
+    expectations.expect(wide.actionGeometry(verbose).width() > kit::px(kit::Size::MenuMinWidth),
+                        "the minimum width is a floor, never a cap");
+}
+
 void testTheMenuFrameAndRowMetricsComeFromTokens(Expectations& expectations) {
     QMenu menu;
     auto* first = menu.addAction(QStringLiteral("Item"));
@@ -224,6 +259,7 @@ int main(int argc, char** argv) {
         testInstalledProxyRoutesThroughToTheRealStyleHintQuery(expectations);
         testMenuRowsReserveOneIconColumnAndDrawSubmenus(expectations);
         testTheMenuFrameAndRowMetricsComeFromTokens(expectations);
+        testEveryMenuIsAtLeastTheMinimumWidth(expectations);
         return expectations.failures() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "kit mnemonic style test failed with an exception: " << error.what() << '\n';

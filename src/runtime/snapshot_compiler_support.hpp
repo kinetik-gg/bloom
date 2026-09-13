@@ -5,6 +5,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -57,6 +58,12 @@ class CompileCheckpointObserver {
         return std::holds_alternative<double>(value);
     case ParameterValueKind::String:
         return std::holds_alternative<std::string>(value);
+    case ParameterValueKind::Integer:
+        return std::holds_alternative<std::int64_t>(value);
+    case ParameterValueKind::Boolean:
+        return std::holds_alternative<bool>(value);
+    case ParameterValueKind::Vec3d:
+        return std::holds_alternative<document::Vec3d>(value);
     }
     return false;
 }

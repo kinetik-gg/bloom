@@ -31,12 +31,24 @@ constexpr std::array kSolidSourceBindings{
 constexpr std::array kTextSourceBindings{
     ExpectedParameterBinding{bloom::document::kTextParameterRole,
                              bloom::document::kTextParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextSizeParameterRole,
+                             bloom::document::kTextSizeParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextColorParameterRole,
+                             bloom::document::kTextColorParameterSchemaKey},
 };
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,
                              bloom::document::kPositionParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kAnchorParameterRole,
+                             bloom::document::kAnchorParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kScaleParameterRole,
+                             bloom::document::kScaleParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kRotationParameterRole,
+                             bloom::document::kRotationParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kOpacityParameterRole,
                              bloom::document::kOpacityParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kBlendModeParameterRole,
+                             bloom::document::kBlendModeParameterSchemaKey},
 };
 
 [[nodiscard]] std::span<const ExpectedParameterBinding>
@@ -76,6 +88,20 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
                        "Parameter binding uses the wrong schema for this node role");
         }
     }
+}
+
+// Whether this input port is backed by a parameter -- an operand socket rather than image
+// transport. An operand's link is recorded as its PARAMETER's driver binding, never as an edge: one
+// authored value has one durable record of where it comes from, so an edge and a binding can never
+// disagree.
+[[nodiscard]] bool isParameterSocket(const bloom::document::NodeRecord& node,
+                                     const InputPortRef& destination) {
+    const auto* fixed = std::get_if<NodeInputRef>(&destination);
+    if (fixed == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(node.parameters,
+                               [&](const auto& binding) { return binding.role == fixed->port; });
 }
 
 [[nodiscard]] NodeId destinationNode(const InputPortRef& destination) {
@@ -151,7 +177,19 @@ bool CanonicalGraph::addNode(NodeRecord node) {
     return true;
 }
 
-bool CanonicalGraph::addEdge(EdgeRecord edge) {
+bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& registry) {
+    const auto* destination = findNode(destinationNode(edge.destination));
+    if (destination != nullptr && isParameterSocket(*destination, edge.destination)) {
+        return false;
+    }
+    const auto sourceKind = outputKind(edge.source, registry);
+    const auto targetKind = inputKind(edge.destination, registry);
+    // Task S7: equal kinds, or one of the whitelisted promotions. The ONE predicate every connect
+    // path asks (node_definition_registry.hpp), so this, validate() below, ConnectPorts and the
+    // compiler's edge check cannot disagree about which links exist.
+    if (sourceKind && targetKind && !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+        return false;
+    }
     if (!edge.id.isValid() || !edge.source.nodeId.isValid() ||
         !isValidStructuralText(edge.source.port) || !validDestination(edge.destination)) {
         return false;
@@ -189,7 +227,48 @@ bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
     return true;
 }
 
-ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) const {
+bool CanonicalGraph::eraseEdge(const EdgeId id) {
+    return std::erase_if(edges_, [id](const auto& edge) { return edge.id == id; }) != 0;
+}
+
+bool CanonicalGraph::eraseNode(const NodeId id) {
+    if (findNode(id) == nullptr)
+        return false;
+    std::vector<LayerSlotId> removedSlots;
+    for (const auto& boundary : layerOutputs_) {
+        if (boundary.nodeId != id)
+            continue;
+        for (const auto& entry : layerStack_.entries()) {
+            if (entry.layerId == boundary.layerId)
+                removedSlots.push_back(entry.slotId);
+        }
+    }
+    for (const auto slot : removedSlots)
+        (void)layerStack_.erase(slot);
+    std::erase_if(edges_, [&](const auto& edge) {
+        const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination);
+        return edge.source.nodeId == id || destinationNode(edge.destination) == id ||
+               (slot && std::ranges::find(removedSlots, slot->slotId) != removedSlots.end());
+    });
+    std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
+    std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
+    return true;
+}
+
+bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {
+    if (!isValidHumanFacingName(name))
+        return false;
+    for (auto& boundary : layerOutputs_) {
+        if (boundary.layerId == id) {
+            boundary.name = std::move(name);
+            return true;
+        }
+    }
+    return false;
+}
+
+ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
+                                          const NodeDefinitionRegistry& registry) const {
     ValidationResult result;
     result.append("layerStack", layerStack_.validate());
 
@@ -297,6 +376,12 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
             continue;
         }
 
+        const auto sourceKind = outputKind(edge.source, registry);
+        const auto targetKind = inputKind(edge.destination, registry);
+        if (sourceKind && targetKind && !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+            result.add(ValidationCode::SocketKindMismatch, path,
+                       "Connected socket kinds do not match");
+        }
         const auto inputKey = destinationKey(edge.destination);
         if (!destinations.insert(inputKey).second) {
             result.add(ValidationCode::DuplicateInput, path + ".destination",
@@ -304,9 +389,14 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
         }
 
         const auto targetNodeId = destinationNode(edge.destination);
-        if (findNode(targetNodeId) == nullptr) {
+        const auto* targetNode = findNode(targetNodeId);
+        if (targetNode == nullptr) {
             result.add(ValidationCode::MissingReference, path + ".destination",
                        "Edge destination references a missing node");
+        } else if (isParameterSocket(*targetNode, edge.destination)) {
+            result.add(
+                ValidationCode::InvalidValue, path + ".destination",
+                "An operand socket is linked by its parameter's driver binding, not an edge");
         }
 
         if (const auto* nodeInput = std::get_if<NodeInputRef>(&edge.destination)) {
@@ -329,6 +419,53 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
         if (findNode(edge.source.nodeId) != nullptr && findNode(targetNodeId) != nullptr) {
             adjacency[edge.source.nodeId].push_back(targetNodeId);
             ++indegree[targetNodeId];
+        }
+    }
+
+    // Driver bindings (task S7). A driven parameter is a reference from a value-graph node's output
+    // into parameter-address space, so it is validated on exactly an edge's terms -- the target
+    // must exist, the port must be declared, and the kinds must be connectable -- and it feeds the
+    // SAME adjacency the cycle check below walks. A driver that closes a loop is therefore refused
+    // by the one existing same-time cycle rule rather than by a second rule that could disagree
+    // with it.
+    for (const auto& node : nodes_) {
+        const auto* definition = registry.find(node.typeId, node.schemaVersion);
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = parameters.find(binding.parameterId);
+            const auto* driver = parameter == nullptr
+                                     ? nullptr
+                                     : std::get_if<DriverBindingSource>(&parameter->source);
+            if (driver == nullptr) {
+                continue;
+            }
+            const auto path = "nodes[" + std::to_string(node.id.value()) + "].parameters[" +
+                              binding.role + "].driver";
+            if (findNode(driver->sourceNodeId) == nullptr) {
+                result.add(ValidationCode::MissingReference, path + ".sourceNodeId",
+                           "Driver binding references a missing node");
+                continue;
+            }
+            const auto sourceKind =
+                outputKind(OutputPortRef{driver->sourceNodeId, driver->outputPort}, registry);
+            const InputPortDefinition* socket = nullptr;
+            if (definition != nullptr) {
+                const auto match =
+                    std::ranges::find(definition->inputs, binding.role, &InputPortDefinition::name);
+                socket = match == definition->inputs.end() ? nullptr : &*match;
+            }
+            if (definition != nullptr && socket == nullptr) {
+                // An inline selector decides which kernel the plan compiles, so it cannot be
+                // delivered per frame; it declares no socket, and a driver on it is not a link the
+                // editor could have made.
+                result.add(ValidationCode::InvalidValue, path,
+                           "This parameter role has no linkable socket to drive");
+            } else if (sourceKind.has_value() && socket != nullptr &&
+                       !isAcceptedSocketConnection(*sourceKind, socket->valueKind)) {
+                result.add(ValidationCode::SocketKindMismatch, path,
+                           "Driver binding socket kinds do not match");
+            }
+            adjacency[driver->sourceNodeId].push_back(node.id);
+            ++indegree[node.id];
         }
     }
 
@@ -393,6 +530,38 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters) cons
     }
 
     return result;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::outputKind(const OutputPortRef& output,
+                           const NodeDefinitionRegistry& registry) const {
+    const auto* node = findNode(output.nodeId);
+    const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
+    if (definition) {
+        for (const auto& port : definition->outputs) {
+            if (port.name == output.port)
+                return port.valueKind;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<SocketValueKind>
+CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistry& registry) const {
+    const auto* node = findNode(destinationNode(input));
+    const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
+    if (definition == nullptr)
+        return std::nullopt;
+    if (const auto* fixed = std::get_if<NodeInputRef>(&input)) {
+        for (const auto& port : definition->inputs) {
+            if (port.name == fixed->port)
+                return port.valueKind;
+        }
+    } else if (definition->layerSlotInput &&
+               definition->layerSlotInput->role == std::get<LayerStackInputRef>(input).role) {
+        return definition->layerSlotInput->valueKind;
+    }
+    return std::nullopt;
 }
 
 } // namespace bloom::document

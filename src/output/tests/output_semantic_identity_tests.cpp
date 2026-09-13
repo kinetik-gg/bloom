@@ -48,12 +48,29 @@ using namespace std::chrono_literals;
 
 // An independent byte-oriented oracle assembled every frozen field with explicit big-endian
 // packing. These lengths and SHA-256 values cover the complete tiny PNG and EXR preimages.
+// Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
+// primitive 3 -> 4). Both are frozen fields of the process-frame semantic identity these preimages
+// embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
+// from the same kind of independent byte-oriented oracle that produced the originals -- a
+// standalone script that packs each frozen field itself with explicit big-endian integers and
+// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing EVERY
+// previously checked-in golden set byte for byte when fed its own version numbers.
+//
+// Task S5 moved all four: kCompiledCompositionPlanSemanticsVersion and
+// kAnimationSamplingSemanticsVersion are both 2 now (a solid's colour and a text layer's size and
+// colour became typed operands; EaseInOut and Color4 curves changed what sampling can produce), and
+// both integers are hashed into the process-frame identity preimage. Every preimage LENGTH below is
+// unchanged -- no frozen field was added, removed, or reordered -- which is exactly why only the
+// digests move.
+// Merged goldens: the blend-mode slice moved the evaluator and primitive semantics to 5 while the
+// animation slice moved the plan to 2 and sampling to 2; the values below are the oracle's output
+// for that combination (evaluator/primitive 5, plan 2, animation 2), never the implementation's.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "a032aec2ed0b51e7d76120fa6229f720650ef2dab557968c776b0dfd03f4c6a6";
+    "06d66a210e9f7db1e7e7d262947810f8141624c23abe350de317e4a375093158";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "cbef24efb48761fde472cd7ff1d6fbea2206420bf0fc27e84fe75d263b34e1c0";
+    "baafa3b4f8b848ada18c3ec6808423a47bcb5ece7f386657368bf7c603126b5d";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "2645132e8d63892ed500119e27ed6a1ff6d93ea8d58a5e51a3bfc23aab7ec375";
+    "7fe60cc67fb0efb3d6cc2b27a535789a27ba8be426da78fea3abc49c4ac93935";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
@@ -380,11 +397,16 @@ tinyFrameWithPixelAspect(const core::PixelAspectRatio pixelAspect) {
     }
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledSolid{
-        test::kSolidNodeId, test::kColorParameterId, {0.25, 0.5, 0.75, 1.0}});
+        test::kSolidNodeId, {test::kColorParameterId, core::Color4d{0.25, 0.5, 0.75, 1.0}}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         test::kLayerNodeId, test::kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{test::kPositionParameterId, document::Vec2d{0.5, 0.5}},
-        runtime::CompiledScalarParameter{test::kOpacityParameterId, 1.0}});
+        runtime::CompiledVec2Parameter{test::kAnchorParameterId, document::kDefaultAnchor},
+        runtime::CompiledVec2Parameter{test::kScaleParameterId, document::kDefaultScale},
+        runtime::CompiledScalarParameter{test::kRotationParameterId,
+                                         document::kDefaultRotationDegrees},
+        runtime::CompiledScalarParameter{test::kOpacityParameterId, 1.0},
+        test::kBlendModeParameterId, core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         test::kStackNodeId,
         {{test::kLayerSlotId, test::kLayerId, runtime::OperationIndex::fromRaw(1)}}});

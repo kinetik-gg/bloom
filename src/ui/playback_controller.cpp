@@ -93,6 +93,11 @@ void PlaybackController::play() {
     // Interactive priority precisely while this flag is armed, and this is the one place that
     // grants that priority to session-time changes -- no new request kind needed.
     previewController_.beginInteractiveScrub();
+    // Task S5, item 3b: the dropped-frame counter is armed and reset by PLAY, not by scrubbing, so
+    // the figure a surface shows always belongs to the run in progress. The transport is the only
+    // thing that knows a playback run has started; the preview controller only knows it is being
+    // asked for frames.
+    previewController_.beginDroppedFrameCounting();
     timer_.start();
     emit stateChanged(state_);
 }
@@ -108,6 +113,7 @@ void PlaybackController::pause() {
     // TimelineRuler::mouseReleaseEvent()/ViewerEditor::endDrag()'s own notifyScrubEnded() call on
     // gesture end.
     previewController_.notifyScrubEnded();
+    previewController_.endDroppedFrameCounting();
     emit stateChanged(state_);
 }
 

@@ -62,8 +62,14 @@ rejects a nonempty OCIO revision or display identity.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.
-Adding half-float EXR, arbitrary channels, tiled or multipart EXR, non-square PNG, sequences, or
-video requires another declared preset rather than changing version 1 silently.
+Adding half-float EXR, arbitrary channels, tiled or multipart EXR, non-square PNG, or video requires
+another declared preset rather than changing version 1 silently.
+
+A frame RANGE export needs no new preset, and adds none: it is one complete publication per frame
+through these same presets, each frame evaluated at its own exact time and approved through its own
+attempt and digest. Nothing about a single frame's analysis, identity, verification, or publication
+changes because another frame precedes or follows it. See
+[`animation-and-time.md`](animation-and-time.md), "Sequence Export".
 
 ### Process-Frame Semantic Identity Version 1
 

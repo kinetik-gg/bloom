@@ -11,6 +11,9 @@ CompiledCompositionPlan::CompiledCompositionPlan(
       operations_(std::move(definition.operations)), output_(definition.output),
       scalarCurves_(std::move(definition.scalarCurves)),
       vec2Curves_(std::move(definition.vec2Curves)),
+      color4Curves_(std::move(definition.color4Curves)),
+      valueOperations_(std::move(definition.valueOperations)),
+      valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
       animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {}
 
@@ -23,6 +26,9 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .output = output_,
             .scalarCurves = scalarCurves_,
             .vec2Curves = vec2Curves_,
+            .color4Curves = color4Curves_,
+            .valueOperations = valueOperations_,
+            .valueOutputCount = valueOutputCount_,
             .planSemanticsVersion = planSemanticsVersion_,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_};
 }

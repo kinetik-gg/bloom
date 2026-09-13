@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@ enum class ValidationCode {
     InvalidValue,
     MissingReference,
     TypeMismatch,
+    SocketKindMismatch,
     InvalidInterpolation,
     DuplicateTime,
     InvalidOrder,
@@ -29,21 +31,28 @@ enum class ValidationCode {
     RevisionMismatch,
 };
 
+enum class ValidationSeverity { Error, Warning };
+
 struct ValidationIssue {
     ValidationCode code;
     std::string path;
     std::string message;
+    ValidationSeverity severity = ValidationSeverity::Error;
 
     friend bool operator==(const ValidationIssue&, const ValidationIssue&) = default;
 };
 
 class ValidationResult final {
   public:
-    [[nodiscard]] bool ok() const noexcept { return issues_.empty(); }
+    [[nodiscard]] bool ok() const noexcept {
+        return std::ranges::none_of(
+            issues_, [](const auto& issue) { return issue.severity == ValidationSeverity::Error; });
+    }
     [[nodiscard]] std::span<const ValidationIssue> issues() const noexcept { return issues_; }
 
-    void add(ValidationCode code, std::string path, std::string message) {
-        issues_.push_back({code, std::move(path), std::move(message)});
+    void add(ValidationCode code, std::string path, std::string message,
+             ValidationSeverity severity = ValidationSeverity::Error) {
+        issues_.push_back({code, std::move(path), std::move(message), severity});
     }
 
     void append(std::string_view prefix, const ValidationResult& other) {
@@ -53,7 +62,7 @@ class ValidationResult final {
                 path.push_back('.');
             }
             path.append(issue.path);
-            add(issue.code, std::move(path), issue.message);
+            add(issue.code, std::move(path), issue.message, issue.severity);
         }
     }
 

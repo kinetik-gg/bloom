@@ -40,4 +40,10 @@ sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time) no
 sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept;
 
+[[nodiscard]] AnimationSampleResult<core::Color4d>
+sampleAnimationCurve(const CompiledColor4Curve& curve, core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<core::Color4d>
+sampleAnimationCurve(const CompiledColor4Curve& curve, core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept;
+
 } // namespace bloom::runtime

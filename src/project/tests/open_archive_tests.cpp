@@ -157,7 +157,7 @@ void testOpenMinimalRoundTrip(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
     auto built =
@@ -192,15 +192,15 @@ void testOpenMinimalRoundTrip(Expectations& expectations) {
                         "open minimal: one composition decodes");
     expectations.expect(openedValue.colorSettings == colorSettings,
                         "open minimal: colorSettings decode equal to what was saved");
-    expectations.expect(openedValue.schemaMinor == 0, "open minimal: schemaMinor decodes to 0");
+    expectations.expect(openedValue.schemaMinor == 4, "open minimal: schemaMinor decodes to 4");
     expectations.expect(!openedValue.roundTrip.has_value(),
                         "open minimal: no RoundTripState for an exact {1,0} document");
     expectations.expect(openedValue.requirements.empty(),
                         "open minimal: the empty requirement set decodes empty");
     expectations.expect(openedValue.containerVersion == bloom::document::SchemaVersion{1, 0} &&
                             openedValue.documentSchemaVersion ==
-                                bloom::document::SchemaVersion{1, 0},
-                        "open minimal: container/document schema versions decode to {1,0}");
+                                bloom::document::SchemaVersion{1, 4},
+                        "open minimal: container decodes to {1,0} and the document to {1,4}");
 
     const CanonicalManifestV1 resaveManifest{.documentSchemaVersion =
                                                  openedValue.documentSchemaVersion,
@@ -245,7 +245,16 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(3),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
@@ -287,16 +296,29 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
     graph.setCompositionOutput({NodeId::fromRaw(4), std::string(kCompositionOutputOutputPort)});
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
-    expectations.expect(composition.parameters().insert(
-                            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
-                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
-                                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
-                        "open composed: fixture parameters insert");
+    expectations.expect(
+        composition.parameters().insert({ParameterId::fromRaw(7),
+                                         std::string(kSolidColorParameterSchemaKey),
+                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(5),
+                                             std::string(kPositionParameterSchemaKey),
+                                             ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(3),
+                                             std::string(kOpacityParameterSchemaKey),
+                                             AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(8),
+                                             std::string(kAnchorParameterSchemaKey),
+                                             ConstantValueSource{kDefaultAnchor}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(9),
+                                             std::string(kScaleParameterSchemaKey),
+                                             ConstantValueSource{kDefaultScale}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(10),
+                                             std::string(kRotationParameterSchemaKey),
+                                             ConstantValueSource{kDefaultRotationDegrees}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(11),
+                                             std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+        "open composed: fixture parameters insert");
 
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);
@@ -322,7 +344,7 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 7,
+                                         .parameter = 11,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -341,7 +363,7 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {"vendor.nodes.blur"}},
     };
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
@@ -439,14 +461,14 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 0\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 4\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "open RT: root schemaVersion anchor is located in the baseline");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 0").size(), "\"minor\": 1");
+    text.replace(anchorPos, std::string_view("\"minor\": 4").size(), "\"minor\": 5");
 
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "open RT: baseline ends with the root's closing brace and final LF");
@@ -477,11 +499,11 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 1}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 5}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 1};
+                                            .schemaMinor = 5};
 
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -502,7 +524,7 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
         return;
     }
     auto openedValue = std::move(opened).takeOpened();
-    expectations.expect(openedValue.schemaMinor == 1, "open RT: schemaMinor decodes to 1");
+    expectations.expect(openedValue.schemaMinor == 5, "open RT: schemaMinor decodes to 5");
     expectations.expect(openedValue.roundTrip.has_value(),
                         "open RT: RoundTripState is present for the newer-minor document");
     if (!openedValue.roundTrip.has_value()) {
@@ -631,14 +653,14 @@ void testDocumentSidePreservedReadOnly(Expectations& expectations) {
     auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
     std::string text(reinterpret_cast<const char*>(documentBytes.data()), documentBytes.size());
 
-    const std::string minorAnchor = "\"minor\": 0\n  },\n  \"project\"";
+    const std::string minorAnchor = "\"minor\": 4\n  },\n  \"project\"";
     const auto minorPos = text.find(minorAnchor);
     expectations.expect(minorPos != std::string::npos,
                         "document-side preservation: root schemaVersion anchor is located");
     if (minorPos == std::string::npos) {
         return;
     }
-    text.replace(minorPos, std::string_view("\"minor\": 0").size(), "\"minor\": 1");
+    text.replace(minorPos, std::string_view("\"minor\": 4").size(), "\"minor\": 5");
 
     const std::string kindAnchor = R"("kind": "builtin")";
     const auto kindPos = text.find(kindAnchor);
@@ -651,7 +673,7 @@ void testDocumentSidePreservedReadOnly(Expectations& expectations) {
 
     std::vector<std::byte> splicedDocumentBytes(text.size());
     std::memcpy(splicedDocumentBytes.data(), text.data(), text.size());
-    const auto manifestBytes = manifestBytesOrAbort({1, 1});
+    const auto manifestBytes = manifestBytesOrAbort({1, 5});
 
     auto manifestEntry = makeStoredEntry("manifest.json", manifestBytes);
     auto documentEntry = makeStoredEntry("document.json", splicedDocumentBytes);
@@ -681,7 +703,7 @@ void testContainerCrcFailure(Expectations& expectations) {
     using bloom::project::test::buildConformingArchive;
     using bloom::project::test::makeStoredEntry;
 
-    const auto manifestBytes = manifestBytesOrAbort({1, 0});
+    const auto manifestBytes = manifestBytesOrAbort({1, 4});
     const auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
 
     auto manifestEntry = makeStoredEntry("manifest.json", manifestBytes);
@@ -707,7 +729,7 @@ void testJsonSyntaxFailure(Expectations& expectations) {
     using bloom::project::test::makeStoredEntry;
     using bloom::project::test::toBytes;
 
-    const auto manifestBytes = manifestBytesOrAbort({1, 0});
+    const auto manifestBytes = manifestBytesOrAbort({1, 4});
     const auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
     std::string corrupted(reinterpret_cast<const char*>(documentBytes.data()),
                           documentBytes.size());
@@ -741,7 +763,7 @@ void testSemanticDecodeFailure(Expectations& expectations) {
     using bloom::project::test::makeStoredEntry;
     using bloom::project::test::toBytes;
 
-    const auto manifestBytes = manifestBytesOrAbort({1, 0});
+    const auto manifestBytes = manifestBytesOrAbort({1, 4});
     const auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
     std::string corrupted(reinterpret_cast<const char*>(documentBytes.data()),
                           documentBytes.size());
@@ -786,13 +808,13 @@ void testVersionDisagreementFailure(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    // manifest declares {1,0}; the document is written with root schemaVersion.minor = 1. No
+    // manifest declares {1,4}; the document is written with root schemaVersion.minor = 5. No
     // captured-input leg exists for Open (see docs/architecture/project-format.md, "Versions,
     // Migrations, And Preservation"), so only this manifest-vs-document-root disagreement is
     // exercised here.
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{
-        .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 1};
+        .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 5};
     auto built = buildSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built),
                         "open version disagreement: fixture archive builds (unverified)");
@@ -804,7 +826,7 @@ void testVersionDisagreementFailure(Expectations& expectations) {
         openProjectArchive(built.archive()->bytes(), SaveArchiveLimits{}, makeOperation());
     expectations.expect(
         opened.outcome() == OpenArchiveOutcome::Failed,
-        "open version disagreement: manifest {1,0} vs. document root minor 1 fails");
+        "open version disagreement: manifest {1,4} vs. document root minor 5 fails");
     const auto* failure = opened.failure();
     expectations.expect(
         failure != nullptr && failure->stage() == SaveArchiveStage::VersionAgreement,
@@ -813,8 +835,8 @@ void testVersionDisagreementFailure(Expectations& expectations) {
         const auto* payload = failure->payloadAs<SaveArchiveVersionAgreementFailure>();
         expectations.expect(
             payload != nullptr &&
-                payload->manifestVersion == bloom::document::SchemaVersion{1, 0} &&
-                payload->documentVersion == bloom::document::SchemaVersion{1, 1},
+                payload->manifestVersion == bloom::document::SchemaVersion{1, 4} &&
+                payload->documentVersion == bloom::document::SchemaVersion{1, 5},
             "open version disagreement: failure names the exact mismatched versions");
     }
 }
@@ -848,7 +870,7 @@ void testUncoveredRequirementFailure(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     auto built = buildSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built),
@@ -913,7 +935,7 @@ void testUncoveredRequirementFailure(Expectations& expectations) {
                                                          .capabilityId = "vendor.bulk.cap",
                                                          .schemaVersion = {1, 0},
                                                          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
@@ -1002,7 +1024,7 @@ void testDeterminism(Expectations& expectations) {
     bloom::document::Document document{std::move(newProject.project)};
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
     auto built =

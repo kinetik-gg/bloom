@@ -586,6 +586,35 @@ void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& 
 }
 
 // The status bar's center readout reuses the timeline's own exact display shape ("Frame N ·
+
+// Task S5, item 3b: the footer's dropped-frame readout. It is EMPTY unless the preview controller
+// is counting, so outside a playback run the footer claims nothing at all -- and while counting it
+// reports the count honestly, including zero.
+void testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Dropped Frame Readout Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the dropped-frame readout fixture reaches its first ready frame");
+
+    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest().isEmpty(),
+                        "the footer says nothing about dropped frames outside a playback run, "
+                        "because nothing is measuring");
+
+    fixture.controller.beginDroppedFrameCounting();
+    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest() ==
+                            QStringLiteral("0 dropped"),
+                        "once a run is counting the footer reports the count even at zero -- "
+                        "silence would read as 'not measured', which is a different statement");
+
+    fixture.controller.endDroppedFrameCounting();
+    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest().isEmpty(),
+                        "and it falls silent again when the run ends");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 // S.mmms")
 // -- including an honest truncated (not rounded) subframe display, never a binary64 rounding of a
 // non-terminating decimal (docs/architecture/animation-and-time.md).
@@ -664,6 +693,44 @@ void testSpaceHoldLeftDragPans(Expectations& expectations) {
                         "the space-pan fixture reaches asynchronous scheduler quiescence");
 }
 
+// Task S1, item 8: Ctrl+0 fits and Ctrl+1 is actual size, the same pair the node canvas answers to.
+// F and Z are retired in both and are bound by nothing here.
+void testCtrlZeroFitsAndCtrlOneIsActualSize(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Viewer Zoom Keys Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the fixture's initial frame becomes ready");
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "the viewer starts in Fit mode");
+
+    const auto sendKey = [&fixture](const int key, const Qt::KeyboardModifiers modifiers) {
+        QKeyEvent event(QEvent::KeyPress, key, modifiers);
+        QCoreApplication::sendEvent(&fixture.viewer, &event);
+    };
+
+    sendKey(Qt::Key_1, Qt::ControlModifier);
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow &&
+                            near(fixture.viewer.viewTransformForTest().zoom, 1.0),
+                        "Ctrl+1 leaves Fit for exactly 100%");
+    sendKey(Qt::Key_0, Qt::ControlModifier);
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "and Ctrl+0 returns to Fit");
+
+    // The retired keys do nothing: two ways to do one thing is exactly what item 8 removed.
+    sendKey(Qt::Key_Z, Qt::NoModifier);
+    expectations.expect(fixture.viewer.viewTransformForTest().fitToWindow,
+                        "Z no longer reaches actual size");
+    sendKey(Qt::Key_1, Qt::ControlModifier);
+    sendKey(Qt::Key_F, Qt::NoModifier);
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow,
+                        "and F no longer reaches Fit");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the zoom-key fixture reaches asynchronous scheduler quiescence");
+}
+
 // Honest empty state (decision 5): with no composition at all, the canvas shows a quiet,
 // product-neutral invitation instead of any evaluation warning or banner.
 void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expectations) {
@@ -721,7 +788,9 @@ int main(int argc, char** argv) {
     testStatusBarZoomDropdownDrivesViewTransform(expectations);
     testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(expectations);
     testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(expectations);
+    testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(expectations);
     testSpaceHoldLeftDragPans(expectations);
+    testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

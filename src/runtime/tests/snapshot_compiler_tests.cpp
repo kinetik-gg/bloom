@@ -8,10 +8,12 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include "snapshot_compiler_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -47,6 +49,17 @@ constexpr auto kFirstPosition = document::ParameterId::fromRaw(32);
 constexpr auto kSecondPosition = document::ParameterId::fromRaw(33);
 constexpr auto kFirstOpacity = document::ParameterId::fromRaw(34);
 constexpr auto kSecondOpacity = document::ParameterId::fromRaw(35);
+constexpr auto kTextSize = document::ParameterId::fromRaw(36);
+constexpr auto kTextColor = document::ParameterId::fromRaw(37);
+constexpr auto kFirstAnchor = document::ParameterId::fromRaw(38);
+constexpr auto kSecondAnchor = document::ParameterId::fromRaw(39);
+constexpr auto kFirstScale = document::ParameterId::fromRaw(40);
+constexpr auto kSecondScale = document::ParameterId::fromRaw(41);
+constexpr auto kFirstRotation = document::ParameterId::fromRaw(42);
+constexpr auto kSecondRotation = document::ParameterId::fromRaw(43);
+// ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+constexpr auto kFirstBlendMode = document::ParameterId::fromRaw(44);
+constexpr auto kSecondBlendMode = document::ParameterId::fromRaw(45);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -113,7 +126,11 @@ struct ProjectOptions final {
         {kFirstLayerNode,
          std::string(kLayerOutputNodeType),
          {{std::string(kPositionParameterRole), kFirstPosition},
-          {std::string(kOpacityParameterRole), kFirstOpacity}},
+          {std::string(kAnchorParameterRole), kFirstAnchor},
+          {std::string(kScaleParameterRole), kFirstScale},
+          {std::string(kRotationParameterRole), kFirstRotation},
+          {std::string(kOpacityParameterRole), kFirstOpacity},
+          {std::string(kBlendModeParameterRole), kFirstBlendMode}},
          kLayerOutputNodeSchemaVersion},
         {kStackNode, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion},
         {kOutputNode,
@@ -129,7 +146,11 @@ struct ProjectOptions final {
         nodes.push_back({kSecondLayerNode,
                          std::string(kLayerOutputNodeType),
                          {{std::string(kPositionParameterRole), kSecondPosition},
-                          {std::string(kOpacityParameterRole), kSecondOpacity}},
+                          {std::string(kAnchorParameterRole), kSecondAnchor},
+                          {std::string(kScaleParameterRole), kSecondScale},
+                          {std::string(kRotationParameterRole), kSecondRotation},
+                          {std::string(kOpacityParameterRole), kSecondOpacity},
+                          {std::string(kBlendModeParameterRole), kSecondBlendMode}},
                          kLayerOutputNodeSchemaVersion});
     }
     if (options.reverseInsertion) {
@@ -196,6 +217,28 @@ struct ProjectOptions final {
     require(composition.parameters().insert(
                 {kFirstOpacity, std::string(kOpacityParameterSchemaKey), ConstantValueSource{0.8}}),
             "first opacity must be accepted");
+    // The identity transform and Normal blending: every fixture here is about topology, parameter
+    // sources, and diagnostics, so the three transform breadth parameters and the blend mode stay
+    // at their schema defaults unless a case deliberately rewrites one.
+    const auto insertIdentityTransform = [&composition](const ParameterId anchor,
+                                                        const ParameterId scale,
+                                                        const ParameterId rotation,
+                                                        const ParameterId blendMode) {
+        require(composition.parameters().insert({anchor, std::string(kAnchorParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultAnchor}}),
+                "anchor must be accepted");
+        require(composition.parameters().insert({scale, std::string(kScaleParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultScale}}),
+                "scale must be accepted");
+        require(composition.parameters().insert({rotation, std::string(kRotationParameterSchemaKey),
+                                                 ConstantValueSource{kDefaultRotationDegrees}}),
+                "rotation must be accepted");
+        require(
+            composition.parameters().insert({blendMode, std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+            "blend mode must be accepted");
+    };
+    insertIdentityTransform(kFirstAnchor, kFirstScale, kFirstRotation, kFirstBlendMode);
     if (options.secondLayer) {
         require(composition.parameters().insert(
                     {kSecondColor, std::string(kSolidColorParameterSchemaKey),
@@ -209,6 +252,7 @@ struct ProjectOptions final {
                                                  std::string(kOpacityParameterSchemaKey),
                                                  ConstantValueSource{0.6}}),
                 "second opacity must be accepted");
+        insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation, kSecondBlendMode);
     }
 
     Project project(kProjectId, "Project");
@@ -232,14 +276,21 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
 }
 
 [[nodiscard]] runtime::NodeDefinition customSolidDefinition() {
-    return {{"example.solid", 17},
-            runtime::NodeLoweringKind::Solid,
-            {},
-            {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-            {{std::string(document::kSolidColorParameterRole),
-              std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true}},
-            std::nullopt};
+    // ADAPTED (task S5): the Solid lowering's shape check now requires the colour parameter's
+    // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, which is true
+    // for a solid colour since task S5 made it animatable -- so this custom definition declares it
+    // too, or the registry refuses the definition outright.
+    // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable operand
+    // socket per parameter role, so the colour parameter's Color socket is declared here too.
+    return {
+        {"example.solid", 17},
+        runtime::NodeLoweringKind::Solid,
+        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
+        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+        {{std::string(document::kSolidColorParameterRole),
+          std::string(document::kSolidColorParameterSchemaKey),
+          runtime::ParameterValueKind::Color4d, true, true}},
+        std::nullopt};
 }
 
 [[nodiscard]] runtime::NodeDefinition bulkUnsupportedDefinition(const std::size_t index) {
@@ -249,6 +300,29 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
             {{"image", runtime::SocketValueKind::Image}},
             {},
             std::nullopt};
+}
+
+// Task S7: a driver binding names a value node's output, so a driven fixture needs a value node to
+// name. Adds one literal Value node of `typeId` and points `target`'s source at its single output.
+void attachValueDriver(document::Project& project, const document::NodeId nodeId,
+                       const document::ParameterId valueParameterId, const std::string_view typeId,
+                       const std::string_view valueSchemaKey, document::ParameterValue defaultValue,
+                       const document::ParameterId target) {
+    using namespace document;
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "driver fixture composition must exist");
+    require(composition->parameters().insert({valueParameterId, std::string(valueSchemaKey),
+                                              ConstantValueSource{std::move(defaultValue)}}),
+            "driver fixture value parameter must be accepted");
+    require(composition->graph().addNode({nodeId,
+                                          std::string(typeId),
+                                          {{std::string(kValueParameterRole), valueParameterId}},
+                                          kValueNodeSchemaVersion}),
+            "driver fixture value node must be accepted");
+    require(composition->parameters().setSource(
+                target, DriverBindingSource{nodeId, std::string(kValuePortName)}),
+            "driver fixture binding must be accepted");
+    require(project.validate().ok(), "driver fixture must remain valid document truth");
 }
 
 [[nodiscard]] runtime::SnapshotCompileResult
@@ -267,6 +341,141 @@ compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
         return diagnostic.code == code &&
                (!nodeId.isValid() || diagnostic.subject.nodeId == nodeId);
     });
+}
+
+// Task S7: a Time -> Math -> opacity chain, the smallest graph that proves a driver is resolved per
+// frame rather than once. Returns the project plus the parameter the chain drives.
+struct DrivenChain final {
+    document::Project project;
+    document::ParameterId drivenParameterId;
+};
+
+[[nodiscard]] DrivenChain makeTimeDrivenOpacityChain(const double factor = 0.5) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "chain fixture composition must exist");
+
+    constexpr auto timeNode = NodeId::fromRaw(14);
+    constexpr auto mathNode = NodeId::fromRaw(15);
+    require(composition->graph().addNode(
+                {timeNode, std::string(kTimeValueNodeType), {}, kValueNodeSchemaVersion}),
+            "chain fixture Time node must be accepted");
+
+    // Every declared parameter needs a binding, including the operands this operation does not
+    // read: a node's parameter set is part of its registered shape, and the compiler lowers only
+    // the ones the live operation actually reaches.
+    std::vector<ParameterBinding> mathBindings;
+    auto nextParameterId = std::uint64_t{50};
+    const auto bindParameter = [&](const std::string_view role, const std::string_view schemaKey,
+                                   ParameterValue value) {
+        const auto id = ParameterId::fromRaw(nextParameterId++);
+        require(composition->parameters().insert(
+                    {id, std::string(schemaKey), ConstantValueSource{std::move(value)}}),
+                "chain fixture parameter must be accepted");
+        mathBindings.push_back({std::string(role), id});
+        return id;
+    };
+    const auto firstOperand =
+        bindParameter(kFirstOperandPortName, kScalarOperandParameterSchemaKey, 0.0);
+    bindParameter(kSecondOperandPortName, kScalarOperandParameterSchemaKey, factor);
+    for (std::size_t index = 2; index < kScalarOperandPortNames.size(); ++index) {
+        bindParameter(kScalarOperandPortNames[index], kScalarOperandParameterSchemaKey, 0.0);
+    }
+    bindParameter(kOperationParameterRole, kScalarOperationParameterSchemaKey,
+                  scalarOperationStoredValue(core::primitives::ScalarPrimitive::Multiply));
+    bindParameter(kClampResultParameterRole, kClampResultParameterSchemaKey, false);
+    require(composition->graph().addNode({mathNode, std::string(kScalarMathNodeType),
+                                          std::move(mathBindings), kValueNodeSchemaVersion}),
+            "chain fixture Math node must be accepted");
+
+    require(composition->parameters().setSource(
+                firstOperand, DriverBindingSource{timeNode, std::string(kTimeSecondsPortName)}),
+            "chain fixture Time driver must be accepted");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{mathNode, std::string(kResultPortName)}),
+            "chain fixture opacity driver must be accepted");
+    require(project.validate().ok(), "chain fixture must be valid document truth");
+    return {std::move(project), kFirstOpacity};
+}
+
+void testValueGraphDriverResolution(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto chain = makeTimeDrivenOpacityChain();
+    const auto result = compile(std::move(chain.project), registry);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan,
+                        "a Time to Math to opacity chain compiles");
+    if (!result.plan) {
+        return;
+    }
+    const auto& plan = *result.plan;
+    // Two operations and three outputs: Time's two, the Math result, and nothing else. Reachability
+    // pruning is what keeps it there -- no unreferenced value node is compiled.
+    expectations.expect(plan.valueOperations().size() == 2 && plan.valueOutputCount() == 3,
+                        "the chain compiles to exactly the two value nodes it contains");
+
+    const auto layer = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+        return std::holds_alternative<runtime::CompiledLayerOutput>(operation);
+    });
+    expectations.expect(layer != plan.operations().end(),
+                        "the chain's plan contains its Layer Output");
+    if (layer == plan.operations().end()) {
+        return;
+    }
+    const auto& opacity = std::get<runtime::CompiledLayerOutput>(*layer).opacity;
+    const auto* driven = std::get_if<runtime::ValueOutputIndex>(&opacity.source);
+    expectations.expect(driven != nullptr, "the driven opacity resolves to a value-graph output");
+    if (driven == nullptr) {
+        return;
+    }
+
+    // The same plan, sampled at three frames: 24fps, so second 0, 1 and 2 are frames 0, 24 and 48
+    // -- and the opacity the evaluator reads is half the elapsed seconds at each of them.
+    const std::array<std::pair<std::int64_t, double>, 3> expected{std::pair{std::int64_t{0}, 0.0},
+                                                                  std::pair{std::int64_t{1}, 0.5},
+                                                                  std::pair{std::int64_t{2}, 1.0}};
+    for (const auto& [second, value] : expected) {
+        const auto evaluation = runtime::evaluateValueGraph(
+            plan.valueOperations(), plan.valueOutputCount(),
+            core::RationalTime::fromInteger(second), plan.format().frameRate());
+        const auto* resolved = driven->value() < evaluation.outputs.size()
+                                   ? std::get_if<double>(&evaluation.outputs[driven->value()])
+                                   : nullptr;
+        expectations.expect(evaluation.diagnostics.empty() && resolved != nullptr &&
+                                *resolved == value,
+                            "the driven opacity is re-resolved at each frame");
+    }
+}
+
+void testValueGraphCycleRefusal(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    // Two Reroutes pointing at each other through their parameters is the smallest driver cycle
+    // there is. It is refused by the document's own acyclic check -- the one the image graph
+    // already uses -- rather than by a second rule that could disagree with it.
+    auto chain = makeTimeDrivenOpacityChain();
+    auto* composition = chain.project.findComposition(kCompositionId);
+    require(composition != nullptr, "cycle fixture composition must exist");
+    const auto* mathNode = composition->graph().findNode(NodeId::fromRaw(15));
+    require(mathNode != nullptr, "cycle fixture Math node must exist");
+    const auto operand =
+        std::ranges::find(mathNode->parameters, kFirstOperandPortName, &ParameterBinding::role);
+    require(operand != mathNode->parameters.end(), "cycle fixture operand must exist");
+    require(composition->parameters().setSource(
+                operand->parameterId,
+                DriverBindingSource{NodeId::fromRaw(15), std::string(kResultPortName)}),
+            "a self-driving operand is well-formed as a reference");
+    const auto validation = chain.project.validate();
+    expectations.expect(std::ranges::any_of(validation.issues(),
+                                            [](const auto& issue) {
+                                                return issue.code == ValidationCode::GraphCycle;
+                                            }),
+                        "a parameter driven by its own node is refused as a graph cycle");
 }
 
 void testRegistryMustBeFrozen(Expectations& expectations) {
@@ -338,9 +547,13 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                                     : std::get_if<document::Vec2d>(&firstLayer->position.source);
     const auto* firstOpacity =
         firstLayer == nullptr ? nullptr : std::get_if<double>(&firstLayer->opacity.source);
+    // Task S5: a solid's colour is a typed operand, so its constant travels inside the operand's
+    // own source variant rather than as a bare field.
+    const auto* solidColor =
+        solid == nullptr ? nullptr : std::get_if<core::Color4d>(&solid->color.source);
     expectations.expect(solid != nullptr && solid->sourceNodeId == kFirstSolidNode &&
-                            solid->colorParameterId == kFirstColor &&
-                            solid->color == core::Color4d{1.5, 0.25, 0.5, 0.75},
+                            solid->color.id == kFirstColor && solidColor != nullptr &&
+                            *solidColor == core::Color4d{1.5, 0.25, 0.5, 0.75},
                         "solid preserves straight HDR authoring color and typed identity");
     expectations.expect(firstLayer != nullptr && firstLayer->input.value() == 0 &&
                             firstLayer->layerId == kFirstLayer &&
@@ -349,6 +562,14 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                             firstLayer->opacity.id == kFirstOpacity && firstOpacity != nullptr &&
                             *firstOpacity == 0.8,
                         "Layer Output preserves typed input and static properties");
+    // The blend mode lowers to a resolved enumerator plus its own parameter identity, never to a
+    // curve index: the schema declares it non-animatable.
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendModeParameterId == kFirstBlendMode,
+                        "Layer Output carries the blend mode's own parameter identity");
+    expectations.expect(firstLayer != nullptr &&
+                            firstLayer->blendMode == bloom::core::kDefaultBlendMode,
+                        "a layer with the schema default lowers to Normal");
     expectations.expect(stack != nullptr && stack->entries.size() == 2 &&
                             stack->entries[0] ==
                                 runtime::CompiledLayerStackEntry{
@@ -447,24 +668,69 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                                           kFirstSolidNode),
                         "known type with unavailable version is distinguished from unknown type");
 
+    // ADAPTED (task S3): this case previously asserted that a recognized text source reports
+    // UnsupportedNode, because no portable CPU glyph rasterizer existed. Text now has its own
+    // lowering, so what is pinned here is the lowered operation -- including that the three
+    // parameter identities travel with it for diagnostics -- and the ABSENCE of the diagnostic this
+    // case used to require. UnsupportedNode itself stays covered by
+    // unsupportedColorDefinition()'s own case above.
     auto text = makeProject(singleLayerOptions());
     auto* textComposition = text.findComposition(kCompositionId);
     auto* textNode = textComposition->graph().findNode(kFirstSolidNode);
     textNode->typeId = std::string(document::kTextSourceNodeType);
     textNode->schemaVersion = document::kTextSourceNodeSchemaVersion;
-    textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor}};
+    textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
+                            {std::string(document::kTextSizeParameterRole), kTextSize},
+                            {std::string(document::kTextColorParameterRole), kTextColor}};
+    const auto textColorValue = core::Color4d{0.25, 0.5, 0.75, 1.0};
     require(textComposition->parameters().erase(kFirstColor) &&
                 textComposition->parameters().insert(
                     {kFirstColor, std::string(document::kTextParameterSchemaKey),
                      document::ConstantValueSource{std::string("Title")}}) &&
+                textComposition->parameters().insert(
+                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                     document::ConstantValueSource{48.0}}) &&
+                textComposition->parameters().insert(
+                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
+                     document::ConstantValueSource{textColorValue}}) &&
                 text.validate().ok(),
             "recognized Text fixture must remain valid");
     const auto textResult = compile(std::move(text), registry);
-    expectations.expect(textResult.status == runtime::SnapshotCompileStatus::Unsupported &&
-                            hasDiagnostic(textResult,
-                                          runtime::CompileDiagnosticCode::UnsupportedNode,
-                                          kFirstSolidNode),
-                        "recognized Text reports an unavailable capability, not an unknown node");
+    expectations.expect(textResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            textResult.plan && textResult.diagnostics.empty(),
+                        "a recognized text source compiles with no diagnostics at all");
+    const auto* compiledText =
+        textResult.plan && !textResult.plan->operations().empty()
+            ? std::get_if<runtime::CompiledText>(&textResult.plan->operations().front())
+            : nullptr;
+    const auto* textSize =
+        compiledText == nullptr ? nullptr : std::get_if<double>(&compiledText->size.source);
+    const auto* textColor =
+        compiledText == nullptr ? nullptr : std::get_if<core::Color4d>(&compiledText->color.source);
+    expectations.expect(compiledText != nullptr && compiledText->sourceNodeId == kFirstSolidNode &&
+                            compiledText->content == "Title" && textSize != nullptr &&
+                            *textSize == 48.0 && textColor != nullptr &&
+                            *textColor == textColorValue,
+                        "the lowered text operation carries the exact authored content, size, and "
+                        "color");
+    expectations.expect(
+        compiledText != nullptr && compiledText->contentParameterId == kFirstColor &&
+            compiledText->size.id == kTextSize && compiledText->color.id == kTextColor,
+        "and each parameter identity, so an evaluation diagnostic can name the "
+        "exact parameter that failed");
+
+    // A size the schema refuses never reaches the evaluator: the document rejects the value at
+    // insertion, so there is no "valid document, unrenderable plan" state to lower.
+    auto oversized = makeProject(singleLayerOptions());
+    auto* oversizedComposition = oversized.findComposition(kCompositionId);
+    expectations.expect(
+        !oversizedComposition->parameters().insert(
+            {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+             document::ConstantValueSource{document::kMaximumTextSizePixels + 1.0}}) &&
+            !oversizedComposition->parameters().insert(
+                {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                 document::ConstantValueSource{0.0}}),
+        "the text size schema refuses an out-of-range size at the document boundary");
 }
 
 void testReachableSchemaDiagnostics(Expectations& expectations) {
@@ -646,19 +912,82 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                             "bloom.runtime.compile.unsupported-parameter-source",
                         "compiler diagnostics expose stable machine-readable identifiers");
 
+    // ADAPTED (task S7): a driver binding on a Colour parameter is evaluable now, so what used to
+    // be an unsupported-source assertion is a positive one -- the solid's colour compiles to a
+    // value-graph output, and the value node that supplies it becomes a compiled value operation.
     auto driven = makeProject(singleLayerOptions());
-    auto& drivenParameters = driven.findComposition(kCompositionId)->parameters();
-    require(
-        drivenParameters.setSource(
-            kFirstColor, document::DriverBindingSource{document::DriverBindingId::fromRaw(101)}) &&
-            driven.validate().ok(),
-        "driver reference fixture must remain valid document truth");
+    attachValueDriver(driven, document::NodeId::fromRaw(14), document::ParameterId::fromRaw(46),
+                      document::kColorValueNodeType, document::kColorValueParameterSchemaKey,
+                      core::Color4d{0.25, 0.5, 0.75, 1.0}, kFirstColor);
     const auto drivenResult = compile(std::move(driven), registry);
+    expectations.expect(drivenResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            drivenResult.plan,
+                        "a Colour parameter driven by a Colour value node compiles");
+    if (drivenResult.plan) {
+        const auto& plan = *drivenResult.plan;
+        expectations.expect(plan.valueOperations().size() == 1 && plan.valueOutputCount() == 1,
+                            "the driving value node compiles to exactly one value operation");
+        const auto solid = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledSolid>(operation);
+        });
+        expectations.expect(solid != plan.operations().end() &&
+                                std::holds_alternative<runtime::ValueOutputIndex>(
+                                    std::get<runtime::CompiledSolid>(*solid).color.source),
+                            "the driven colour operand resolves to a value-graph output");
+    }
+
+    // The other half of the same rule: the three parameter kinds with a value-graph arm are Scalar,
+    // Vector2 and Colour. An Integer one -- the blend mode -- is linkable and durable, but nothing
+    // carries its value into a compiled operation yet, so it keeps the unsupported-source report.
+    auto drivenBlendMode = makeProject(singleLayerOptions());
+    attachValueDriver(drivenBlendMode, document::NodeId::fromRaw(14),
+                      document::ParameterId::fromRaw(46), document::kIntegerValueNodeType,
+                      document::kIntegerValueParameterSchemaKey, std::int64_t{0}, kFirstBlendMode);
+    const auto blendModeResult = compile(std::move(drivenBlendMode), registry);
     expectations.expect(
-        drivenResult.status == runtime::SnapshotCompileStatus::Unsupported &&
-            hasDiagnostic(drivenResult, runtime::CompileDiagnosticCode::UnsupportedParameterSource,
-                          kFirstSolidNode),
-        "driver source stays unsupported until its Batch 4 typed output contract");
+        blendModeResult.status == runtime::SnapshotCompileStatus::Unsupported &&
+            hasDiagnostic(blendModeResult,
+                          runtime::CompileDiagnosticCode::UnsupportedParameterSource,
+                          kFirstLayerNode),
+        "a driven Integer parameter reports an unsupported source rather than pretending to "
+        "evaluate");
+}
+
+// An authored blend mode lowers from its stored integer through core::BlendMode's one mapping, and
+// an integer naming no implemented mode never reaches lowering at all: ParameterStore refuses it on
+// write, so the lowering path has no "unknown mode" branch to guess in.
+void testBlendModeLowersFromItsStoredInteger(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "blend-mode fixture composition must exist");
+    auto& parameters = composition->parameters();
+    expectations.expect(
+        !parameters.setSource(
+            kFirstBlendMode,
+            document::ConstantValueSource{
+                bloom::core::blendModeStoredValue(bloom::core::BlendMode::Difference) + 1}),
+        "an integer naming no implemented blend mode is refused by the document layer");
+    expectations.expect(
+        !parameters.setSource(kFirstBlendMode, document::ConstantValueSource{std::int64_t{-1}}),
+        "a negative stored blend mode is refused by the document layer");
+    require(parameters.setSource(kFirstBlendMode,
+                                 document::ConstantValueSource{bloom::core::blendModeStoredValue(
+                                     bloom::core::BlendMode::Overlay)}),
+            "an implemented blend mode must be publishable");
+    require(project.validate().ok(), "blend-mode fixture must remain valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    const auto* layer =
+        result.plan == nullptr
+            ? nullptr
+            : std::get_if<runtime::CompiledLayerOutput>(&result.plan->operations()[1]);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled &&
+                            layer != nullptr && layer->blendMode == bloom::core::BlendMode::Overlay,
+                        "an authored blend mode lowers to its own enumerator");
 }
 
 void testRequestScopedParameterOverrides(Expectations& expectations) {
@@ -732,13 +1061,10 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
         "override targets must participate in the requested output path");
 
     auto drivenProject = makeProject(singleLayerOptions());
-    require(
-        drivenProject.findComposition(kCompositionId)
-                ->parameters()
-                .setSource(kFirstPosition,
-                           document::DriverBindingSource{document::DriverBindingId::fromRaw(92)}) &&
-            drivenProject.validate().ok(),
-        "driven override fixture must remain valid document truth");
+    attachValueDriver(drivenProject, document::NodeId::fromRaw(14),
+                      document::ParameterId::fromRaw(46), document::kVector2ValueNodeType,
+                      document::kVector2ValueParameterSchemaKey, document::Vec2d{7.0, 9.0},
+                      kFirstPosition);
     const auto driven =
         compile(std::move(drivenProject), registry,
                 runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
@@ -926,18 +1252,25 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
                         "large-registry cancellation stops before further definition resolution");
 }
 
+#include "snapshot_compiler_mute_tests.ipp"
+
 } // namespace
 
 int main() {
     Expectations expectations;
     try {
+        testMuteKindsAndPixels(expectations);
+        testMuteFirstImageInput(expectations);
         testRegistryMustBeFrozen(expectations);
+        testValueGraphDriverResolution(expectations);
+        testValueGraphCycleRefusal(expectations);
         testDeterministicTypedPlan(expectations);
         testCustomSolidLoweringRemainsSupported(expectations);
         testReachabilityAndUnsupportedNodes(expectations);
         testReachableSchemaDiagnostics(expectations);
         testTypedParameterDiagnostics(expectations);
         testParameterSourcesAndDiagnosticIds(expectations);
+        testBlendModeLowersFromItsStoredInteger(expectations);
         testRequestScopedParameterOverrides(expectations);
         testMidWorkCancellationIsBounded(expectations);
     } catch (const std::exception& error) {

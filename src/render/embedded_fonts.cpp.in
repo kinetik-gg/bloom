@@ -1,0 +1,26 @@
+// GENERATED FILE -- produced by src/render/CMakeLists.txt at CMake configure time from
+// src/ui/kit/third_party/dejavu-sans/DejaVuSans.ttf. Do not edit; the source of truth is the
+// checked-in, digest-recorded asset (src/ui/kit/third_party/dejavu-sans/provenance.md). It lives
+// under the build tree, never the source tree, and is the only translation unit of the
+// bloom_render_fonts object library.
+
+#include <bloom/render/embedded_fonts.hpp>
+
+namespace bloom::render {
+namespace {
+
+constexpr std::uint8_t kDejaVuSansTrueTypeBytes[] = {
+@BLOOM_DEJAVU_SANS_PAYLOAD_BYTES@
+};
+
+static_assert(sizeof(kDejaVuSansTrueTypeBytes) == @BLOOM_DEJAVU_SANS_BYTE_COUNT@,
+              "the embedded DejaVu Sans payload lost bytes between CMake and the compiler");
+
+} // namespace
+
+std::span<const std::uint8_t> embeddedDejaVuSansTrueTypeBytes() noexcept {
+    return std::span<const std::uint8_t>(kDejaVuSansTrueTypeBytes,
+                                         sizeof(kDejaVuSansTrueTypeBytes));
+}
+
+} // namespace bloom::render

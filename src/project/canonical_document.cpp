@@ -83,6 +83,9 @@ struct SortWindows final {
             } else if (const auto* vector =
                            std::get_if<bloom::document::Vec2AnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, vector->keyframes.size());
+            } else if (const auto* color =
+                           std::get_if<bloom::document::Color4AnimationCurve>(&record)) {
+                plan.window2 = maximumOf(plan.window2, color->keyframes.size());
             }
         }
     }
@@ -527,6 +530,17 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
                emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
+    if (const auto* vector = std::get_if<Vec3d>(&value)) {
+        // Document 1.4. Its own kind token rather than a third component appended to "vec2": the
+        // format's discriminators name TYPES, and a three-component vector is a different type from
+        // a two-component one -- which is also why an older minor refuses to decode this kind at
+        // all rather than reading it as a vec2 with a stray member.
+        return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("vec3")) &&
+               state.ok(writer.memberName("x")) && state.ok(writer.float64Value(vector->x)) &&
+               state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
+               state.ok(writer.memberName("z")) && state.ok(writer.float64Value(vector->z)) &&
+               emitRetainedTrailing(state) && state.ok(writer.endObject());
+    }
     if (const auto* color = std::get_if<bloom::core::Color4d>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("color4")) &&
                state.ok(writer.memberName("red")) && state.ok(writer.float64Value(color->red)) &&
@@ -592,11 +606,26 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
             if (!emitNamedId(state, "curveId", curve->curveId.value())) {
                 return false;
             }
+        } else if (const auto* driver = std::get_if<DriverBindingSource>(&record.source)) {
+            // Document 1.4. The durable record is exactly the pair it addresses, written the same
+            // way an edge's source is -- an object id and a port name -- because that is what a
+            // driver is: an ordinary port reference that lands in parameter-address space.
+            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("driver"))) {
+                return false;
+            }
+            if (!emitNamedId(state, "sourceNodeId", driver->sourceNodeId.value())) {
+                return false;
+            }
+            if (!state.ok(writer.memberName("outputPort")) ||
+                !state.ok(writer.stringValue(driver->outputPort))) {
+                return false;
+            }
         } else {
-            // Admission rejected live driver sources before staging; reaching this path means the
-            // caller bypassed canonicalDocumentSize.
-            state.walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource,
-                            state.walk.compositionIndex, parameterRank);
+            // Unreachable: ParameterSource is a closed three-alternative variant and all three are
+            // handled above. Reported rather than assumed, matching how every other
+            // cannot-occur branch in this writer behaves.
+            state.walk.fail(CanonicalDocumentError::InvalidParameter, state.walk.compositionIndex,
+                            parameterRank);
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -620,6 +649,8 @@ emitInterpolation(EmitState& state,
         return state.ok(state.writer.stringValue("hold"));
     case bloom::document::KeyframeInterpolation::Linear:
         return state.ok(state.writer.stringValue("linear"));
+    case bloom::document::KeyframeInterpolation::EaseInOut:
+        return state.ok(state.writer.stringValue("ease-in-out"));
     }
     return false;
 }
@@ -712,6 +743,68 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
+[[nodiscard]] bool emitColor4Keyframe(EmitState& state,
+                                      const bloom::document::Color4Keyframe& key) noexcept {
+    auto& writer = state.writer;
+    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
+    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "id", key.id.value())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("time"))) {
+        return false;
+    }
+    {
+        const PathScope timeScope(state, "time");
+        if (!emitRational(state, key.time.numerator(), key.time.denominator())) {
+            return false;
+        }
+    }
+    // Channel order is the authoring order core::Color4d declares and the constant colour value
+    // already writes (red, green, blue, alpha) -- the same member order, so a colour key and a
+    // colour constant read identically on the wire.
+    if (!state.ok(writer.memberName("value")) || !state.ok(writer.beginObject())) {
+        return false;
+    }
+    {
+        const PathScope valueScope(state, "value");
+        if (!state.ok(writer.memberName("red")) || !state.ok(writer.float64Value(key.value.red))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("green")) ||
+            !state.ok(writer.float64Value(key.value.green))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("blue")) ||
+            !state.ok(writer.float64Value(key.value.blue))) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("alpha")) ||
+            !state.ok(writer.float64Value(key.value.alpha))) {
+            return false;
+        }
+        if (!emitRetainedTrailing(state)) {
+            return false;
+        }
+    }
+    if (!state.ok(writer.endObject())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("outgoingInterpolation"))) {
+        return false;
+    }
+    if (!emitInterpolation(state, key.outgoingInterpolation)) {
+        return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
 [[nodiscard]] bool emitAnimationCurves(EmitState& state, const Composition& composition,
                                        const std::size_t compositionIndex) noexcept {
     using namespace bloom::document;
@@ -783,6 +876,31 @@ emitInterpolation(EmitState& state,
             }
             for (const auto keyIndex : keyOrder) {
                 if (!emitVec2Keyframe(state, vector->keyframes[keyIndex])) {
+                    {
+                        state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                        compositionIndex);
+                        return false;
+                    }
+                }
+            }
+        } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("color4")) ||
+                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
+                return false;
+            }
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    color->keyframes,
+                    [](const bloom::document::Color4Keyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                {
+                    state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                    compositionIndex);
+                    return false;
+                }
+            }
+            for (const auto keyIndex : keyOrder) {
+                if (!emitColor4Keyframe(state, color->keyframes[keyIndex])) {
                     {
                         state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
                                         compositionIndex);
@@ -1122,6 +1240,73 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
+[[nodiscard]] bool emitNodeLayout(EmitState& state, const Composition& composition) noexcept {
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("nodeLayout")) || !state.ok(writer.beginArray()))
+        return false;
+    const PathScope layoutScope(state, "nodeLayout");
+    for (const auto& [id, record] : composition.nodeLayout()) {
+        const auto idText = bloom::project::formatCanonicalUInt64(id.value());
+        const PathScope recordScope(state, RoundTripCollectionKind::NodeLayout, idText.view());
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "nodeId", id.value()) ||
+            !state.ok(writer.memberName("position")) || !state.ok(writer.beginObject()))
+            return false;
+        {
+            const PathScope positionScope(state, "position");
+            if (!state.ok(writer.memberName("x")) ||
+                !state.ok(writer.float64Value(record.position.x)) ||
+                !state.ok(writer.memberName("y")) ||
+                !state.ok(writer.float64Value(record.position.y)) || !emitRetainedTrailing(state))
+                return false;
+        }
+        if (!state.ok(writer.endObject()) || !state.ok(writer.memberName("width")) ||
+            !state.ok(writer.float64Value(record.width)) ||
+            !state.ok(writer.memberName("collapsed")) ||
+            !state.ok(writer.booleanValue(record.collapsed)) ||
+            !state.ok(writer.memberName("muted")) || !state.ok(writer.booleanValue(record.muted)) ||
+            !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
+// The group frames, ascending by NodeGroupId because NodeGroups is keyed by it, each with its
+// members ascending by NodeId for the same reason.
+[[nodiscard]] bool emitNodeGroups(EmitState& state, const Composition& composition) noexcept {
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("nodeGroups")) || !state.ok(writer.beginArray()))
+        return false;
+    const PathScope groupsScope(state, "nodeGroups");
+    for (const auto& [id, record] : composition.nodeGroups()) {
+        const auto idText = bloom::project::formatCanonicalUInt64(id.value());
+        const PathScope recordScope(state, RoundTripCollectionKind::NodeGroup, idText.view());
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "groupId", id.value()) ||
+            !state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(record.name)) ||
+            !state.ok(writer.memberName("members")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto member : record.members) {
+            const auto memberText = bloom::project::formatCanonicalUInt64(member.value());
+            if (!state.ok(writer.stringValue(memberText.view())))
+                return false;
+        }
+        if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("padding")) ||
+            !state.ok(writer.beginObject()))
+            return false;
+        {
+            const PathScope paddingScope(state, "padding");
+            if (!state.ok(writer.memberName("x")) ||
+                !state.ok(writer.float64Value(record.padding.x)) ||
+                !state.ok(writer.memberName("y")) ||
+                !state.ok(writer.float64Value(record.padding.y)) || !emitRetainedTrailing(state))
+                return false;
+        }
+        if (!state.ok(writer.endObject()) || !emitRetainedTrailing(state) ||
+            !state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitComposition(EmitState& state, const Composition& composition,
                                    const std::size_t compositionIndex) noexcept {
     auto& writer = state.writer;
@@ -1196,7 +1381,8 @@ emitInterpolation(EmitState& state,
     if (!emitAnimationCurves(state, composition, compositionIndex)) {
         return false;
     }
-    if (!emitGraph(state, composition, compositionIndex)) {
+    if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition) ||
+        !emitNodeGroups(state, composition)) {
         return false;
     }
     if (!emitRetainedTrailing(state)) {
@@ -1530,7 +1716,11 @@ emitInterpolation(EmitState& state,
     // emitVersion's own comment). {1, schemaMinor} lets an overlay rewrite of a {1, minor > 0}
     // document reproduce the exact minor it was opened with; a plain write leaves schemaMinor at
     // its default 0.
-    if (!emitVersion(state, SchemaVersion{kV1SchemaVersion.major, state.schemaMinor})) {
+    if (!emitVersion(
+            state,
+            SchemaVersion{kV1SchemaVersion.major,
+                          std::max(state.schemaMinor,
+                                   bloom::project::kCanonicalDocumentSchemaVersionV1.minor)})) {
         return false;
     }
 
@@ -1605,7 +1795,8 @@ emitInterpolation(EmitState& state,
                 !emitHighWaterMember(state, "animationCurve", water.animationCurve) ||
                 !emitHighWaterMember(state, "keyframe", water.keyframe) ||
                 !emitHighWaterMember(state, "driverBinding", water.driverBinding) ||
-                !emitHighWaterMember(state, "extensionRecord", water.extensionRecord)) {
+                !emitHighWaterMember(state, "extensionRecord", water.extensionRecord) ||
+                !emitHighWaterMember(state, "nodeGroup", water.nodeGroup)) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {
@@ -1715,7 +1906,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         walk.fail(CanonicalDocumentError::InvalidProcessColorSpaceId);
         return walk;
     }
-    if (settings.schemaVersion != kV1SchemaVersion ||
+    if (settings.schemaVersion != bloom::document::kColorSettingsSchemaVersionV1 ||
         settings.ocioConfig.schemaVersion != kOcioConfigReferenceSchemaVersionV1) {
         walk.fail(CanonicalDocumentError::InvalidColorSettings);
         return walk;
@@ -1735,19 +1926,13 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
         return walk;
     }
 
-    // Native v1 Save is a restricted supported-subset encoder: a live driver source is an
-    // unsupported save feature reported with its exact location, never a degraded rewrite.
+    // No parameter-source admission pass any more. Document 1.4 can write every alternative the
+    // document layer can hold, and a driver source's own well-formedness -- a valid node id and
+    // valid structural port text -- is already refused by ParameterStore on insert, so a second
+    // check here could only ever be unreachable.
     for (std::size_t compositionIndex = 0; compositionIndex < project.compositions().size();
          ++compositionIndex) {
         const auto& composition = project.compositions()[compositionIndex];
-        const auto& parameters = composition.parameters().records();
-        for (std::size_t parameterIndex = 0; parameterIndex < parameters.size(); ++parameterIndex) {
-            if (std::holds_alternative<DriverBindingSource>(parameters[parameterIndex].source)) {
-                walk.fail(CanonicalDocumentError::UnsupportedDriverBindingSource, compositionIndex,
-                          parameterIndex);
-                return walk;
-            }
-        }
 
         // Defensive domain re-checks for values whose owning types cannot always guarantee the
         // serialized domain (for example through setFormat).

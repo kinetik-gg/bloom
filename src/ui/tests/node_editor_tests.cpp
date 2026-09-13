@@ -6,6 +6,7 @@
 #include <bloom/ui/node_editor.hpp>
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
@@ -23,6 +24,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QGraphicsItem>
+#include <QGraphicsProxyWidget>
 #include <QKeyEvent>
 #include <QList>
 #include <QMenu>
@@ -105,8 +107,9 @@ void sendWheel(ui::NodeGraphicsView* view, const QPointF position, const int not
     QCoreApplication::sendEvent(view->viewport(), &event);
 }
 
-void sendKey(ui::NodeGraphicsView* view, const QEvent::Type type, const int key) {
-    QKeyEvent event(type, key, Qt::NoModifier);
+void sendKey(ui::NodeGraphicsView* view, const QEvent::Type type, const int key,
+             const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QKeyEvent event(type, key, modifiers);
     QCoreApplication::sendEvent(view, &event);
 }
 
@@ -203,10 +206,11 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(!fixture.view()->viewAdjusted(),
                         "Fit leaves the canvas following the graph until the artist moves it");
 
-    // Z, through the real key event, not the method.
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Z);
+    // Actual size, through the real key event, not the method. Task S1, item 8 retired Z in favour
+    // of the Adobe-standard Ctrl+1, in this canvas and in the Viewer alike.
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
-                        "Z is exactly 100%, one scene unit per screen pixel");
+                        "Ctrl+1 is exactly 100%, one scene unit per screen pixel");
     const QRectF actual = fixture.view()->viewportTransform().mapRect(bounds);
     expectations.expect(near(actual.center().x(), viewport.center().x(), 0.5) &&
                             near(actual.center().y(), viewport.center().y(), 0.5),
@@ -214,10 +218,20 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(fixture.view()->viewAdjusted(),
                         "an explicit 100% counts as the artist having moved the view");
 
-    // F, through the real key event.
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_F);
+    // Fit, through the real key event.
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
     expectations.expect(!fixture.view()->viewAdjusted() && !near(fixture.view()->zoomFactor(), 1.0),
-                        "F re-frames the graph");
+                        "Ctrl+0 re-frames the graph");
+
+    // And the keys they replaced are bound by nothing: a retired binding that still worked would be
+    // two ways to do one thing, which is exactly what item 8 exists to stop.
+    const double frameZoom = fixture.view()->zoomFactor();
+    for (const int retired : {Qt::Key_F, Qt::Key_Z}) {
+        sendKey(fixture.view(), QEvent::KeyPress, retired);
+        expectations.expect(near(fixture.view()->zoomFactor(), frameZoom) &&
+                                !fixture.view()->viewAdjusted(),
+                            "a retired navigation key changes nothing at all");
+    }
 
     // While the artist has not moved the view, a resize re-frames -- the same way the Viewer's Fit
     // recomputes its rectangle from the available area. Once they HAVE moved it, a resize leaves
@@ -228,7 +242,7 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
     expectations.expect(!near(fixture.view()->zoomFactor(), fittedZoom),
                         "a resize re-frames the graph while the view is still following it");
 
-    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_Z);
+    sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     fixture.editor.resize(800, 600);
     QCoreApplication::processEvents();
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
@@ -295,10 +309,10 @@ void testEmptyCanvasZoomDoesNotLatchTheViewAway(Expectations& expectations) {
                         "the fixture genuinely has no composition -- this is the empty canvas");
     expectations.expect(editor.graphScene()->items().isEmpty(), "so the canvas projects nothing");
 
-    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_Z);
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     expectations.expect(!editor.graphView()->viewAdjusted(),
                         "100% on an empty canvas changes nothing, so it does not claim the view");
-    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_F);
+    sendKey(editor.graphView(), QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
     expectations.expect(!editor.graphView()->viewAdjusted(), "and neither does Fit");
 }
 
@@ -352,16 +366,107 @@ void testSelectionFollowsTheSessionInBothDirections(Expectations& expectations) 
 // --- Decision 3: typed connectors, only for the types that exist -------------------------------
 
 void testConnectorTypingIsPinnedPerSocketKind(Expectations& expectations) {
-    // Image is the ONE transport kind runtime::SocketValueKind declares, and the only one any edge
-    // in a document::CanonicalGraph can carry today (see socketColorToken()'s comment in
-    // node_editor.hpp). Pinning the mapping here is what makes adding a second kind a deliberate
-    // decision rather than an accident: socketColorToken()'s switch stops being exhaustive.
+    // ADAPTED (task S7): Image is no longer the only transport kind, so the mapping is pinned for
+    // every kind the socket palette answers for -- including the two vector widths deliberately
+    // sharing one token, which is a decision the assertion below has to state rather than leave to
+    // the reader.
+    expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Integer) ==
+                                ui::kit::Color::SocketInteger &&
+                            ui::socketColorToken(runtime::SocketValueKind::Boolean) ==
+                                ui::kit::Color::SocketBoolean,
+                        "Integer and Boolean sockets take their own palette tokens");
+    expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Vector2) ==
+                            ui::socketColorToken(runtime::SocketValueKind::Vector3),
+                        "both vector widths share one token so they read as a family");
+    //
+    // Task S1, item 6 moved this off the Data* palette: a socket identifies a TRANSPORT kind, not
+    // what an item in a project is, and Image had been resolving to exactly AccentHover's blue.
     expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Image) ==
-                            ui::kit::Color::DataImage,
-                        "an Image socket takes the data palette's own Image token");
+                            ui::kit::Color::SocketImage,
+                        "an Image socket takes the socket palette's own Image token");
     expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) ==
-                            ui::kit::color(ui::kit::Color::DataImage),
+                            ui::kit::color(ui::kit::Color::SocketImage),
                         "and resolves to exactly that token's color, not a look-alike");
+    expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) !=
+                            ui::kit::color(ui::kit::Color::AccentHover),
+                        "which is no longer the hovered-accent blue it used to collide with");
+}
+
+// Task S7, items 3 and 4: a value node's operands are editable inline, a driven operand hides its
+// control while keeping its socket, and one undo puts the constant back.
+void testValueNodeOperandsAreEditableAndHideWhenDriven(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Value Node Operand Test"));
+    const auto addNode = [&fixture](const std::string_view typeId, const document::Vec2d position) {
+        commands::Transaction transaction("Add node", fixture.session.snapshot().revision());
+        transaction.emplace<commands::AddNode>(fixture.session.compositionId(), std::string(typeId),
+                                               position);
+        return fixture.scene()
+            ->submit(std::move(transaction))
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    };
+    const auto scalarNode = addNode(document::kScalarValueNodeType, {64.0, 64.0});
+    const auto mathNode = addNode(document::kScalarMathNodeType, {320.0, 64.0});
+    expectations.expect(scalarNode.has_value() && mathNode.has_value(),
+                        "the canvas adds a Scalar value node and a Math node");
+    if (!scalarNode.has_value() || !mathNode.has_value()) {
+        return;
+    }
+
+    auto* valueField = qobject_cast<ui::kit::KValueField*>(
+        fixture.scene()->nodeFieldForTest(*scalarNode, QStringLiteral("nodeOperandEditor")));
+    expectations.expect(valueField != nullptr && valueField->isEnabled(),
+                        "a Scalar value node carries an editable inline field for its own value");
+    auto* selector =
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandSelector"));
+    auto* toggle =
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandToggle"));
+    expectations.expect(selector != nullptr && toggle != nullptr,
+                        "a Math node carries its operation dropdown and its clamp toggle inline");
+    if (valueField == nullptr) {
+        return;
+    }
+
+    const auto* valueParameter =
+        parameterForRole(fixture.session, *scalarNode, document::kValueParameterRole);
+    expectations.expect(valueParameter != nullptr, "the Scalar node binds its value parameter");
+    if (valueParameter == nullptr) {
+        return;
+    }
+    valueField->setValue(7.5);
+    expectations.expect(fixture.session.constantValue(valueParameter->id) == 7.5,
+                        "editing the inline field writes the parameter's own constant");
+
+    // Drive the Math node's first operand from the Scalar node, through exactly the connect command
+    // the socket gesture uses.
+    const auto* operandParameter =
+        parameterForRole(fixture.session, *mathNode, document::kFirstOperandPortName);
+    expectations.expect(operandParameter != nullptr, "the Math node binds its first operand");
+    if (operandParameter == nullptr) {
+        return;
+    }
+    const auto operandId = operandParameter->id;
+    auto* operandField = qobject_cast<ui::kit::KValueField*>(
+        fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandEditor")));
+    expectations.expect(operandField != nullptr && operandField->graphicsProxyWidget()->isVisible(),
+                        "an unlinked operand shows its inline control");
+    commands::Transaction link("Link operand", fixture.session.snapshot().revision());
+    link.emplace<commands::ConnectPorts>(
+        fixture.session.compositionId(),
+        document::OutputPortRef{*scalarNode, std::string(document::kValuePortName)},
+        document::InputPortRef{
+            document::NodeInputRef{*mathNode, std::string(document::kFirstOperandPortName)}});
+    expectations.expect(fixture.scene()->submit(std::move(link)).changed(),
+                        "the operand socket accepts the Scalar node's output");
+    expectations.expect(operandField != nullptr &&
+                            !operandField->graphicsProxyWidget()->isVisible(),
+                        "a driven operand hides its inline control");
+    expectations.expect(std::holds_alternative<document::DriverBindingSource>(
+                            fixture.session.composition()->parameters().find(operandId)->source),
+                        "and the parameter's source is the driver binding");
+    expectations.expect(fixture.session.undo(), "the link undoes once");
+    expectations.expect(std::holds_alternative<document::ConstantValueSource>(
+                            fixture.session.composition()->parameters().find(operandId)->source),
+                        "undo restores the exact constant the link replaced");
 }
 
 void testEveryProjectedEdgeIsAPathItemBetweenTwoCards(Expectations& expectations) {
@@ -407,9 +512,12 @@ void testMidChainCardsCarryBothPortDots(Expectations& expectations) {
         return;
     }
 
+    // ADAPTED (task S7, item 3): a source card carries an input dot now -- its colour parameter is
+    // a linkable operand socket, so "nothing feeds into a source" stopped being true the moment
+    // every parameter role became linkable.
     expectations.expect(fixture.scene()->nodeSocketsForTest(*sourceNodeId) ==
-                            ui::NodeSockets{false, true},
-                        "a source card carries only an output dot: nothing feeds into it");
+                            ui::NodeSockets{true, true},
+                        "a source card carries an operand socket for its colour and one output");
     expectations.expect(fixture.scene()->nodeSocketsForTest(*boundaryNodeId) ==
                             ui::NodeSockets{true, true},
                         "the layer boundary card carries both: it consumes the source and feeds "
@@ -584,6 +692,96 @@ void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectati
                         "and one undo step reverts it");
 }
 
+// Task S4: the same in-card authoring loop for the three transform breadth parameters. What is
+// pinned is that each is a live field on the card (not a read-only row), that it writes the
+// canonical parameter through the session's own command, and that it is one undo step with the same
+// label the properties panel produces.
+void testInNodeTransformFieldsCommitThroughThePropertiesPath(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Node Transform Edit Test"));
+    const auto layerId = addSolid(fixture.session);
+    if (!layerId.has_value()) {
+        expectations.expect(false, "the fixture can add a solid layer");
+        return;
+    }
+    const auto boundaryNodeId = fixture.session.boundaryNodeForLayer(*layerId);
+    if (!boundaryNodeId.has_value()) {
+        expectations.expect(false, "the solid layer resolves its boundary node");
+        return;
+    }
+    const auto field = [&](const QString& objectName) {
+        return qobject_cast<ui::kit::KValueField*>(
+            fixture.scene()->nodeFieldForTest(*boundaryNodeId, objectName));
+    };
+    auto* anchorX = field(QStringLiteral("nodeAnchorXEditor"));
+    auto* anchorY = field(QStringLiteral("nodeAnchorYEditor"));
+    auto* scaleX = field(QStringLiteral("nodeScaleXEditor"));
+    auto* scaleY = field(QStringLiteral("nodeScaleYEditor"));
+    auto* rotation = field(QStringLiteral("nodeRotationEditor"));
+    expectations.expect(anchorX != nullptr && anchorY != nullptr && scaleX != nullptr &&
+                            scaleY != nullptr && rotation != nullptr,
+                        "the layer boundary card carries live fields for anchor, scale, and "
+                        "rotation");
+    if (anchorX == nullptr || anchorY == nullptr || scaleX == nullptr || scaleY == nullptr ||
+        rotation == nullptr) {
+        return;
+    }
+    expectations.expect(anchorX->isEnabled() && scaleX->isEnabled() && rotation->isEnabled() &&
+                            scaleX->value() == 100.0 && rotation->value() == 0.0 &&
+                            anchorX->value() == 0.0,
+                        "the card shows the identity transform and every row is editable");
+
+    const auto parameterId = [&](const std::string_view role) {
+        const auto* parameter = parameterForRole(fixture.session, *boundaryNodeId, role);
+        return parameter == nullptr ? document::ParameterId{} : parameter->id;
+    };
+    const auto anchorId = parameterId(document::kAnchorParameterRole);
+    const auto scaleId = parameterId(document::kScaleParameterRole);
+    const auto rotationId = parameterId(document::kRotationParameterRole);
+    expectations.expect(anchorId.isValid() && scaleId.isValid() && rotationId.isValid(),
+                        "the boundary node binds anchor, scale, and rotation");
+    if (!anchorId.isValid() || !scaleId.isValid() || !rotationId.isValid()) {
+        return;
+    }
+
+    int snapshotSignals = 0;
+    QObject::connect(&fixture.session, &ui::CompositionSession::snapshotChanged, &fixture.session,
+                     [&snapshotSignals] { ++snapshotSignals; });
+
+    anchorX->setValue(-12.0);
+    expectations.expect(snapshotSignals == 1 &&
+                            fixture.session.constantVec2Value(anchorId) ==
+                                document::Vec2d{-12.0, 0.0} &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Anchor"),
+                        "an in-card anchor edit is one \"Set Anchor\" command on the canonical "
+                        "parameter");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(anchorId) == document::kDefaultAnchor,
+                        "and one undo step reverts it");
+
+    scaleY->setValue(25.0);
+    expectations.expect(fixture.session.constantVec2Value(scaleId) == document::Vec2d{1.0, 0.25} &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Scale"),
+                        "an in-card scale edit stores a unitless factor from its percentage");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(scaleId) == document::kDefaultScale,
+                        "and one undo step reverts it");
+
+    rotation->setValue(-135.0);
+    const auto storedRotation = fixture.session.constantValue(rotationId);
+    expectations.expect(storedRotation.has_value() && *storedRotation == -135.0 &&
+                            fixture.session.undoLabel() == QStringLiteral("Set Rotation"),
+                        "an in-card rotation edit stores the authored degrees exactly, sign "
+                        "included");
+    expectations.expect(fixture.session.undo() && fixture.session.constantValue(rotationId) ==
+                                                      document::kDefaultRotationDegrees,
+                        "and one undo step reverts it");
+
+    // The cards are reconciled in place across all three edits, so the fields keep their identity.
+    expectations.expect(field(QStringLiteral("nodeScaleXEditor")) == scaleX &&
+                            field(QStringLiteral("nodeRotationEditor")) == rotation,
+                        "the card is reconciled in place, so the transform fields keep identity");
+}
+
 void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expectations) {
     GraphFixture fixture(makeProject("Node Color Chip Test"));
     const auto layerId = addSolid(fixture.session);
@@ -603,16 +801,19 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
     if (chip == nullptr) {
         return;
     }
-    // No command anywhere sets a color, so the chip must not offer a picker whose result nothing
-    // could commit -- the honesty rule, pinned.
-    expectations.expect(!chip->isEnabled(),
-                        "the chip is read-only: no command in src/commands sets a color");
-    expectations.expect(!chip->isPickerOpen(), "and it never opens its picker");
+    // ADAPTED (task S3): the chip was read-only because no command set a color. Both
+    // CompositionSession::setSelectedSolidColor() and setSelectedTextColor() now exist, so the
+    // honesty rule points the other way -- an enabled chip whose picker result really commits. What
+    // stays pinned is that the exact authoring value is still reported in text, because the swatch
+    // cannot show an HDR or negative channel.
+    expectations.expect(chip->isEnabled(), "the chip is editable: a command now sets a color");
+    expectations.expect(!chip->isPickerOpen(), "and it opens its picker only when asked");
     expectations.expect(chip->toolTip().contains(QStringLiteral("R 0.62")),
                         "the exact, unclipped authoring value travels in the tooltip, because an "
                         "8-bit swatch cannot show one honestly");
-    expectations.expect(chip->toolTip().contains(QStringLiteral("Read-only")),
-                        "and the tooltip says why the chip does not open");
+    expectations.expect(chip->toolTip().contains(QStringLiteral("[0, 1]")),
+                        "and the tooltip says what committing through the swatch would do to a "
+                        "value outside the displayable range");
 
     // A node that binds no parameters carries no rows at all.
     const auto stackNodeId = fixture.session.composition()->graph().layerStack().nodeId();
@@ -636,11 +837,13 @@ int runAll() {
     testEmptyCanvasZoomDoesNotLatchTheViewAway(expectations);
     testSelectionFollowsTheSessionInBothDirections(expectations);
     testConnectorTypingIsPinnedPerSocketKind(expectations);
+    testValueNodeOperandsAreEditableAndHideWhenDriven(expectations);
     testEveryProjectedEdgeIsAPathItemBetweenTwoCards(expectations);
     testMidChainCardsCarryBothPortDots(expectations);
     testContextMenuOffersOnlyRealCommands(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
+    testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

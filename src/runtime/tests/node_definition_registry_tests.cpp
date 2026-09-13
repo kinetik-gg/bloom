@@ -1,12 +1,15 @@
+#include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,14 +36,20 @@ class Expectations final {
 
 [[nodiscard]] bloom::runtime::NodeDefinition customSolid(const std::uint32_t version = 1) {
     using namespace bloom;
-    return {{"example.solid", version},
-            runtime::NodeLoweringKind::Solid,
-            {},
-            {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-            {{std::string(document::kSolidColorParameterRole),
-              std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true}},
-            std::nullopt};
+    return {
+        {"example.solid", version},
+        runtime::NodeLoweringKind::Solid,
+        // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable
+        // operand socket per parameter role, so a custom Solid declares the colour socket too.
+        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
+        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+        // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
+        // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
+        // solid colour is animatable now -- so a custom Solid must declare it too.
+        {{std::string(document::kSolidColorParameterRole),
+          std::string(document::kSolidColorParameterSchemaKey),
+          runtime::ParameterValueKind::Color4d, true, true}},
+        std::nullopt};
 }
 
 [[nodiscard]] bloom::runtime::NodeDefinition unsupportedDefinition(std::string typeId) {
@@ -82,7 +91,7 @@ void testValidationAndDuplicates(Expectations& expectations) {
     expectations.expect(registry.registerDefinition(original) == NodeRegistrationStatus::Registered,
                         "valid definition is registered");
     auto replacement = original;
-    replacement.outputs.front().name = "replacement";
+    replacement.parameters.front().role = "replacement";
     expectations.expect(registry.registerDefinition(std::move(replacement)) ==
                             NodeRegistrationStatus::InvalidDefinition,
                         "malformed replacement is rejected before duplicate lookup");
@@ -103,8 +112,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    expectations.expect(registry.definitions().size() == 5,
-                        "startup contribution includes four lowerings and recognized Text");
+    // ADAPTED (task S7): the five structural node types plus the forty-node value library.
+    expectations.expect(registry.definitions().size() == 45,
+                        "startup contribution includes every built-in definition");
 
     registry.freeze();
     const auto* solid =
@@ -116,19 +126,104 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                                       document::kSolidSourceNodeSchemaVersion) == solid,
                         "idempotent freeze preserves lookup addresses");
     expectations.expect(registry.containsType(document::kTextSourceNodeType),
-                        "recognized unsupported types remain discoverable");
+                        "every built-in type remains discoverable");
     const auto* text =
         registry.find(document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion);
-    expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Unsupported,
-                        "Text is explicit unsupported capability, not an unknown node");
+    // ADAPTED (task S3): Text was NodeLoweringKind::Unsupported while no portable CPU glyph
+    // rasterizer existed. It now has its own lowering, so the contract pinned here is its parameter
+    // shape -- content, then size, then color, in that order, none animatable -- rather than the
+    // absence of one.
+    expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
+                        "Text is a lowered capability with its own compiled operation");
+    expectations.expect(
+        text != nullptr && text->parameters.size() == 3 &&
+            text->parameters[0].role == document::kTextParameterRole &&
+            text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
+            text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
+            text->parameters[1].role == document::kTextSizeParameterRole &&
+            text->parameters[1].schemaKey == document::kTextSizeParameterSchemaKey &&
+            text->parameters[1].valueKind == runtime::ParameterValueKind::Float64 &&
+            text->parameters[2].role == document::kTextColorParameterRole &&
+            text->parameters[2].schemaKey == document::kTextColorParameterSchemaKey &&
+            text->parameters[2].valueKind == runtime::ParameterValueKind::Color4d,
+        "the text schema is exactly content, size, and color, in the registered order");
+    expectations.expect(text != nullptr && text->parameters.size() == 3 &&
+                            text->parameters[1].defaultValue ==
+                                document::ParameterValue{document::kDefaultTextSizePixels} &&
+                            text->parameters[2].defaultValue ==
+                                document::ParameterValue{core::Color4d{1.0, 1.0, 1.0, 1.0}},
+                        "a new text layer defaults to 72 px opaque white");
+    // The font is deliberately absent from the schema: the CPU reference path has exactly one
+    // embedded face, so a font parameter would persist a choice nothing can honor.
+    expectations.expect(text != nullptr &&
+                            std::ranges::none_of(text->parameters,
+                                                 [](const auto& parameter) {
+                                                     return parameter.role.find("font") !=
+                                                            std::string::npos;
+                                                 }),
+                        "the text schema names no font");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
-    expectations.expect(layer != nullptr && layer->parameters.size() == 2 &&
-                            layer->parameters[0].supportsAnimation &&
-                            layer->parameters[1].supportsAnimation && solid != nullptr &&
-                            !solid->parameters.front().supportsAnimation && text != nullptr &&
-                            !text->parameters.front().supportsAnimation,
-                        "animation support is an explicit per-parameter evaluator capability");
+    // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
+    // ADAPTED (task S5): a source parameter no longer declares "no animation" as a class. Animation
+    // support is still an explicit per-parameter capability, but what it must EQUAL is the shared
+    // schema predicate -- so a registered definition can never be a second opinion about what is
+    // animatable. Solid colour and text size/colour now declare it; text content, a String, does
+    // not.
+    expectations.expect(
+        layer != nullptr && layer->parameters.size() == 6 &&
+            std::ranges::all_of(
+                std::span(layer->parameters).first(5),
+                [](const auto& parameter) { return parameter.supportsAnimation; }) &&
+            !layer->parameters[5].supportsAnimation && solid != nullptr &&
+            solid->parameters.front().supportsAnimation && text != nullptr &&
+            text->parameters.size() == 3 && !text->parameters[0].supportsAnimation &&
+            text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
+        "animation support is an explicit per-parameter evaluator capability");
+    const auto declarationMatchesSchema = [](const auto& definition) {
+        return std::ranges::all_of(definition->parameters, [](const auto& parameter) {
+            return parameter.supportsAnimation ==
+                   document::isAnimatableSchemaKey(parameter.schemaKey);
+        });
+    };
+    expectations.expect(layer != nullptr && solid != nullptr && text != nullptr &&
+                            declarationMatchesSchema(layer) && declarationMatchesSchema(solid) &&
+                            declarationMatchesSchema(text),
+                        "and it agrees with the shared schema predicates for every registered "
+                        "parameter, so the two can never drift");
+    expectations.expect(
+        layer != nullptr && layer->parameters.size() == 6 &&
+            layer->parameters[0].role == document::kPositionParameterRole &&
+            layer->parameters[0].schemaKey == document::kPositionParameterSchemaKey &&
+            layer->parameters[0].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[1].role == document::kAnchorParameterRole &&
+            layer->parameters[1].schemaKey == document::kAnchorParameterSchemaKey &&
+            layer->parameters[1].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[2].role == document::kScaleParameterRole &&
+            layer->parameters[2].schemaKey == document::kScaleParameterSchemaKey &&
+            layer->parameters[2].valueKind == runtime::ParameterValueKind::Vec2d &&
+            layer->parameters[3].role == document::kRotationParameterRole &&
+            layer->parameters[3].schemaKey == document::kRotationParameterSchemaKey &&
+            layer->parameters[3].valueKind == runtime::ParameterValueKind::Float64 &&
+            layer->parameters[4].role == document::kOpacityParameterRole &&
+            layer->parameters[4].schemaKey == document::kOpacityParameterSchemaKey &&
+            layer->parameters[4].valueKind == runtime::ParameterValueKind::Float64 &&
+            layer->parameters[5].role == document::kBlendModeParameterRole &&
+            layer->parameters[5].schemaKey == document::kBlendModeParameterSchemaKey &&
+            layer->parameters[5].valueKind == runtime::ParameterValueKind::Integer,
+        "the Layer Output schema is exactly position, anchor, scale, rotation, opacity, and blend "
+        "mode, in the registered order");
+    expectations.expect(layer != nullptr && layer->parameters.size() == 6 &&
+                            layer->parameters[1].defaultValue ==
+                                document::ParameterValue{document::kDefaultAnchor} &&
+                            layer->parameters[2].defaultValue ==
+                                document::ParameterValue{document::kDefaultScale} &&
+                            layer->parameters[3].defaultValue ==
+                                document::ParameterValue{document::kDefaultRotationDegrees} &&
+                            layer->parameters[5].defaultValue ==
+                                document::ParameterValue{document::kDefaultBlendModeValue},
+                        "the transform defaults are the identity transform -- centre anchor, unit "
+                        "scale, no rotation -- and the blend mode defaults to Normal");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,
                         "registration is closed after freeze");
@@ -168,6 +263,119 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
                         "Solid remains an explicitly extensible lowering contract");
 }
 
+// Task S7: the value library's ONE shape contract, exercised through the registry rather than by
+// reaching into it. Every built-in registers (the count above proves that), so what is pinned here
+// is the refusals -- each perturbation below breaks exactly one clause of the contract, and a
+// definition that still registered would mean the clause is not being checked.
+void testValueLoweringShapeContract(Expectations& expectations) {
+    using namespace bloom;
+
+    const auto refuses = [&expectations](runtime::NodeDefinition definition,
+                                         const std::string_view message) {
+        runtime::NodeDefinitionRegistry registry;
+        expectations.expect(registry.registerDefinition(std::move(definition)) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            message);
+    };
+
+    // A literal: no inputs, one output, one parameter.
+    const auto literal =
+        builtInDefinition(document::kScalarValueNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto extraSocket = literal;
+        extraSocket.inputs.push_back(
+            {std::string(document::kValueParameterRole), runtime::SocketValueKind::Scalar, false});
+        refuses(std::move(extraSocket), "a literal Value node may not take an input at all");
+    }
+    {
+        auto animatable = literal;
+        animatable.parameters.front().supportsAnimation = true;
+        refuses(std::move(animatable),
+                "no value schema is animatable, so a definition may not claim one is");
+    }
+    {
+        auto structural = literal;
+        structural.cardinality = runtime::NodeCardinality::OnePerComposition;
+        refuses(std::move(structural), "a value node is never a structural singleton");
+    }
+    {
+        auto misfiled = literal;
+        misfiled.category = runtime::NodeCategory::Compositing;
+        refuses(std::move(misfiled),
+                "a value node is listed under Values or Utilities and nowhere else");
+    }
+
+    // An operand node: every socket backed by a parameter of the matching kind, and never required.
+    const auto clamp =
+        builtInDefinition(document::kClampNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto required = clamp;
+        required.inputs.front().required = true;
+        refuses(std::move(required),
+                "an operand socket is never required: its parameter is the value when nothing is "
+                "connected");
+    }
+    {
+        auto mismatched = clamp;
+        mismatched.inputs.front().valueKind = runtime::SocketValueKind::Color;
+        refuses(std::move(mismatched),
+                "an operand socket's kind must be the one its parameter's value kind carries");
+    }
+    {
+        auto unbacked = clamp;
+        unbacked.inputs.push_back({"stray", runtime::SocketValueKind::Scalar, false});
+        refuses(std::move(unbacked),
+                "a socket with no parameter behind it exists only on a Reroute");
+    }
+    {
+        auto unsocketed = clamp;
+        unsocketed.parameters.push_back(
+            {"stray", "example.operand", runtime::ParameterValueKind::Float64, true, false, 0.0});
+        refuses(
+            std::move(unsocketed),
+            "a parameter with no socket must be an inline selector, not an unreachable operand");
+    }
+
+    // A Reroute: the one value lowering whose single socket is required and carries no parameter.
+    const auto reroute =
+        builtInDefinition(document::kScalarRerouteNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto optional = reroute;
+        optional.inputs.front().required = false;
+        refuses(std::move(optional),
+                "a Reroute's pass-through is required: nothing else can supply it");
+    }
+    {
+        auto retyped = reroute;
+        retyped.outputs.front().valueKind = runtime::SocketValueKind::Color;
+        refuses(std::move(retyped), "a Reroute passes its own kind through, not another");
+    }
+    {
+        auto pixels = reroute;
+        pixels.inputs.front().valueKind = runtime::SocketValueKind::Image;
+        pixels.outputs.front().valueKind = runtime::SocketValueKind::Image;
+        refuses(std::move(pixels),
+                "only the Image Reroute type may carry Image: a kind-named type and its sockets "
+                "cannot disagree");
+    }
+
+    // Time: no inputs, no parameters, and its two outputs in their declared units.
+    {
+        auto time =
+            builtInDefinition(document::kTimeValueNodeType, document::kValueNodeSchemaVersion);
+        time.outputs.pop_back();
+        refuses(std::move(time), "Time declares both of its units or neither");
+    }
+
+    // A Switch: both branches carry the result's kind, and the condition is Boolean.
+    {
+        auto mixedSwitch =
+            builtInDefinition(document::kScalarSwitchNodeType, document::kValueNodeSchemaVersion);
+        mixedSwitch.inputs.front().valueKind = runtime::SocketValueKind::Scalar;
+        refuses(std::move(mixedSwitch), "a Switch's condition is Boolean and only Boolean");
+    }
+}
+
 void testLargeFrozenRegistryLookup(Expectations& expectations) {
     using namespace bloom::runtime;
     constexpr std::size_t definitionCount = 4'096;
@@ -202,6 +410,7 @@ int main() try {
     testValidationAndDuplicates(expectations);
     testFreezeAndBuiltIns(expectations);
     testStructuralLoweringsRequireCanonicalKeys(expectations);
+    testValueLoweringShapeContract(expectations);
     testLargeFrozenRegistryLookup(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 } catch (const std::exception& error) {

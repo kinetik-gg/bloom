@@ -163,7 +163,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 0\n"
+    "    \"minor\": 4\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -185,8 +185,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "        },\n"
     "        \"expectedRevision\": {\n"
     "          \"algorithm\": \"sha256\",\n"
-    "          \"digest\": "
-    "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n"
+    "          \"digest\": \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n"
     "        },\n"
     "        \"portability\": \"builtin\",\n"
     "        \"contextVariables\": []\n"
@@ -252,7 +251,30 @@ constexpr std::string_view kMinimalDocumentGolden =
     "            \"nodeId\": \"2\",\n"
     "            \"port\": \"image\"\n"
     "          }\n"
-    "        }\n"
+    "        },\n"
+    "        \"nodeLayout\": [\n"
+    "          {\n"
+    "            \"nodeId\": \"1\",\n"
+    "            \"position\": {\n"
+    "              \"x\": 544.0,\n"
+    "              \"y\": 32.0\n"
+    "            },\n"
+    "            \"width\": 128.0,\n"
+    "            \"collapsed\": false,\n"
+    "            \"muted\": false\n"
+    "          },\n"
+    "          {\n"
+    "            \"nodeId\": \"2\",\n"
+    "            \"position\": {\n"
+    "              \"x\": 800.0,\n"
+    "              \"y\": 32.0\n"
+    "            },\n"
+    "            \"width\": 128.0,\n"
+    "            \"collapsed\": false,\n"
+    "            \"muted\": false\n"
+    "          }\n"
+    "        ],\n"
+    "        \"nodeGroups\": []\n"
     "      }\n"
     "    ]\n"
     "  },\n"
@@ -267,7 +289,8 @@ constexpr std::string_view kMinimalDocumentGolden =
     "      \"animationCurve\": \"0\",\n"
     "      \"keyframe\": \"0\",\n"
     "      \"driverBinding\": \"0\",\n"
-    "      \"extensionRecord\": \"0\"\n"
+    "      \"extensionRecord\": \"0\",\n"
+    "      \"nodeGroup\": \"0\"\n"
     "    }\n"
     "  },\n"
     "  \"extensions\": []\n"
@@ -312,7 +335,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 0\n"
+        "    \"minor\": 4\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -395,6 +418,54 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "                \"alpha\": 1.0\n"
         "              }\n"
         "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"8\",\n"
+        "            \"schemaKey\": \"bloom.transform.anchor\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"vec2\",\n"
+        "                \"x\": 0.0,\n"
+        "                \"y\": 0.0\n"
+        "              }\n"
+        "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"9\",\n"
+        "            \"schemaKey\": \"bloom.transform.scale\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"vec2\",\n"
+        "                \"x\": 1.0,\n"
+        "                \"y\": 1.0\n"
+        "              }\n"
+        "            }\n"
+        "          },\n"
+        "          {\n"
+        "            \"id\": \"10\",\n"
+        "            \"schemaKey\": \"bloom.transform.rotation\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"float64\",\n"
+        "                \"value\": 0.0\n"
+        "              }\n"
+        "            }\n"
+        "          },\n"
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode parameter,
+        // persisted as the int64 its stable mapping gives it (Normal = 0).
+        "          {\n"
+        "            \"id\": \"11\",\n"
+        "            \"schemaKey\": \"bloom.layer.blend-mode\",\n"
+        "            \"source\": {\n"
+        "              \"kind\": \"constant\",\n"
+        "              \"value\": {\n"
+        "                \"kind\": \"int64\",\n"
+        "                \"value\": \"0\"\n"
+        "              }\n"
+        "            }\n"
         "          }\n"
         "        ],\n"
         "        \"animationCurves\": [\n"
@@ -445,8 +516,17 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "            {\n"
         "              \"id\": \"3\",\n"
         "              \"typeId\": \"bloom.layer-output\",\n"
-        "              \"schemaVersion\": 1,\n"
+        // ADAPTED (blend modes): the Layer Output node schema version is now 3.
+        "              \"schemaVersion\": 3,\n"
         "              \"parameters\": [\n"
+        "                {\n"
+        "                  \"role\": \"anchor\",\n"
+        "                  \"parameterId\": \"8\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"blendMode\",\n"
+        "                  \"parameterId\": \"11\"\n"
+        "                },\n"
         "                {\n"
         "                  \"role\": \"opacity\",\n"
         "                  \"parameterId\": \"3\"\n"
@@ -454,6 +534,14 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "                {\n"
         "                  \"role\": \"position\",\n"
         "                  \"parameterId\": \"5\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"rotation\",\n"
+        "                  \"parameterId\": \"10\"\n"
+        "                },\n"
+        "                {\n"
+        "                  \"role\": \"scale\",\n"
+        "                  \"parameterId\": \"9\"\n"
         "                }\n"
         "              ]\n"
         "            },\n"
@@ -524,7 +612,50 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "            \"nodeId\": \"4\",\n"
         "            \"port\": \"image\"\n"
         "          }\n"
-        "        }\n"
+        "        },\n"
+        "        \"nodeLayout\": [\n"
+        "          {\n"
+        "            \"nodeId\": \"1\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 544.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"2\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 32.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"3\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 288.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"4\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 800.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          }\n"
+        "        ],\n"
+        "        \"nodeGroups\": []\n"
         "      }\n"
         "    ]\n"
         "  },\n"
@@ -535,11 +666,12 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "      \"edge\": \"3\",\n"
         "      \"layer\": \"1\",\n"
         "      \"layerSlot\": \"1\",\n"
-        "      \"parameter\": \"7\",\n"
+        "      \"parameter\": \"11\",\n"
         "      \"animationCurve\": \"9\",\n"
         "      \"keyframe\": \"22\",\n"
         "      \"driverBinding\": \"0\",\n"
-        "      \"extensionRecord\": \"0\"\n"
+        "      \"extensionRecord\": \"0\",\n"
+        "      \"nodeGroup\": \"0\"\n"
         "    }\n"
         "  },\n"
         "  \"extensions\": []\n"
@@ -561,7 +693,16 @@ void testComposedGoldenBytes(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(3),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
@@ -601,16 +742,29 @@ void testComposedGoldenBytes(Expectations& expectations) {
     graph.setCompositionOutput({NodeId::fromRaw(4), std::string(kCompositionOutputOutputPort)});
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
-    expectations.expect(composition.parameters().insert(
-                            {ParameterId::fromRaw(7), std::string(kSolidColorParameterSchemaKey),
-                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(5), std::string(kPositionParameterSchemaKey),
-                                 ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
-                            composition.parameters().insert(
-                                {ParameterId::fromRaw(3), std::string(kOpacityParameterSchemaKey),
-                                 AnimationCurveSource{AnimationCurveId::fromRaw(9)}}),
-                        "the composed fixture parameters insert out of numeric ID order");
+    expectations.expect(
+        composition.parameters().insert({ParameterId::fromRaw(7),
+                                         std::string(kSolidColorParameterSchemaKey),
+                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(5),
+                                             std::string(kPositionParameterSchemaKey),
+                                             ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(3),
+                                             std::string(kOpacityParameterSchemaKey),
+                                             AnimationCurveSource{AnimationCurveId::fromRaw(9)}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(8),
+                                             std::string(kAnchorParameterSchemaKey),
+                                             ConstantValueSource{kDefaultAnchor}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(9),
+                                             std::string(kScaleParameterSchemaKey),
+                                             ConstantValueSource{kDefaultScale}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(10),
+                                             std::string(kRotationParameterSchemaKey),
+                                             ConstantValueSource{kDefaultRotationDegrees}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(11),
+                                             std::string(kBlendModeParameterSchemaKey),
+                                             ConstantValueSource{kDefaultBlendModeValue}}),
+        "the composed fixture parameters insert out of numeric ID order");
 
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);
@@ -631,7 +785,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 7,
+                                         .parameter = 11,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -673,7 +827,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 0\n"
+        "    \"minor\": 4\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -762,7 +916,30 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "            \"nodeId\": \"2\",\n"
         "            \"port\": \"image\"\n"
         "          }\n"
-        "        }\n"
+        "        },\n"
+        "        \"nodeLayout\": [\n"
+        "          {\n"
+        "            \"nodeId\": \"1\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 544.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          },\n"
+        "          {\n"
+        "            \"nodeId\": \"2\",\n"
+        "            \"position\": {\n"
+        "              \"x\": 800.0,\n"
+        "              \"y\": 32.0\n"
+        "            },\n"
+        "            \"width\": 128.0,\n"
+        "            \"collapsed\": false,\n"
+        "            \"muted\": false\n"
+        "          }\n"
+        "        ],\n"
+        "        \"nodeGroups\": []\n"
         "      }\n"
         "    ]\n"
         "  },\n"
@@ -777,7 +954,8 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "      \"animationCurve\": \"0\",\n"
         "      \"keyframe\": \"0\",\n"
         "      \"driverBinding\": \"0\",\n"
-        "      \"extensionRecord\": \"9\"\n"
+        "      \"extensionRecord\": \"9\",\n"
+        "      \"nodeGroup\": \"0\"\n"
         "    }\n"
         "  },\n"
         "  \"extensions\": [\n"
@@ -979,7 +1157,11 @@ void testInvalidColorSettingsRejections(Expectations& expectations) {
                        "color settings schema version is fixed at 1.0");
 }
 
-void testDriverSourceAdmission(Expectations& expectations) {
+// Task S7 inverted this test's subject. A live driver source used to fail admission, because the
+// source carried a DriverBindingId into a table the format did not have; document 1.4 records the
+// durable node-and-port pair the driver addresses, so what is asserted now is that a driven
+// parameter ENCODES -- and encodes as the same object shape an edge source already uses.
+void testDriverSourceEncoding(Expectations& expectations) {
     using namespace bloom::document;
     auto duration = RationalTime::create(240, 24);
     if (!duration.has_value()) {
@@ -995,7 +1177,7 @@ void testDriverSourceAdmission(Expectations& expectations) {
     }
     expectations.expect(composition->parameters().insert(
                             {ParameterId::fromRaw(2), std::string(kOpacityParameterSchemaKey),
-                             DriverBindingSource{DriverBindingId::fromRaw(4)}}),
+                             DriverBindingSource{NodeId::fromRaw(1), std::string(kValuePortName)}}),
                         "the driver fixture parameter inserts with a live driver source");
 
     IdAllocatorHighWater highWater{};
@@ -1003,6 +1185,8 @@ void testDriverSourceAdmission(Expectations& expectations) {
     highWater.node = 2;
     highWater.edge = 1;
     highWater.parameter = 2;
+    // Still declared even though no record carries one: decision 0018 requires the driverBinding
+    // high-water to persist so issued ids are never reused, and task S7 did not change that.
     highWater.driverBinding = 4;
     Document document{std::move(newProject.project), highWater};
     auto snapshot = document.snapshot();
@@ -1014,9 +1198,17 @@ void testDriverSourceAdmission(Expectations& expectations) {
                                       .colorSettings = &settings,
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch};
-    expectRequestError(expectations, request, {},
-                       CanonicalDocumentError::UnsupportedDriverBindingSource, 0, 0,
-                       "a live driver source fails admission with its composition and parameter");
+    const auto encoded = encodeWithSlack(request);
+    expectations.expect(encoded.ok, "a live driver source encodes rather than failing admission");
+    // Member order is part of the canonical form, so the three members are asserted as one
+    // contiguous run rather than three independent searches.
+    expectations.expect(encoded.bytes.find("\"kind\": \"driver\",\n"
+                                           "              \"sourceNodeId\": \"1\",\n"
+                                           "              \"outputPort\": \"value\"\n") !=
+                            std::string::npos,
+                        "the driver source is written as the node-and-port pair it addresses");
+    expectations.expect(encoded.bytes.find("\"minor\": 4") != std::string::npos,
+                        "a document carrying a driver source declares schema minor 4");
 }
 
 void testLimitsAndCapacityAdversarial(Expectations& expectations) {
@@ -1207,8 +1399,10 @@ void testPlainWriteExplicitDefaultsUnchanged(Expectations& expectations) {
 // Version parameterization: schemaMinor alone (no overlay) changes only the root schemaVersion.
 void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1222,22 +1416,24 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
-                        "schemaMinor=1 with no overlay sizes exactly with the golden");
+                        "schemaMinor=5 with no overlay sizes exactly with the golden");
     const auto encoded = encodeWithSlack(request);
     expectBytesEqual(expectations,
                      encoded.ok ? std::string_view(encoded.bytes) : std::string_view{}, expected,
-                     "schemaMinor=1 with no overlay emits {1, 1} and is otherwise "
+                     "schemaMinor=5 with no overlay emits {1, 5} and is otherwise "
                      "byte-identical");
 }
 
 // The document root itself is an attachment point (its schema path is the empty path).
 void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1258,7 +1454,7 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a root-attached retained member sizes exactly with the golden");
@@ -1271,8 +1467,10 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
 // A singleton schema-path attachment point nested one level in (project).
 void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello\"\n  },\n  \"idAllocation\"");
 
@@ -1293,7 +1491,7 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a project-attached retained member sizes exactly with the golden");
@@ -1309,8 +1507,10 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
 // canonical (byte equality proves no re-derivation/renormalization happened).
 void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1332,20 +1532,9 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                    "          }\n"
                    "        },\n"
                    "        \"parameters\"");
-    requireReplace(expected,
-                   "          }\n"
-                   "        }\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"",
-                   "          }\n"
-                   "        },\n"
-                   "        \"zzzComp\": -7\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"");
+    requireReplace(expected, "        \"nodeGroups\": []\n      }\n    ]\n  },\n  \"idAllocation\"",
+                   "        \"nodeGroups\": [],\n        \"zzzComp\": -7\n      }\n    ]\n  },\n  "
+                   "\"idAllocation\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1383,7 +1572,7 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "composition- and format-attached retained members size exactly with the "
@@ -1398,8 +1587,10 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
 // A collection-element attachment point nested two levels in (a graph node).
 void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1433,7 +1624,7 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a node-attached retained member sizes exactly with the golden");
@@ -1447,8 +1638,10 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
 // Composition/Node.
 void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1482,7 +1675,7 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "an edge-attached retained member sizes exactly with the golden");
@@ -1496,14 +1689,16 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
 // carrying a retained array of booleans.
 void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
+    // name a minor the default does not already produce or it would assert nothing.
+    requireReplace(expected, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
     requireReplace(expected,
-                   "      \"extensionRecord\": \"0\"\n"
+                   "      \"nodeGroup\": \"0\"\n"
                    "    }\n"
                    "  },\n"
                    "  \"extensions\"",
-                   "      \"extensionRecord\": \"0\",\n"
+                   "      \"nodeGroup\": \"0\",\n"
                    "      \"zzzHighWater\": 5\n"
                    "    },\n"
                    "    \"zzzIdAllocation\": [\n"
@@ -1540,7 +1735,7 @@ void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "idAllocation- and highestIssued-attached retained members size exactly "
@@ -1576,7 +1771,7 @@ void testOverlayLeftoverEntryIsTypedError(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(!size.hasValue() &&
                             size.error() == CanonicalDocumentError::RoundTripStateMismatch,
@@ -1618,7 +1813,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 1};
+                                      .schemaMinor = 5};
     const auto size = bloom::project::canonicalDocumentSize(request);
     if (!size.hasValue()) {
         expectations.expect(false, "the overlay capacity fixture preflights successfully");
@@ -1676,7 +1871,16 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
     const NodeRecord layerOutputNode{
         NodeId::fromRaw(2),
         std::string(kLayerOutputNodeType),
-        {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
+        // Canonical binding order -- UTF-8 by role -- because the decoder hands bindings back in
+        // exactly that order and these fixtures compare decoded records to these source records.
+        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+        // "blendMode" sorts between "anchor" and "opacity" in UTF-8 byte order.
+        {{"anchor", ParameterId::fromRaw(8)},
+         {"blendMode", ParameterId::fromRaw(11)},
+         {"opacity", ParameterId::fromRaw(3)},
+         {"position", ParameterId::fromRaw(5)},
+         {"rotation", ParameterId::fromRaw(10)},
+         {"scale", ParameterId::fromRaw(9)}},
         kLayerOutputNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(3),
                                            std::string(kCompositionOutputNodeType),
@@ -1711,7 +1915,19 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                          ConstantValueSource{1.0}}) &&
         composition.parameters().insert({ParameterId::fromRaw(5),
                                          std::string(kPositionParameterSchemaKey),
-                                         ConstantValueSource{Vec2d{0.0, 0.0}}});
+                                         ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(8),
+                                         std::string(kAnchorParameterSchemaKey),
+                                         ConstantValueSource{kDefaultAnchor}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(9),
+                                         std::string(kScaleParameterSchemaKey),
+                                         ConstantValueSource{kDefaultScale}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(10),
+                                         std::string(kRotationParameterSchemaKey),
+                                         ConstantValueSource{kDefaultRotationDegrees}}) &&
+        composition.parameters().insert({ParameterId::fromRaw(11),
+                                         std::string(kBlendModeParameterSchemaKey),
+                                         ConstantValueSource{kDefaultBlendModeValue}});
     if (!paramsInserted) {
         std::abort();
     }
@@ -1735,7 +1951,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
     highWater.edge = 2;
     highWater.layer = 1;
     highWater.layerSlot = 1;
-    highWater.parameter = 5;
+    highWater.parameter = 11;
     highWater.extensionRecord = 1;
     return Document{std::move(project), highWater};
 }
@@ -1759,8 +1975,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 0\n  },\n  \"project\"",
-                   "\"minor\": 1\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 4\n  },\n  \"project\"",
+                   "\"minor\": 5\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"
@@ -1808,26 +2024,10 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                    "        },\n"
                    "        \"parameters\"");
 
-    requireReplace(original,
-                   "          \"compositionOutput\": {\n"
-                   "            \"nodeId\": \"3\",\n"
-                   "            \"port\": \"image\"\n"
-                   "          }\n"
-                   "        }\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"",
-                   "          \"compositionOutput\": {\n"
-                   "            \"nodeId\": \"3\",\n"
-                   "            \"port\": \"image\"\n"
-                   "          }\n"
-                   "        },\n"
-                   "        \"zzzComp\": true\n"
-                   "      }\n"
-                   "    ]\n"
-                   "  },\n"
-                   "  \"idAllocation\"");
+    requireReplace(
+        original, "        \"nodeGroups\": []\n      }\n    ]\n  },\n  \"idAllocation\"",
+        "        \"nodeGroups\": [],\n        \"zzzComp\": true\n      }\n    ]\n  },\n  "
+        "\"idAllocation\"");
 
     requireReplace(original, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello world\"\n  },\n  \"idAllocation\"");
@@ -1884,7 +2084,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 1};
+                                             .schemaMinor = 5};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "
@@ -1907,7 +2107,7 @@ int main() {
         testComposedGoldenBytes(expectations);
         testExtensionGoldenBytes(expectations);
         testInvalidColorSettingsRejections(expectations);
-        testDriverSourceAdmission(expectations);
+        testDriverSourceEncoding(expectations);
         testLimitsAndCapacityAdversarial(expectations);
         testPlainWriteExplicitDefaultsUnchanged(expectations);
         testSchemaMinorParameterization(expectations);

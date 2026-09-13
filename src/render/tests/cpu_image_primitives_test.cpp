@@ -1,7 +1,9 @@
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/display_buffer.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cfenv>
 #include <cmath>
@@ -11,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <ranges>
 #include <source_location>
 #include <span>
 #include <stdexcept>
@@ -29,11 +32,14 @@ namespace {
 
 using bloom::core::Color4d;
 using bloom::core::PixelAspectRatio;
+using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::fillSolidRow;
 using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
 using bloom::render::ImageStatus;
 using bloom::render::ImageWindow;
+using bloom::render::LayerTransform;
+using bloom::render::layerTransformBilinearRow;
 using bloom::render::mapLinearRec709SceneToSrgbRow;
 using bloom::render::PreparedReferenceDisplayBuffer;
 using bloom::render::ReferenceDisplayBufferBuilder;
@@ -119,6 +125,14 @@ template <typename T>
         throw std::logic_error("invalid pixel fixture");
     }
     return *result.value();
+}
+
+// Rgba32f has no default state by design, so a scratch row has to be filled with the one value that
+// is always meaningful: exact transparent black.
+template <std::size_t Size> [[nodiscard]] std::array<Rgba32f, Size> transparentRow() {
+    return []<std::size_t... Index>(std::index_sequence<Index...>) {
+        return std::array<Rgba32f, Size>{((void)Index, Rgba32f::transparent())...};
+    }(std::make_index_sequence<Size>{});
 }
 
 [[nodiscard]] Rgba32fImageDescriptor descriptor(const ImageWindow dataWindow,
@@ -218,7 +232,8 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 2,
+    // ADAPTED (blend modes): the Layer Stack stage folds through the blend kernel now.
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 5,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});
@@ -345,6 +360,276 @@ void testTranslationAndOpacity(Expectations& expectations) {
         "translation row reports malformed storage, source state, and coordinates distinctly");
 }
 
+// The affine layer resample. Every expectation here is a hand-computed consequence of the
+// documented model -- inverse map, then pixel-centre bilinear gather with transparent taps outside
+// the source -- never a value copied out of the implementation.
+[[nodiscard]] LayerTransform transform(const LayerTransform::Authored authored,
+                                       const ImageWindow sourceWindow,
+                                       const double proxyScaleX = 1.0,
+                                       const double proxyScaleY = 1.0) {
+    const auto result = LayerTransform::create(authored, sourceWindow, proxyScaleX, proxyScaleY);
+    if (!result) {
+        throw std::logic_error("invalid layer transform fixture");
+    }
+    return *result.value();
+}
+
+void testLayerTransformTranslationIsBitIdenticalToThePreviousPrimitive(Expectations& expectations) {
+    // The pin the task's "identical output to today for scale 1 / rotation 0" requirement names:
+    // the retained pre-S4 primitive and the new one must agree BIT FOR BIT on a subpixel
+    // translation, and must keep agreeing when an anchor is authored, because an anchor is
+    // algebraically irrelevant to a translate-only layer and must therefore be numerically
+    // irrelevant too.
+    const auto imageWindow = window(0, 0, 4, 3);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const std::array sourcePixels{
+        pixel(0.25F, 0.5F, 0.75F, 1.0F),    pixel(1.0F, 0.0F, 0.0F, 1.0F),
+        pixel(0.0F, 0.125F, 0.0F, 0.25F),   pixel(0.5F, 0.5F, 0.5F, 0.5F),
+        pixel(0.0F, 0.0F, 1.0F, 1.0F),      pixel(0.125F, 0.25F, 0.375F, 0.5F),
+        pixel(1.0F, 1.0F, 1.0F, 1.0F),      Rgba32f::transparent(),
+        pixel(0.75F, 0.25F, 0.0F, 0.75F),   pixel(0.0F, 0.5F, 0.5F, 0.5F),
+        pixel(0.0625F, 0.0F, 0.0F, 0.125F), pixel(0.9F, 0.8F, 0.7F, 1.0F),
+    };
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "layer transform source view fixture succeeds");
+        return;
+    }
+
+    constexpr double kSubpixelX = 0.3;
+    constexpr double kSubpixelY = -0.7;
+    constexpr double kOpacity = 0.625;
+    const auto legacy = TranslationOpacity::create(kSubpixelX, kSubpixelY, kOpacity);
+    if (!legacy) {
+        expectations.expect(false, "legacy translation fixture succeeds");
+        return;
+    }
+    // A deliberately off-centre anchor, an exact 360 degree rotation, and unit scale: all three
+    // resolve to the translate-only path.
+    const auto affine = transform({.translationX = kSubpixelX,
+                                   .translationY = kSubpixelY,
+                                   .anchorX = -37.25,
+                                   .anchorY = 11.5,
+                                   .rotationDegrees = -360.0,
+                                   .opacity = kOpacity},
+                                  imageWindow);
+    expectations.expect(
+        affine.isTranslationOnly(),
+        "unit scale with a whole-turn rotation resolves to the translate-only path");
+
+    bool identical = true;
+    for (std::int64_t y = imageWindow.originY(); y < imageWindow.maxYExclusive(); ++y) {
+        auto legacyRow = transparentRow<4>();
+        auto affineRow = transparentRow<4>();
+        const auto legacyStatus = translateOpacityBilinearRow(*sourceView.value(), imageWindow, y,
+                                                              *legacy.value(), legacyRow);
+        const auto affineStatus =
+            layerTransformBilinearRow(*sourceView.value(), imageWindow, y, affine, affineRow);
+        identical = identical && !legacyStatus.has_value() && !affineStatus.has_value() &&
+                    legacyRow == affineRow;
+    }
+    expectations.expect(identical,
+                        "a translate-only layer resamples bit-identically to the retained pre-S4 "
+                        "primitive, anchor included");
+}
+
+void testLayerTransformQuarterTurnsAreExact(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 2, 2);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const std::array sourcePixels{
+        pixel(1.0F, 0.0F, 0.0F, 1.0F),
+        pixel(0.0F, 1.0F, 0.0F, 1.0F),
+        pixel(0.0F, 0.0F, 1.0F, 1.0F),
+        pixel(1.0F, 1.0F, 0.0F, 1.0F),
+    };
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "quarter turn source view fixture succeeds");
+        return;
+    }
+    const auto rowsOf = [&](const LayerTransform& value) {
+        std::array<std::array<Rgba32f, 2>, 2> rows{transparentRow<2>(), transparentRow<2>()};
+        bool ok = true;
+        for (std::int64_t y = 0; y < 2; ++y) {
+            ok = ok && !layerTransformBilinearRow(*sourceView.value(), imageWindow, y, value,
+                                                  rows[static_cast<std::size_t>(y)])
+                            .has_value();
+        }
+        return std::pair{ok, rows};
+    };
+
+    // A 2x2 layer's pixel-area centre is (0.5, 0.5). A quarter turn clockwise about it maps source
+    // (u, v) to output (1 - v, u), so output (x, y) samples source (y, 1 - x) -- every sample
+    // coordinate an exact integer, every bilinear factor exactly zero, every output pixel therefore
+    // an exact copy of one source pixel.
+    const auto [quarterOk, quarter] = rowsOf(transform({.rotationDegrees = 90.0}, imageWindow));
+    expectations.expect(quarterOk && quarter[0][0] == sourcePixels[2] &&
+                            quarter[0][1] == sourcePixels[0] && quarter[1][0] == sourcePixels[3] &&
+                            quarter[1][1] == sourcePixels[1],
+                        "a 90 degree rotation is an exact clockwise permutation of pixel centres");
+
+    // Half a turn is the exact reversal of both axes.
+    const auto [halfOk, half] = rowsOf(transform({.rotationDegrees = 180.0}, imageWindow));
+    expectations.expect(halfOk && half[0][0] == sourcePixels[3] && half[0][1] == sourcePixels[2] &&
+                            half[1][0] == sourcePixels[1] && half[1][1] == sourcePixels[0],
+                        "a 180 degree rotation is an exact reversal of both axes");
+
+    // 270 and -90 name the same quarter turn, and both must be exact.
+    const auto [threeQuarterOk, threeQuarter] =
+        rowsOf(transform({.rotationDegrees = 270.0}, imageWindow));
+    const auto [negativeOk, negative] = rowsOf(transform({.rotationDegrees = -90.0}, imageWindow));
+    expectations.expect(
+        threeQuarterOk && negativeOk && threeQuarter == negative &&
+            threeQuarter[0][0] == sourcePixels[1] && threeQuarter[0][1] == sourcePixels[3] &&
+            threeQuarter[1][0] == sourcePixels[0] && threeQuarter[1][1] == sourcePixels[2],
+        "270 and -90 degrees are the same exact quarter turn");
+
+    // 450 degrees winds past a full turn and must land exactly where 90 does: the wrap is exact
+    // arithmetic, not an approximation.
+    const auto [woundOk, wound] = rowsOf(transform({.rotationDegrees = 450.0}, imageWindow));
+    expectations.expect(woundOk && wound == quarter,
+                        "a rotation wound past a full turn is exactly its reduced angle");
+
+    // Anchored at the top-left pixel centre instead -- anchor (-0.5, -0.5) offsets the centre by
+    // half a pixel on each axis -- half a turn carries every other pixel off the layer, leaving
+    // only the anchored pixel itself.
+    const auto [cornerOk, corner] = rowsOf(
+        transform({.anchorX = -0.5, .anchorY = -0.5, .rotationDegrees = 180.0}, imageWindow));
+    expectations.expect(
+        cornerOk && corner[0][0] == sourcePixels[0] && corner[0][1] == Rgba32f::transparent() &&
+            corner[1][0] == Rgba32f::transparent() && corner[1][1] == Rgba32f::transparent(),
+        "an anchor at a corner pivots about that corner, not about the centre");
+}
+
+void testLayerTransformScaleAndBounds(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 2, 2);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    const auto white = pixel(1.0F, 1.0F, 1.0F, 1.0F);
+    const std::array sourcePixels{white, Rgba32f::transparent(), Rgba32f::transparent(), white};
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "scale source view fixture succeeds");
+        return;
+    }
+
+    // Half scale about the centre (0.5, 0.5) inverts to u = 0.5 + 2 (x - 0.5), so the four output
+    // pixel centres sample at -0.5 and 1.5 on each axis. Each in-range sample sits exactly half a
+    // pixel outside the checker's white corner, so it reads half that corner against a transparent
+    // tap on one axis and half again on the other: one quarter of white.
+    const auto halved = transform({.scaleX = 0.5, .scaleY = 0.5}, imageWindow);
+    const auto quarterWhite = pixel(0.25F, 0.25F, 0.25F, 0.25F);
+    auto firstRow = transparentRow<2>();
+    auto secondRow = transparentRow<2>();
+    const auto firstStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 0, halved, firstRow);
+    const auto secondStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, halved, secondRow);
+    expectations.expect(!firstStatus.has_value() && !secondStatus.has_value() &&
+                            firstRow[0] == quarterWhite && firstRow[1] == Rgba32f::transparent() &&
+                            secondRow[0] == Rgba32f::transparent() && secondRow[1] == quarterWhite,
+                        "half scale resamples a 2x2 checker to exact quarter-weighted corners");
+
+    // Bounds. The bilinear support of a 2x2 layer is the closed box [-1, 2] on each axis, so an
+    // unscaled, unmoved layer covers the whole 2x2 composition.
+    const auto identity = transform({}, imageWindow);
+    const auto identityBounds = identity.supportBounds(imageWindow);
+    expectations.expect(identityBounds.has_value() && *identityBounds == imageWindow,
+                        "an unmoved layer's data window is the whole composition");
+
+    // Moved one pixel right, the support starts at output column 0 still (the -1 tap) but the layer
+    // can no longer reach anything left of it; clipped to the composition it is columns 0..1.
+    const auto moved = transform({.translationX = 1.0}, imageWindow);
+    const auto movedBounds = moved.supportBounds(imageWindow);
+    expectations.expect(movedBounds.has_value() && *movedBounds == imageWindow,
+                        "a one-pixel move still reaches every column of a 2x2 composition");
+
+    // Far enough away and the layer reaches nothing at all, so it needs no image.
+    const auto gone = transform({.translationX = 100.0, .translationY = 100.0}, imageWindow);
+    expectations.expect(!gone.supportBounds(imageWindow).has_value(),
+                        "a layer carried off the composition has no data window at all");
+
+    // A larger composition shows the clipping doing real work: moved three pixels right inside an
+    // 8x8 frame, a 2x2 layer's support is output columns 2..5 and rows -1..2 clipped to 0..2.
+    const auto frame = window(0, 0, 8, 8);
+    const auto insideFrame = transform({.translationX = 3.0}, imageWindow);
+    const auto frameBounds = insideFrame.supportBounds(frame);
+    expectations.expect(frameBounds.has_value() && *frameBounds == window(2, 0, 4, 3),
+                        "a layer's data window is its transformed bounds clipped to the frame");
+}
+
+void testLayerTransformProxyAndRejections(Expectations& expectations) {
+    const auto imageWindow = window(0, 0, 4, 4);
+    const auto imageDescriptor = descriptor(imageWindow, imageWindow);
+    auto sourcePixels = transparentRow<16>();
+    sourcePixels[5] = pixel(1.0F, 0.0F, 0.0F, 1.0F);
+    const auto sourceImage = makeImage(imageDescriptor, sourcePixels);
+    const auto sourceView = sourceImage.view();
+    if (!sourceView) {
+        expectations.expect(false, "proxy source view fixture succeeds");
+        return;
+    }
+
+    // Proxy factors scale the authored translation and anchor into device pixels. At twice the
+    // composition extent an authored one-pixel move is a two-pixel device move, which is what keeps
+    // a proxy frame the same picture at a different size.
+    const auto proxied = transform({.translationX = 1.0}, imageWindow, 2.0, 2.0);
+    auto proxyRow = transparentRow<4>();
+    const auto proxyStatus =
+        layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, proxied, proxyRow);
+    expectations.expect(!proxyStatus.has_value() && proxyRow[3] == sourcePixels[5] &&
+                            proxyRow[1] == Rgba32f::transparent(),
+                        "a proxy factor scales the authored translation into device pixels");
+
+    const auto identity = transform({}, imageWindow);
+    auto row = transparentRow<4>();
+    const auto otherWindow = window(1, 0, 4, 4);
+    expectations.expect(
+        hasError(layerTransformBilinearRow(*sourceView.value(), otherWindow, 0,
+                                           transform({}, otherWindow), row),
+                 ImageErrorCode::IncompatibleImageDescriptor),
+        "the resample refuses a source whose data window is not the one it was built for");
+    expectations.expect(
+        hasError(layerTransformBilinearRow(Rgba32fImageView{}, imageWindow, 0, identity, row),
+                 ImageErrorCode::InvalidState) &&
+            hasError(layerTransformBilinearRow(*sourceView.value(), imageWindow, 9, identity, row),
+                     ImageErrorCode::CoordinateOutOfBounds),
+        "the resample reports source state and coordinate failures distinctly");
+    auto wrongSize = transparentRow<1>();
+    expectations.expect(hasError(layerTransformBilinearRow(*sourceView.value(), imageWindow, 0,
+                                                           identity, wrongSize),
+                                 ImageErrorCode::InvalidStorageSize),
+                        "the resample reports a row span that does not match its window");
+
+    const auto rejects = [&](const LayerTransform::Authored authored, const double proxyX = 1.0,
+                             const double proxyY = 1.0) {
+        const auto result = LayerTransform::create(authored, imageWindow, proxyX, proxyY);
+        return !result && result.error() != nullptr &&
+               (result.error()->code == ImageErrorCode::InvalidParameter ||
+                result.error()->code == ImageErrorCode::NonFiniteResult);
+    };
+    const auto infinity = std::numeric_limits<double>::infinity();
+    expectations.expect(rejects({.scaleX = 0.0}) && rejects({.scaleY = 0.0}),
+                        "a collapsed layer has no inverse and is refused rather than resampled");
+    expectations.expect(rejects({.translationX = infinity}) && rejects({.anchorY = infinity}) &&
+                            rejects({.rotationDegrees = infinity}) && rejects({.opacity = -0.5}) &&
+                            rejects({.opacity = 1.5}) && rejects({}, 0.0) && rejects({}, 1.0, -2.0),
+                        "non-finite values, an out-of-range opacity, and a non-positive proxy "
+                        "factor are all refused");
+
+    // A negative scale factor is authorable and mirrors the axis: a 4x4 layer's centre is 1.5, so
+    // x mirrors to 3 - x.
+    const auto mirrored = transform({.scaleX = -1.0}, imageWindow);
+    auto mirroredRow = transparentRow<4>();
+    expectations.expect(
+        !layerTransformBilinearRow(*sourceView.value(), imageWindow, 1, mirrored, mirroredRow)
+                .has_value() &&
+            mirroredRow[2] == sourcePixels[5] && mirroredRow[1] == Rgba32f::transparent(),
+        "a negative scale factor mirrors the axis exactly");
+}
+
 void testSourceOver(Expectations& expectations) {
     const std::array source{
         pixel(0.5F, 0.0F, 0.0F, 0.5F),
@@ -383,6 +668,126 @@ void testSourceOver(Expectations& expectations) {
         hasError(sourceOverLinearRec709SceneRow(overflowingSource, overflowingDestination),
                  ImageErrorCode::NonFiniteResult),
         "source-over reports finite-input RGB overflow without clamping");
+}
+
+// The blend-mode goldens, on ONE 2x2 premultiplied fixture carrying every awkward case the process
+// representation allows: partial alpha on both sides, an opaque source over a translucent backdrop,
+// an HDR channel above 1 on both sides, and a negative channel.
+//
+// Every fixture value and every expected value here is dyadic -- exactly representable in binary32
+// -- so the goldens are exact algebra rather than a particular rounding, and they were derived from
+// the documented formulas (docs/architecture/color-management.md, "Blend modes") independently of
+// the implementation rather than captured from its output.
+struct BlendGolden final {
+    bloom::core::BlendMode mode;
+    std::array<Rgba32f, 4> expected;
+};
+
+void testBlendModes(Expectations& expectations) {
+    using bloom::core::BlendMode;
+    const std::array blendSource{
+        pixel(0.5F, 0.25F, 0.125F, 0.5F),    // straight (1, 0.5, 0.25) at half alpha
+        pixel(2.0F, 0.5F, -0.25F, 1.0F),     // opaque, HDR red, negative blue
+        pixel(0.125F, 0.375F, 0.25F, 0.25F), // straight (0.5, 1.5, 1) at quarter alpha
+        pixel(0.75F, 0.0F, 0.75F, 0.75F),    // straight (1, 0, 1) at three-quarter alpha
+    };
+    const std::array blendDestination{
+        pixel(0.25F, 0.5F, 0.75F, 1.0F),        // opaque backdrop
+        pixel(0.375F, 0.125F, 0.625F, 0.5F),    // straight (0.75, 0.25, 1.25): HDR backdrop blue
+        pixel(0.5F, 0.5F, 0.5F, 1.0F),          // opaque mid grey
+        pixel(0.0625F, 0.125F, 0.1875F, 0.25F), // straight (0.25, 0.5, 0.75) at quarter alpha
+    };
+    const std::array<BlendGolden, 8> goldens{{
+        {BlendMode::Normal,
+         {pixel(0.625F, 0.5F, 0.5F, 1.0F), pixel(2.0F, 0.5F, -0.25F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.765625F, 0.03125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Add,
+         {pixel(0.75F, 0.75F, 0.875F, 1.0F), pixel(2.375F, 0.625F, 0.375F, 1.0F),
+          pixel(0.625F, 0.875F, 0.75F, 1.0F), pixel(0.8125F, 0.125F, 0.9375F, 0.8125F)}},
+        {BlendMode::Multiply,
+         {pixel(0.25F, 0.375F, 0.46875F, 1.0F), pixel(1.75F, 0.3125F, -0.28125F, 1.0F),
+          pixel(0.4375F, 0.5625F, 0.5F, 1.0F), pixel(0.625F, 0.03125F, 0.75F, 0.8125F)}},
+        {BlendMode::Screen,
+         {pixel(0.625F, 0.625F, 0.78125F, 1.0F), pixel(1.625F, 0.5625F, 0.53125F, 1.0F),
+          pixel(0.5625F, 0.6875F, 0.625F, 1.0F), pixel(0.765625F, 0.125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Overlay,
+         {pixel(0.375F, 0.5F, 0.6875F, 1.0F), pixel(1.75F, 0.375F, 0.6875F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.671875F, 0.03125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Darken,
+         {pixel(0.25F, 0.5F, 0.5F, 1.0F), pixel(1.375F, 0.375F, -0.25F, 1.0F),
+          pixel(0.5F, 0.5F, 0.5F, 1.0F), pixel(0.625F, 0.03125F, 0.75F, 0.8125F)}},
+        {BlendMode::Lighten,
+         {pixel(0.625F, 0.5F, 0.75F, 1.0F), pixel(2.0F, 0.5F, 0.5F, 1.0F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.765625F, 0.125F, 0.796875F, 0.8125F)}},
+        {BlendMode::Difference,
+         {pixel(0.5F, 0.25F, 0.625F, 1.0F), pixel(1.625F, 0.375F, 0.625F, 1.0F),
+          pixel(0.375F, 0.625F, 0.5F, 1.0F), pixel(0.71875F, 0.125F, 0.65625F, 0.8125F)}},
+    }};
+    expectations.expect(goldens.size() == bloom::core::kBlendModes.size(),
+                        "every implemented blend mode has a golden row");
+    for (const auto& golden : goldens) {
+        auto destination = blendDestination;
+        const auto status = blendLinearRec709SceneRow(golden.mode, blendSource, destination);
+        expectations.expect(!status.has_value() && std::ranges::equal(destination, golden.expected),
+                            "a blend mode reproduces its documented formula exactly on "
+                            "premultiplied alpha < 1 and HDR > 1 pixels");
+    }
+
+    // The old behaviour, bit for bit: Normal is not merely algebraically source-over, it IS the
+    // retained source-over kernel, so the two must agree on identical storage with no tolerance.
+    auto blended = blendDestination;
+    auto composited = blendDestination;
+    expectations.expect(
+        !blendLinearRec709SceneRow(BlendMode::Normal, blendSource, blended).has_value() &&
+            !sourceOverLinearRec709SceneRow(blendSource, composited).has_value() &&
+            blended == composited,
+        "Normal is bit-exactly the pre-blend-mode source-over result");
+
+    // Alpha compositing is source-over under EVERY mode: a mode changes a layer's colour, never how
+    // much of the backdrop it covers.
+    for (const auto mode : bloom::core::kBlendModes) {
+        auto modeDestination = blendDestination;
+        auto overDestination = blendDestination;
+        const bool ok =
+            !blendLinearRec709SceneRow(mode, blendSource, modeDestination).has_value() &&
+            !sourceOverLinearRec709SceneRow(blendSource, overDestination).has_value();
+        expectations.expect(ok && std::ranges::equal(modeDestination, overDestination,
+                                                     [](const Rgba32f left, const Rgba32f right) {
+                                                         return left.alpha() == right.alpha();
+                                                     }),
+                            "every mode composites alpha as source-over");
+    }
+
+    // The two alpha endpoints, under a mode that is nowhere near source-over in colour.
+    const std::array endpointSource{Rgba32f::transparent(), pixel(0.5F, 0.25F, 0.125F, 0.5F)};
+    std::array endpointDestination{pixel(0.25F, 0.5F, 0.75F, 1.0F), Rgba32f::transparent()};
+    const auto untouchedBackdrop = endpointDestination[0];
+    expectations.expect(
+        !blendLinearRec709SceneRow(BlendMode::Difference, endpointSource, endpointDestination)
+                .has_value() &&
+            endpointDestination[0] == untouchedBackdrop &&
+            endpointDestination[1] == endpointSource[1],
+        "a transparent source leaves the backdrop alone and a transparent backdrop takes the "
+        "source exactly, under every mode");
+
+    std::array<Rgba32f, 1> wrongSize{Rgba32f::transparent()};
+    expectations.expect(
+        hasError(blendLinearRec709SceneRow(BlendMode::Screen, blendSource, wrongSize),
+                 ImageErrorCode::InvalidStorageSize),
+        "blending rejects unequal row sizes");
+    auto aliased = blendDestination;
+    expectations.expect(hasError(blendLinearRec709SceneRow(
+                                     BlendMode::Screen, std::span<const Rgba32f>(aliased), aliased),
+                                 ImageErrorCode::InvalidParameter),
+                        "blending rejects source storage that aliases its in-place destination");
+
+    const auto maximum = std::numeric_limits<float>::max();
+    const std::array overflowingSource{pixel(maximum, 0.0F, 0.0F, 1.0F)};
+    std::array overflowingDestination{pixel(maximum, 0.0F, 0.0F, 1.0F)};
+    expectations.expect(hasError(blendLinearRec709SceneRow(BlendMode::Add, overflowingSource,
+                                                           overflowingDestination),
+                                 ImageErrorCode::NonFiniteResult),
+                        "blending reports finite-input RGB overflow without clamping");
 }
 
 void testReferenceDisplayMapping(Expectations& expectations) {
@@ -490,7 +895,12 @@ int main() {
         testDisplayBuilder(expectations);
         testSolidAndParameters(expectations);
         testTranslationAndOpacity(expectations);
+        testLayerTransformTranslationIsBitIdenticalToThePreviousPrimitive(expectations);
+        testLayerTransformQuarterTurnsAreExact(expectations);
+        testLayerTransformScaleAndBounds(expectations);
+        testLayerTransformProxyAndRejections(expectations);
         testSourceOver(expectations);
+        testBlendModes(expectations);
         testReferenceDisplayMapping(expectations);
         testFloatingPointEnvironment(expectations);
         return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

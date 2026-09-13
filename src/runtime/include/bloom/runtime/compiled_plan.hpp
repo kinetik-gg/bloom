@@ -1,26 +1,51 @@
 #pragma once
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <variant>
 #include <vector>
 
 namespace bloom::runtime {
 
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 1;
-inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 1;
+// Deliberately NOT bumped when CompiledText was added (task S3). This number exists so an evaluator
+// can refuse a plan built under different semantics, and a compiled plan never crosses a process or
+// persistence boundary: it is compiled in-process from a document snapshot and retained only by
+// frames of that same process, so no version-1 plan can reach a build that has CompiledText, and no
+// plan carrying a CompiledText can reach a build that does not. What DOES cross such a boundary is
+// ProcessFrameIdentity, and the two numbers it carries for this are
+// kCpuCompositionEvaluatorSemanticsVersion and render::kCpuImagePrimitiveSemanticsVersion -- both
+// bumped by the text path, because both describe pixels a cached or exported frame may already
+// hold. Bump this one when the plan's own grammar changes in a way an existing plan value could
+// misrepresent (a field's meaning changing, not a new alternative appearing).
+//
+// Task S5 bumped it 1 -> 2 for exactly that reason: CompiledSolid::color, CompiledText::size, and
+// CompiledText::color stopped being resolved constants and became CompiledColorParameter/
+// CompiledScalarParameter operands, because those three schemas are now animatable. A version-1
+// plan's `color` field was a Color4d; a version-2 plan's is a parameter that may index a curve
+// table, so the same field position means something different -- a field's meaning changing, not a
+// new alternative appearing. Both numbers below also enter ProcessFrameIdentity and therefore every
+// cached/exported frame digest (src/output/process_frame_semantic_identity.cpp), which is why the
+// identity goldens were re-derived in the same change.
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 2;
+// Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
+// value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
+inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
 
 enum class CompiledKeyframeInterpolation : std::uint8_t {
     Hold,
     Linear,
+    EaseInOut,
 };
 
 struct CompiledScalarKeyframe final {
@@ -55,6 +80,22 @@ struct CompiledVec2Curve final {
     friend bool operator==(const CompiledVec2Curve&, const CompiledVec2Curve&) = default;
 };
 
+struct CompiledColor4Keyframe final {
+    document::KeyframeId id;
+    core::RationalTime time;
+    core::Color4d value;
+    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+
+    friend bool operator==(const CompiledColor4Keyframe&, const CompiledColor4Keyframe&) = default;
+};
+
+struct CompiledColor4Curve final {
+    document::AnimationCurveId id;
+    std::vector<CompiledColor4Keyframe> keyframes;
+
+    friend bool operator==(const CompiledColor4Curve&, const CompiledColor4Curve&) = default;
+};
+
 class ScalarCurveIndex final {
   public:
     [[nodiscard]] static constexpr ScalarCurveIndex fromRaw(const std::size_t value) noexcept {
@@ -87,9 +128,30 @@ class Vec2CurveIndex final {
     std::size_t value_ = 0;
 };
 
+class Color4CurveIndex final {
+  public:
+    [[nodiscard]] static constexpr Color4CurveIndex fromRaw(const std::size_t value) noexcept {
+        return Color4CurveIndex(value);
+    }
+
+    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
+    friend constexpr auto operator<=>(const Color4CurveIndex&,
+                                      const Color4CurveIndex&) noexcept = default;
+
+  private:
+    explicit constexpr Color4CurveIndex(const std::size_t value) noexcept : value_(value) {}
+
+    std::size_t value_ = 0;
+};
+
+// Each of the three typed operands gained ONE more alternative in task S7: a value-graph output,
+// for a parameter a driver binding supplies per frame. A new alternative appearing is deliberately
+// not a plan-semantics change -- no existing plan value means anything different than it did, and
+// the field at this position is still "where this parameter's value comes from" -- which is the
+// same reasoning the semantics-version comment at the top of this file already states.
 struct CompiledScalarParameter final {
     document::ParameterId id;
-    std::variant<double, ScalarCurveIndex> source;
+    std::variant<double, ScalarCurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledScalarParameter&,
                            const CompiledScalarParameter&) = default;
@@ -97,9 +159,16 @@ struct CompiledScalarParameter final {
 
 struct CompiledVec2Parameter final {
     document::ParameterId id;
-    std::variant<document::Vec2d, Vec2CurveIndex> source;
+    std::variant<document::Vec2d, Vec2CurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledVec2Parameter&, const CompiledVec2Parameter&) = default;
+};
+
+struct CompiledColorParameter final {
+    document::ParameterId id;
+    std::variant<core::Color4d, Color4CurveIndex, ValueOutputIndex> source;
+
+    friend bool operator==(const CompiledColorParameter&, const CompiledColorParameter&) = default;
 };
 
 class OperationIndex final {
@@ -118,20 +187,50 @@ class OperationIndex final {
     std::size_t value_ = 0;
 };
 
+// A lowered solid source. Its colour is a typed operand rather than a resolved constant (task S5):
+// the solid colour schema is animatable now, so the value is either a constant or an index into the
+// plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
 struct CompiledSolid {
     document::NodeId sourceNodeId;
-    document::ParameterId colorParameterId;
-    core::Color4d color;
+    CompiledColorParameter color;
 
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
 
+// A lowered text source. Content stays a resolved constant because a String has no interpolation
+// and no command in the surface can put it on a curve; size and colour became typed operands in
+// task S5, when both schemas became animatable. Each carries its own parameter identity so a
+// diagnostic can name the exact parameter that failed, exactly as CompiledSolid does.
+struct CompiledText {
+    document::NodeId sourceNodeId;
+    document::ParameterId contentParameterId;
+    std::string content;
+    CompiledScalarParameter size;
+    CompiledColorParameter color;
+
+    friend bool operator==(const CompiledText&, const CompiledText&) = default;
+};
+
+// A lowered Layer Output boundary. The six parameters appear in the registered authoring order --
+// position, anchor, scale, rotation, opacity, blend mode -- and each one carries its own parameter
+// identity so a diagnostic can name the exact parameter that failed. The first five are animatable,
+// so each is either a resolved constant or an index into the plan's curve tables.
+//
+// The blend mode is a resolved constant, like CompiledText's three values and for the same reason:
+// the schema declares it non-animatable and no command in the surface can put it on a curve. It
+// lives HERE, on the layer boundary that owns it, rather than on the stack entry that consumes it
+// -- the stack entry is the ordering of layers, and the mode is a property of the layer.
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
     OperationIndex input;
     CompiledVec2Parameter position;
+    CompiledVec2Parameter anchor;
+    CompiledVec2Parameter scale;
+    CompiledScalarParameter rotation;
     CompiledScalarParameter opacity;
+    document::ParameterId blendModeParameterId;
+    core::BlendMode blendMode = core::kDefaultBlendMode;
 
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
@@ -160,8 +259,8 @@ struct CompiledCompositionOutput {
                            const CompiledCompositionOutput&) = default;
 };
 
-using CompiledOperation =
-    std::variant<CompiledSolid, CompiledLayerOutput, CompiledLayerStack, CompiledCompositionOutput>;
+using CompiledOperation = std::variant<CompiledSolid, CompiledText, CompiledLayerOutput,
+                                       CompiledLayerStack, CompiledCompositionOutput>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot
@@ -175,6 +274,13 @@ struct CompiledCompositionPlanDefinition final {
     OperationIndex output;
     std::vector<CompiledScalarCurve> scalarCurves{};
     std::vector<CompiledVec2Curve> vec2Curves{};
+    std::vector<CompiledColor4Curve> color4Curves{};
+    // The value graph (task S7), in topological order: every operation's operands name only earlier
+    // outputs, so one linear sweep evaluates the whole of it. `valueOutputCount` is the size of the
+    // flat output table the operations' runs partition, kept explicitly so the evaluator can
+    // bounds- check a ValueOutputIndex without summing the operations first.
+    std::vector<CompiledValueOperation> valueOperations{};
+    std::size_t valueOutputCount = 0;
     std::uint32_t planSemanticsVersion = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
@@ -212,6 +318,15 @@ class CompiledCompositionPlan final {
         return vec2Curves_;
     }
     [[nodiscard]] std::span<const CompiledVec2Curve> vec2Curves() const&& = delete;
+    [[nodiscard]] std::span<const CompiledColor4Curve> color4Curves() const& noexcept {
+        return color4Curves_;
+    }
+    [[nodiscard]] std::span<const CompiledColor4Curve> color4Curves() const&& = delete;
+    [[nodiscard]] std::span<const CompiledValueOperation> valueOperations() const& noexcept {
+        return valueOperations_;
+    }
+    [[nodiscard]] std::span<const CompiledValueOperation> valueOperations() const&& = delete;
+    [[nodiscard]] std::size_t valueOutputCount() const noexcept { return valueOutputCount_; }
     [[nodiscard]] std::uint32_t planSemanticsVersion() const noexcept {
         return planSemanticsVersion_;
     }
@@ -235,6 +350,9 @@ class CompiledCompositionPlan final {
     OperationIndex output_;
     std::vector<CompiledScalarCurve> scalarCurves_;
     std::vector<CompiledVec2Curve> vec2Curves_;
+    std::vector<CompiledColor4Curve> color4Curves_;
+    std::vector<CompiledValueOperation> valueOperations_;
+    std::size_t valueOutputCount_ = 0;
     std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
 };

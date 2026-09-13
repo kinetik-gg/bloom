@@ -41,3 +41,8 @@ bloom_add_test(
     LABELS animation commands unit
     TIMEOUT 30
 )
+
+add_executable(bloom_commands_node_test node_operations_tests.cpp)
+target_link_libraries(bloom_commands_node_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_node_test)
+bloom_add_test(NAME bloom.commands.nodes COMMAND bloom_commands_node_test LABELS commands unit)

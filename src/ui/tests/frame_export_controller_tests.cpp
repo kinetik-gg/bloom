@@ -20,9 +20,11 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QImage>
 #include <QString>
 
 #include <algorithm>
@@ -64,6 +66,7 @@ using bloom::ui::FrameExportApprovalDecision;
 using bloom::ui::FrameExportApprovalPrompt;
 using bloom::ui::FrameExportController;
 using bloom::ui::FrameExportOutcome;
+using bloom::ui::FrameExportRangeRequest;
 using bloom::ui::TaskUiBridge;
 
 class Expectations final {
@@ -189,9 +192,9 @@ struct Fixture final {
     TaskUiBridge bridge;
     TempDirectory directory;
 
-    explicit Fixture(const document::CompositionFormat format = smallFormat())
-        : newProject(document::makeNewProject("Export Test", "Main",
-                                              core::RationalTime::fromInteger(10), format)),
+    explicit Fixture(const document::CompositionFormat format = smallFormat(),
+                     const core::RationalTime duration = core::RationalTime::fromInteger(10))
+        : newProject(document::makeNewProject("Export Test", "Main", duration, format)),
           document(std::move(newProject.project)), commandStack(document),
           session(document, commandStack, newProject.initialCompositionId),
           // SnapshotCompiler has no default constructor -- only `explicit SnapshotCompiler(const
@@ -671,6 +674,87 @@ void testPngDestinationRoutesToPngPresetAndPublishes(Expectations& expectations)
 }
 
 // -------------------------------------------------------------------------------------------
+// Task S3: a text layer really reaches an exported PNG's pixels. This is the end of the slice's
+// chain -- document schema, compiled plan, CPU glyph rasterization, display mapping, PNG encode --
+// and it is asserted by decoding the published file rather than by trusting the writer.
+// -------------------------------------------------------------------------------------------
+
+void testPngExportContainsRasterizedText(Expectations& expectations) {
+    // Big enough for a readable glyph; U+2588 FULL BLOCK at 24 px per em so the assertion can name
+    // exact interior pixels instead of hunting for antialiased edges. The rasterized block's own
+    // geometry (origin and full-coverage interior) is pinned in src/render's own tests; here it
+    // only has to be comfortably inside this frame.
+    const auto textFormat = document::CompositionFormat::create(64, 48);
+    if (!textFormat.has_value()) {
+        expectations.expect(false, "text export: the fixture format is valid");
+        return;
+    }
+    Fixture fixture(*textFormat);
+    if (!fixture.setUp(expectations, "text export: fixture is available")) {
+        return;
+    }
+    // The text origin is the frame origin, so a layer centered in the frame puts the glyph's
+    // top-left corner at the frame's top-left corner.
+    expectations.expect(fixture.session.addTextLayer(QStringLiteral("Title"),
+                                                     QString::fromUtf8("\xe2\x96\x88"), 24.0,
+                                                     core::Color4d{1.0, 1.0, 1.0, 1.0}),
+                        "text export: the text layer is added");
+
+    const auto target = fixture.directory.path() / "text.png";
+    fixture.controller().setDestinationProvider(
+        [&target]() -> std::optional<std::filesystem::path> { return target; });
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Export; });
+
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString&) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                     });
+    fixture.controller().requestExport();
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "text export: the export reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Published,
+                        "text export: the export publishes");
+    if (outcome != FrameExportOutcome::Published) {
+        return;
+    }
+
+    // Decoded by Qt, not by Bloom's own writer, so this asserts what a reader actually sees.
+    QImage decoded;
+    expectations.expect(decoded.load(QString::fromStdString(target.string()), "PNG"),
+                        "text export: the published PNG decodes");
+    if (decoded.isNull()) {
+        return;
+    }
+    expectations.expect(decoded.width() == 64 && decoded.height() == 48,
+                        "text export: the PNG carries the composition's own resolution");
+    const QImage rgba = decoded.convertToFormat(QImage::Format_RGBA8888);
+    const QColor ink = rgba.pixelColor(4, 4);
+    expectations.expect(ink.alpha() == 255 && ink.red() == 255 && ink.green() == 255 &&
+                            ink.blue() == 255,
+                        "text export: a pixel under the glyph's fully covered interior is opaque "
+                        "white, which is the exported text");
+    const QColor background = rgba.pixelColor(60, 44);
+    expectations.expect(background.alpha() == 0,
+                        "text export: a pixel the glyph does not reach stays fully transparent, so "
+                        "the glyph is really glyph-shaped rather than a filled frame");
+
+    std::size_t inkPixels = 0;
+    for (int y = 0; y < rgba.height(); ++y) {
+        for (int x = 0; x < rgba.width(); ++x) {
+            inkPixels += rgba.pixelColor(x, y).alpha() == 0 ? 0U : 1U;
+        }
+    }
+    expectations.expect(inkPixels > 0 && inkPixels < static_cast<std::size_t>(rgba.width()) *
+                                                         static_cast<std::size_t>(rgba.height()),
+                        "text export: the exported frame is partly covered -- neither empty nor "
+                        "entirely filled");
+}
+
+// -------------------------------------------------------------------------------------------
 // Both presets from one controller, back to back: the EXR path is unchanged and the PNG path
 // coexists with it under the same one-export-at-a-time bound.
 // -------------------------------------------------------------------------------------------
@@ -722,6 +806,183 @@ void testBothPresetsExportBackToBack(Expectations& expectations) {
                         "extension selected");
 }
 
+// --- Task S5, item 3a/3c: the frame-range export
+// --------------------------------------------------
+//
+// The proof the whole slice exists for: an animated composition exported as a SEQUENCE must carry a
+// different, predictable picture in every frame's own file -- which is only true if every frame was
+// evaluated at its own exact time rather than at the session's, and if the animation reached the
+// pixels at all. The solid's COLOUR is what animates here, because colour animation is exactly what
+// task S5's item 1 added: before it, no command could put a colour on a curve.
+void testFrameRangeExportsEveryFrameAtItsOwnTime(Expectations& expectations) {
+    // Four frames at 24 fps, 2x2 pixels: frames 0 through 3, each at exact time i/24.
+    const auto duration = core::RationalTime::create(4, 24);
+    const auto format = document::CompositionFormat::create(2, 2);
+    if (!duration.has_value() || !format.has_value()) {
+        expectations.expect(false, "frame range: the four-frame fixture constructs");
+        return;
+    }
+    Fixture fixture(*format, *duration);
+    if (!fixture.setUp(expectations, "frame range: fixture is available")) {
+        return;
+    }
+
+    // Black at frame 0, white at frame 3, animated in between.
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Ramp"), core::Color4d{0.0, 0.0, 0.0, 1.0}),
+        "frame range: the ramp layer is added");
+    expectations.expect(fixture.session.toggleKeyframe(document::kSolidColorParameterRole),
+                        "frame range: the solid colour accepts the keyframe gesture");
+    const auto lastTime = core::RationalTime::create(3, 24);
+    if (!lastTime.has_value()) {
+        expectations.expect(false, "frame range: frame 3's exact time constructs");
+        return;
+    }
+    expectations.expect(fixture.session.setCurrentTime(*lastTime),
+                        "frame range: the session steps to frame 3");
+    expectations.expect(
+        fixture.session.setSelectedSolidColor(core::Color4d{1.0, 1.0, 1.0, 1.0}),
+        "frame range: editing the animated colour at frame 3 inserts its second key");
+
+    // The session stays on frame 3 for the whole export: if any frame were evaluated at the SESSION
+    // time rather than at its own, every file would come out identical, and the assertions below
+    // would fail.
+    const auto base = fixture.directory.path() / "ramp.png";
+    fixture.controller().setRangeProvider([base]() -> std::optional<FrameExportRangeRequest> {
+        return FrameExportRangeRequest{.destination = base, .firstFrame = 0, .lastFrame = 3};
+    });
+    int approvalPrompts = 0;
+    fixture.controller().setApprovalDecisionProvider(
+        [&approvalPrompts](const FrameExportApprovalPrompt&) {
+            ++approvalPrompts;
+            return FrameExportApprovalDecision::Export;
+        });
+
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QString diagnosticMessage;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString& text) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                         diagnosticMessage = text;
+                     });
+    fixture.controller().requestRangeExport();
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "frame range: the range reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Published,
+                        "frame range: every frame publishes");
+    if (outcome != FrameExportOutcome::Published) {
+        std::cerr << "  diagnostic: " << diagnosticMessage.toStdString() << '\n';
+        return;
+    }
+    expectations.expect(approvalPrompts == 1,
+                        "frame range: the artist approves ONCE for the whole range, not once per "
+                        "frame -- every frame still runs its own approval with its own digest");
+
+    // Zero-padded names, four digits, in the destination's own directory.
+    std::array<QImage, 4> frames;
+    for (std::uint64_t index = 0; index < 4; ++index) {
+        const auto path = FrameExportController::sequenceFramePath(base, index, 3);
+        expectations.expect(path.filename().string() == "ramp." +
+                                                            std::string(index == 0   ? "0000"
+                                                                        : index == 1 ? "0001"
+                                                                        : index == 2 ? "0002"
+                                                                                     : "0003") +
+                                                            ".png",
+                            "frame range: each frame's name is the stem, a dot, a four-digit "
+                            "zero-padded index, then the extension");
+        expectations.expect(std::filesystem::exists(path),
+                            "frame range: every frame in the range was written");
+        expectations.expect(frames[index].load(QString::fromStdString(path.string()), "PNG"),
+                            "frame range: every written frame decodes as PNG");
+    }
+    if (std::ranges::any_of(frames, [](const QImage& image) { return image.isNull(); })) {
+        return;
+    }
+
+    // THE per-frame assertion. Frame 0 is the first key exactly, frame 3 the second exactly, and
+    // the two interior frames are strictly between them in strictly increasing order -- which can
+    // only be true if each was evaluated at its own exact time.
+    std::array<int, 4> luminance{};
+    for (std::size_t index = 0; index < frames.size(); ++index) {
+        const QImage rgba = frames[index].convertToFormat(QImage::Format_RGBA8888);
+        expectations.expect(rgba.width() == 2 && rgba.height() == 2,
+                            "frame range: each frame carries the composition's own resolution");
+        const QColor pixel = rgba.pixelColor(0, 0);
+        expectations.expect(pixel.alpha() == 255,
+                            "frame range: the animated solid is opaque in every frame");
+        expectations.expect(pixel.red() == pixel.green() && pixel.green() == pixel.blue(),
+                            "frame range: a neutral ramp stays neutral in every frame");
+        luminance[index] = pixel.red();
+    }
+    expectations.expect(luminance[0] == 0, "frame range: frame 0 is exactly the first key's black");
+    expectations.expect(luminance[3] == 255,
+                        "frame range: frame 3 is exactly the second key's white");
+    expectations.expect(luminance[0] < luminance[1] && luminance[1] < luminance[2] &&
+                            luminance[2] < luminance[3],
+                        "frame range: the four frames carry four strictly increasing values, so "
+                        "every frame really was evaluated at its own exact time");
+}
+
+// Task S5, item 3a: a range outside the composition is refused rather than silently clamped, and a
+// cancel at the approval prompt publishes nothing.
+void testFrameRangeRefusalAndCancellation(Expectations& expectations) {
+    const auto duration = core::RationalTime::create(4, 24);
+    if (!duration.has_value()) {
+        expectations.expect(false, "frame range refusal: the fixture duration constructs");
+        return;
+    }
+    Fixture fixture(smallFormat(), *duration);
+    if (!fixture.setUp(expectations, "frame range refusal: fixture is available")) {
+        return;
+    }
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.5, 0.5, 0.5, 1.0}),
+        "frame range refusal: a layer is added");
+
+    int finishedCount = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Published;
+    QString message;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome resultOutcome, const QString& text) {
+                         ++finishedCount;
+                         outcome = resultOutcome;
+                         message = text;
+                     });
+
+    const auto base = fixture.directory.path() / "out.png";
+    fixture.controller().beginRangeExport(
+        FrameExportRangeRequest{.destination = base, .firstFrame = 0, .lastFrame = 99});
+    expectations.expect(
+        finishedCount == 1 && outcome == FrameExportOutcome::Refused,
+        "frame range refusal: a range past the composition's last frame is refused");
+    expectations.expect(message.contains(QStringLiteral("outside")),
+                        "frame range refusal: and the message says the range is out of bounds");
+    expectations.expect(
+        !std::filesystem::exists(FrameExportController::sequenceFramePath(base, 0, 99)),
+        "frame range refusal: nothing was written");
+
+    // Declining the single approval prompt cancels the whole range before any frame publishes.
+    finishedCount = 0;
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Cancel; });
+    fixture.controller().beginRangeExport(
+        FrameExportRangeRequest{.destination = base, .firstFrame = 0, .lastFrame = 3});
+    expectations.expect(waitUntil([&] { return finishedCount == 1; }),
+                        "frame range refusal: the declined range reaches a terminal outcome");
+    expectations.expect(outcome == FrameExportOutcome::Cancelled,
+                        "frame range refusal: declining the one approval cancels the whole range");
+    expectations.expect(!fixture.controller().isExportingRange() &&
+                            fixture.controller().canExport(),
+                        "frame range refusal: and the controller returns to idle");
+    expectations.expect(fixture.controller().chargedResourceBytes() == 0,
+                        "frame range refusal: a cancelled range releases every reservation");
+    expectations.expect(
+        !std::filesystem::exists(FrameExportController::sequenceFramePath(base, 0, 3)),
+        "frame range refusal: no frame was written");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -735,6 +996,9 @@ int main(int argc, char** argv) {
     testExternalModificationConflictSurfacedAsFailure(expectations);
     testDestinationExtensionSelectsPreset(expectations);
     testPngDestinationRoutesToPngPresetAndPublishes(expectations);
+    testPngExportContainsRasterizedText(expectations);
     testBothPresetsExportBackToBack(expectations);
+    testFrameRangeExportsEveryFrameAtItsOwnTime(expectations);
+    testFrameRangeRefusalAndCancellation(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
