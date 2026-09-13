@@ -36,9 +36,9 @@ PlaybackController::PlaybackController(CompositionSession& session,
                                        CompositionPreviewController& previewController,
                                        ClockFunction clock,
                                        const std::chrono::milliseconds tickInterval,
-                                       QObject* parent)
+                                       FrameCachedPredicate frameCached, QObject* parent)
     : QObject(parent), session_(session), previewController_(previewController),
-      clock_(std::move(clock)) {
+      clock_(std::move(clock)), frameCached_(std::move(frameCached)) {
     timer_.setTimerType(Qt::PreciseTimer);
     timer_.setInterval(static_cast<int>(tickInterval.count()));
     connect(&timer_, &QTimer::timeout, this, &PlaybackController::tick);
@@ -83,6 +83,7 @@ void PlaybackController::play() {
     // start (design decision 2) -- read fresh here every time, not cached from a prior play().
     startClock_ = clock_();
     startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
+    appliedOffset_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
 
     state_ = PlaybackState::Playing;
@@ -163,16 +164,35 @@ void PlaybackController::tick() {
     }
 
     const auto frameCount = mapping->maximumFrameIndex() + 1;
-    if (*frameOffset > std::numeric_limits<std::uint64_t>::max() - startFrameIndex_) {
+    if (*frameOffset <= appliedOffset_) {
+        // The frame this run is already showing is still the one elapsed time asks for.
+        return;
+    }
+    // The frame-accurate clock (task PERF1, item 4): when the NEXT frame is already cached there is
+    // nothing to drop, so the target advances by exactly one frame however far behind the transport
+    // is -- no elapsed-time catch-up skipping. The due moment above is still total elapsed time since
+    // play()'s fixed start, so presentations track the ideal frame grid rather than accumulating a
+    // per-tick error. An uncached next frame keeps the original policy and jumps to whatever elapsed
+    // time demands.
+    const auto steppedOffset = appliedOffset_ + 1;
+    auto nextOffset = *frameOffset;
+    if (steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
+        isFrameCached(*mapping, (startFrameIndex_ + steppedOffset) % frameCount)) {
+        nextOffset = steppedOffset;
+    }
+    if (nextOffset > std::numeric_limits<std::uint64_t>::max() - startFrameIndex_) {
         // Same checked-overflow discipline applied to the addition below.
         return;
     }
     // Looping (design decision 2): wraps within [0, duration) via exact modulo of the frame count.
-    // Recomputed fresh from the fixed start/elapsed every tick -- never an accumulated running
-    // index -- so repeated wraps never drift.
-    const auto targetFrameIndex = (startFrameIndex_ + *frameOffset) % frameCount;
+    // The offset is exact in both clocks -- elapsed-derived or one frame on -- so repeated wraps
+    // never drift.
+    const auto targetFrameIndex = (startFrameIndex_ + nextOffset) % frameCount;
+    appliedOffset_ = nextOffset;
 
     if (lastAppliedFrameIndex_.has_value() && *lastAppliedFrameIndex_ == targetFrameIndex) {
+        // A whole loop landed back on the frame already shown: nothing to publish, but the offset
+        // above has moved on so the next frame is still due at the right moment.
         return;
     }
     const auto targetTime = mapping->timeForFrame(targetFrameIndex);
@@ -184,6 +204,19 @@ void PlaybackController::tick() {
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*targetTime.value());
     applyingOwnTimeChange_ = false;
+}
+
+bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,
+                                      const std::uint64_t frameIndex) const {
+    if (frameCached_) {
+        return frameCached_(frameIndex);
+    }
+    const auto time = mapping.timeForFrame(frameIndex);
+    if (!time.hasValue()) {
+        return false;
+    }
+    const auto key = previewController_.cacheKeyForTime(*time.value());
+    return key.has_value() && previewController_.frameCache().contains(*key);
 }
 
 void PlaybackController::handleCompositionChanged() {

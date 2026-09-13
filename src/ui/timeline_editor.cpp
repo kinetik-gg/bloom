@@ -835,8 +835,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
+    // No cached-frame predicate: the transport asks the preview controller's own RAM preview cache,
+    // which is the one that actually answers its requests (task PERF1, item 4).
     playback_ = new PlaybackController(session_, previewController, &std::chrono::steady_clock::now,
-                                       std::chrono::milliseconds{16}, this);
+                                       std::chrono::milliseconds{16}, {}, this);
 
     // ---- Header row: the transport/readout cluster on the left, the work area on the right
     // -------
