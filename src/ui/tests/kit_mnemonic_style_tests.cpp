@@ -169,21 +169,33 @@ void testMenuRowsReserveOneIconColumnAndDrawSubmenus(Expectations& expectations)
                         "every row is the same width, so the arrow column is a real column");
     (void)plainArrowBand;
 
-    // The shortcut is painted, and in the quiet ink -- never the label's Foreground.
-    bool sawShortcutInk = false;
-    bool sawLabelInk = false;
-    const QColor faint = kit::color(kit::Color::Faint);
-    const QColor foreground = kit::color(kit::Color::Foreground);
-    for (int x = plainRow.left(); x <= plainRow.right() && x < canvas.width(); ++x) {
-        for (int y = plainRow.top(); y <= plainRow.bottom() && y < canvas.height(); ++y) {
-            const QColor pixel = canvas.pixelColor(x, y);
-            sawShortcutInk = sawShortcutInk || pixel == faint;
-            sawLabelInk = sawLabelInk || pixel == foreground;
+    // The shortcut is painted, and in the quiet ink -- never the label's Foreground. Text is
+    // antialiased, and the runner's font rasterization need not produce a single pixel at the
+    // exact token value, so the pin compares the brightest ink of the label's half of the row
+    // with the brightest ink of the shortcut's half: the label reaches well above Faint, the
+    // shortcut stays well below Foreground, and both are inked above the ground.
+    const auto brightest = [&](const int left, const int right) {
+        int value = 0;
+        for (int x = std::max(left, 0); x <= right && x < canvas.width(); ++x) {
+            for (int y = plainRow.top(); y <= plainRow.bottom() && y < canvas.height(); ++y) {
+                const QColor pixel = canvas.pixelColor(x, y);
+                if (pixel != ground) {
+                    value = std::max(value, pixel.lightness());
+                }
+            }
         }
-    }
-    expectations.expect(sawShortcutInk,
+        return value;
+    };
+    const int middle = plainRow.left() + plainRow.width() / 2;
+    const int labelInk = brightest(plainRow.left(), middle);
+    const int shortcutInk = brightest(middle + 1, plainRow.right());
+    const int faintLightness = kit::color(kit::Color::Faint).lightness();
+    const int foregroundLightness = kit::color(kit::Color::Foreground).lightness();
+    expectations.expect(shortcutInk > ground.lightness() && shortcutInk <= faintLightness + 24 &&
+                            shortcutInk < foregroundLightness - 64,
                         "the shortcut column is painted in Faint, the quietest ink in the row");
-    expectations.expect(sawLabelInk, "and the label itself is still full-strength Foreground");
+    expectations.expect(labelInk > shortcutInk + 40 && labelInk > faintLightness + 24,
+                        "and the label itself is still full-strength Foreground");
 }
 
 void testTheMenuFrameAndRowMetricsComeFromTokens(Expectations& expectations) {
