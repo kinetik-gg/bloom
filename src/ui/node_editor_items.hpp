@@ -166,7 +166,11 @@ class SocketItem final : public QGraphicsItem {
     // brightens toward Foreground and an incompatible one fades to the disabled ink, so a drag
     // names its own landing sites instead of leaving the artist to aim and find out.
     enum class DragAffinity : std::uint8_t { Idle, Compatible, Incompatible };
-    void setDragAffinity(DragAffinity affinity);
+    // `refusal` is the one line that says WHY an incompatible socket cannot take the link now being
+    // dragged (task FIX1, item A.3). It joins this socket's own tooltip for as long as the drag
+    // lasts and is dropped again when the affinity returns to Idle, so a hover during a refused
+    // drag explains itself instead of leaving the artist to guess at a dimmed dot.
+    void setDragAffinity(DragAffinity affinity, const QString& refusal = {});
     [[nodiscard]] DragAffinity dragAffinity() const noexcept { return affinity_; }
     // The ink this socket paints right now, affinity included. Exposed so a test can state the
     // brighten/dim rule in the same terms the painter applies it.

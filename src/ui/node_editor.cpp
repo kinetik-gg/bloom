@@ -265,7 +265,31 @@ NodeSockets NodeGraphicsScene::nodeSocketsForTest(const document::NodeId nodeId)
 }
 
 void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
-    for (const auto& edge : composition.graph().edges()) {
+    // Task FIX1, item A: a driven operand's link is recorded as its parameter's driver binding
+    // rather than as an edge, and until now nothing drew it -- an artist who plugged a Scalar into
+    // an opacity socket saw the socket's widget disappear and no wire at all, which is most of
+    // "nodes exist but not usable". The canvas's one link list is therefore the graph's edges
+    // FOLLOWED BY every driver binding, rendered as the same NodeEdgeItem so hover, selection
+    // emphasis, cutting and the pick-up gesture all reach them without a second code path. A driver
+    // link carries no EdgeId (there is no edge to carry one), so it is addressed by its
+    // destination, which is what DisconnectInput already takes.
+    std::vector<document::EdgeRecord> links(composition.graph().edges().begin(),
+                                            composition.graph().edges().end());
+    for (const auto& node : composition.graph().nodes()) {
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* driver =
+                parameter == nullptr
+                    ? nullptr
+                    : std::get_if<document::DriverBindingSource>(&parameter->source);
+            if (driver == nullptr)
+                continue;
+            links.push_back({document::EdgeId{},
+                             document::OutputPortRef{driver->sourceNodeId, driver->outputPort},
+                             document::NodeInputRef{node.id, binding.role}});
+        }
+    }
+    for (const auto& edge : links) {
         auto* source = dynamic_cast<NodeItem*>(findNodeItem(edge.source.nodeId));
         auto* destination =
             dynamic_cast<NodeItem*>(findNodeItem(destinationNodeId(edge.destination)));

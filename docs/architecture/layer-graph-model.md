@@ -528,6 +528,13 @@ Add surfaces list entries in that category order and alphabetically inside each 
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
 heading, and the list is exactly as tall as the rows and headings it holds.
 
+A typed query reorders that list by RELEVANCE OF THE NAME, never of the keywords. An entry is still
+found by the socket kinds it carries -- that is what the keywords are for -- but a keyword match can
+never outrank a name match: sections are ordered by their own best name score and entries inside a
+section by theirs, so typing `Scalar` and pressing Enter adds the node CALLED Scalar rather than the
+first node in category order that happens to carry a Scalar socket. With no query typed, every score
+is equal and the category order above is exactly what the artist reads.
+
 ### Value Graph And Drivers
 
 A composition holds two graphs in one node set. The **image chain** produces pixels and is addressed
@@ -540,6 +547,24 @@ Reachability follows drivers as well as edges: a node whose parameter is driven 
 node that drives it. Those dependencies feed the SAME indegree map the edge set builds, so a cycle
 through a driver is refused by the one existing acyclic check rather than by a second rule that could
 disagree with it.
+
+A driver binding is DRAWN, exactly as an edge is. The canvas's link list is the graph's edges followed
+by one synthesized link per driver binding, rendered as the same item so hover emphasis, selection
+emphasis, the cut gesture and the pick-up gesture all reach a driver without a second code path. Such
+a link carries no `EdgeId` -- there is no edge to carry one -- so it is addressed by its DESTINATION,
+which is what `DisconnectInput` already takes. The pick-up gesture asks an input one question, "where
+does your value come from", and an edge and a driver binding are the two answers; dropping a picked-up
+driver on empty canvas restores the operand's registered default, in one undoable step.
+
+Pointer slop around a socket is an ARTIST's slop, not a scene measurement: the socket's own hit shape
+is fixed in scene units, so the canvas widens the grab radius by the view's inverse scale before
+resolving a press. A socket is therefore the same size under the pointer at every zoom, and never
+smaller than its painted hit shape. A hosted field keeps its own clicks -- the widened radius is tried
+only where no field is under the pointer.
+
+While a link drag is in flight, a socket that cannot take it carries the reason in its own tooltip --
+which way round the link would have to go, or which two kinds do not meet -- and drops that line again
+when the drag ends.
 
 #### Socket Kinds And Promotion
 

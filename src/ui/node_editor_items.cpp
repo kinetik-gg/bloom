@@ -531,10 +531,14 @@ QColor SocketItem::paintedInk() const {
     return base;
 }
 
-void SocketItem::setDragAffinity(const DragAffinity affinity) {
-    if (affinity_ == affinity)
+void SocketItem::setDragAffinity(const DragAffinity affinity, const QString& refusal) {
+    const QString tip = affinity == DragAffinity::Incompatible && !refusal.isEmpty()
+                            ? description_ + QStringLiteral("\n") + refusal
+                            : description_;
+    if (affinity_ == affinity && toolTip() == tip)
         return;
     affinity_ = affinity;
+    setToolTip(tip);
     update();
 }
 

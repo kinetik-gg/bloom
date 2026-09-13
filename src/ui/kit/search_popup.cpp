@@ -16,7 +16,10 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cstddef>
+#include <map>
 #include <utility>
+#include <vector>
 
 namespace bloom::ui::kit {
 namespace {
@@ -30,6 +33,25 @@ namespace {
 // is exactly its own rows; this is the other end -- a long one stops growing instead of running off
 // the screen.
 [[nodiscard]] int maximumListHeight() { return resultRowHeight() * 12; }
+
+// How well an entry's own NAME answers the query (task FIX1, item A). Keywords are what make an
+// entry findable -- a node is listed for the socket kinds it carries -- but they must never outrank
+// a name: typing "Scalar" and pressing Enter has to add the node CALLED Scalar, not the first node
+// in the list that happens to carry a Scalar socket. Zero means "matched on keywords alone".
+[[nodiscard]] int nameRelevance(const QString& label, const QString& query) {
+    if (query.isEmpty())
+        return 0;
+    if (label.compare(query, Qt::CaseInsensitive) == 0)
+        return 4;
+    if (label.startsWith(query, Qt::CaseInsensitive))
+        return 3;
+    for (const auto& word : label.split(' ', Qt::SkipEmptyParts))
+        if (word.startsWith(query, Qt::CaseInsensitive))
+            return 2;
+    if (label.contains(query, Qt::CaseInsensitive))
+        return 1;
+    return 0;
+}
 
 } // namespace
 
@@ -75,16 +97,64 @@ void KSearchPopup::setEntries(std::vector<SearchEntry> entries) {
 
 void KSearchPopup::filter() {
     model_->clear();
-    const auto words = field_->text().simplified().split(' ', Qt::SkipEmptyParts);
-    QString openSection;
-    bool sectionOpen = false;
-    int height = 0;
-    for (const auto& entry : entries_) {
+    const QString query = field_->text().simplified();
+    const auto words = query.split(' ', Qt::SkipEmptyParts);
+    // Two passes. The first keeps every entry whose name or keywords carry all the typed words and
+    // scores it on its NAME alone; the second lists the surviving entries by relevance -- sections
+    // ordered by their own best match, entries ordered inside them -- so the row Enter lands on is
+    // the one the artist was naming. With an empty query every score is zero and the caller's own
+    // category order survives untouched.
+    struct Match final {
+        const SearchEntry* entry = nullptr;
+        int relevance = 0;
+        std::size_t order = 0;
+    };
+    std::vector<Match> matches;
+    matches.reserve(entries_.size());
+    for (std::size_t index = 0; index < entries_.size(); ++index) {
+        const auto& entry = entries_[index];
         const QString haystack = entry.label + ' ' + entry.keywords;
         if (!std::ranges::all_of(words, [&](const auto& word) {
                 return haystack.contains(word, Qt::CaseInsensitive);
             }))
             continue;
+        matches.push_back({&entry, nameRelevance(entry.label, query), index});
+    }
+    std::vector<QString> sectionOrder;
+    std::map<QString, std::pair<int, std::size_t>> sectionRank;
+    for (const auto& match : matches) {
+        const auto existing = sectionRank.find(match.entry->section);
+        if (existing == sectionRank.end()) {
+            sectionOrder.push_back(match.entry->section);
+            sectionRank.emplace(match.entry->section, std::pair{match.relevance, match.order});
+        } else if (match.relevance > existing->second.first) {
+            existing->second = {match.relevance, existing->second.second};
+        }
+    }
+    std::ranges::stable_sort(sectionOrder, [&](const QString& left, const QString& right) {
+        const auto& leftRank = sectionRank.at(left);
+        const auto& rightRank = sectionRank.at(right);
+        if (leftRank.first != rightRank.first)
+            return leftRank.first > rightRank.first;
+        return leftRank.second < rightRank.second;
+    });
+    std::ranges::stable_sort(matches, [&](const Match& left, const Match& right) {
+        const auto leftSection =
+            std::ranges::find(sectionOrder, left.entry->section) - sectionOrder.begin();
+        const auto rightSection =
+            std::ranges::find(sectionOrder, right.entry->section) - sectionOrder.begin();
+        if (leftSection != rightSection)
+            return leftSection < rightSection;
+        if (left.relevance != right.relevance)
+            return left.relevance > right.relevance;
+        return left.order < right.order;
+    });
+
+    QString openSection;
+    bool sectionOpen = false;
+    int height = 0;
+    for (const auto& match : matches) {
+        const auto& entry = *match.entry;
         // A heading is emitted only once the section has something to head, so a filter that
         // matches nothing in a section leaves no empty heading behind.
         if (!entry.section.isEmpty() && (!sectionOpen || entry.section != openSection)) {
