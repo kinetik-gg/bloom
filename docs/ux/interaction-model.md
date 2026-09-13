@@ -178,6 +178,28 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | --- | --- |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
+| `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
+| `Shift+wheel` or horizontal wheel | Scroll the visible time range |
+| Drag the navigator window | Scroll; drag either window edge to resize the visible range; `Escape` cancels |
+| `Ctrl+0` | Timeline View → Zoom to Fit |
+| `Ctrl++` / `Ctrl+-` | Timeline View → Zoom In / Zoom Out about the visible center |
+| `Ctrl+A` / `Ctrl+Shift+A` | Timeline Select → All / None (shared layer-boundary selection) |
+| `Delete` / `Backspace` with layer stack or lanes focused | Timeline Edit → Delete Layer, through `RemoveNodes` on the selected layers' Layer nodes |
+
+The header offers **Add** (Solid, Text), **View**, **Edit**, and **Select** menus. Edit reuses the
+application's Undo/Redo actions and shortcuts. Delete in a keyframe lane retains its keyframe
+behavior. Menus collapse into one `…` popup when their available header width is too small.
+
+View → Frames / Timecode changes both ruler labels and the timeline readout, and persists the
+preference in `timeline/time-format`. Frames is the default. Timecode is non-drop `HH:MM:SS:FF`,
+using the nearest nominal integer frame rate for fractional rates; exact composition seconds remain
+visible beside either format. This is a display preference, with no effect on document or render time.
+
+Time navigation is editor-local session state. The visible range is half-open `[t0, t1)`, clamped
+inside the full composition duration, with a minimum span of one frame (or the entire duration for
+a shorter composition). Zoom to Fit restores the full duration. All lane, keyframe, work-area,
+playhead, and cache projections use this same range. Plain vertical wheel scrolling retains the
+shared layer-stack/lane vertical scroll.
 
 RAM Preview sits in the transport cluster as a button, but its KEYS are declared by the Composition
 menu, not here: one `Qt::WindowShortcut` owner per sequence, or Qt reports an ambiguous overload and

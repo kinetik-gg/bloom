@@ -160,11 +160,24 @@ task's report for why an editor's own existing bottom bar (the viewer's status r
 timeline's transport) is not moved into it yet. Editors that offer a task-specific footer, such as
 Assets and Nodes, use the same strip rather than inventing a second chrome treatment.
 
-### Editor panel row (task ASSETS-1)
+### Editor panel rows
 
 | Panel | Header menus | Body | Footer |
 | --- | --- | --- | --- |
 | Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
+| Timeline | Left cell: switcher, Add/View/Edit/Select, elided composition name (`Type::UI`), fullscreen. Right cell: work-area strip, tick labels, and playhead head | Column headings first; synchronized layer stack and lanes; selected layer's keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
+
+The timeline header splits at exactly the body's layer-column divider. Its ruler begins at the lane
+region's x origin and reserves the same vertical-scrollbar gutter. The ruler lives inside the
+`EditorHeader` row; it has no separate body row. A continuous `1px` Accent playhead stroke connects
+the header, the right side of the column-heading row, and all lanes. The work-area strip remains the
+full composition range; it does not imply editable in/out points.
+
+Timeline major labels use the frame cadence `1, 2, 5, 10, 24, 48, 96, …`, chosen from available pixel
+density and actual label font metrics. Ten-frame spacing is used at fit when it has enough room;
+labels are never allowed to overlap or cross the ruler's right edge. The navigator shows the full
+duration with an Accent-dim visible-range window and solid Accent edge grips. Zoom and scroll
+change the window and projections, while layer-row height stays `32` (`ControlRoomy`).
 
 Assets uses the `Folder` panel-switcher icon and the `DataComposition` vocabulary for composition
 rows. Its disabled affordances keep their honest reason in a tooltip, and its composition actions
