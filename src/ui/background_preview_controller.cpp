@@ -44,6 +44,8 @@ BackgroundPreviewController::BackgroundPreviewController(
             exhausted_ = false;
         }
     });
+    connect(&previewController_.frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
+            &BackgroundPreviewController::restart);
     idleTimer_.start();
 }
 

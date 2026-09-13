@@ -29,6 +29,7 @@
 #include <QRectF>
 #include <QString>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1149,12 +1150,113 @@ void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations
                         "the band is DIM, not a solid opaque Accent fill");
 }
 
+void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Ruler cache geometry", time(5, 24)));
+    ui::TimelineRuler ruler(fixture.session, fixture.controller);
+    ruler.resize(501, ruler.height());
+    ruler.show();
+    auto& cache = fixture.controller.frameCache();
+    std::vector<ui::PreparedPreviewFrameHandle> frames;
+    for (const auto index : {0, 2, 4}) {
+        (void)fixture.session.setCurrentTime(time(index, 24));
+        expectations.expect(waitUntil([&] {
+                                return fixture.controller.state().activity ==
+                                       ui::PreviewActivity::Ready;
+                            }),
+                            "seed a ruler cache frame");
+        frames.push_back(fixture.controller.state().frame);
+    }
+    int notifications = 0;
+    QObject::connect(&cache, &ui::PreviewFrameCache::contentsChanged, &ruler,
+                     [&] { ++notifications; });
+    cache.clear();
+    expectations.expect(waitUntil([&] { return notifications != 0; }),
+                        "clear is notified asynchronously");
+    notifications = 0;
+    for (const auto& frame : frames) {
+        cache.insert(frame);
+    }
+    expectations.expect(notifications == 0, "insertion does not repaint once per frame");
+    expectations.expect(waitUntil([&] { return notifications == 1; }),
+                        "three inserts coalesce into one notification");
+    for (const int width : {501, 1001}) {
+        ruler.resize(width, ruler.height());
+        const auto axis = ui::TimelineAxis::create(*fixture.session.composition(), width);
+        auto rects = ruler.cachedFrameRects();
+        std::ranges::sort(rects, {}, &QRectF::left);
+        expectations.expect(axis.has_value() && rects.size() == 3, "one segment per cached frame");
+        if (!axis.has_value() || rects.size() != 3) {
+            continue;
+        }
+        for (std::size_t i = 0; i < rects.size(); ++i) {
+            const auto index = static_cast<std::int64_t>(i * 2);
+            const auto& segment = rects[i];
+            expectations.expect(
+                std::abs(segment.left() - axis->pixelForTime(time(index, 24))) < 0.001 &&
+                    std::abs(segment.right() - axis->pixelForTime(time(index + 1, 24))) < 0.001,
+                "cache segment endpoints use the shared time axis, including the last frame");
+            expectations.expect(segment.height() == ui::kit::px(ui::kit::Spacing::XXS) &&
+                                    segment.bottom() == ruler.height(),
+                                "cache bar is thin and bottom aligned");
+        }
+        QImage image(ruler.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        ruler.render(&image);
+        const int greenX = static_cast<int>(rects.front().center().x());
+        expectations.expect(image.pixelColor(greenX, ruler.height() - 1) ==
+                                ui::kit::color(ui::kit::Color::Ok),
+                            "cached coverage paints the semantic Ok green");
+        const int gapX = static_cast<int>(axis->pixelForTime(time(3, 48)));
+        expectations.expect(image.pixelColor(gapX, ruler.height() - 1) !=
+                                ui::kit::color(ui::kit::Color::Ok),
+                            "the uncached frame gap remains unpainted");
+    }
+    const auto bytes = ui::PreviewFrameCache::frameByteCost(*frames.front());
+    cache.setByteBudget(bytes);
+    expectations.expect(ruler.cachedFrameRects().size() == 1, "eviction removes ruler segments");
+    cache.setByteBudget(bytes * 8);
+    (void)fixture.session.setCurrentTime(time(1, 48));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity ==
+                                   ui::PreviewActivity::Ready;
+                        }),
+                        "subframe sample is ready");
+    expectations.expect(cache.size() == 2 && ruler.cachedFrameRects().size() == 1,
+                        "a cached subframe never certifies a frame-grid sample");
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expectations.expect(ruler.cachedFrameRects().empty(),
+                        "old resolution coverage disappears immediately");
+    (void)fixture.session.setCurrentTime(time(0));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity ==
+                                   ui::PreviewActivity::Ready;
+                        }),
+                        "new resolution frame ready");
+    expectations.expect(ruler.cachedFrameRects().size() == 1, "only current resolution is shown");
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"), {1, 0, 0, 1}),
+                        "revision edit succeeds");
+    expectations.expect(ruler.cachedFrameRects().empty(),
+                        "old revision coverage disappears immediately");
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity ==
+                                   ui::PreviewActivity::Ready;
+                        }),
+                        "edited frame ready");
+    expectations.expect(ruler.cachedFrameRects().size() == 1, "new revision coverage returns");
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "ruler fixture shuts down");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testCacheBarTracksAxisIdentityEvictionAndBatches(expectations);
     testRulerScrubLandsOnExactFrameTimesIncludingATie(expectations);
     testKeyframeRowsAppearOnePerAnimatedParameter(expectations);
     testKeyframeRowsCoverEveryAnimatableTransformParameter(expectations);
