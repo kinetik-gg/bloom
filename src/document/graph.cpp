@@ -184,6 +184,17 @@ bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& regi
     }
     const auto sourceKind = outputKind(edge.source, registry);
     const auto targetKind = inputKind(edge.destination, registry);
+    // Nothing connects FROM a SINK. Task FIX1, item H made the composition Output one -- it
+    // declares no output port at all -- and this is the rule that says so for every connect path at
+    // once. It asks whether the registered definition has ANY output, not whether this particular
+    // port is declared: an unknown port on a node that does have outputs is still the compiler's
+    // UnknownPort diagnostic to report, which is a different mistake with a different message.
+    if (const auto* source = findNode(edge.source.nodeId); source != nullptr) {
+        const auto* definition = registry.find(source->typeId, source->schemaVersion);
+        if (definition != nullptr && definition->outputs.empty()) {
+            return false;
+        }
+    }
     // Task S7: equal kinds, or one of the whitelisted promotions. The ONE predicate every connect
     // path asks (node_definition_registry.hpp), so this, validate() below, ConnectPorts and the
     // compiler's edge check cannot disagree about which links exist.
@@ -378,7 +389,17 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
 
         const auto sourceKind = outputKind(edge.source, registry);
         const auto targetKind = inputKind(edge.destination, registry);
-        if (sourceKind && targetKind && !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+        const auto* sourceDefinition = [&]() -> const NodeDefinition* {
+            const auto* sourceNode = findNode(edge.source.nodeId);
+            return sourceNode == nullptr
+                       ? nullptr
+                       : registry.find(sourceNode->typeId, sourceNode->schemaVersion);
+        }();
+        if (sourceDefinition != nullptr && sourceDefinition->outputs.empty()) {
+            result.add(ValidationCode::InvalidValue, path + ".source",
+                       "This node is a sink and declares no output to connect from");
+        } else if (sourceKind && targetKind &&
+                   !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
             result.add(ValidationCode::SocketKindMismatch, path,
                        "Connected socket kinds do not match");
         }

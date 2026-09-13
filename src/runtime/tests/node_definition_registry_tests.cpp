@@ -241,6 +241,23 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
         Case{document::kCompositionOutputNodeType, document::kCompositionOutputNodeSchemaVersion},
     };
 
+    // Task FIX1, item H: the composition Output is a SINK. It declares one input and no output at
+    // all, and a definition claiming one is refused -- which is what keeps "nothing connects from
+    // the end of the composition" a registry fact rather than an editor convention.
+    {
+        const auto output = builtInDefinition(document::kCompositionOutputNodeType,
+                                              document::kCompositionOutputNodeSchemaVersion);
+        expectations.expect(output.outputs.empty() && output.inputs.size() == 1,
+                            "the composition Output declares one input and no output");
+        runtime::NodeDefinitionRegistry sourcingOutput;
+        auto spoof = output;
+        spoof.outputs.push_back(
+            {std::string(document::kCompositionOutputOutputPort), runtime::SocketValueKind::Image});
+        expectations.expect(sourcingOutput.registerDefinition(std::move(spoof)) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "and a definition that gives it one is refused");
+    }
+
     for (const auto& testCase : cases) {
         runtime::NodeDefinitionRegistry customTypeRegistry;
         auto customType = builtInDefinition(testCase.typeId, testCase.version);

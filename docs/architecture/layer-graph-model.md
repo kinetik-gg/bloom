@@ -707,6 +707,21 @@ linkable in the editor and durable in the document, but nothing yet carries thei
 compiled operation, so a driver on one is reported through the existing `UnsupportedParameterSource`
 diagnostic rather than silently ignored.
 
+#### The Output Node Is A Sink
+
+`bloom.composition-output` declares ONE input and NO output. Nothing connects from the end of the
+composition: the compiler's reachability walks backwards from this node, so an edge leaving it was
+never followed, and a socket that leads nowhere is an invitation to draw a wire that means nothing.
+The rule is stated once, in `CanonicalGraph::addEdge()` and `validate()`, as "a node whose registered
+definition declares no output is a sink" -- not as a special case for this type, and not as "this
+particular port is undeclared", which is still the compiler's own `UnknownPort` diagnostic about a
+different mistake. A document written before this that carries such an edge decodes with the edge
+dropped rather than refused; the graph's `compositionOutput` endpoint keeps its port spelling, which
+is how the document has always named the endpoint rather than a socket.
+
+Nesting one composition inside another belongs to a separate **Composition source** node -- a node
+that READS another composition's output -- not to an output port on this one.
+
 ### Node Cardinality
 
 `NodeDefinition::cardinality` declares how many instances of a node type one composition may hold.

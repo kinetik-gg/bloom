@@ -180,8 +180,12 @@ template <typename Definition>
                definition.cardinality == NodeCardinality::OnePerComposition &&
                hasLeadingImageInput(definition, kCompositionOutputInputPort) &&
                definition.inputs.size() == 1 &&
-               hasImageOutput(definition, kCompositionOutputOutputPort) &&
-               definition.parameters.empty() && !definition.layerSlotInput.has_value();
+               // Task FIX1, item H: a SINK. It declares no output port at all, because nothing may
+               // connect from the end of the composition -- the compiler never followed such an
+               // edge, and a socket that leads nowhere is an invitation to draw a wire that means
+               // nothing.
+               definition.outputs.empty() && definition.parameters.empty() &&
+               !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Unsupported:
         return true;
     // The value lowerings share ONE shape contract rather than fifteen bespoke ones; see
@@ -300,7 +304,7 @@ template <typename Definition>
     return {{std::string(kCompositionOutputNodeType), kCompositionOutputNodeSchemaVersion},
             NodeLoweringKind::CompositionOutput,
             {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, true}},
-            {{std::string(kCompositionOutputOutputPort), SocketValueKind::Image}},
+            {},
             {},
             std::nullopt,
             NodeCardinality::OnePerComposition,

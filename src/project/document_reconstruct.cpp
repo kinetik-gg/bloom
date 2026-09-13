@@ -133,6 +133,22 @@ struct InjectedLayerOutputParameter final {
     }
     for (auto& edge : decodedGraph.edges) {
         const auto edgeId = edge.id;
+        // An edge whose SOURCE is a sink is dropped rather than refused (task FIX1, item H). The
+        // composition Output declares no output port now, and a document written before that could
+        // carry an edge from it -- one the compiler never followed, because reachability walks
+        // BACKWARDS from the output and nothing downstream of it exists. Refusing the archive over
+        // a link that never meant anything would lose the artist's whole project to a record that
+        // was already inert. It is dropped silently: this reconstruction path reports rejections,
+        // not warnings, and inventing a warning channel for it belongs with the one the open
+        // pipeline will need for every other advisory rather than here.
+        const auto* source = graph.findNode(edge.source.nodeId);
+        const auto* definition =
+            source == nullptr
+                ? nullptr
+                : document::builtInNodeDefinitions().find(source->typeId, source->schemaVersion);
+        if (definition != nullptr && definition->outputs.empty()) {
+            continue;
+        }
         if (!graph.addEdge(std::move(edge))) {
             return compositionRejection(ReconstructionStage::GraphEdge, compositionId,
                                         edgeId.value());
