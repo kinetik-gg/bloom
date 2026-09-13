@@ -157,7 +157,19 @@ An editor panel's footer strip (task C1, item C5) is not a distinct token: it re
 (`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
 the header's own `Border` hairline, just on its top edge, and is empty by default -- see this
 task's report for why an editor's own existing bottom bar (the viewer's status readout, the
-timeline's transport) is not moved into it yet.
+timeline's transport) is not moved into it yet. Editors that offer a task-specific footer, such as
+Assets and Nodes, use the same strip rather than inventing a second chrome treatment.
+
+### Editor panel row (task ASSETS-1)
+
+| Panel | Header menus | Body | Footer |
+| --- | --- | --- | --- |
+| Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
+
+Assets uses the `Folder` panel-switcher icon and the `DataComposition` vocabulary for composition
+rows. Its disabled affordances keep their honest reason in a tooltip, and its composition actions
+use the ordinary `Accent` selected-row treatment; no media thumbnail or import chrome is implied
+before the media pipeline exists.
 
 ### Viewer footer readouts
 
@@ -185,6 +197,13 @@ header menu can never show a stale value for the other. Right-aligned: the selec
 (`nodeSelectionReadout`), `Muted` `UiSmall`, reading "N nodes". Unlike the Viewer's own footer, this
 one is ordinary child widgets in a `QHBoxLayout` rather than one surface the editor paints itself --
 there is no per-frame readout here that needs a single paint pass to stay in sync.
+
+### Assets footer (task ASSETS-1)
+
+The footer places New Composition, disabled New Folder, and disabled Import on the left, with
+Delete aligned to the right. New Folder explains `Folders arrive with asset organisation`; Import
+explains `Image and sequence import arrives with the media pipeline`. The panel body is a
+two-column tree whose Kind column reads `Composition`, with a search field above it.
 
 ### Elevation
 
