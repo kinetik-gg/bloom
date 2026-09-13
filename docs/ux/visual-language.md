@@ -172,8 +172,8 @@ Assets and Nodes, use the same strip rather than inventing a second chrome treat
 The timeline header splits at exactly the body's layer-column divider. Its ruler begins at the lane
 region's x origin and reserves the same vertical-scrollbar gutter. The ruler lives inside the
 `EditorHeader` row; it has no separate body row. A continuous `1px` Accent playhead stroke connects
-the header, the right side of the column-heading row, and all lanes. The work-area strip remains the
-full composition range; it does not imply editable in/out points.
+the header, the right side of the column-heading row, and all lanes. The work-area strip shows the
+persisted range, with Accent grips at both endpoints and the same zoom/scroll axis as the ruler.
 
 Timeline major labels use the frame cadence `1, 2, 5, 10, 24, 48, 96, …`, chosen from available pixel
 density and actual label font metrics. Ten-frame spacing is used at fit when it has enough room;
@@ -448,13 +448,13 @@ licensing, substitution, and missing-dependency workflow.
 
 ### Timeline layer row controls
 
-The layer-stack column's row carries two Compact `KDropdown`s, and they are deliberately not the same
-kind of thing:
+The layer-stack column carries Bold 16 px visibility, solo and lock glyphs with distinct on/off
+states, a label swatch and name, and a Compact Blending dropdown. Audio and Parent are hidden:
 
 | Row control | Object name | State |
 | --- | --- | --- |
 | Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
-| Parent | `layerParentDropdown` | Disabled, carrying its single honest value "None", with a tooltip saying why: no parenting exists in the document model or the command vocabulary |
+| Parent | `layerParentDropdown` | Hidden until parenting exists |
 
 A disabled placeholder always states its reason in its tooltip rather than merely looking
 unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
@@ -547,3 +547,16 @@ Existing scene/view/editor, canvas/Add menu, Add Solid/Text, navigation action, 
 position-field object names are unchanged. The legacy named Add actions remain routable contracts
 when Add… replaces the visible submenu. The architecture's application-integration limit determines
 which authoring affordances can currently be offered.
+
+### Layer Labels And Bars
+
+`Color::Label1..8` is a dedicated display-label palette, independent of socket and media colors:
+`#D97C7C`, `#D9A66C`, `#C9C76B`, `#83BD84`, `#68BABA`, `#799ED2`, `#AA8ACC`, `#CE89B4`.
+A custom RGB label uses the same row swatch and bar fill. Kind colors remain the default.
+
+Bars span the layer's half-open range, inset vertically by `Spacing::XS`, with a one-pixel inner
+border from `hoverFillFor(barColor)` and shallow `Elevation::TimelineBar` shadow. Both ends have
+trim grips; snapping shows a vertical guide. Row drag shows an Accent insertion rule. Toggle
+states use `Visible`/`Hidden`, `Check` for solo and `Locked`/`Unlocked`, rendered in the curated
+Bold weight at `Size::IconMedium` (16 px). Their source and hashes are in the Phosphor provenance
+record; other icon weights and meanings are unchanged.

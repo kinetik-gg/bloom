@@ -37,16 +37,16 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.4`.
+The container version remains `1.0`; the current document schema is `1.5`.
 The earlier document `1.0`, `1.1`, `1.2`, and `1.3` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.4.schema.json` and `schemas/project/document-1.4.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.4` and
-`urn:kinetik:bloom:schema:project-document:1.4`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.4`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
+`schemas/project/manifest-1.5.schema.json` and `schemas/project/document-1.5.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.5` and
+`urn:kinetik:bloom:schema:project-document:1.5`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.5`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
 `1.3`, manifest and
 document -- remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
@@ -1065,3 +1065,25 @@ neither of `1.3`'s additions, so there is nothing to add or infer -- the step ex
 no hole, not because a `1.2` file is missing anything. It charges the operation budget and reparses
 before trusted decode, and each step refuses any document that is not its own source version, so the
 chain cannot be entered twice or out of order. Current writes emit at least minor 3.
+
+## Timeline Fields In Document 1.5
+
+The `1.4` → `1.5` migration changes only the root document version. All additions are optional,
+so a migrated file needs no inserted default members. The production migration chain has no gaps.
+Container version and node schema versions remain unchanged. Both 1.5 schema artifacts are
+validated by the schema checker, which removes the new constraints and reuses the 1.4 ladder.
+
+After a layer boundary's existing four members, optional known members appear in this order:
+`inPoint`, `outPoint`, `enabled`, `solo`, `locked`, `labelColor`. Times use the canonical rational
+object. Zero `inPoint` and the zero full-duration `outPoint` sentinel are omitted by the writer.
+Flags are omitted at their defaults (true, false, false respectively). A label is exactly three
+JSON unsigned integers in `[0,255]`, in red/green/blue order; no alpha or color-space transform is
+implied. A missing label uses the kind color. Unknown members still follow known members under
+the existing additive-minor preservation rules.
+
+After `nodeGroups`, a composition may contain `workArea`, with `start`, then `end` canonical
+rational objects. Absence means `[0,duration)`; a present range satisfies
+`0 <= start < end <= duration`. Layer ranges obey the same domain after resolving the duration
+sentinel. Invalid ranges are refused during trusted document construction. The writer preserves
+explicit ranges and work areas through close/reopen verification; old document pixels and output
+identity goldens do not change.

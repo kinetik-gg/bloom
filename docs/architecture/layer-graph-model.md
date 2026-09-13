@@ -855,3 +855,39 @@ canonical-stack topology still refuses through command validation.
 
 These are Qt scene/widget interactions without platform-specific input code. The same implementation
 and offscreen event tests apply to Linux, macOS and Windows; this change's executed gates are Linux.
+
+## Layer Timeline Contract
+
+A `LayerOutputBoundary` owns range, visibility (`enabled`, default true), `solo` (false),
+`locked` (false), and optional RGB `labelColor`. Its `inPoint` defaults to zero. A zero stored
+`outPoint` is the full-duration sentinel; `endPoint(duration)` resolves it to the composition
+end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to the composition
+frame grid; the exact composition end is also a valid endpoint. Existing documents therefore
+retain full-range rendering without migration-injected data.
+
+`SetLayerRange` edits both endpoints in one transaction. `SplitLayerAtTime` requires an interior
+frame and duplicates the Layer node, its own parameters/curves, boundary and stable stack slot.
+The first range becomes `[in,t)`, the second `[t,out)`. Upstream image/value sources remain shared;
+new parameters, curves, keys, node, layer, edge and slot IDs remain pinned across undo/redo.
+`DuplicateNodes` retains a copied Layer's incoming shared connections and boundary metadata.
+
+`SetLayerEnabled` synchronizes the Layer node's existing mute state. Source-node mute remains
+independent. When any boundary is soloed, the stack admits only soloed, enabled, unmuted layers.
+Range checks live in immutable compiled layer operands and run at each requested frame time;
+outside the range the evaluator publishes no image slot and the stack skips that entry. Plans
+remain reusable across frame times. The added operands do not reinterpret previous fields or
+change existing default pixels; evaluator, primitive, animation and plan semantics constants and
+output identity goldens remain unchanged.
+
+`SetLayerLocked` protects a layer's parameters and upstream parameter owners, including animated
+keys, range and explicit reorder commands. The command stack refuses protected changes with a
+message, including destructive Layer deletion. Node-card and Properties editors disable their
+controls. Unlock, visibility, solo and label edits remain available. Undo/redo restore recorded
+snapshots and are not refused by a lock introduced in that history.
+
+`SetLayerLabelColor` sets or clears an optional three-channel, 8-bit RGB display label. The row
+swatch and clip bar use it; absence uses the layer-kind color. Labels and locks do not affect
+pixels. The composition separately owns optional `WorkArea{start,end}`; `SetWorkArea` and
+`ClearWorkArea` share normal validation, transaction and persistence boundaries. The range
+scopes preview/cache/transport through `CompositionSession::workArea()` and never changes export
+or the full composition duration. Timeline rows remain projections of stable stack slots.

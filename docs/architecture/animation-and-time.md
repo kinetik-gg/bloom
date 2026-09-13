@@ -348,12 +348,13 @@ so, and an explicit refresh, which asks for the frame to be re-derived precisely
 the key does not cover may have changed.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
-own button) pre-renders the composition's whole frame range into the cache one frame at a time, in
+own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in
 the background, reporting "Caching 42/240" in the Viewer footer and cancellable with Escape, then
 asks the transport to play it. Frames already cached are counted without being rendered again, so a
-second RAM preview of an unedited range is immediate. The range is the composition's own
-`[0, duration)`: Bloom has no work-area range to scope it to, since the timeline's work-area strip
-honestly spans the whole duration and the document model has no in/out points.
+second RAM preview of an unedited range is immediate. The range is the persisted half-open work
+area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
+starts inside and loops over those same frame indices. The start frame is included and the end
+frame excluded; a range edit cancels an active cache run through the ordinary revision path.
 
 ### Background caching
 
@@ -373,8 +374,9 @@ and shutdown handling. It never changes session time or publishes Viewer pixels.
 Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
 cycle that evicts its own frames. A revision, resolution, playhead, or memory-budget change restarts
-selection. Old revision entries evict through the existing cache policy. Bloom still has no editable
-work-area in/out points: the supported range is the full composition `[0, duration)`.
+selection. Old revision entries evict through the existing cache policy. Background caching visits
+only frame times inside the session's resolved work area, including when choosing nearby frames
+around an out-of-range playhead. Cache budgets, cancellation and shutdown behavior are unchanged.
 
 The ruler paints a thin `Ok` green segment for each retained frame-grid sample at the current
 project, composition, revision, resolution, and policy. Subframe samples do not certify a whole frame.
@@ -457,9 +459,9 @@ identity.
 On release, a constant position receives one set-constant transaction. An animated position updates
 the exact-time key or inserts one. A zero move commits nothing. Escape, secondary-button cancel,
 capture loss, a stale revision, a missing target, a parameter-source change, a composition switch,
-or a frozen-mapping change clears the override and creates no command. Version 1 has no durable
-layer lock field, so all otherwise valid targets are treated as unlocked. It supports one active
-translation interaction; locking, multi-selection transforms, and constraint modes are deferred.
+or a frozen-mapping change clears the override and creates no command. A locked layer refuses
+translation interaction before an override is created. Multi-selection transforms and constraint
+modes remain deferred.
 
 ## Required Verification
 

@@ -16,7 +16,7 @@ hosts reach with a modifier — bare letters belong to tools.
 ## Rules
 
 - **One meaning per key per editor.** A key does not change meaning depending on what is selected.
-- **A modifier-free letter is a tool, not a command.** Commands that destroy, duplicate, or toggle
+- **A modifier-free letter is a tool, not a command**, except Timeline B/N range marks. Commands that destroy, duplicate, or toggle
   state take a modifier or live in a menu.
 - **A command may live in a menu without owning a key.** Mute, collapse, and dissolve are exactly
   that: they are in the node context menu and bind nothing.
@@ -176,6 +176,15 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 
 | Binding | Action |
 | --- | --- |
+| `B` / `N` | Set work-area start / exclusive end at the playhead |
+| Drag work-area grips / double-click strip | Set frame-snapped range / reset to full duration |
+| Drag bar edge / body | Trim / move both endpoints; commit once on release, Escape cancels |
+| `Shift` during bar drag | Disable magnetic snapping; committed endpoints still land on frames |
+| `Ctrl+K` | Split selected layers at the playhead (also Timeline Edit) |
+| Click / Ctrl-click / Shift-click row | Select one / toggle membership / extend contiguous selection |
+| Drag row | Reorder stable slots at the insertion indicator |
+| Double-click name | Inline rename; Return commits, Escape cancels |
+| Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
@@ -205,6 +214,17 @@ RAM Preview sits in the transport cluster as a button, but its KEYS are declared
 menu, not here: one `Qt::WindowShortcut` owner per sequence, or Qt reports an ambiguous overload and
 fires neither. The button, the menu item, and `Ctrl+Shift+Space` all call the one
 `RamPreviewController::toggle()`, per **Ownership Boundary** below.
+
+Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
+marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
+commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
+presets, a custom RGB picker and Kind Default. Name editing consumes text/navigation keys before
+Timeline commands. Keyframe property rows and parenting are separate work.
+
+New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,
+`timelineSplitLayerAction`, `timelineLayerInsertionIndicator`, `timelineLayerRenameEditor`,
+`timelineLayerContextMenu`, `timelineLayerLabelColorDialog`. Existing object names are retained,
+including the hidden `layerParentDropdown`.
 
 ## Retired Bindings
 

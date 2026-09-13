@@ -7,6 +7,7 @@ add_library(
     node_group_schema_checks.cpp
     animation_breadth_schema_checks.cpp
     value_graph_schema_checks.cpp
+    layer_timeline_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp
     schema_check_helpers.hpp
