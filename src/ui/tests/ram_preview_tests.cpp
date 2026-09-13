@@ -12,6 +12,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -32,6 +33,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -320,6 +322,16 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the first frame renders");
     const auto afterFirstFrame = fixture.preparationCount.load();
+    const auto freshFrame = fixture.controller.state().frame;
+    const auto freshView = freshFrame == nullptr ? std::nullopt : freshFrame->displayBufferView();
+    expectations.expect(freshFrame != nullptr && freshFrame->hasProcessFrame() &&
+                            freshView.has_value() && !freshView->pixels.empty(),
+                        "the freshly evaluated frame carries its process frame and its pixels");
+    const bool freshQualified = freshView.has_value() && freshView->isOcioQualified;
+    const std::vector<render::Rgba8> freshPixels =
+        freshView.has_value()
+            ? std::vector<render::Rgba8>(freshView->pixels.begin(), freshView->pixels.end())
+            : std::vector<render::Rgba8>{};
 
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)), "move to frame one");
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
@@ -344,6 +356,69 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
                             fixture.controller.state().frame->desiredIdentity() ==
                                 fixture.controller.state().desiredIdentity,
                         "the frame published from the cache carries this request's own identity");
+
+    // FORMAL AMENDMENT 1: what comes back from the cache is the packed display buffer and nothing
+    // else. It is the same picture -- byte for byte the pixels the evaluation published -- but it
+    // carries no process frame, and says so rather than handing one back that is silently null.
+    const auto cachedFrame = fixture.controller.state().frame;
+    expectations.expect(cachedFrame != nullptr && !cachedFrame->hasProcessFrame(),
+                        "a frame served from the cache carries no process frame");
+    expectations.expect(cachedFrame != nullptr && cachedFrame->processFrame() == nullptr,
+                        "its process-frame handle is null rather than dangling");
+    const auto cachedView =
+        cachedFrame == nullptr ? std::nullopt : cachedFrame->displayBufferView();
+    expectations.expect(cachedView.has_value() && freshPixels.size() == cachedView->pixels.size() &&
+                            std::ranges::equal(freshPixels, cachedView->pixels),
+                        "a cache hit paints exactly the pixels the evaluation published");
+    expectations.expect(cachedFrame != nullptr && freshFrame != nullptr &&
+                            cachedFrame->isOcioQualified() == freshFrame->isOcioQualified() &&
+                            cachedView.has_value() && cachedView->isOcioQualified == freshQualified,
+                        "stripping the process image does not relabel which transform made the "
+                        "pixels");
+
+    finishFixture(fixture, expectations);
+}
+
+// The amendment's own promise, stated as a lifetime: once a frame is in the cache, nothing keeps
+// its Float32 process image alive.
+void testCachingReleasesTheProcessImage(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Cache Footprint", time(1)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the footprint fixture renders its first frame");
+    auto firstFrame = fixture.controller.state().frame;
+    expectations.expect(firstFrame != nullptr && firstFrame->hasProcessFrame(),
+                        "a freshly evaluated frame does carry its process frame");
+    if (firstFrame == nullptr) {
+        finishFixture(fixture, expectations);
+        return;
+    }
+    const auto firstKey = ui::PreviewFrameCacheKey::forIdentity(firstFrame->desiredIdentity());
+    const std::weak_ptr<const runtime::ProcessFrame> processFrame = firstFrame->processFrame();
+    const auto displayBytes = ui::PreviewFrameCache::frameByteCost(*firstFrame);
+    const auto processBytes = firstFrame->processImage().pixels().size_bytes();
+    // Released here, so that from this line on the cache is the only thing that could still be
+    // holding that frame -- which is exactly what the weak handle below is asking about.
+    firstFrame.reset();
+    expectations.expect(displayBytes > 0 && processBytes == displayBytes * 4,
+                        "this composition's process image is four times its display buffer");
+    expectations.expect(fixture.controller.frameCache().residentBytes() == displayBytes,
+                        "the cache accounts for the display buffer alone, never the process image");
+
+    // Move the session on twice, so nothing but the cache still refers to that first frame: the
+    // controller's state holds a newer one and no request retains an older.
+    expectations.expect(fixture.session.setCurrentTime(time(1, 25)) &&
+                            waitUntil([&] { return isReady(fixture.controller); }),
+                        "the footprint fixture reaches a second frame");
+    expectations.expect(fixture.session.setCurrentTime(time(2, 25)) &&
+                            waitUntil([&] { return isReady(fixture.controller); }),
+                        "the footprint fixture reaches a third frame");
+
+    expectations.expect(fixture.controller.frameCache().contains(firstKey),
+                        "the first frame is still cached");
+    expectations.expect(processFrame.expired(),
+                        "caching a frame does not keep its Float32 process image alive");
+    expectations.expect(fixture.controller.frameCache().residentBytes() == displayBytes * 3,
+                        "three cached frames cost three display buffers and nothing more");
 
     finishFixture(fixture, expectations);
 }
@@ -560,6 +635,7 @@ int main(int argc, char** argv) {
     try {
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);
+        testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);

@@ -296,12 +296,24 @@ publishes once per session, so an entry's display identity can change at most on
 every earlier entry is stale. A frame whose qualification differs from the tag clears the cache and
 adopts the new one.
 
+**What is retained.** The packed RGBA8 display buffer and the identity, and NOT the Float32 process
+image it was mapped from. Playback paints the packed buffer and nothing else -- the viewer's own
+painting, its display geometry, its colour-state chip, and the direct-manipulation mapping all read
+that buffer, none of them the process image -- so keeping the process image would spend four fifths
+of the budget on pixels nothing in a preview ever reads. A retained frame is therefore about 8 MB at
+1920x1080 rather than about 41 MB.
+
+Anything that DOES need scene-linear pixels -- a frame or sequence export, a future sampler or
+analysis -- evaluates the frame again rather than being handed a cached one, and asks
+`PreparedPreviewFrame::hasProcessFrame()` rather than assuming. That is the one thing a cache hit
+cannot answer, and it is stated rather than papered over with a silently null handle.
+
 **Budget.** `playback/ram-preview-memory-bytes` in QSettings, 2 GiB by default; missing, unparseable,
 or zero reads as the default. Least-recently-used entries are evicted until the budget is satisfied,
 and a frame larger than the whole budget is refused rather than allowed to evict everything for
-itself. A retained frame costs its packed display buffer plus the Float32 process image it keeps
-alive, which at composition resolution is tens of megabytes -- the honest answer for 1920x1080 under
-the default budget is a few dozen frames, not a few hundred.
+itself. At about 8 MB a frame the default budget holds roughly 250 frames of a 1920x1080
+composition -- ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the
+first eviction and keeps the prefix that does.
 
 **Invalidation is the key.** A document edit advances the revision, so every entry of an earlier
 revision is unreachable by construction; those entries are dropped outright when a frame of a newer
@@ -417,6 +429,8 @@ translation interaction; locking, multi-selection transforms, and constraint mod
 - a compiled plan reused across requests at one revision and recompiled at the next
 - a cached preview key published with no task and no evaluation, eviction under the memory budget,
   and entries of an older revision dropped when a newer one arrives
+- a retained frame costing its display buffer alone, painting exactly the pixels the evaluation
+  published, and letting its process image go
 - a RAM preview of a twenty-four frame composition caching every frame, then playing all of them in
   order with nothing evaluated and no frame dropped, and its cancellation keeping what it cached
 

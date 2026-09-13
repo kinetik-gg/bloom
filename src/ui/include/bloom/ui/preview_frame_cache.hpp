@@ -12,11 +12,10 @@ class QSettings;
 
 namespace bloom::ui {
 
-// 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A
-// composition-resolution preview frame retains both its packed display buffer and the Float32
-// process image it was mapped from, so it is tens of megabytes: the budget is what decides how many
-// frames of a range can be held at once, and the honest answer for a 1920x1080 composition is a few
-// dozen.
+// 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A retained frame is
+// its packed RGBA8 display buffer and nothing else -- about 8 MB at 1920x1080, a quarter of what
+// the Float32 process image it was mapped from would have cost -- so the default budget holds
+// roughly 250 frames of a composition-resolution range.
 inline constexpr std::size_t kDefaultPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
 
@@ -87,9 +86,11 @@ class PreviewFrameCache final {
     // and moves a hit to the front of the eviction order.
     [[nodiscard]] PreparedPreviewFrameHandle take(const runtime::PreviewRequestIdentity& identity);
 
-    // Retains `frame` under its own identity's key. Drops every entry of an older revision first,
-    // then evicts least-recently-used entries until the budget is satisfied. A frame larger than
-    // the whole budget is refused rather than allowed to evict everything for itself.
+    // Retains `frame`'s DISPLAY BUFFER under its own identity's key -- the process image is dropped
+    // here, so a hit can never hand back scene-linear pixels. Drops every entry of an older
+    // revision first, then evicts least-recently-used entries until the budget is satisfied. A
+    // frame larger than the whole budget is refused rather than allowed to evict everything for
+    // itself.
     void insert(const PreparedPreviewFrameHandle& frame);
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
@@ -102,15 +103,18 @@ class PreviewFrameCache final {
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
 
-    // What one retained frame costs: its packed display buffer plus the process image it keeps
-    // alive.
+    // What RETAINING one frame costs: its packed display buffer, and nothing else. Deliberately not
+    // what holding the frame costs right now -- insertion keeps the display buffer and drops the
+    // Float32 process image (see runtime::PreviewDisplayOnlyFrame).
     [[nodiscard]] static std::size_t
     frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
 
   private:
     struct Entry final {
         PreviewFrameCacheKey key;
-        PreparedPreviewFrameHandle frame;
+        // Display-only: the packed buffer plus its identity, never the process image it was mapped
+        // from. A hit is wrapped back into a PreparedPreviewFrame envelope on the way out.
+        std::shared_ptr<const runtime::PreviewDisplayOnlyFrame> frame;
         std::size_t bytes = 0;
     };
 
