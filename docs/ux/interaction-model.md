@@ -176,6 +176,19 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 
 | Binding | Action |
 | --- | --- |
+| Click layer chevron / collapsed key summary | Expand or collapse that layer / expand it to expose parameter lanes |
+| Inline parameter value / diamond | Commit through the Properties session setters / use the shared animate, add-key, remove-key gesture |
+| Click key / Shift-click key | Select one / extend the session key selection across lanes |
+| Drag empty parameter lane / Shift-drag empty lane | Box-select keys across rows / add the box contents to the selection |
+| Drag selected key | Move the selected keys together; snap to frames, other keys, playhead and work-area edges |
+| Shift during key drag | Disable frame and magnetic snapping; translate the selection by one rational subframe offset |
+| Alt-drag one selected key | Duplicate it at the destination with a new stable key ID |
+| Alt-drag first or last of at least two selected keys on one parameter | Stretch the selected times about the opposite endpoint, snapped to frames |
+| Double-click key / animated lane background | Move playhead to the key's exact time / insert a sampled key at the clicked frame |
+| `Delete` / `Backspace` with parameter lanes focused | Delete the key selection in one transaction |
+| `Ctrl+C` / `Ctrl+V` with parameter lanes focused | Copy selected keys / paste onto the same parameters with the earliest copied time at the playhead |
+| Right-click key | Hold, Linear, Ease In-Out, or Delete for the complete key selection |
+| `Escape` during key drag or box selection | Cancel the gesture without a document edit |
 | `B` / `N` | Set work-area start / exclusive end at the playhead |
 | Drag work-area grips / double-click strip | Set frame-snapped range / reset to full duration |
 | Drag bar edge / body | Trim / move both endpoints; commit once on release, Escape cancels |
@@ -219,12 +232,39 @@ Bar magnetic targets are other layers' in/out points, the playhead and work-area
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
 commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
 presets, a custom RGB picker and Kind Default. Name editing consumes text/navigation keys before
-Timeline commands. Keyframe property rows and parenting are separate work.
+Timeline commands. Parenting remains separate work.
 
 New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,
 `timelineSplitLayerAction`, `timelineLayerInsertionIndicator`, `timelineLayerRenameEditor`,
 `timelineLayerContextMenu`, `timelineLayerLabelColorDialog`. Existing object names are retained,
 including the hidden `layerParentDropdown`.
+
+Expanded layers contain Transform (Position, Anchor, Scale, Rotation), Appearance (Opacity,
+Blending), and the source node's animatable parameters (Solid Color; Text Size and Color). Each
+parameter occupies one row; vector components share that row. Expansion is per-layer editor state,
+cleared on composition changes, and is not saved. Collapsed summaries deduplicate coincident key
+times across the boundary and source parameters and only expand the layer when clicked.
+
+A click on an already selected key keeps the set during a possible drag, then selects that one key
+on release if no drag occurred. Right-clicking a selected key preserves the set. Locked layers reject parameter and key edits. Batch gestures
+commit once on release; a stale revision cancels the gesture. A collision rejects the complete
+move, stretch, duplicate or paste. A stretch keeps its endpoint on the same side of its anchor;
+rounding that would merge keys rejects the edit. Ordinary moves clamp the whole selection to the
+composition, preserving its spacing. Shift subframe pointer offsets use nanosecond resolution and
+checked rational addition. Clipboard offsets remain exact, including a subframe playhead; the
+clipboard is session-local and clears when the composition or document changes.
+
+Final keys keep canonical Linear outgoing interpolation when a batch interpolation is applied.
+Deleting every key on a parameter restores a constant equal to its earliest key's value. Both
+choices, and all affected curves, are restored exactly by one Undo. The same Qt gestures and
+command path apply on Linux, macOS and Windows; platform qualification remains a separate gate.
+
+The retained `timelineKeyframeArea` and `timelineKeyframePanel` now identify the lane container
+inside `timelineLaneRegion`, with no separate panel beneath the layer stack. The former
+`timelineKeyframeIndent` and `timelineKeyframeScrollGutter` wrappers are removed with that separate
+layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
+`timelinePropertyDiamond`, `timelinePropertyValue`, `timelinePropertyBlending`,
+`timelinePropertyColor`, `timelinePropertyComponent`, and `timelineKeyframeRow`.
 
 ## Retired Bindings
 

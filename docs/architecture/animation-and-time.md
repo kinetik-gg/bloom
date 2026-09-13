@@ -174,10 +174,34 @@ The command surface is typed by curve value kind:
   the gesture that changes an ease is a menu pick on a key that is not moving. Setting the mode a key
   already carries is a committing no-change; anything but `Linear` on the final key is refused.
 
+### Multi-key commands
+
+`MoveKeyframes`, `DeleteKeyframes`, `SetKeyframesInterpolation` and `PasteKeyframes` are Qt-free
+operations in `animation_operations`. Each UI batch is one transaction against the revision frozen
+at gesture start (or the current revision for a menu/clipboard action), with one undo entry.
+
+| Operation | Admission and result |
+| --- | --- |
+| `MoveKeyframes` | Accepts stable curve/key addresses with destination times. Stages and sorts complete curves, permitting selected keys to exchange their original times. Duplicate addresses, occupied final times and times outside `[0, duration)` reject the whole transaction. IDs and values are preserved; final outgoing interpolation is normalized to Linear |
+| `DeleteKeyframes` | Removes the complete addressed selection across value kinds. If a curve becomes empty, restores a constant holding its earliest pre-delete key's value and erases the curve atomically |
+| `SetKeyframesInterpolation` | Applies Hold, Linear or Ease In-Out to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
+| `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
+
+All three value kinds (Scalar, Vec2 and Color4) use the same batch paths. A staged collision does
+not consume durable IDs or publish any other curve in the transaction. Undo/redo restores exact
+sources, IDs, values, times and outgoing modes. No evaluator, sampling, process-identity or
+sampling-version changes are involved.
+
+Endpoint time-stretch submits `MoveKeyframes` with frame-snapped scaled times about the opposite
+selected endpoint. Shift disables ordinary move snapping; the UI converts pointer displacement to
+a rational nanosecond offset and applies it with checked portable integer arithmetic. Clipboard
+paste uses checked rational offsets relative to the earliest copied key and the current playhead,
+preserving subframe spacing. Unrepresentable arithmetic is refused rather than overflowing.
+
 ### The Keyframe Gesture
 
-Clicking a parameter row's keyframe diamond, at the session's current time, is the one gesture that
-creates and removes animation. It has exactly four transitions, each ONE transaction and therefore
+Clicking a parameter row's shared keyframe diamond, at the session's current time, creates and
+removes animation. It has exactly four transitions, each ONE transaction and therefore
 one undo step:
 
 1. A CONSTANT parameter becomes animated with one key at the current value and time --
@@ -229,8 +253,12 @@ active request is cancelled but remains active until terminal; only then may the
 submitted. Scrub end bypasses the trailing delay but does not violate that active-request gate.
 Scheduler coalescing and stale-result rejection remain lower-level backstops.
 
-Keyframe selection stores the stable `KeyframeId`; row index and screen position are presentation
-details.
+`CompositionSelection` owns a collection of stable `(AnimationCurveId, KeyframeId)` addresses
+and one primary key with a contextual layer. Shift-click and box selection update that shared
+collection; vanished keys are pruned after execute/undo/redo and composition changes clear it.
+Rows, pixel positions, expanded-layer state, drag previews and the clipboard are session/UI state.
+They are not serialized project truth. Timeline property fields bind exact parameter IDs and issue
+the same session setters as Properties; the UI never mutates document curves directly.
 
 ## Per-Frame Evaluation
 
