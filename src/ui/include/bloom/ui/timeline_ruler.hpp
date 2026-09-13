@@ -26,40 +26,26 @@ namespace bloom::ui {
 class CompositionPreviewController;
 class CompositionSession;
 
-// The ONE pixel <-> frame/time mapping every time-axis surface in the timeline panel reads (task
-// T1). It was private to timeline_ruler.cpp while the ruler was the only widget with a time axis;
-// the AE-style lane region now paints clip bars and the playhead on exactly the same axis, and the
-// work-area header row paints the playhead's head marker on it, so one shared definition is the
-// only way those three surfaces cannot drift apart by a pixel. Both directions' arithmetic moved
-// verbatim.
-//
-// Pixel coordinates are UI-space integers, not RationalTime values, so the reverse pixel ->
-// frame-index direction (used only for scrubbing) is a deliberately exact integer mapping using the
-// same tie-to-greater rule as the time-domain contract (docs/architecture/animation-and-time.md,
-// "Session Time And Scrubbing"). The forward frame/time -> pixel direction (used only for painting)
-// is ordinary presentational arithmetic, not a clamp/tie/mapping decision.
-//
-// `widthPixels` is always the width of a LANE-REGION-ALIGNED widget: the ruler, a lane region, or
-// the work-area row, all of which share one left edge. That is why frame 0 lands at the lane
-// region's left edge and never underneath the layer-stack column.
+// Shared presentation mapping. The half-open visible range is in seconds and belongs to the
+// editor viewport, never the document. Scrub results always land on exact rational frame times.
 struct TimelineAxis final {
     document::FrameRate frameRate;
     core::RationalTime duration;
     int widthPixels = 0;
     std::uint64_t maxIndex = 0;
+    double t0 = 0.0;
+    double t1 = 0.0;
 
     [[nodiscard]] static std::optional<TimelineAxis>
     create(const document::Composition& composition, int widthPixels);
-
-    // Exact pixel -> frame index, clamped into the widget bounds, with an exact halfway pixel tie
-    // going to the greater index (checked integer arithmetic). Falls back to a defensively clamped
-    // floating approximation only if the exact product would overflow std::uint64_t -- unreachable
-    // for any realistic composition duration/frame rate combined with a practical widget width, but
-    // kept safe rather than UB, matching FrameTimeMapping's own defensive-clamp precedent.
+    void zoomToRange(double start, double end) noexcept;
+    void zoomToFit() noexcept;
+    [[nodiscard]] double secondsForPixel(qreal pixelX) const noexcept;
+    [[nodiscard]] qreal pixelForSeconds(double seconds) const noexcept;
+    [[nodiscard]] double pixelsPerFrame() const noexcept;
     [[nodiscard]] std::uint64_t frameIndexForPixel(int pixelX) const noexcept;
-
-    // Presentational time -> pixel (not a contract decision): clamps into [0, duration] so a key or
-    // playhead fractionally outside the composition's range still paints at a visible edge.
+    // Out-of-view times remain outside the widget, so clipping never pins an invisible key or
+    // playhead to an edge of the viewport.
     [[nodiscard]] qreal pixelForTime(core::RationalTime time) const noexcept;
 };
 
@@ -119,7 +105,16 @@ class TimelineRuler final : public QWidget {
     void beginScrub(int pixelX);
     void updateScrub(int pixelX);
     void endScrub(int pixelX);
+    [[nodiscard]] std::optional<TimelineAxis> axisForWidth(int widthPixels) const;
+    void zoomToRange(double start, double end);
+    void zoomToFit();
+    void zoomBy(double factor, qreal anchorX);
+    [[nodiscard]] bool handleWheel(QWheelEvent* event);
 
+  signals:
+    void axisChanged();
+
+  public:
     // Exposed purely for tests (mirrors ViewerEditor::zoomDropdownForTest()'s precedent): the exact
     // major-tick label rects paintEvent would draw at the ruler's CURRENT width/composition, so a
     // collision test can assert disjointness without re-deriving the density math or rasterizing a
@@ -135,10 +130,35 @@ class TimelineRuler final : public QWidget {
 
   private:
     void scrubToPixel(int pixelX);
+    void wheelEvent(QWheelEvent* event) override;
+    double visibleStart_ = 0.0;
+    double visibleEnd_ = 0.0;
 
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool scrubbing_ = false;
+};
+
+// Full-duration overview with a draggable window and independently resizable edges.
+class TimelineNavigator final : public QWidget {
+  public:
+    explicit TimelineNavigator(TimelineRuler& ruler, QWidget* parent = nullptr);
+    [[nodiscard]] QRectF windowRect() const;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+
+  private:
+    enum class Drag { None, Pan, Start, End };
+    TimelineRuler& ruler_;
+    Drag drag_ = Drag::None;
+    qreal pressX_ = 0.0;
+    double start_ = 0.0;
+    double end_ = 0.0;
 };
 
 // The honest "work area" strip (task U7, issue #122, decision 3): a thin Accent-dim band spanning
@@ -174,6 +194,7 @@ class TimelineWorkAreaRow final : public QWidget {
     explicit TimelineWorkAreaRow(CompositionSession& session, QWidget* parent = nullptr);
 
     [[nodiscard]] TimelineWorkAreaStrip* strip() const noexcept { return strip_; }
+    void setRuler(TimelineRuler& ruler);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -181,6 +202,8 @@ class TimelineWorkAreaRow final : public QWidget {
   private:
     CompositionSession& session_;
     TimelineWorkAreaStrip* strip_ = nullptr;
+    TimelineRuler* ruler_ = nullptr;
+    bool event(QEvent* event) override;
 };
 
 // One row per animated parameter of the current selection's layer -- every animatable Layer Output
@@ -204,6 +227,7 @@ class TimelineKeyframePanel final : public QWidget {
 
   public:
     explicit TimelineKeyframePanel(CompositionSession& session, QWidget* parent = nullptr);
+    void setRuler(TimelineRuler& ruler);
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -213,6 +237,7 @@ class TimelineKeyframePanel final : public QWidget {
 
     CompositionSession& session_;
     QVBoxLayout* rowsLayout_ = nullptr;
+    TimelineRuler* ruler_ = nullptr;
     std::vector<class TimelineKeyframeRow*> rows_;
     // Memoizes which curves currently have a row, so rebuild() only tears down/recreates widgets
     // when the row SET actually changes (a different contextual layer, or a curve appearing/

@@ -244,6 +244,7 @@ target_sources(
         timeline_editor.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_navigation.cpp
         viewer_editor.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"

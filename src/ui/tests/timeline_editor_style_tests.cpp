@@ -33,6 +33,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPixmap>
@@ -44,6 +45,7 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QWheelEvent>
 #include <QWidget>
 
 #include <array>
@@ -53,6 +55,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -317,6 +320,114 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
     expectations.expect(area.findChild<ui::TimelineRuler*>() == nullptr,
                         "replacement destroys the transferred ruler");
     expectations.expect(area.setEditorId("bloom.timeline"), "the split editor can be restored");
+    finishFixture(fixture);
+}
+
+void testTimeViewportGestures(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Zoom and scroll"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    editor.resize(1200, 400);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* ruler = editor.rulerForTest();
+    auto* lanes = editor.laneRegionForTest();
+    (void)fixture.session.setCurrentTime(time(3));
+    expectations.expect(fixture.session.toggleKeyframe("opacity"), "seed an animated key lane");
+    const auto originalTime = fixture.session.currentTime();
+    const auto revision = fixture.session.snapshot().revision();
+    const auto getAxis = [ruler](int width = -1) {
+        const auto result = ruler->axisForWidth(width < 0 ? ruler->width() : width);
+        if (!result.has_value()) {
+            throw std::runtime_error("Missing timeline test axis");
+        }
+        return *result;
+    };
+    const auto before = getAxis();
+    const qreal cursor = ruler->width() * 0.4;
+    const double anchorTime = before.secondsForPixel(cursor);
+    auto wheel = [](QWidget& widget, qreal x, QPoint angle, Qt::KeyboardModifiers modifiers) {
+        QWheelEvent event(QPointF(x, 10), widget.mapToGlobal(QPoint(static_cast<int>(x), 10)), {},
+                          angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&widget, &event);
+    };
+    wheel(*lanes, cursor, QPoint(0, 120), Qt::ControlModifier);
+    auto axis = getAxis();
+    expectations.expect(axis.t1 - axis.t0 < before.t1 - before.t0,
+                        "Ctrl+wheel over lanes zooms the shared axis");
+    expectations.expect(std::abs(axis.secondsForPixel(cursor) - anchorTime) < 1e-10,
+                        "zoom preserves the cursor time");
+    ruler->zoomToRange(2.0, 5.0);
+    wheel(*ruler, cursor, QPoint(0, -120), Qt::ShiftModifier);
+    axis = getAxis();
+    expectations.expect(axis.t0 > 2.0 && std::abs(axis.t1 - axis.t0 - 3.0) < 1e-10,
+                        "Shift+wheel scrolls without changing the visible span");
+    const double priorStart = axis.t0;
+    wheel(*lanes, cursor, QPoint(120, 0), Qt::NoModifier);
+    expectations.expect(getAxis().t0 < priorStart, "horizontal wheel scrolls the axis");
+    ruler->zoomToRange(2.0, 5.0);
+    auto* keys = editor.findChild<ui::TimelineKeyframePanel*>();
+    const auto keyRows = keys->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+    expectations.expect(!keyRows.isEmpty(), "an animated key row is present");
+    if (!keyRows.isEmpty()) {
+        auto* keyRow = keyRows.front();
+        const auto keyAxis = getAxis(keyRow->width());
+        sendMouse(*keyRow, QEvent::MouseButtonPress, keyAxis.pixelForTime(time(3)),
+                  keyRow->height() / 2.0);
+        expectations.expect(
+            std::holds_alternative<ui::KeyframeSelection>(fixture.session.selection().primary),
+            "keyframe hit testing follows the zoomed shared axis");
+        sendMouse(*keyRow, QEvent::MouseButtonRelease, keyAxis.pixelForTime(time(3)),
+                  keyRow->height() / 2.0);
+    }
+    const auto rects = ruler->majorTickLabelRectsForTest();
+    for (std::size_t i = 1; i < rects.size(); ++i) {
+        expectations.expect(rects[i - 1].right() < rects[i].left(),
+                            "zoomed and scrolled tick labels do not overlap");
+    }
+    auto* navigator =
+        dynamic_cast<ui::TimelineNavigator*>(editor.findChild<QWidget*>("timelineNavigator"));
+    expectations.expect(navigator != nullptr &&
+                            navigator->height() == ui::kit::px(ui::kit::Size::Control),
+                        "the navigator uses the Control row height");
+    if (navigator != nullptr) {
+        const auto window = navigator->windowRect();
+        sendMouse(*navigator, QEvent::MouseButtonPress, window.center().x(), window.center().y());
+        sendMouse(*navigator, QEvent::MouseMove, window.center().x() + 30, window.center().y());
+        expectations.expect(getAxis().t0 > 2.0, "dragging the navigator window pans");
+        QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(navigator, &cancel);
+        expectations.expect(std::abs(getAxis().t0 - 2.0) < 1e-10,
+                            "Escape restores the original viewport");
+        sendMouse(*navigator, QEvent::MouseButtonPress, window.right(), window.center().y());
+        sendMouse(*navigator, QEvent::MouseButtonRelease, window.right() - 30, window.center().y());
+        axis = getAxis();
+        expectations.expect(axis.t0 == 2.0 && axis.t1 < 5.0,
+                            "resizing the navigator end preserves the start");
+        const auto resized = navigator->windowRect();
+        sendMouse(*navigator, QEvent::MouseButtonPress, resized.left(), resized.center().y());
+        sendMouse(*navigator, QEvent::MouseButtonRelease, resized.left() + 10,
+                  resized.center().y());
+        expectations.expect(getAxis().t0 > 2.0, "the navigator start is independently resizable");
+    }
+    ruler->zoomToRange(-100.0, 100.0);
+    axis = getAxis();
+    expectations.expect(axis.t0 == 0 && axis.t1 == before.duration.toSeconds(),
+                        "ranges clamp to the full composition duration");
+    ruler->zoomToRange(2.0, 2.000001);
+    axis = getAxis();
+    expectations.expect(axis.t1 - axis.t0 >= 1.0 / 24.0 - 1e-10,
+                        "zoom clamps at one visible frame");
+    expectations.expect(axis.pixelForTime(time(0)) < 0,
+                        "offscreen times are clipped rather than pinned to the edge");
+    ruler->zoomToFit();
+    axis = getAxis();
+    expectations.expect(axis.t0 == before.t0 && axis.t1 == before.t1,
+                        "Zoom to Fit restores the entire duration");
+    expectations.expect(fixture.session.currentTime() == originalTime &&
+                            fixture.session.snapshot().revision() == revision,
+                        "all navigation is presentation-only");
     finishFixture(fixture);
 }
 
@@ -1133,6 +1244,7 @@ int main(int argc, char** argv) {
     try {
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
+        testTimeViewportGestures(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);
         testRowsAreFlatThirtyTwoPixelRows(expectations);
         testOneScrollbarMovesBothHalvesTogether(expectations);

@@ -23,6 +23,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -36,51 +37,11 @@
 
 namespace bloom::ui {
 
-std::optional<TimelineAxis> TimelineAxis::create(const document::Composition& composition,
-                                                 const int widthPixels) {
-    const auto frameRate = composition.format().frameRate();
-    const auto duration = composition.duration();
-    const auto maxIndex = ui::maxFrameIndex(frameRate, duration);
-    if (!maxIndex.has_value()) {
-        return std::nullopt;
-    }
-    return TimelineAxis{frameRate, duration, widthPixels, *maxIndex};
-}
-
-std::uint64_t TimelineAxis::frameIndexForPixel(const int pixelX) const noexcept {
-    if (widthPixels <= 1 || maxIndex == 0) {
-        return 0;
-    }
-    const int clamped = std::clamp(pixelX, 0, widthPixels - 1);
-    const auto span = static_cast<std::uint64_t>(widthPixels - 1);
-    const auto position = static_cast<std::uint64_t>(clamped);
-    if (position != 0 && maxIndex > std::numeric_limits<std::uint64_t>::max() / position) {
-        const double fraction = static_cast<double>(clamped) / static_cast<double>(span);
-        const double approximate = std::clamp(fraction * static_cast<double>(maxIndex), 0.0,
-                                              static_cast<double>(maxIndex));
-        return static_cast<std::uint64_t>(approximate);
-    }
-    const auto product = position * maxIndex;
-    const auto quotient = product / span;
-    const auto remainder = product % span;
-    const auto tiedUp = (remainder * 2 >= span) ? quotient + 1 : quotient;
-    return std::min(tiedUp, maxIndex);
-}
-
-qreal TimelineAxis::pixelForTime(const core::RationalTime time) const noexcept {
-    if (widthPixels <= 1) {
-        return 0.0;
-    }
-    const double durationSeconds = duration.toSeconds();
-    if (!(durationSeconds > 0.0)) {
-        return 0.0;
-    }
-    const double fraction = std::clamp(time.toSeconds() / durationSeconds, 0.0, 1.0);
-    return static_cast<qreal>(fraction * static_cast<double>(widthPixels - 1));
-}
-
 void paintPlayheadLine(QPainter& painter, const TimelineAxis& axis, const core::RationalTime time,
                        const qreal heightPixels) {
+    if (time.toSeconds() < axis.t0 || time.toSeconds() >= axis.t1) {
+        return;
+    }
     // Snapped to the centre of one whole pixel column: a 1px pen on an integer x straddles the
     // boundary between two columns at some device pixel ratios and reads as two half-lit columns,
     // which is exactly the lie docs/ux/visual-language.md's Motion section forbids for a playhead.
@@ -125,8 +86,7 @@ constexpr qreal kMajorTickHeight = 8.0;
     if (axis.maxIndex == 0 || axis.widthPixels <= 1) {
         return 1;
     }
-    const double pixelsPerFrame =
-        static_cast<double>(axis.widthPixels - 1) / static_cast<double>(axis.maxIndex);
+    const double pixelsPerFrame = axis.pixelsPerFrame();
     if (pixelsPerFrame >= kMinimumPixelsPerMinorTick) {
         return 1;
     }
@@ -155,12 +115,17 @@ constexpr qreal kMajorTickHeight = 8.0;
     if (axis.maxIndex == 0 || axis.widthPixels <= 1) {
         return flooredMinor;
     }
-    const double pixelsPerFrame =
-        static_cast<double>(axis.widthPixels - 1) / static_cast<double>(axis.maxIndex);
-    const double neededPixels = static_cast<double>(widestLabelPixels) + kMajorLabelGapPixels;
-    std::uint64_t step = flooredMinor;
-    while (static_cast<double>(step) * pixelsPerFrame < neededPixels) {
-        step += flooredMinor;
+    const double pixelsPerFrame = axis.pixelsPerFrame();
+    const double neededFrames = (widestLabelPixels + kMajorLabelGapPixels) / pixelsPerFrame;
+    for (const std::uint64_t step : {1ULL, 2ULL, 5ULL, 10ULL, 24ULL, 48ULL}) {
+        if (static_cast<double>(step) >= neededFrames) {
+            return step;
+        }
+    }
+    std::uint64_t step = 48;
+    while (static_cast<double>(step) < neededFrames &&
+           step <= std::numeric_limits<std::uint64_t>::max() / 2) {
+        step *= 2;
     }
     return step;
 }
@@ -251,16 +216,28 @@ struct MajorTickLabel final {
     const qreal widestLabelPixels = metrics.horizontalAdvance(QString::number(axis.maxIndex));
     const auto minorStep = minorTickStepFrames(axis);
     const auto majorStep = majorTickStepFrames(axis, widestLabelPixels, minorStep);
-    for (std::uint64_t index = 0; index <= axis.maxIndex; index += majorStep) {
+    for (std::uint64_t index = (axis.frameIndexForPixel(0) / majorStep) * majorStep;
+         index <= axis.maxIndex; index += majorStep) {
         const auto time = frameTimeForIndex(axis.frameRate, axis.duration, index);
         if (!time.has_value()) {
             continue;
         }
         const qreal x = axis.pixelForTime(*time);
+        if (x > axis.widthPixels) {
+            break;
+        }
+        if (x < 0) {
+            continue;
+        }
         const QString text = QString::number(index);
         const qreal textWidth = metrics.horizontalAdvance(text);
-        labels.push_back(
-            {index, QRectF(x + kTickLabelInsetPixels, 0.0, textWidth, labelAreaHeight)});
+        if (x + kTickLabelInsetPixels + textWidth <= axis.widthPixels) {
+            labels.push_back(
+                {index, QRectF(x + kTickLabelInsetPixels, 0.0, textWidth, labelAreaHeight)});
+        }
+        if (axis.maxIndex - index < majorStep) {
+            break;
+        }
     }
     return labels;
 }
@@ -297,7 +274,18 @@ class TimelineKeyframeRow final : public QWidget {
         connect(&session_, &CompositionSession::snapshotChanged, this, [this] { update(); });
     }
 
+    void setRuler(TimelineRuler& ruler) {
+        ruler_ = &ruler;
+        connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
+        update();
+    }
+
   protected:
+    void wheelEvent(QWheelEvent* event) override {
+        if (ruler_ == nullptr || !ruler_->handleWheel(event)) {
+            QWidget::wheelEvent(event);
+        }
+    }
     void paintEvent(QPaintEvent* event) override {
         Q_UNUSED(event)
         QPainter painter(this);
@@ -312,7 +300,8 @@ class TimelineKeyframeRow final : public QWidget {
         if (composition == nullptr) {
             return;
         }
-        const auto axis = TimelineAxis::create(*composition, width());
+        const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                            : TimelineAxis::create(*composition, width());
         if (!axis.has_value()) {
             return;
         }
@@ -324,6 +313,9 @@ class TimelineKeyframeRow final : public QWidget {
         const auto* keySelection = std::get_if<KeyframeSelection>(&session_.selection().primary);
         const qreal centerY = height() / 2.0;
         for (const auto& key : collectKeys()) {
+            if (key.time.toSeconds() < axis->t0 || key.time.toSeconds() >= axis->t1) {
+                continue;
+            }
             const qreal x = axis->pixelForTime(key.time);
             const bool selected = keySelection != nullptr && keySelection->curveId == curveId_ &&
                                   keySelection->keyframeId == key.id;
@@ -369,7 +361,8 @@ class TimelineKeyframeRow final : public QWidget {
         if (composition == nullptr) {
             return;
         }
-        const auto axis = TimelineAxis::create(*composition, width());
+        const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                            : TimelineAxis::create(*composition, width());
         if (!axis.has_value()) {
             return;
         }
@@ -407,7 +400,8 @@ class TimelineKeyframeRow final : public QWidget {
         if (composition == nullptr) {
             return;
         }
-        const auto axis = TimelineAxis::create(*composition, width());
+        const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                            : TimelineAxis::create(*composition, width());
         if (!axis.has_value()) {
             return;
         }
@@ -443,7 +437,8 @@ class TimelineKeyframeRow final : public QWidget {
         if (composition == nullptr) {
             return;
         }
-        const auto axis = TimelineAxis::create(*composition, width());
+        const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                            : TimelineAxis::create(*composition, width());
         if (!axis.has_value()) {
             return;
         }
@@ -501,7 +496,8 @@ class TimelineKeyframeRow final : public QWidget {
         if (composition == nullptr) {
             return;
         }
-        const auto axis = TimelineAxis::create(*composition, width());
+        const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                            : TimelineAxis::create(*composition, width());
         if (!axis.has_value()) {
             return;
         }
@@ -552,6 +548,9 @@ class TimelineKeyframeRow final : public QWidget {
         std::optional<document::KeyframeId> closest;
         qreal closestDistance = std::numeric_limits<qreal>::max();
         for (const auto& key : collectKeys()) {
+            if (key.time.toSeconds() < axis.t0 || key.time.toSeconds() >= axis.t1) {
+                continue;
+            }
             const qreal distance = std::abs(axis.pixelForTime(key.time) - pixelX);
             if (distance <= kKeyHitToleranceLogicalPixels && distance < closestDistance) {
                 closest = key.id;
@@ -596,6 +595,7 @@ class TimelineKeyframeRow final : public QWidget {
         return entries;
     }
 
+    TimelineRuler* ruler_ = nullptr;
     CompositionSession& session_;
     QString label_;
     document::AnimationCurveId curveId_;
@@ -682,8 +682,9 @@ TimelineRuler::TimelineRuler(CompositionSession& session,
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             qOverload<>(&TimelineRuler::update));
-    connect(&session_, &CompositionSession::compositionChanged, this,
-            qOverload<>(&TimelineRuler::update));
+    connect(&session_, &CompositionSession::compositionChanged, this, &TimelineRuler::zoomToFit);
+    connect(this, &TimelineRuler::axisChanged, this, qOverload<>(&TimelineRuler::update));
+    connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineRuler::axisChanged);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             qOverload<>(&TimelineRuler::update));
 }
@@ -700,7 +701,7 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     if (composition == nullptr) {
         return;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = axisForWidth(width());
     if (!axis.has_value()) {
         return;
     }
@@ -713,14 +714,21 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     // Minor grid first (decision 3: "minors as subtle ticks"), so a coincident major tick paints
     // on top of it below rather than the other way around.
     kit::applyHairlinePen(painter, kit::color(kit::Color::Faint));
-    for (std::uint64_t index = 0; index <= axis->maxIndex; index += minorStep) {
+    for (std::uint64_t index = (axis->frameIndexForPixel(0) / minorStep) * minorStep;
+         index <= axis->maxIndex; index += minorStep) {
         const auto time = frameTimeForIndex(axis->frameRate, axis->duration, index);
         if (!time.has_value()) {
             continue;
         }
         const qreal x = axis->pixelForTime(*time);
+        if (x > width()) {
+            break;
+        }
         painter.drawLine(QPointF(x, static_cast<qreal>(height()) - kMinorTickHeight),
                          QPointF(x, static_cast<qreal>(height()) - 1.0));
+        if (axis->maxIndex - index < minorStep) {
+            break;
+        }
     }
 
     // Major grid: taller ticks plus a Geist Mono label (decision 3), density-adaptive so labels
@@ -756,7 +764,7 @@ std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
     if (composition == nullptr || !probe.has_value()) {
         return segments;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = axisForWidth(width());
     const auto rate = composition->format().frameRate();
     const auto mapping = core::FrameTimeMapping::create(composition->duration(), rate.numerator(),
                                                         rate.denominator());
@@ -778,8 +786,11 @@ std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
             }
             end = *next.value();
         }
-        const auto left = axis->pixelForTime(time);
-        const auto right = axis->pixelForTime(end);
+        if (time.toSeconds() >= axis->t1 || end.toSeconds() <= axis->t0) {
+            continue;
+        }
+        const auto left = std::max(0.0, axis->pixelForTime(time));
+        const auto right = std::min(static_cast<qreal>(width() - 1), axis->pixelForTime(end));
         if (right > left) {
             segments.emplace_back(left, height() - barHeight, right - left, barHeight);
         }
@@ -793,7 +804,7 @@ std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
     if (composition == nullptr) {
         return rects;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = axisForWidth(width());
     if (!axis.has_value()) {
         return rects;
     }
@@ -855,7 +866,7 @@ void TimelineRuler::scrubToPixel(const int pixelX) {
     if (composition == nullptr) {
         return;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = axisForWidth(width());
     if (!axis.has_value()) {
         return;
     }
@@ -910,7 +921,6 @@ TimelineWorkAreaRow::TimelineWorkAreaRow(CompositionSession& session, QWidget* p
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addStretch(1);
     strip_ = new TimelineWorkAreaStrip(session_, this);
     layout->addWidget(strip_);
     layout->addStretch(1);
@@ -931,8 +941,13 @@ void TimelineWorkAreaRow::paintEvent(QPaintEvent* event) {
     if (composition == nullptr) {
         return;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
+                                        : TimelineAxis::create(*composition, width());
     if (!axis.has_value()) {
+        return;
+    }
+    if (session_.currentTime().toSeconds() < axis->t0 ||
+        session_.currentTime().toSeconds() >= axis->t1) {
         return;
     }
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
@@ -966,6 +981,13 @@ TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidge
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineKeyframePanel::rebuild);
     rebuild();
+}
+
+void TimelineKeyframePanel::setRuler(TimelineRuler& ruler) {
+    ruler_ = &ruler;
+    for (auto* row : rows_) {
+        row->setRuler(ruler);
+    }
 }
 
 void TimelineKeyframePanel::keyPressEvent(QKeyEvent* event) {
@@ -1018,6 +1040,9 @@ void TimelineKeyframePanel::rebuild() {
     rows_.reserve(specs.size());
     for (const auto& spec : specs) {
         auto* row = new TimelineKeyframeRow(session_, spec.label, spec.curveId, this);
+        if (ruler_ != nullptr) {
+            row->setRuler(*ruler_);
+        }
         rowsLayout_->addWidget(row);
         rows_.push_back(row);
     }

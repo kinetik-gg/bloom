@@ -693,6 +693,7 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
     setAccessibleName(tr("Layer lanes"));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
+    connect(&ruler_, &TimelineRuler::axisChanged, this, qOverload<>(&TimelineLaneRegion::update));
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             qOverload<>(&TimelineLaneRegion::update));
     connect(&session_, &CompositionSession::selectionChanged, this,
@@ -732,7 +733,7 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     if (composition == nullptr) {
         return std::nullopt;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = ruler_.axisForWidth(width());
     if (!axis.has_value()) {
         return std::nullopt;
     }
@@ -740,8 +741,9 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     // and a layer id, and no in/out point exists on a layer at all), so the honest extent is the
     // WHOLE composition range -- derived from the axis rather than assumed to be the full widget
     // width, so the day a trim feature lands this is already asking the right question.
-    const qreal left = axis->pixelForTime(core::RationalTime::fromInteger(0));
-    const qreal right = axis->pixelForTime(composition->duration());
+    const qreal left = std::max(0.0, axis->pixelForTime(core::RationalTime::fromInteger(0)));
+    const qreal right =
+        std::min(static_cast<qreal>(width() - 1), axis->pixelForTime(composition->duration()));
     const int inset = kit::px(kit::Spacing::XXS);
     const int top = rowTop(row) + inset;
     const int barWidth = std::max(1, static_cast<int>(std::lround(right - left)) + 1);
@@ -777,7 +779,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     if (composition == nullptr) {
         return;
     }
-    const auto axis = TimelineAxis::create(*composition, width());
+    const auto axis = ruler_.axisForWidth(width());
     if (!axis.has_value()) {
         return;
     }
@@ -813,6 +815,9 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
+    if (ruler_.handleWheel(event)) {
+        return;
+    }
     const int steps = event->angleDelta().y() / 120;
     if (steps == 0) {
         QWidget::wheelEvent(event);
@@ -985,6 +990,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     workArea_->setFixedHeight(kit::px(kit::Spacing::M));
     ruler_ = new TimelineRuler(session_, previewController, rulerColumn);
     ruler_->setFixedHeight(kit::px(kit::Size::EditorHeader) - workArea_->height());
+    workArea_->setRuler(*ruler_);
     rulerLayout->addWidget(workArea_);
     rulerLayout->addWidget(ruler_);
     auto* headerGutter = new QWidget(headerRow);
@@ -994,7 +1000,11 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     headerLayout->addWidget(headerGutter);
     fallbackLayout->addWidget(headerRow, 1);
     transportLayout->addWidget(controls);
-    transportLayout->addStretch(1);
+    transportLayout->addWidget(new TimelineNavigator(*ruler_, transportRow), 1);
+    auto* navigatorGutter = new QWidget(transportRow);
+    navigatorGutter->setObjectName("timelineNavigatorScrollGutter");
+    navigatorGutter->setFixedWidth(kScrollGutterWidth);
+    transportLayout->addWidget(navigatorGutter);
 
     // ---- Column-header row: the icon/name/blending/parent headers, then the RULER ---------------
     // This is what puts frame 0 at the lane region's left edge: the ruler is the RIGHT member of
@@ -1051,6 +1061,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     keyframeIndent->setObjectName("timelineKeyframeIndent");
     keyframeIndent->setFixedWidth(kLayerColumnWidthPx);
     keyframes_ = new TimelineKeyframePanel(session_, keyframeArea);
+    keyframes_->setRuler(*ruler_);
     auto* keyframeGutter = new QWidget(keyframeArea);
     keyframeGutter->setObjectName("timelineKeyframeScrollGutter");
     keyframeGutter->setFixedWidth(kScrollGutterWidth);
