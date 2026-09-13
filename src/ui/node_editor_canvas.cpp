@@ -85,8 +85,7 @@ QRectF NodeGraphicsView::graphBounds() const {
     return scene() == nullptr ? QRectF() : scene()->itemsBoundingRect();
 }
 
-bool NodeGraphicsView::applyCenteredScale(const double scale) {
-    const QRectF bounds = graphBounds();
+bool NodeGraphicsView::applyCenteredScale(const QRectF& bounds, const double scale) {
     const QRectF view = QRectF(viewport()->rect());
     if (bounds.isEmpty() || view.isEmpty()) {
         return false;
@@ -106,7 +105,7 @@ void NodeGraphicsView::frameGraph() {
         return;
     }
     if (!applyCenteredScale(
-            std::min(view.width() / bounds.width(), view.height() / bounds.height()))) {
+            bounds, std::min(view.width() / bounds.width(), view.height() / bounds.height()))) {
         return;
     }
     // Fit means "keep framing everything": a later projection rebuild re-frames until the artist
@@ -120,9 +119,32 @@ void NodeGraphicsView::zoomToActualSize() {
     // over. Latching the flag on an empty canvas -- no composition, or a collapsed panel -- would
     // permanently stop the auto-framing that a rebuild and a resize depend on, and the canvas would
     // never frame the content that arrived afterwards.
-    if (!applyCenteredScale(1.0)) {
+    if (!applyCenteredScale(graphBounds(), 1.0)) {
         return;
     }
+    viewAdjusted_ = true;
+    framedOnce_ = true;
+}
+
+void NodeGraphicsView::zoomToPercent(const int percent) {
+    if (!applyCenteredScale(graphBounds(), static_cast<double>(percent) / 100.0)) {
+        return;
+    }
+    viewAdjusted_ = true;
+    framedOnce_ = true;
+}
+
+void NodeGraphicsView::frameRect(const QRectF bounds) {
+    const QRectF view = QRectF(viewport()->rect());
+    if (bounds.isEmpty() || view.isEmpty()) {
+        return;
+    }
+    if (!applyCenteredScale(
+            bounds, std::min(view.width() / bounds.width(), view.height() / bounds.height()))) {
+        return;
+    }
+    // Unlike Fit, framing a specific selection is a deliberate placement: it counts as the artist
+    // having taken the view over, exactly as 100% and a wheel step do.
     viewAdjusted_ = true;
     framedOnce_ = true;
 }

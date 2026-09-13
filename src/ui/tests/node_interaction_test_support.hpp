@@ -120,4 +120,6 @@ struct Fixture final {
 void testLayoutSelectionAndSockets();
 void testConnectionsCutAndInsertion();
 void testSearchKeyboardAndMenus();
+// Task NODES-1: header menus, grid snapping, link style, and the footer.
+void testHeaderMenusGridSnappingLinkStyleAndFooter();
 } // namespace bloom::ui::test

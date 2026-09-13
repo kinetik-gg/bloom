@@ -8,6 +8,13 @@ namespace bloom::ui {
 using namespace node_editor;
 namespace {
 bool fieldAt(QGraphicsScene& scene, QPointF point);
+// Task NODES-1, deliverable 3: the grid-snap primitive the Move gesture's live preview and its
+// final commit both round through. Alt-bypass and the "is snapping even on" check are the caller's
+// job -- this is pure geometry.
+QPointF snappedToGrid(const QPointF point, const qreal gridSize) {
+    return {std::round(point.x() / gridSize) * gridSize,
+            std::round(point.y() / gridSize) * gridSize};
+}
 // The pointer slop a socket gets, measured where the artist actually aims: on SCREEN. The socket's
 // own hit shape is fixed in scene units (SocketItem::shape()), so at a zoomed-out canvas -- which
 // is what Fit leaves the artist looking at -- kSocketHitSlop's 12 scene px shrink to three or four
@@ -507,15 +514,20 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
     event->accept();
     const QPointF delta = event->scenePos() - gesture.origin;
     switch (gesture.mode) {
-    case NodeInteraction::Mode::Move:
+    case NodeInteraction::Mode::Move: {
+        // Task NODES-1, deliverable 3: Alt bypasses snapping for exactly this move, without
+        // touching the persisted snapEnabled_ setting itself.
+        const bool snap = snapEnabled_ && !event->modifiers().testFlag(Qt::AltModifier);
         for (const auto& [id, position] : gesture.positions)
             if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(id))) {
                 card->setDragging(true);
-                card->setPos(position + delta);
+                const QPointF target = position + delta;
+                card->setPos(snap ? snappedToGrid(target, gridSize_) : target);
             }
         previewInsertion(*this, gesture, *session_->composition(), event->scenePos());
         updateGroupGeometry();
         break;
+    }
     case NodeInteraction::Mode::Resize:
         if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(gesture.resized)))
             // Clamped against the card's OWN content floor, not a spelled 128: a card whose label
@@ -554,8 +566,9 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
             target != nullptr && (!target->draggable() || orientationWrong || kindWrong);
         gesture.line->setPen(QPen(
             kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)), 2));
-        gesture.line->setPath(gesture.output ? linkPath(gesture.origin, event->scenePos())
-                                             : linkPath(event->scenePos(), gesture.origin));
+        gesture.line->setPath(gesture.output
+                                  ? linkPath(gesture.origin, event->scenePos(), linkStyle_)
+                                  : linkPath(event->scenePos(), gesture.origin, linkStyle_));
         updateOrderedDropIndicator(*this, event->scenePos());
         break;
     }
@@ -586,10 +599,29 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
     commands::Transaction transaction("Edit Nodes", gesture.revision);
     const auto compositionId = session_->compositionId();
     if (gesture.mode == NodeInteraction::Mode::Move) {
+        // Task NODES-1, deliverable 3: snapped again here, explicitly, rather than trusting that
+        // the last mouseMoveEvent already left every card on the lattice -- a release is its own
+        // event, with its own modifiers, and is what MoveNodes actually reads. Skipped entirely for
+        // a card no mouseMoveEvent ever touched (still exactly at `original`): a plain click is a
+        // press and a release at the same point with no Move in between, and must stay a no-op --
+        // snapping it here would silently teleport an untouched, off-lattice card onto the grid on
+        // nothing more than a selection click.
+        const bool snap = snapEnabled_ && !event->modifiers().testFlag(Qt::AltModifier);
         std::map<document::NodeId, document::Vec2d> moved;
-        for (const auto& [id, original] : gesture.positions)
-            if (auto* card = findNodeItem(id); card && card->pos() != original)
-                moved.emplace(id, document::Vec2d{card->pos().x(), card->pos().y()});
+        for (const auto& [id, original] : gesture.positions) {
+            auto* card = findNodeItem(id);
+            if (card == nullptr || card->pos() == original) {
+                continue;
+            }
+            const QPointF finalPosition =
+                snap ? snappedToGrid(card->pos(), gridSize_) : card->pos();
+            if (finalPosition != card->pos()) {
+                card->setPos(finalPosition);
+            }
+            if (finalPosition != original) {
+                moved.emplace(id, document::Vec2d{finalPosition.x(), finalPosition.y()});
+            }
+        }
         // Where each dragged card landed relative to the frames that held still during the drag. A
         // frame drag carries every member at once and changes no membership, so it asks nothing.
         commands::NodeGroupMembershipDelta membership;

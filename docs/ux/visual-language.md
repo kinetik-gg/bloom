@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-13
+Updated: 2026-09-14
 
 ## Purpose
 
@@ -174,6 +174,17 @@ All three use `TypeRole::Value`, the monospaced numeric role, so a count never r
 beside it as it changes. "Silent when it has nothing to say" is the rule they share: outside a
 playback run there is no dropped-frame figure, and outside a RAM preview run there is no progress --
 a zero shown out of context reads as a measurement, which would be a different claim.
+
+### Nodes footer (task NODES-1)
+
+Left to right: a zoom dropdown (`nodeZoomDropdown`, the same Fit/25/50/100/200/400 items the
+Viewer's own dropdown offers), a grid-snapping switch (`nodeSnapSwitch`, a `KSwitch`), and a link
+style dropdown (`nodeLinkStyleDropdown`, a `KDropdown` offering Spline/Straight/Angled) -- the same
+two settings View's own Grid Snapping toggle and Link Style submenu offer, so the footer and the
+header menu can never show a stale value for the other. Right-aligned: the selection readout
+(`nodeSelectionReadout`), `Muted` `UiSmall`, reading "N nodes". Unlike the Viewer's own footer, this
+one is ordinary child widgets in a `QHBoxLayout` rather than one surface the editor paints itself --
+there is no per-frame readout here that needs a single paint pass to stay in sync.
 
 ### Elevation
 

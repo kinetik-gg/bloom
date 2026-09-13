@@ -143,7 +143,8 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
 
     header_ = new QWidget(this);
     header_->setObjectName("editorHeader");
-    auto* headerLayout = new QHBoxLayout(header_);
+    headerLayout_ = new QHBoxLayout(header_);
+    auto*& headerLayout = headerLayout_;
     // task U8, issue #131, formal amendment 2, A10: 10px side padding (Spacing::PanelHeader,
     // reused on all four edges now that the switcher and the header button are no longer sized
     // off the header's own margins); contents are explicitly vertically centered below rather
@@ -365,6 +366,11 @@ void EditorArea::rebuildEditor(int editorIndex) {
         delete footer_;
         footer_ = nullptr;
     }
+    if (headerMenus_ != nullptr) {
+        headerLayout_->removeWidget(headerMenus_);
+        delete headerMenus_;
+        headerMenus_ = nullptr;
+    }
 
     if (editorIndex < 0) {
         return;
@@ -401,6 +407,20 @@ void EditorArea::rebuildEditor(int editorIndex) {
             footer_->setObjectName(QStringLiteral("editorFooter"));
             footer_->setParent(this);
             layout_->addWidget(footer_);
+        }
+    }
+
+    // Task NODES-1: the header's own OPTIONAL extra, same idempotent take-once contract as the
+    // footer above. Inserted at index 1 -- right after the panel switcher (index 0) and before the
+    // stretch (index 1 until this insert pushes it to 2) that keeps the maximize button pinned to
+    // the header's far right, so the widget reads as part of the header row rather than crowding
+    // either end of it.
+    if (auto* menuProvider = dynamic_cast<EditorHeaderMenuProvider*>(editorWidget_)) {
+        if (auto* offeredMenus = menuProvider->takeHeaderMenuWidget()) {
+            headerMenus_ = offeredMenus;
+            headerMenus_->setParent(header_);
+            headerLayout_->insertWidget(1, headerMenus_);
+            headerLayout_->setAlignment(headerMenus_, Qt::AlignVCenter);
         }
     }
 

@@ -88,6 +88,59 @@ Mute, collapse, and dissolve are context-menu commands in this editor and bind n
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
 becomes "rename whichever thing is selected".
 
+### Header menus (task NODES-1)
+
+Add, View, Select, and Node sit in the panel's own header, right after the switcher: the panel's
+menu bar, not the application's. Add is the same categorized submenu the canvas's own right-click
+menu offers -- one surface, restated in two places, never a second opinion about what is addable.
+View, Select, and Node reuse the canvas's existing commands and objectNames wherever one already
+existed (`nodeFitAction`, `nodeSelectAllAction`, `nodeGroupAction`, and so on); a command the
+context menu shows only when it applies, this persistent menu instead disables when it does not,
+since hiding and re-showing entries in a menu that stays open across gestures would read as the
+menu itself changing shape. A few commands are new here and bind no key, matching the "reserved
+keys are left unbound" rule above:
+
+| Menu | New command | Does |
+| --- | --- | --- |
+| View | Frame Selected | Frames exactly the selected cards; frames the whole graph if nothing is selected |
+| View | Grid Snapping | Toggles grid snapping (see below); the same toggle the footer's switch offers |
+| View | Link Style | Spline / Straight / Angled (see below); the same choice the footer's dropdown offers |
+| Select | None | Clears the selection |
+| Select | Invert | Selects every unselected node, deselecting every selected one |
+| Select | Linked Upstream | Extends the selection to every node reachable by following links backward, transitively |
+| Select | Linked Downstream | The same walk, following links forward |
+
+A shortcut shown next to a header menu item (Fit, Actual Size, Select All, Group, Ungroup, Delete)
+is the SAME key `NodeGraphicsView` already claims through `ShortcutOverride` -- it is display text,
+not a second live binding, so it never fires while some other panel has focus (see Ownership
+Boundary below). The header itself never wraps to a second row: once it is too narrow to hold all
+four menus, they collapse into a single "..." overflow menu holding the same four as submenus.
+
+### Link style (task NODES-1)
+
+View > Link Style picks how every wire is drawn, persisted in `QSettings` under `nodes/link-style`:
+
+| Style | Drawn as |
+| --- | --- |
+| Spline (default) | The original cubic bezier |
+| Straight | A direct line, socket to socket |
+| Angled | Orthogonal: horizontal, then vertical, then horizontal |
+
+Changing it repaints every wire already on the canvas, including the drag preview link; hit-testing
+always follows whichever path is actually drawn, so cutting, hovering, and picking up a wire work
+identically under every style.
+
+### Grid snapping (task NODES-1)
+
+View > Grid Snapping (also in the footer, as a switch) snaps a dragged card's position to a fixed
+lattice -- `QSettings` `nodes/snap` (off by default) and `nodes/grid-size` (16 design px) -- both
+while the drag is in flight and on the position `MoveNodes` actually commits, so a released card
+never lands one pixel off the grid it appeared to land on. **`Alt` held bypasses it** for that one
+drag, without touching the persisted setting. The painted dot grid steps by the same size, so what
+snapping targets is always what is visibly drawn. A plain click -- a press and a release with
+nothing dragged in between -- is never affected: only a card a `mouseMoveEvent` actually moved is
+eligible to snap on release.
+
 Every socket is a drag target, not only the image ports: a node's parameter roles are sockets of their
 own kind, so the same one gesture that wires an image wires a value into a parameter. Nothing new was
 added for it -- a link into a parameter socket records that parameter's driver binding, and releasing

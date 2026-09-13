@@ -453,7 +453,26 @@ QString socketKindName(const document::SocketValueKind kind) {
     return {};
 }
 
-QPainterPath linkPath(const QPointF start, const QPointF end) {
+QPainterPath linkPath(const QPointF start, const QPointF end, const LinkStyle style) {
+    switch (style) {
+    case LinkStyle::Straight: {
+        QPainterPath path(start);
+        path.lineTo(end);
+        return path;
+    }
+    case LinkStyle::Angled: {
+        // Orthogonal horizontal-vertical-horizontal: out of the source horizontally to the
+        // midpoint, straight down (or up) to the destination's row, then horizontally into it.
+        QPainterPath path(start);
+        const qreal midX = (start.x() + end.x()) / 2.0;
+        path.lineTo(midX, start.y());
+        path.lineTo(midX, end.y());
+        path.lineTo(end);
+        return path;
+    }
+    case LinkStyle::Spline:
+        break;
+    }
     const qreal handle = std::max(64.0, std::abs(end.x() - start.x()) / 2.0);
     QPainterPath path(start);
     path.cubicTo(start + QPointF(handle, 0), end - QPointF(handle, 0), end);
@@ -709,9 +728,10 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
 }
 
 NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output,
-                           SocketItem& input, document::EdgeRecord record, const bool isStructural)
+                           SocketItem& input, document::EdgeRecord record, const bool isStructural,
+                           const LinkStyle style)
     : edge(std::move(record)), structural(isStructural), source_(source), destination_(destination),
-      output_(output), input_(input) {
+      output_(output), input_(input), style_(style) {
     setData(kNodeItemKindRole, QStringLiteral("edge"));
     setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(edge.id.value()));
     setData(kNodeStructuralRole, structural);
@@ -726,7 +746,9 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     destination_.addEdge(*this);
     updatePath();
 }
-void NodeEdgeItem::updatePath() { setPath(linkPath(output_.scenePos(), input_.scenePos())); }
+void NodeEdgeItem::updatePath() {
+    setPath(linkPath(output_.scenePos(), input_.scenePos(), style_));
+}
 QPainterPath NodeEdgeItem::shape() const {
     QPainterPathStroker stroke;
     stroke.setWidth(12);
