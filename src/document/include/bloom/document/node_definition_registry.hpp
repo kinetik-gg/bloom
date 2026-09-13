@@ -24,6 +24,11 @@ enum class SocketValueKind {
     Scalar,
     Vector2,
     String,
+    // Task S7. Integer and Boolean carry ParameterValue's existing std::int64_t and bool members,
+    // so neither needed a new authoring type; Vector3 needed document::Vec3d.
+    Integer,
+    Boolean,
+    Vector3,
 };
 
 enum class ParameterValueKind {
@@ -31,12 +36,89 @@ enum class ParameterValueKind {
     Vec2d,
     Float64,
     String,
-    // A small signed integer. Today's only use is an enumeration stored under its own closed
-    // mapping (the Layer Output blend mode), which is why there is no separate "Enum" kind: the
-    // stored value IS an integer, and the schema key -- not the value kind -- is what names the
-    // enumeration the integer belongs to.
+    // A small signed integer. Its first use was an enumeration stored under its own closed mapping
+    // (the Layer Output blend mode), which is why there is no separate "Enum" kind: the stored
+    // value IS an integer, and the schema key -- not the value kind -- is what names the
+    // enumeration the integer belongs to. Task S7 gave it a second, plainer use: an Integer value
+    // node and every index, seed and count operand in the value library.
     Integer,
+    // Task S7.
+    Boolean,
+    Vec3d,
 };
+
+// The one correspondence between an authored value's kind and the socket kind that carries it.
+// Every value-graph node definition is checked against this rather than restating the pairing, so a
+// parameter and the socket that can drive it cannot disagree about what they hold.
+[[nodiscard]] constexpr SocketValueKind
+socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
+    switch (kind) {
+    case ParameterValueKind::Color4d:
+        return SocketValueKind::Color;
+    case ParameterValueKind::Vec2d:
+        return SocketValueKind::Vector2;
+    case ParameterValueKind::Float64:
+        return SocketValueKind::Scalar;
+    case ParameterValueKind::String:
+        return SocketValueKind::String;
+    case ParameterValueKind::Integer:
+        return SocketValueKind::Integer;
+    case ParameterValueKind::Boolean:
+        return SocketValueKind::Boolean;
+    case ParameterValueKind::Vec3d:
+        return SocketValueKind::Vector3;
+    }
+    return SocketValueKind::Image;
+}
+
+// The promotion whitelist (task S7, item 1). A connection is accepted when the kinds are EQUAL, or
+// when the source kind appears here as promotable to the destination kind.
+//
+// Deliberately a short explicit whitelist rather than implicit numeric coercion anywhere a number
+// meets a number. Each entry below is a widening with exactly one answer and no lost information:
+//
+//   Integer -> Scalar    every std::int64_t a document can hold is exactly representable as a
+//                        double up to 2^53, and the compiler emits an explicit conversion operation
+//                        so the widening is visible in a plan dump rather than implied.
+//   Boolean -> Integer   false is 0 and true is 1, the same mapping every stored boolean already
+//   has. Boolean -> Scalar    the same mapping, widened once more; offered directly so a Compare
+//   result
+//                        can feed a Mix factor without an intervening conversion node.
+//   Scalar  -> Vector2   "splat": the one value in every component. A vector built from one number
+//   Scalar  -> Vector3   has no other defensible reading, and it is what every comparable tool
+//   does.
+//
+// Nothing promotes INTO Boolean, String, or Image, and no vector promotes to another width: each of
+// those would have to invent information (which components? which spelling? which pixels?), and a
+// refusal the artist can see is better than a guess they cannot.
+[[nodiscard]] constexpr bool
+isPromotedSocketConnection(const SocketValueKind source,
+                           const SocketValueKind destination) noexcept {
+    switch (source) {
+    case SocketValueKind::Integer:
+        return destination == SocketValueKind::Scalar;
+    case SocketValueKind::Boolean:
+        return destination == SocketValueKind::Integer || destination == SocketValueKind::Scalar;
+    case SocketValueKind::Scalar:
+        return destination == SocketValueKind::Vector2 || destination == SocketValueKind::Vector3;
+    case SocketValueKind::Image:
+    case SocketValueKind::Color:
+    case SocketValueKind::Vector2:
+    case SocketValueKind::String:
+    case SocketValueKind::Vector3:
+        return false;
+    }
+    return false;
+}
+
+// The ONE question every connect-time and validation-time kind check asks, so the editor's drag
+// affinity, ConnectPorts, CanonicalGraph::validate() and the compiler's edge check cannot disagree
+// about which links exist.
+[[nodiscard]] constexpr bool
+isAcceptedSocketConnection(const SocketValueKind source,
+                           const SocketValueKind destination) noexcept {
+    return source == destination || isPromotedSocketConnection(source, destination);
+}
 
 struct InputPortDefinition {
     std::string name;
@@ -101,8 +183,64 @@ enum class NodeLoweringKind {
     LayerOutput,
     LayerStack,
     CompositionOutput,
+    // The value-graph lowerings (task S7). Each compiles to a runtime::CompiledValueOperation, not
+    // a CompiledOperation: these produce ONE value per frame, not pixels, and they are evaluated in
+    // their own pass before any image operation reads one.
+    //
+    // They are grouped by the KERNEL they reach rather than one per node type, so the twenty-odd
+    // library nodes share a handful of lowerings the way the Solid and Text sources share
+    // compiledColorParameter(): a Switch over Scalar and a Switch over Colour are the same
+    // operation on different storage, and giving each its own lowering would be the same code
+    // twice.
+    ValueConstant,
+    ValueTime,
+    ValueScalarMath,
+    ValueVectorMath,
+    ValueVectorReduce,
+    ValueMapRange,
+    ValueClamp,
+    ValueMix,
+    ValueColorMix,
+    ValueCompare,
+    ValueSwitch,
+    ValueSeparate,
+    ValueCombine,
+    ValueRandom,
+    ValueReroute,
     Unsupported,
 };
+
+// Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
+// it to split one reachable node set into the two passes, so the split is declared beside the
+// lowerings instead of being an ever-growing condition at the call site.
+[[nodiscard]] constexpr bool isValueLowering(const NodeLoweringKind lowering) noexcept {
+    switch (lowering) {
+    case NodeLoweringKind::ValueConstant:
+    case NodeLoweringKind::ValueTime:
+    case NodeLoweringKind::ValueScalarMath:
+    case NodeLoweringKind::ValueVectorMath:
+    case NodeLoweringKind::ValueVectorReduce:
+    case NodeLoweringKind::ValueMapRange:
+    case NodeLoweringKind::ValueClamp:
+    case NodeLoweringKind::ValueMix:
+    case NodeLoweringKind::ValueColorMix:
+    case NodeLoweringKind::ValueCompare:
+    case NodeLoweringKind::ValueSwitch:
+    case NodeLoweringKind::ValueSeparate:
+    case NodeLoweringKind::ValueCombine:
+    case NodeLoweringKind::ValueRandom:
+    case NodeLoweringKind::ValueReroute:
+        return true;
+    case NodeLoweringKind::Solid:
+    case NodeLoweringKind::Text:
+    case NodeLoweringKind::LayerOutput:
+    case NodeLoweringKind::LayerStack:
+    case NodeLoweringKind::CompositionOutput:
+    case NodeLoweringKind::Unsupported:
+        return false;
+    }
+    return false;
+}
 
 struct NodeDefinition {
     NodeTypeKey key;

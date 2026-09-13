@@ -5,6 +5,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
+#include <bloom/document/value_nodes.hpp>
 
 #include <cstdint>
 #include <optional>

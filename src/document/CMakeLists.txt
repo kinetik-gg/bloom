@@ -15,6 +15,7 @@ target_sources(
         parameter.cpp
         persisted_text.cpp
         project.cpp
+        value_node_definitions.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -35,6 +36,8 @@ target_sources(
             include/bloom/document/project.hpp
             include/bloom/document/schema_version.hpp
             include/bloom/document/validation.hpp
+            include/bloom/document/value_nodes.hpp
+            include/bloom/document/value_operations.hpp
 )
 
 target_compile_features(bloom_document PUBLIC cxx_std_20)

@@ -18,9 +18,14 @@ void expect(const bool condition, const char* message) {
 }
 
 void socketKinds() {
-    constexpr std::array kinds{SocketValueKind::Image, SocketValueKind::Color,
-                               SocketValueKind::Scalar, SocketValueKind::Vector2,
-                               SocketValueKind::String};
+    // All eight kinds after task S7, and the expectation is no longer "equal kinds connect" but the
+    // shared isAcceptedSocketConnection() predicate -- equal kinds, or one of the five whitelisted
+    // promotions. Stated through the predicate rather than a second copy of the table so this test
+    // cannot drift from the rule the editor and the compiler both ask.
+    constexpr std::array kinds{SocketValueKind::Image,   SocketValueKind::Color,
+                               SocketValueKind::Scalar,  SocketValueKind::Vector2,
+                               SocketValueKind::String,  SocketValueKind::Integer,
+                               SocketValueKind::Boolean, SocketValueKind::Vector3};
     for (const auto sourceKind : kinds) {
         for (const auto destinationKind : kinds) {
             NodeDefinitionRegistry registry;
@@ -47,9 +52,9 @@ void socketKinds() {
             const EdgeRecord edge{EdgeId::fromRaw(1),
                                   {NodeId::fromRaw(1), "out"},
                                   NodeInputRef{NodeId::fromRaw(2), "in"}};
-            expect(graph.addEdge(edge, registry) == (sourceKind == destinationKind),
-                   "adder kind check");
-            if (sourceKind != destinationKind) {
+            const bool accepted = isAcceptedSocketConnection(sourceKind, destinationKind);
+            expect(graph.addEdge(edge, registry) == accepted, "adder kind check");
+            if (!accepted) {
                 expect(graph.edges().empty(), "rejected edge leaves graph untouched");
                 expect(graph.addEdge(edge), "unknown schemas remain preservable");
             }
@@ -57,7 +62,7 @@ void socketKinds() {
             expect(std::ranges::any_of(validation.issues(),
                                        [](const auto& issue) {
                                            return issue.code == ValidationCode::SocketKindMismatch;
-                                       }) == (sourceKind != destinationKind),
+                                       }) == !accepted,
                    "validation reports typed mismatch");
         }
     }

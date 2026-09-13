@@ -286,8 +286,9 @@ withCollision(SingleLayerCompositionIds second, const SingleLayerCompositionIds&
         composition->parameters().insert({id<ParameterId>(202),
                                           std::string(bloom::document::kOpacityParameterSchemaKey),
                                           AnimationCurveSource{id<AnimationCurveId>(200)}}) &&
-        composition->parameters().insert({id<ParameterId>(203), "com.example.driver-value",
-                                          DriverBindingSource{id<DriverBindingId>(204)}});
+        composition->parameters().insert(
+            {id<ParameterId>(203), "com.example.driver-value",
+             DriverBindingSource{id<NodeId>(1), std::string("value")}});
     if (!animationStateBuilt || !project.validate().ok()) {
         throw std::logic_error("Could not build persisted allocator fixture");
     }
@@ -411,7 +412,11 @@ void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
         .parameter = 203,
         .animationCurve = 200,
         .keyframe = 201,
-        .driverBinding = 204,
+        // Zero, not 204: task S7 made a driver source the node-and-port pair it addresses, so no
+        // record carries a DriverBindingId any more and there is nothing for the inventory walk to
+        // find. The namespace itself stays (decision 0018: persist its high-water so issued ids are
+        // never reused), which is what the persisted-construction assertions below now state.
+        .driverBinding = 0,
         .extensionRecord = 0,
     };
     expectations.expect(
@@ -437,7 +442,10 @@ void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
         RequiredNamespace{&IdAllocatorHighWater::parameter, "parameter"},
         RequiredNamespace{&IdAllocatorHighWater::animationCurve, "animation-curve"},
         RequiredNamespace{&IdAllocatorHighWater::keyframe, "keyframe"},
-        RequiredNamespace{&IdAllocatorHighWater::driverBinding, "driver-binding"},
+        // driverBinding is deliberately absent: with no live record carrying one there is no live
+        // declaration to be below, so a watermark of zero is correct rather than rejected. The
+        // namespace's durability is asserted instead by the restored-construction check above (a
+        // persisted 240 survives a project with no driver id at all) and by the advance below.
     };
     for (const auto& requiredNamespace : requiredNamespaces) {
         auto belowDeclaration = declarations;
@@ -569,6 +577,12 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
     auto document = makeDocument();
     const auto before = document.snapshot();
     auto draft = document.draft(before);
+    // Task S7: a driver source carries no id of its own any more, so the driverBinding namespace
+    // has no record to reconcile FROM -- and decision 0018 requires its high-water to persist
+    // anyway, so that issued ids are never reused. Reserving it explicitly is what that now looks
+    // like, and the assertion below still states the real contract: every durable namespace
+    // round-trips.
+    draft.ids().reserveExisting(id<DriverBindingId>(100));
 
     constexpr auto positionId = id<ParameterId>(44);
     constexpr auto opacityId = id<ParameterId>(45);
@@ -627,8 +641,9 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                composition->parameters().insert(
                    {animationParameterId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     AnimationCurveSource{id<AnimationCurveId>(100)}}) &&
-               composition->parameters().insert({driverParameterId, "com.example.driver",
-                                                 DriverBindingSource{id<DriverBindingId>(100)}}) &&
+               composition->parameters().insert(
+                   {driverParameterId, "com.example.driver",
+                    DriverBindingSource{sourceNodeId, std::string("value")}}) &&
                composition->graph().addNode(std::move(sourceNode)) &&
                composition->graph().addNode(std::move(layerOutputNode)) &&
                composition->graph().addLayerOutput(

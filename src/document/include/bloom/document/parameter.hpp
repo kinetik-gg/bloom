@@ -44,6 +44,62 @@ inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opac
 // be created over it.
 inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.blend-mode";
 
+// ---------------------------------------------------------------------------------------------
+// Value-graph parameter schemas (task S7).
+//
+// Every one of these is a value a node AUTHORS inline and can equally receive from a driver, which
+// is why each is a parameter schema rather than a port-only concept: the inline widget writes the
+// parameter's constant, and linking a value-graph output into the matching socket replaces that
+// constant with a driver binding. The two are the same storage, never two parallel ones.
+//
+// None of them is animatable. A value node's output is already a graph the artist can shape with a
+// curve UPSTREAM of it (wire a Scalar node's animated output into the operand), so giving each
+// operand its own curve kind as well would be a second authoring path to the same picture -- and
+// three of the kinds (Vec3d, Boolean, Integer) have no curve kind at all.
+// ---------------------------------------------------------------------------------------------
+
+// The literal Value nodes. One schema per authored kind, because the kind IS the meaning here:
+// "this node carries a Scalar" is the whole of what a Scalar node's parameter says.
+inline constexpr std::string_view kIntegerValueParameterSchemaKey = "bloom.value.integer";
+inline constexpr std::string_view kScalarValueParameterSchemaKey = "bloom.value.scalar";
+inline constexpr std::string_view kVector2ValueParameterSchemaKey = "bloom.value.vector2";
+inline constexpr std::string_view kVector3ValueParameterSchemaKey = "bloom.value.vector3";
+inline constexpr std::string_view kStringValueParameterSchemaKey = "bloom.value.string";
+inline constexpr std::string_view kColorValueParameterSchemaKey = "bloom.value.color";
+inline constexpr std::string_view kBooleanValueParameterSchemaKey = "bloom.value.boolean";
+
+// Generic operands, shared by every node in the library that reads a value of that kind. One schema
+// per KIND rather than one per node-and-role: a Math node's "a" and a Mix node's "a" mean exactly
+// the same thing -- an unconstrained finite scalar -- and two schema keys saying that would be two
+// spellings of one domain. The node's own role names which operand it is; the schema names what a
+// value of that kind may be.
+inline constexpr std::string_view kScalarOperandParameterSchemaKey = "bloom.operand.scalar";
+inline constexpr std::string_view kIntegerOperandParameterSchemaKey = "bloom.operand.integer";
+inline constexpr std::string_view kBooleanOperandParameterSchemaKey = "bloom.operand.boolean";
+inline constexpr std::string_view kVector2OperandParameterSchemaKey = "bloom.operand.vector2";
+inline constexpr std::string_view kVector3OperandParameterSchemaKey = "bloom.operand.vector3";
+inline constexpr std::string_view kColorOperandParameterSchemaKey = "bloom.operand.color";
+inline constexpr std::string_view kStringOperandParameterSchemaKey = "bloom.operand.string";
+
+// The inline selectors. Each is an Integer under its own closed mapping (value_operations.hpp), for
+// the same reason the blend mode is: a stored name would make every saved document depend on a
+// spelling. None of them is socket-linkable -- the selector is what decides which kernel the plan
+// compiles, so it has to be known at compile time, not delivered per frame.
+inline constexpr std::string_view kScalarOperationParameterSchemaKey = "bloom.math.operation";
+inline constexpr std::string_view kVectorOperationParameterSchemaKey =
+    "bloom.vector-math.operation";
+inline constexpr std::string_view kVectorReductionParameterSchemaKey =
+    "bloom.vector-reduce.operation";
+inline constexpr std::string_view kRangeInterpolationParameterSchemaKey =
+    "bloom.map-range.interpolation";
+inline constexpr std::string_view kCompareOperationParameterSchemaKey = "bloom.compare.operation";
+// A Math or Map Range node's result-clamping toggle. Boolean, and deliberately NOT linkable for the
+// same reason as the selectors above: it changes the shape of the compiled operation.
+inline constexpr std::string_view kClampResultParameterSchemaKey = "bloom.math.clamp-result";
+// Compare's equality tolerance. Its own schema rather than the generic scalar operand because the
+// domain differs: a negative tolerance is not a tolerance.
+inline constexpr std::string_view kCompareEpsilonParameterSchemaKey = "bloom.compare.epsilon";
+
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
 // Evaluation converts them to the canonical premultiplied image representation. The text color
 // schema (kTextColorParameterSchemaKey) authors in exactly this same encoding with exactly the same
@@ -66,6 +122,19 @@ struct Vec2d {
     double y = 0.0;
 
     friend bool operator==(const Vec2d&, const Vec2d&) = default;
+};
+
+// The third authoring vector width (task S7). A genuinely new authoring type rather than a reuse of
+// Vec2d or Color4d: a Color is not a Vec4 under
+// docs/architecture/evaluation-primitives.md's Type Binding rule, and by the same reasoning a
+// three-component vector is not a two-component one with a spare field. It has no animation curve
+// kind yet -- no schema declares a Vec3d parameter animatable -- so it is constant-or-driven only.
+struct Vec3d {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+
+    friend bool operator==(const Vec3d&, const Vec3d&) = default;
 };
 
 // The Layer Output transform defaults, in one place so the node definition registry, the layer
@@ -137,8 +206,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return true;
 }
 
-using ParameterValue =
-    std::variant<bool, std::int64_t, double, Vec2d, core::Color4d, std::string, core::RationalTime>;
+using ParameterValue = std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d,
+                                    std::string, core::RationalTime>;
 
 struct ConstantValueSource {
     ParameterValue value;
@@ -152,8 +221,22 @@ struct AnimationCurveSource {
     friend bool operator==(const AnimationCurveSource&, const AnimationCurveSource&) = default;
 };
 
+// A parameter driven by a value-graph node's output (task S7). Durable, and structurally identical
+// to an ordinary OutputPortRef -- it just lands in parameter-address space instead of on an input
+// port, which is the whole of what a driver is.
+//
+// Deliberately inline rather than an id into a separate driver table: a table would add a document
+// collection, an encoding, and an id space whose only content is this pair, and a dangling id would
+// be a new failure mode the pair cannot have. DriverBindingId still exists as an allocated id space
+// (ids.hpp) because a saved document's high-water marks are durable and this slice is not the place
+// to change the allocator's shape; no live record uses it.
+//
+// Cycles are not a new concept either: CanonicalGraph::validate() feeds these bindings into the
+// same adjacency the edge set builds, so a driver that closes a loop is refused by the one existing
+// same-time cycle check rather than by a second rule that could disagree with it.
 struct DriverBindingSource {
-    DriverBindingId driverId;
+    NodeId sourceNodeId;
+    std::string outputPort;
 
     friend bool operator==(const DriverBindingSource&, const DriverBindingSource&) = default;
 };
