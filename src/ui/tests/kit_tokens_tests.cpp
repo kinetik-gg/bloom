@@ -105,6 +105,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Spacing::Gutter) == 6, "Spacing::Gutter is 6");
     // task U8, issue #131, formal amendment 1, A4: deliberately off the base-4 scale, not rounded.
     expectations.expect(kit::px(kit::Spacing::PanelHeader) == 10, "Spacing::PanelHeader is 10");
+    expectations.expect(kit::px(kit::Spacing::MenuItemY) == 6, "Spacing::MenuItemY is 6");
+    expectations.expect(kit::px(kit::Spacing::MenuItemX) == 10, "Spacing::MenuItemX is 10");
 
     expectations.expect(kit::px(kit::Size::ControlCompact) == 22, "ControlCompact is 22");
     expectations.expect(kit::px(kit::Size::Control) == 26, "Control is 26");
@@ -164,7 +166,7 @@ void testElevationsCarryTheSpecifiedShadows(Expectations& expectations) {
 void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expectations) {
     const auto ui = kit::font(kit::TypeRole::Ui);
     expectations.expect(ui.families().contains(kit::interfaceFontFamily()),
-                        "the UI role asks for Plus Jakarta Sans");
+                        "the UI role asks for DejaVu Sans");
     expectations.expect(ui.weight() == QFont::Medium, "the UI role is weight 500");
 
     const auto small = kit::font(kit::TypeRole::UiSmall);
@@ -186,8 +188,8 @@ void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expecta
 
     // 1 design pixel is 1 Qt logical pixel: the point sizes are the design pixel sizes converted
     // through the screen's own logical DPI, so their ratios are exactly the design ratios.
-    expectations.expect(std::abs(ui.pointSizeF() / small.pointSizeF() - 12.5 / 11.0) < 1e-6,
-                        "UI 12.5 and UISmall 11 keep their design ratio");
+    expectations.expect(std::abs(ui.pointSizeF() / small.pointSizeF() - 12.0 / 10.5) < 1e-6,
+                        "UI 12 and UISmall 10.5 keep their design ratio");
     expectations.expect(std::abs(title.pointSizeF() / value.pointSizeF() - 13.0 / 11.5) < 1e-6,
                         "Title 13 and Value 11.5 keep their design ratio");
 }

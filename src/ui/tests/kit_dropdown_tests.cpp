@@ -4,18 +4,22 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QEvent>
 #include <QAbstractItemModel>
 #include <QApplication>
-#include <QEvent>
 #include <QFile>
+#include <QFrame>
 #include <QImage>
+#include <QKeyEvent>
 #include <QListView>
 #include <QMouseEvent>
+#include <QRegion>
 #include <QSignalSpy>
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -284,6 +288,116 @@ void testThePopupFrameIsBorderedAtRadiusSmall(Expectations& expectations) {
                         "the popup rests on SurfaceRaised");
 }
 
+// Task F1, item F3: the popup is detached. Hover-out does nothing; only a choice, an outside
+// click, or Esc dismisses it.
+void testThePopupIsDetachedAndSurvivesHoverOut(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
+
+    dropdown.showPopup();
+    QCoreApplication::processEvents();
+    expectations.expect(dropdown.isPopupVisible(), "the popup opens");
+
+    QEvent leavePopup(QEvent::Leave);
+    QCoreApplication::sendEvent(dropdown.popup(), &leavePopup);
+    QCoreApplication::processEvents();
+    expectations.expect(dropdown.isPopupVisible(),
+                        "the pointer leaving the popup does not close it");
+
+    QEvent leaveView(QEvent::Leave);
+    QCoreApplication::sendEvent(dropdown.popupView()->viewport(), &leaveView);
+    QEvent leaveField(QEvent::Leave);
+    QCoreApplication::sendEvent(&dropdown, &leaveField);
+    QCoreApplication::processEvents();
+    expectations.expect(dropdown.isPopupVisible(),
+                        "the pointer leaving the list or the field does not close it either");
+
+    dropdown.hidePopup();
+    QCoreApplication::processEvents();
+}
+
+void testAClickOutsideTheFrameClosesThePopup(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
+
+    dropdown.showPopup();
+    QCoreApplication::processEvents();
+    auto* popup = dropdown.popup();
+    // Qt hands the active popup clicks that land anywhere, with a position outside its own
+    // rectangle. Well outside the frame AND outside the shadow gutter around it.
+    const QPointF outside(-40.0, -40.0);
+    QMouseEvent press(QEvent::MouseButtonPress, outside, popup->mapToGlobal(outside),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(popup, &press);
+    QCoreApplication::processEvents();
+    expectations.expect(!dropdown.isPopupVisible(), "a click outside the frame closes the popup");
+
+    dropdown.showPopup();
+    QCoreApplication::processEvents();
+    const QPointF inside(QRectF(dropdown.popup()->surface()->geometry()).center());
+    QMouseEvent insidePress(QEvent::MouseButtonPress, inside, dropdown.popup()->mapToGlobal(inside),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(dropdown.popup(), &insidePress);
+    QCoreApplication::processEvents();
+    expectations.expect(dropdown.isPopupVisible(),
+                        "a press on the frame itself is the list's business, not a dismissal");
+
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(dropdown.popup(), &escape);
+    QCoreApplication::processEvents();
+    expectations.expect(!dropdown.isPopupVisible(), "Esc closes the popup");
+}
+
+// Task F1, item F3: the FRAME is the rounded container. Rows are rectangular and full width, and
+// the list is clipped to the frame's inner rounded rectangle, so a first-row accent hover bar
+// follows the frame's corner instead of squaring it off.
+void testTheRowsAreRectangularAndClippedByTheFrame(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
+    dropdown.showPopup();
+    QCoreApplication::processEvents();
+
+    const QString sheet = dropdown.popup()->styleSheet();
+    expectations.expect(sheet.count(QStringLiteral("border-radius")) == 1,
+                        "exactly one rule in the popup sheet rounds anything, and it is the "
+                        "frame's -- no row rounds itself");
+    expectations.expect(sheet.contains(QStringLiteral("QListView#kDropdownList {")) &&
+                            sheet.contains(QStringLiteral("padding: 0px;")),
+                        "the list adds no padding of its own, so rows span the frame edge to edge");
+
+    auto* view = dropdown.popupView();
+    const QRegion mask = view->mask();
+    expectations.expect(!mask.isEmpty(), "the item list is clipped at all");
+    expectations.expect(!mask.contains(QPoint(0, 0)),
+                        "the list's own top-left corner pixel is clipped away, so a full-width "
+                        "hover bar cannot square off the frame's rounded corner");
+    expectations.expect(!mask.contains(QPoint(view->width() - 1, 0)),
+                        "the top-right corner is clipped too");
+    expectations.expect(mask.contains(QPoint(view->width() / 2, 0)),
+                        "the row still reaches the frame edge everywhere between the corners: the "
+                        "bar is full width, only its corners are cut");
+    expectations.expect(mask.contains(QPoint(view->width() / 2, view->height() - 1)),
+                        "and the last row reaches the bottom edge the same way");
+
+    // The rows fill the frame exactly: no list padding leaving a sliver of SurfaceRaised above the
+    // first bar.
+    const int rowHeight = std::max(kit::px(kit::Size::ControlCompact), view->sizeHintForRow(0));
+    expectations.expect(view->height() == rowHeight * view->model()->rowCount(),
+                        "the list is exactly its rows tall, with no padding of its own (height " +
+                            std::to_string(view->height()) + ", rows " +
+                            std::to_string(view->model()->rowCount()) + " x " +
+                            std::to_string(rowHeight) + ')');
+
+    dropdown.hidePopup();
+    QCoreApplication::processEvents();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -299,5 +413,8 @@ int main(int argc, char** argv) {
     testTheStateMachineAndDisabledDropdown(expectations);
     testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(expectations);
     testThePopupFrameIsBorderedAtRadiusSmall(expectations);
+    testThePopupIsDetachedAndSurvivesHoverOut(expectations);
+    testAClickOutsideTheFrameClosesThePopup(expectations);
+    testTheRowsAreRectangularAndClippedByTheFrame(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

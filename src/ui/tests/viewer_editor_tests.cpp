@@ -20,6 +20,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
@@ -514,6 +515,76 @@ void testStatusBarZoomDropdownDrivesViewTransform(Expectations& expectations) {
                         "the zoom-dropdown fixture reaches asynchronous scheduler quiescence");
 }
 
+// FORMAL AMENDMENT 1 (task C1, after the first report): takeFooterWidget() hands back a real
+// widget hosting the SAME status bar -- zoom dropdown included -- and, per the amendment's own
+// contract, the color-state chip keeps rendering inside it. Pinned by rendering the returned
+// widget offscreen and confirming it is not just a flat Surface-colored strip -- real chip/text
+// content is painted into it -- the same "sample the rendered pixels" technique
+// kinetik_baseline_tests.cpp's QComboBox field/border test already uses elsewhere in this suite.
+// A tolerant "found a non-Surface pixel" check rather than an exact color match: the chip fills
+// itself with the token color at partial opacity (paintChip()'s own withOpacity(color, 0.855)),
+// composited over the Surface base the bar already painted, so the resulting pixel is a blend,
+// never the raw token value.
+//
+// firstCall is deliberately never deleted: fixture.viewer (still alive) keeps a reference to it
+// via statusBarFooter_ for its own session/preview-state signal handlers, exactly as a real
+// EditorArea would keep the footer alive for the whole lifetime of the editor that produced it --
+// deleting it early, before the fixture's own controller/bridge/scheduler have shut down, would
+// dangle that reference into a live signal path and crash the test.
+void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Take Footer Widget Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the fixture's initial frame becomes ready");
+
+    auto* firstCall = fixture.viewer.takeFooterWidget();
+    expectations.expect(firstCall != nullptr, "takeFooterWidget() returns a real widget");
+    expectations.expect(fixture.viewer.takeFooterWidget() == nullptr,
+                        "a second call returns nullptr -- this ViewerEditor already gave its "
+                        "footer away");
+    if (firstCall == nullptr) {
+        return;
+    }
+
+    // The zoom dropdown really moved into the returned widget (FORMAL AMENDMENT 1's "expose its
+    // existing bottom status bar" -- not a duplicate, the SAME control).
+    expectations.expect(fixture.viewer.zoomDropdownForTest()->parentWidget() == firstCall,
+                        "the zoom dropdown is reparented into the returned footer widget");
+    expectations.expect(
+        fixture.viewer.statusBarColorChipTextForTest() == QStringLiteral("Reference (unqualified)"),
+        "the color-state chip's own text is still computed correctly once hosted externally");
+
+    firstCall->resize(400, ui::kit::px(ui::kit::Size::Control));
+    QCoreApplication::processEvents();
+    const QImage image = firstCall->grab().toImage();
+    expectations.expect(!image.isNull(), "the returned footer widget renders offscreen");
+    if (!image.isNull()) {
+        const QColor surface = ui::kit::color(ui::kit::Color::Surface);
+        const auto channelDistance = [](const QColor& left, const QColor& right) {
+            return std::abs(left.red() - right.red()) + std::abs(left.green() - right.green()) +
+                   std::abs(left.blue() - right.blue());
+        };
+        bool sawPaintedContent = false;
+        for (int y = 0; y < image.height() && !sawPaintedContent; ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (channelDistance(image.pixelColor(x, y), surface) > 40) {
+                    sawPaintedContent = true;
+                    break;
+                }
+            }
+        }
+        expectations.expect(sawPaintedContent,
+                            "real chip/readout content -- not a flat Surface-colored strip -- is "
+                            "painted inside the returned footer widget (FORMAL AMENDMENT 1's "
+                            "contract)");
+    }
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the take-footer-widget fixture reaches asynchronous scheduler quiescence");
+}
+
 // The status bar's center readout reuses the timeline's own exact display shape ("Frame N ·
 // S.mmms")
 // -- including an honest truncated (not rounded) subframe display, never a binary64 rounding of a
@@ -648,6 +719,7 @@ int main(int argc, char** argv) {
     testViewerRendersQualifiedFrameAndReportsColorState(expectations);
     testViewerStatusSurfaceReflectsFailClosedColorState(expectations);
     testStatusBarZoomDropdownDrivesViewTransform(expectations);
+    testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(expectations);
     testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(expectations);
     testSpaceHoldLeftDragPans(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);

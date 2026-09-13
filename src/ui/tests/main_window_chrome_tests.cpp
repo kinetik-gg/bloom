@@ -4,7 +4,6 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
-#include <bloom/ui/kit/title_bar.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -150,45 +149,16 @@ void testChromeModeFromSettingsReadsTheInjectedFile(Expectations& expectations) 
     }
 }
 
-void testCustomChromeBuildsAFramelessTitleBarWindow(Expectations& expectations) {
-    bool ok = false;
-    Fixture fixture(&ok);
-    expectations.expect(ok, "custom chrome: fixture editors registered");
-    if (!ok) {
-        return;
-    }
-
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, ChromeMode::Custom);
-    expectations.expect(window.chromeMode() == ChromeMode::Custom,
-                        "custom chrome: chromeMode() reports what it was constructed with");
-    expectations.expect(window.windowFlags().testFlag(Qt::FramelessWindowHint),
-                        "custom chrome: the window is really frameless");
-
-    auto* titleBar = window.findChild<kit::TitleBar*>();
-    expectations.expect(titleBar != nullptr, "custom chrome: a TitleBar exists");
-    if (titleBar == nullptr) {
-        return;
-    }
-    expectations.expect(window.menuWidget() == titleBar,
-                        "custom chrome: the TitleBar is installed as the menu widget");
-    expectations.expect(titleBar->findChild<QMenuBar*>() != nullptr,
-                        "custom chrome: the menu bar is embedded inside the title bar's row");
-
-    // Title follows the session (decision 1): a fresh project shows "Bloom — Untitled".
-    auto* label = titleBar->findChild<QLabel*>(QStringLiteral("titleBarTitleLabel"));
-    expectations.expect(label != nullptr && label->text() == QStringLiteral("Bloom — Untitled"),
-                        "custom chrome: the title bar's label follows the project name");
-
-    // Maximize state propagation: MainWindow::changeEvent syncs the TitleBar's appearance.
-    expectations.expect(!titleBar->maximizedAppearance(), "custom chrome: starts unmaximized");
-    window.setWindowState(window.windowState() | Qt::WindowMaximized);
-    QApplication::sendPostedEvents();
-    expectations.expect(titleBar->maximizedAppearance(),
-                        "custom chrome: a WindowStateChange event syncs the title bar's glyph");
-}
-
-void testNativeChromeKeepsTheClassicMenuBar(Expectations& expectations) {
+// task C1, item C1 (owner: "let OS handle the native window chrome for now" / "no need for
+// custom minimize/maximize/close" / "remove the Bloom app title"): native (server-side) decoration
+// is now the default AND ONLY mode MainWindow ever builds. There is no more ChromeMode-dependent
+// branch inside MainWindow to exercise here -- the CSD kit::TitleBar and FramelessEdgeResizer stay
+// compiled and get their OWN isolated coverage instead (kit_title_bar_tests.cpp,
+// frameless_window_support_tests.cpp), mirroring kit_title_bar_tests.cpp's existing precedent of
+// testing the retained-but-unused widget standalone rather than through MainWindow. The old
+// "custom chrome" test that exercised a frameless MainWindow with an embedded TitleBar is gone: a
+// frameless MainWindow with a TitleBar can no longer be built at all.
+void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
     expectations.expect(ok, "native chrome: fixture editors registered");
@@ -197,15 +167,38 @@ void testNativeChromeKeepsTheClassicMenuBar(Expectations& expectations) {
     }
 
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, ChromeMode::Native);
-    expectations.expect(window.chromeMode() == ChromeMode::Native,
-                        "native chrome: chromeMode() reports Native");
+                      fixture.frameExportController);
     expectations.expect(!window.windowFlags().testFlag(Qt::FramelessWindowHint),
-                        "native chrome: stock decorations, not frameless");
-    expectations.expect(window.findChild<kit::TitleBar*>() == nullptr,
-                        "native chrome: no TitleBar is constructed at all");
+                        "native chrome: stock OS decorations, never frameless");
+    expectations.expect(window.findChild<QWidget*>(QStringLiteral("kinetikTitleBar")) == nullptr,
+                        "native chrome: no Kinetik TitleBar is constructed at all");
     expectations.expect(window.menuBar() != nullptr && window.menuWidget() == window.menuBar(),
                         "native chrome: QMainWindow's own classic menu bar is in charge");
+
+    // No "Bloom" app-title label anywhere in the client area (task C1, item C1): the only window
+    // title left is the OS one, and it carries the document title alone.
+    expectations.expect(window.findChild<QLabel*>(QStringLiteral("titleBarTitleLabel")) == nullptr,
+                        "native chrome: the old title-bar label widget does not exist in this "
+                        "window at all");
+}
+
+// task C1, item C1: the OS window title is exactly the document title -- "Untitled" or the file
+// name -- with Qt's own "[*]" modified marker, and never a "Bloom — " prefix.
+void testWindowTitleIsJustTheDocumentTitle(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "window title: fixture editors registered");
+    if (!ok) {
+        return;
+    }
+
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+    expectations.expect(window.windowTitle() == QStringLiteral("Untitled[*]"),
+                        "window title: a fresh project shows the bare document title, no Bloom "
+                        "prefix (got \"" +
+                            window.windowTitle().toStdString() + "\")");
+    expectations.expect(!window.isWindowModified(), "window title: starts unmodified");
 }
 
 void testViewMenuItemsExistAndFire(Expectations& expectations) {
@@ -216,20 +209,22 @@ void testViewMenuItemsExistAndFire(Expectations& expectations) {
         return;
     }
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, ChromeMode::Custom);
+                      fixture.frameExportController);
 
     auto* fullScreenAction = window.findChild<QAction*>(QStringLiteral("viewFullScreenAction"));
     auto* maximizePanelAction =
         window.findChild<QAction*>(QStringLiteral("viewMaximizePanelAction"));
-    auto* nativeFrameAction = window.findChild<QAction*>(QStringLiteral("useNativeFrameAction"));
-    expectations.expect(fullScreenAction != nullptr && maximizePanelAction != nullptr &&
-                            nativeFrameAction != nullptr,
-                        "view menu: Full Screen, Maximize Panel, and Use Native Window Frame all "
-                        "exist");
-    if (fullScreenAction == nullptr || maximizePanelAction == nullptr ||
-        nativeFrameAction == nullptr) {
+    expectations.expect(fullScreenAction != nullptr && maximizePanelAction != nullptr,
+                        "view menu: Full Screen and Maximize Panel both exist");
+    if (fullScreenAction == nullptr || maximizePanelAction == nullptr) {
         return;
     }
+
+    // task C1, item C1: "Use Native Window Frame" is gone -- native chrome is the default and
+    // only mode now, so the View menu no longer offers a chrome setting at all.
+    expectations.expect(
+        window.findChild<QAction*>(QStringLiteral("useNativeFrameAction")) == nullptr,
+        "view menu: Use Native Window Frame has really been removed, not merely disabled");
 
     expectations.expect(!fullScreenAction->shortcut().isEmpty(),
                         "view menu: Full Screen carries the F11 shortcut");
@@ -259,10 +254,6 @@ void testViewMenuItemsExistAndFire(Expectations& expectations) {
     maximizePanelAction->trigger();
     expectations.expect(!window.workspaceHost()->isAreaMaximized(),
                         "view menu: triggering it again restores");
-
-    expectations.expect(nativeFrameAction->isCheckable() && !nativeFrameAction->isChecked(),
-                        "view menu: Use Native Window Frame reflects the Custom chrome it was "
-                        "constructed with");
 }
 
 void testHelpMenuItemsExistAndFire(Expectations& expectations) {
@@ -273,7 +264,7 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
         return;
     }
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, ChromeMode::Custom);
+                      fixture.frameExportController);
 
     auto* reportIssueAction = window.findChild<QAction*>(QStringLiteral("reportIssueAction"));
     auto* licensesAction = window.findChild<QAction*>(QStringLiteral("openSourceLicensesAction"));
@@ -308,8 +299,8 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testChromeModeFromSettingsReadsTheInjectedFile(expectations);
-    testCustomChromeBuildsAFramelessTitleBarWindow(expectations);
-    testNativeChromeKeepsTheClassicMenuBar(expectations);
+    testMainWindowAlwaysBuildsNativeChrome(expectations);
+    testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
     return expectations.failures() == 0 ? 0 : 1;

@@ -13,7 +13,7 @@ provenance, review, and security records under `dependencies/licenses/`.
 | Component | Version | License | Files | Records |
 | --- | --- | --- | --- | --- |
 | Phosphor Icons (core assets) | v2.0.8 | MIT | `src/ui/kit/third_party/phosphor-icons/` | `LICENSE`, `provenance.md` |
-| Plus Jakarta Sans | 2.7.1 | SIL Open Font License 1.1 | `src/ui/kit/third_party/plus-jakarta-sans/` | `LICENSE`, `provenance.md` |
+| DejaVu Sans | 2.37 | Bitstream Vera Fonts Copyright + Arev Fonts Copyright, DejaVu changes public domain | `src/ui/kit/third_party/dejavu-sans/` | `LICENSE`, `provenance.md` |
 | Geist Mono | v1.7.2 | SIL Open Font License 1.1 | `src/ui/kit/third_party/geist-mono/` | `LICENSE`, `provenance.md` |
 
 Each component directory retains its upstream license text unmodified and a `provenance.md` that
@@ -29,15 +29,18 @@ Bloom vendors a curated 43-icon subset in the `regular` and `fill` weights, unmo
 pinned `v2.0.8` release of <https://github.com/phosphor-icons/core>. The complete catalog is not
 embedded.
 
-### Plus Jakarta Sans
+### DejaVu Sans
 
-Copyright 2020 The Plus Jakarta Sans Project Authors
-(<https://github.com/tokotype/PlusJakartaSans>). Licensed under the SIL Open Font License,
-Version 1.1. The complete license text is at
-`src/ui/kit/third_party/plus-jakarta-sans/LICENSE`, byte-identical to the upstream `OFL.txt`.
+Bitstream Vera Fonts Copyright (c) 2003 by Bitstream, Inc. Arev Fonts Copyright (c) 2006 by
+Tavmjong Bah. DejaVu's own changes are in the public domain
+(<https://github.com/dejavu-fonts/dejavu-fonts>). The Bitstream Vera and Arev licenses are
+MIT-style permissive grants that allow reproduction and distribution, including inside a larger
+software package, provided their notices travel with the fonts. The complete license text is at
+`src/ui/kit/third_party/dejavu-sans/LICENSE`, byte-identical to the upstream `LICENSE`.
 
-Bloom vendors the Regular, Medium, and SemiBold static TTFs, unmodified, from the pinned `2.7.1`
-release. The variable font and the italic faces are not vendored.
+Bloom vendors the DejaVu Sans Book, Bold, and Oblique TTFs, unmodified, from the pinned `2.37`
+release. DejaVu Serif, DejaVu Sans Mono, the Condensed and ExtraLight cuts, and DejaVu Math TeX
+Gyre are not vendored.
 
 ### Geist Mono
 

@@ -20,16 +20,21 @@ struct BundledFace {
     bool isMonospace;
 };
 
-// The minimal shipped weight set ADR 0010 and docs/ux/visual-language.md call for: Regular,
-// Medium, and SemiBold for the interface family, Regular and Medium for the monospaced one. A
-// weight enters this list only when an implemented component uses it.
+// The minimal shipped set ADR 0010 and docs/ux/visual-language.md call for: the interface family's
+// Book, Bold, and Oblique styles, and Regular and Medium for the monospaced one. A face enters this
+// list only when the shipped design calls for it.
+//
+// The three interface files all declare the SAME family name -- DejaVu Sans -- and distinguish
+// themselves by style, so `expectedFamily` is that one name three times. That is the whole
+// difference from the per-weight families the previous interface face shipped (Plus Jakarta Sans
+// Medium was its own family); see fontFamiliesForRole() below.
 constexpr auto kBundledFaces = std::to_array<BundledFace>({
-    {QLatin1StringView(":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-Regular.ttf"),
-     QLatin1StringView("Plus Jakarta Sans"), false},
-    {QLatin1StringView(":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-Medium.ttf"),
-     QLatin1StringView("Plus Jakarta Sans Medium"), false},
-    {QLatin1StringView(":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-SemiBold.ttf"),
-     QLatin1StringView("Plus Jakarta Sans SemiBold"), false},
+    {QLatin1StringView(":/bloom/kit/dejavu-sans/DejaVuSans.ttf"), QLatin1StringView("DejaVu Sans"),
+     false},
+    {QLatin1StringView(":/bloom/kit/dejavu-sans/DejaVuSans-Bold.ttf"),
+     QLatin1StringView("DejaVu Sans"), false},
+    {QLatin1StringView(":/bloom/kit/dejavu-sans/DejaVuSans-Oblique.ttf"),
+     QLatin1StringView("DejaVu Sans"), false},
     {QLatin1StringView(":/bloom/kit/geist-mono/GeistMono-Regular.ttf"),
      QLatin1StringView("Geist Mono"), true},
     {QLatin1StringView(":/bloom/kit/geist-mono/GeistMono-Medium.ttf"),
@@ -84,9 +89,10 @@ std::optional<BundledFontStatus>& memo() {
     }
 
     // Qt reports both a face's own family name and, where the face declares one, its typographic
-    // family -- so the Medium file yields "Plus Jakarta Sans Medium" and "Plus Jakarta Sans", and
-    // whether it reports the second is a Qt-version and platform detail. Deduplicating leaves one
-    // entry per distinct family either way, which is what fontFamiliesForRole() asks about.
+    // family -- so the Geist Mono Medium file yields "Geist Mono Medium" and "Geist Mono", and
+    // whether it reports the second is a Qt-version and platform detail; the three DejaVu Sans
+    // styles all report the one family name. Deduplicating leaves one entry per distinct family
+    // either way, which is what fontFamiliesForRole() asks about.
     status.registeredFamilies.removeDuplicates();
 
     for (const QString& diagnostic : status.diagnostics) {
@@ -139,12 +145,12 @@ QStringList fontFamiliesForRole(const TypeRole role) {
     switch (role) {
     case TypeRole::Ui:
     case TypeRole::UiSmall:
-        appendIfRegistered(families, status, QStringLiteral("Plus Jakarta Sans Medium"));
-        appendIfRegistered(families, status, interfaceFontFamily());
-        families.append(platformFallback(QFontDatabase::GeneralFont));
-        break;
     case TypeRole::Title:
-        appendIfRegistered(families, status, QStringLiteral("Plus Jakarta Sans SemiBold"));
+        // One family for all three interface roles: the bundled faces are styles of DejaVu Sans,
+        // not families of their own, so naming the family and letting font()'s own setWeight() pick
+        // the face is what selects Book for the 500-weight roles and Bold for the 600-weight Title
+        // role. Naming a "DejaVu Sans Bold" family here would ask for a family Qt never registered
+        // and silently fall through to the platform face.
         appendIfRegistered(families, status, interfaceFontFamily());
         families.append(platformFallback(QFontDatabase::GeneralFont));
         break;

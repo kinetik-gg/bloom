@@ -1,8 +1,8 @@
-// Issue #120 (task U5): PropertiesEditor's kit field grid, hover recipe, keyframe indicator, and
-// no-selection document view. Every expectation here is presentation-only -- it asserts VALUES,
-// UNITS, and STATE RECIPES the redesigned panel now shows, not any editing capability beyond what
-// composition_projection_test.cpp already exercises (setSelectedPosition/setSelectedOpacity
-// directly through CompositionSession, unchanged by this task).
+// Issue #120 (task U5): PropertiesEditor's kit field grid, keyframe indicator, and no-selection
+// document view. Task P1/P2/P3/P4 (owner review 2026-09-12) added real behavior on top: the
+// selection title row and its "Nothing selected" placeholder are gone, whole-row hover is gone,
+// the RGBA cells are genuinely editable through a new CompositionSession::setSelectedSolidColor()
+// command with undo parity, and a focused+hovered cell's on-screen border is pinned to Accent.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -26,6 +26,7 @@
 #include <QEnterEvent>
 #include <QImage>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QPointF>
 #include <QWidget>
@@ -169,15 +170,45 @@ void testSelectionShowsGroupedRowsWithValuesAndUnits(Expectations& expectations)
                         "the Opacity row reads the default constant value with a % unit");
 
     auto* solidPanel = properties.findChild<QWidget*>("solidColorProperties");
-    auto* solidColorValue = properties.findChild<QLabel*>("solidColorValue");
-    expectations.expect(solidPanel != nullptr && !solidPanel->isHidden() &&
-                            solidColorValue != nullptr &&
-                            solidColorValue->text() == QStringLiteral("R 0.2  G 0.3  B 0.4  A 1"),
-                        "the Solid Source group shows the exact RGBA text unchanged in content");
+    auto* red = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* green = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* blue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    auto* alpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
+    expectations.expect(solidPanel != nullptr && !solidPanel->isHidden() && red != nullptr &&
+                            green != nullptr && blue != nullptr && alpha != nullptr,
+                        "the Solid Source group exposes four RGBA kit::KValueField cells");
+    if (red == nullptr || green == nullptr || blue == nullptr || alpha == nullptr) {
+        return;
+    }
+    expectations.expect(red->value() == 0.2 && green->value() == 0.3 && blue->value() == 0.4 &&
+                            alpha->value() == 1.0,
+                        "the RGBA cells read the solid's exact constant value");
+    expectations.expect(red->unit().isEmpty() && green->unit().isEmpty() &&
+                            blue->unit().isEmpty() && alpha->unit().isEmpty(),
+                        "RGBA cells carry no unit suffix");
+    expectations.expect(red->decimals() == 3 && red->singleStep() == 0.01,
+                        "RGBA cells show 3 decimals and scrub in 0.01 steps");
+    // FORMAL AMENDMENT 1 (2026-09-12): the RGBA cells are unbounded -- negative and HDR channels
+    // are never clipped, exactly like the read-only label they replaced. A solid's default palette
+    // color is well within [0, 1], so this only pins that the range was not narrowed to it; the
+    // no-clipping guarantee itself is pinned by testRgbaCellsNeverClipNegativeOrHdrChannels below.
+    expectations.expect(red->minimum() < 0.0 && red->maximum() > 1.0,
+                        "RGBA cells are not range-clamped to 0-1");
+    expectations.expect(
+        red->label() == QStringLiteral("R") && green->label() == QStringLiteral("G") &&
+            blue->label() == QStringLiteral("B") && alpha->label() == QStringLiteral("A"),
+        "RGBA cells carry their own R/G/B/A sub-labels");
 
     auto* documentSection = properties.findChild<QWidget*>("propertiesDocumentSection");
     expectations.expect(documentSection != nullptr && documentSection->isHidden(),
                         "a real selection hides the no-selection document view");
+
+    expectations.expect(properties.findChild<QLabel*>("propertiesSelectionTitle") == nullptr,
+                        "task P1: the selection title row no longer exists");
+    for (const auto* label : properties.findChildren<QLabel*>()) {
+        expectations.expect(label->text() != QStringLiteral("Nothing selected"),
+                            "task P1: no label anywhere in the panel reads \"Nothing selected\"");
+    }
 }
 
 void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
@@ -222,7 +253,10 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
                         "the still-constant Position parameter paints the dimmed indicator");
 }
 
-void testHoverPaintsTheStatesRecipeOnARow(Expectations& expectations) {
+// Task P2 (owner review 2026-09-12: "hover is for the component being interacted, not the whole
+// row"): a row entering hover must paint NOTHING of its own -- the row is a plain container now,
+// and every hover affordance comes from the kit control it lays out.
+void testRowNeverPaintsWholeRowHover(Expectations& expectations) {
     auto newProject = document::makeNewProject("Hover Test", "Main", time(10));
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
@@ -240,40 +274,31 @@ void testHoverPaintsTheStatesRecipeOnARow(Expectations& expectations) {
     }
     auto* row = opacityField->parentWidget();
     expectations.expect(row != nullptr && row->objectName() == QStringLiteral("propertiesRow"),
-                        "the Opacity value cell's immediate parent is its PropertiesRow container");
+                        "the Opacity value cell's immediate parent is its row container");
     if (row == nullptr) {
         return;
     }
     row->resize(row->sizeHint());
 
-    const QColor restBackground = row->grab().toImage().pixelColor(1, 1);
-    const QColor hoverExpected =
+    const QColor hoverSurface =
         ui::kit::color(ui::kit::surfaceForState(ui::kit::Color::Background, ui::kit::State::Hover));
-    expectations.expect(!near(restBackground, hoverExpected, 4),
-                        "a row at rest does not already paint the hover fill");
+    const QImage before = row->grab().toImage();
 
     QEnterEvent enter(QPointF(1.0, 1.0), QPointF(1.0, 1.0), QPointF(1.0, 1.0));
     QCoreApplication::sendEvent(row, &enter);
 
     const QImage hovered = row->grab().toImage();
-    bool sawHoverFill = false;
-    for (int y = 0; y < hovered.height() && !sawHoverFill; ++y) {
+    expectations.expect(before == hovered,
+                        "entering the row repaints nothing -- no whole-row hover fill");
+    for (int y = 0; y < hovered.height(); ++y) {
         for (int x = 0; x < hovered.width(); ++x) {
-            if (near(hovered.pixelColor(x, y), hoverExpected, 4)) {
-                sawHoverFill = true;
-                break;
-            }
+            expectations.expect(!near(hovered.pixelColor(x, y), hoverSurface, 4),
+                                "no pixel in the hovered row matches the old whole-row hover fill");
         }
     }
-    expectations.expect(sawHoverFill,
-                        "hovering the row paints the States recipe: Background stepped to "
-                        "Hover's surface, i.e. Surface");
 
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(row, &leave);
-    const QColor afterLeave = row->grab().toImage().pixelColor(1, 1);
-    expectations.expect(!near(afterLeave, hoverExpected, 4),
-                        "leaving the row clears the hover fill");
 }
 
 void testNoSelectionShowsDocumentProperties(Expectations& expectations) {
@@ -363,9 +388,13 @@ void testSelectionSwapUpdatesRows(Expectations& expectations) {
     }
 
     auto* positionX = properties.findChild<ui::kit::KValueField*>("positionXEditor");
-    auto* solidColorValue = properties.findChild<QLabel*>("solidColorValue");
-    expectations.expect(positionX != nullptr && solidColorValue != nullptr, "rows still resolve");
-    if (positionX == nullptr || solidColorValue == nullptr) {
+    auto* red = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* green = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* blue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    expectations.expect(positionX != nullptr && red != nullptr && green != nullptr &&
+                            blue != nullptr,
+                        "rows still resolve");
+    if (positionX == nullptr || red == nullptr || green == nullptr || blue == nullptr) {
         return;
     }
     // CompositionSession::addSolidLayer() defaults a new solid's position to the composition's
@@ -374,12 +403,187 @@ void testSelectionSwapUpdatesRows(Expectations& expectations) {
     // actually re-read the new selection rather than keeping stale values across the swap.
     expectations.expect(positionX->value() == 960.0,
                         "the swapped-to layer's own position value replaces the previous row");
-    expectations.expect(solidColorValue->text() == QStringLiteral("R 0.9  G 0.1  B 0.5  A 1"),
-                        "the swapped-to layer's own solid color replaces the previous row");
+    expectations.expect(red->value() == 0.9 && green->value() == 0.1 && blue->value() == 0.5,
+                        "the swapped-to layer's own solid color replaces the previous RGBA cells");
 
     session.clearSelection();
     expectations.expect(!documentSection->isHidden() && selectionSection->isHidden(),
                         "clearing the selection swaps back to the document view");
+}
+
+// Task P3: editing an RGBA cell writes through CompositionSession::setSelectedSolidColor() into a
+// real commands::SetParameterSource transaction -- the document value changes, the other three
+// channels are untouched, and undo restores the exact pre-edit color, the same undo/dirty/revision
+// parity Position already has.
+void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Color Edit Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* red = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    expectations.expect(red != nullptr, "the Red cell resolves for the edit check");
+    if (red == nullptr) {
+        return;
+    }
+
+    red->setValue(0.75);
+    const auto edited = session.constantColorValue(ids.color);
+    expectations.expect(edited.has_value() && edited->red == 0.75,
+                        "editing the Red cell commits through a command and updates the document");
+    expectations.expect(edited.has_value() && edited->green == 0.3 && edited->blue == 0.4 &&
+                            edited->alpha == 1.0,
+                        "editing one channel leaves the other three exactly as they were");
+    expectations.expect(session.canUndo(), "the color edit lands as one undoable command");
+
+    expectations.expect(session.undo(), "the color edit can be undone");
+    const auto restored = session.constantColorValue(ids.color);
+    expectations.expect(restored.has_value() && restored->red == 0.2 && restored->green == 0.3 &&
+                            restored->blue == 0.4 && restored->alpha == 1.0,
+                        "undo restores the exact pre-edit color");
+}
+
+// FORMAL AMENDMENT 1 (2026-09-12, after the first report): the 0-1 clamp in the first pass of P3
+// was the package author's error -- the document contract allows negative and HDR channels, and
+// the former read-only label promised no clipping. The RGBA cells are unbounded and must restore
+// that exact guarantee: display the exact stored value for a negative/HDR channel, with no
+// clipping.
+void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
+    auto newProject = document::makeNewProject("HDR Color Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    constexpr core::Color4d hdrColor{-0.25, 1.5, 0.125, 0.8};
+    expectations.expect(session.addSolidLayer(QStringLiteral("HDR"), hdrColor),
+                        "a negative/HDR solid can be added for the clipping check");
+
+    ui::PropertiesEditor properties(session);
+    auto* red = properties.findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    auto* green = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
+    auto* blue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    auto* alpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
+    expectations.expect(red != nullptr && green != nullptr && blue != nullptr && alpha != nullptr,
+                        "the RGBA cells resolve for the negative/HDR check");
+    if (red == nullptr || green == nullptr || blue == nullptr || alpha == nullptr) {
+        return;
+    }
+    expectations.expect(red->value() == -0.25 && green->value() == 1.5 && blue->value() == 0.125 &&
+                            alpha->value() == 0.8,
+                        "the RGBA cells display the exact negative and HDR channel values with no "
+                        "clipping");
+
+    // Editing an unrelated channel must not clip the OTHER channels' already-HDR/negative values
+    // either -- commitSolidColor() reads all four live cell values on every emission.
+    alpha->setValue(0.9);
+    const auto edited = session.constantColorValue(
+        session.parameterForSelection(document::kSolidColorParameterRole)->id);
+    expectations.expect(edited.has_value() && edited->red == -0.25 && edited->green == 1.5 &&
+                            edited->blue == 0.125 && edited->alpha == 0.9,
+                        "committing one channel keeps the other channels' exact negative/HDR "
+                        "values, unclipped, in the document");
+}
+
+// Task P3: a scrub gesture (press, travel past the drag threshold, release) on an RGBA cell
+// changes its value and commits that value into the document, exactly like a Position scrub.
+void testScrubOnRgbaCellChangesValue(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Color Scrub Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* blueField = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
+    expectations.expect(blueField != nullptr, "the Blue cell resolves for the scrub check");
+    if (blueField == nullptr) {
+        return;
+    }
+
+    // Mirrors kit_value_field_tests.cpp's own scrub() helper: a press, a horizontal drag well past
+    // the platform drag threshold, and a release, sent straight to the field.
+    const QPointF start(blueField->cellRect().center());
+    const auto travel = static_cast<qreal>(QApplication::startDragDistance() + 20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, blueField->mapToGlobal(start.toPoint()),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(blueField, &press);
+    const QPointF moved = start + QPointF(travel, 0.0);
+    QMouseEvent move(QEvent::MouseMove, moved, blueField->mapToGlobal(moved.toPoint()),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(blueField, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, moved, blueField->mapToGlobal(moved.toPoint()),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(blueField, &release);
+
+    expectations.expect(blueField->value() != 0.4,
+                        "scrubbing the Blue cell changes its displayed value");
+    const auto scrubbed = session.constantColorValue(ids.color);
+    expectations.expect(scrubbed.has_value() && scrubbed->blue == blueField->value(),
+                        "the scrub committed through the session into the document value");
+}
+
+// Task P4: F1's kit-wide focus/hover border rule (kit::borderForInteraction: focus wins over
+// hover, one border, never a second ring), verified here with an actual on-screen grab of a
+// focused+hovered cell embedded in this panel, not just borderToken() introspection.
+void testFocusedHoveredCellBorderIsAccentOnScreen(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Focus Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    properties.activateWindow();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    auto* positionX = properties.findChild<ui::kit::KValueField*>("positionXEditor");
+    expectations.expect(positionX != nullptr,
+                        "the Position X cell resolves for the focus+hover check");
+    if (positionX == nullptr) {
+        return;
+    }
+
+    positionX->clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(positionX, &leave);
+    positionX->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(positionX->hasFocus(), "the cell can take keyboard focus inside the panel");
+
+    QEnterEvent enter(QPointF(1.0, 1.0), QPointF(1.0, 1.0), QPointF(1.0, 1.0));
+    QCoreApplication::sendEvent(positionX, &enter);
+
+    expectations.expect(positionX->borderToken() == ui::kit::Color::Accent,
+                        "a focused+hovered cell's border token stays Accent -- focus wins over "
+                        "hover, and the panel does not override it");
+
+    const QColor accent = ui::kit::color(ui::kit::Color::Accent);
+    const QImage image = positionX->grab().toImage();
+    bool sawAccentBorder = false;
+    for (int y = 0; y < image.height() && !sawAccentBorder; ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (near(image.pixelColor(x, y), accent, 4)) {
+                sawAccentBorder = true;
+                break;
+            }
+        }
+    }
+    expectations.expect(sawAccentBorder,
+                        "the focused+hovered cell actually paints an Accent border on screen "
+                        "inside the panel, with no separate focus ring painted underneath it");
 }
 
 } // namespace
@@ -390,9 +594,13 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testSelectionShowsGroupedRowsWithValuesAndUnits(expectations);
     testAnimatedParameterShowsGoldStaticShowsDim(expectations);
-    testHoverPaintsTheStatesRecipeOnARow(expectations);
+    testRowNeverPaintsWholeRowHover(expectations);
     testNoSelectionShowsDocumentProperties(expectations);
     testSelectionSwapUpdatesRows(expectations);
+    testRgbaCellsEditThroughCommandWithUndo(expectations);
+    testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
+    testScrubOnRgbaCellChangesValue(expectations);
+    testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";
         return 1;

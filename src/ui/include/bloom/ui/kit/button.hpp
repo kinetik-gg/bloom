@@ -68,6 +68,11 @@ class KButton final : public QAbstractButton {
     [[nodiscard]] QColor fillForState(State state) const;
     [[nodiscard]] QColor inkForVisualState(State state) const;
 
+    // The single border this control paints, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction). Accent here outranks every variant's own resting outline; the
+    // variant recipes in paintEvent() only apply when this is not Accent.
+    [[nodiscard]] Color borderToken() const;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 

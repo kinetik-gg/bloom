@@ -125,7 +125,7 @@ Shadow shadow(const Elevation token) {
     return {};
 }
 
-QString interfaceFontFamily() { return QStringLiteral("Plus Jakarta Sans"); }
+QString interfaceFontFamily() { return QStringLiteral("DejaVu Sans"); }
 
 QString monospaceFontFamily() { return QStringLiteral("Geist Mono"); }
 
@@ -139,12 +139,17 @@ QFont font(const TypeRole role) {
     switch (role) {
     case TypeRole::Ui:
         value.setStyleHint(QFont::SansSerif);
-        value.setPointSizeF(pointSizeForDesignPixels(12.5));
+        // 12 design pixels, re-tuned down from 12.5 with the DejaVu Sans swap (task F1, item F1):
+        // DejaVu's x-height and advance widths run larger than the previous interface face's at the
+        // same pixel size, so the old number read oversized in dense chrome.
+        value.setPointSizeF(pointSizeForDesignPixels(12.0));
         value.setWeight(QFont::Medium);
         break;
     case TypeRole::UiSmall:
         value.setStyleHint(QFont::SansSerif);
-        value.setPointSizeF(pointSizeForDesignPixels(11.0));
+        // 10.5 design pixels, re-tuned down from 11 for the same reason; the uppercase
+        // transform and +0.07em tracking below are unchanged.
+        value.setPointSizeF(pointSizeForDesignPixels(10.5));
         value.setWeight(QFont::Medium);
         value.setCapitalization(QFont::AllUppercase);
         value.setLetterSpacing(QFont::PercentageSpacing, 107.0);

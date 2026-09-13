@@ -35,6 +35,24 @@ namespace bloom::ui::kit {
 // The border a control shows in a given state.
 [[nodiscard]] Color borderForState(State state);
 
+// The kit-wide focus/hover border rule (task F1, item F2). A kit control shows exactly ONE 1px
+// border and never a second outline: `Border` at rest, `BorderHover` under the pointer, and
+// `Accent` while it is active -- focused, being edited, or holding an open popup.
+//
+// FOCUS WINS. A control that is both active and hovered stays `Accent`, so moving the pointer over
+// the thing you are editing never takes the focus indication away; hover is the weaker signal and
+// yields. A disabled control rests at `Border` and has no hover response at all, matching the
+// disabled rule the rest of this header already applies.
+//
+// A control that is borderless at rest -- a KValueField cell -- paints this function's `Border`
+// result transparent instead. The token it gets back is the same; only that one control's resting
+// ink differs, because its cell already reads as a field without an outline.
+//
+// This replaces the outer focus ring for every control it applies to: drawFocusRing() below is no
+// longer part of the focus recipe for KButton, KDropdown, KPanelSwitcher, KSlider, KSwitch, or
+// KValueField.
+[[nodiscard]] Color borderForInteraction(bool enabled, bool active, bool hovered);
+
 // The ink a control's text takes in a given state, already faded when disabled.
 [[nodiscard]] QColor inkForState(Color resting, State state);
 
@@ -47,8 +65,13 @@ void applyHairlinePen(QPainter& painter, const QColor& color);
 void fillRoundedSurface(QPainter& painter, const QRectF& bounds, const QColor& fill,
                         const QColor& border, Radius radius);
 
-// Draws the focus ring OUTSIDE `bounds`, so gaining focus never changes a control's size or moves
-// anything next to it. Widgets reserve kFocusRingWidth of margin for it in their size hints.
+// Draws an accent ring OUTSIDE `bounds`, in the kFocusRingWidth of margin widgets reserve for it in
+// their size hints, so drawing it never changes a control's size or moves anything next to it.
+//
+// No longer the kit's focus affordance (task F1, item F2: borderForInteraction() above is). It
+// survives for the color widgets, whose focusable target is a color field or a swatch -- surfaces
+// whose own border color is the artist's data rather than a state channel, so a border-color change
+// there could not carry focus at all.
 void drawFocusRing(QPainter& painter, const QRectF& bounds, Radius radius);
 
 // Attaches (or clears, for Elevation::Flat) the token drop shadow for an elevated surface.

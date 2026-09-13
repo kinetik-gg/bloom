@@ -1,35 +1,48 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QEventLoop>
+#include <QKeySequence>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QtGlobal>
 
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <thread>
@@ -83,10 +96,10 @@ class WorkerGate final {
     bool released_ = false;
 };
 
-template <typename Predicate> bool waitUntil(Predicate predicate) {
+template <typename Predicate> bool waitUntilBounded(Predicate predicate, const int timeoutMs) {
     QElapsedTimer timer;
     timer.start();
-    while (timer.elapsed() < 2'000) {
+    while (timer.elapsed() < timeoutMs) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         if (std::invoke(predicate)) {
             return true;
@@ -94,6 +107,36 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
         std::this_thread::yield();
     }
     return std::invoke(predicate);
+}
+
+// The 2s bound FORMAL AMENDMENT 1 (S1-A) asks every reproduction shape to assert
+// shutdownQuiescent within.
+template <typename Predicate> bool waitUntil(Predicate predicate) {
+    return waitUntilBounded(std::move(predicate), 2'000);
+}
+
+// A manually-advanced fake for PlaybackController::ClockFunction (mirrors playback_controller_
+// tests.cpp's own ManualClock exactly): no dependency on real elapsed wall time, so shape (c)
+// below drives playback purely by calling advance() then tick().
+struct ManualClock final {
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+
+    void advance(const std::chrono::nanoseconds delta) { now += delta; }
+};
+
+// qInstallMessageHandler() requires a plain function (no captures), so the buffer it appends into
+// has to live at namespace scope rather than as a lambda capture -- used only by
+// testStuckShutdownDiagnosticLogsAfterFiveSeconds() below to observe
+// ApplicationShutdownCoordinator's S1-C watchdog through its real qCWarning() output rather than a
+// white-box hook.
+QString& capturedDiagnosticMessages() {
+    static QString storage;
+    return storage;
+}
+
+void captureDiagnosticMessages(QtMsgType, const QMessageLogContext&, const QString& message) {
+    capturedDiagnosticMessages() += message;
+    capturedDiagnosticMessages() += QLatin1Char('\n');
 }
 
 bloom::runtime::TaskSchedulerConfig testSchedulerConfig() {
@@ -204,6 +247,539 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     window.hide();
 }
 
+// Task S1: the PO's literal complaint -- "I cant kill the app from the menu" -- rather than the
+// close-button path testShutdownAndCloseRouting() above already covers. MainWindow's File menu had
+// no Quit/Exit action at all, so nothing the artist could click there ever reached
+// MainWindow::shutdownRequested(); the app just kept running, indistinguishable from a genuine
+// hang once the supervising session attached and found every thread idle. This asserts the File
+// menu exposes a quit action, discoverable the same way every other action test in this codebase
+// finds one (objectName + findChild), and that triggering it routes through the exact same
+// shutdownRequested() -> ApplicationShutdownCoordinator::beginShutdown() path the window close
+// button already uses.
+void testFileMenuQuitRoutesThroughShutdown(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject =
+        document::makeNewProject("Menu Quit Test", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    ui::FrameExportController frameExportController(session, scheduler, bridge, snapshotCompiler,
+                                                    projectHost.publicationCoordinator(),
+                                                    projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+
+    auto* quitAction = window.findChild<QAction*>(QStringLiteral("quitAction"));
+    expectations.expect(quitAction != nullptr, "the File menu exposes a discoverable Quit action");
+    if (quitAction == nullptr) {
+        return;
+    }
+    expectations.expect(quitAction->shortcut() == QKeySequence(QKeySequence::Quit),
+                        "the Quit action carries the platform Quit shortcut");
+
+    int shutdownRequests = 0;
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &window,
+                     [&shutdownRequests] { ++shutdownRequests; });
+    window.show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    quitAction->trigger();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(shutdownRequests == 1,
+                        "triggering the File menu Quit action requests shutdown exactly once");
+    expectations.expect(shutdown.isShuttingDown(),
+                        "the File menu Quit action reaches the same shutdown coordinator as close");
+    window.hide();
+}
+
+// Task S1: reproduces the PO-reported hang ("stuck at 'shutdown state'") for the one shape the
+// gated-worker fixture above never exercises -- an application that has gone fully idle (every
+// startup task, including QualifiedDisplayProcessorBootstrap's one-time blocking-stage build, has
+// already reached a terminal state and no new work is in flight) before the window is closed.
+// This wires the exact production wiring from apps/bloom/main.cpp (TaskUiBridge,
+// QualifiedDisplayProcessorBootstrap, CompositionPreviewController's real pipeline, MainWindow's
+// close-event routing, and ApplicationShutdownCoordinator all reacting through their real signals)
+// rather than the earlier fixture's synthetic worker gate, and asserts the coordinator reaches
+// quiescence -- and the application's quit is actually requested -- within a bounded timeout.
+void testIdleApplicationQuitsOnClose(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject =
+        document::makeNewProject("Idle Shutdown Test", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "idle fixture registers built-in node definitions");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    // Present in every real run (apps/bloom/main.cpp), submitted at construction, and absent from
+    // every other coordinator/shutdown test in this file -- the prime suspect the task package
+    // named for a stage that never reports "drained".
+    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+    auto* application = QCoreApplication::instance();
+    application->installEventFilter(&shutdown);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    ui::FrameExportController frameExportController(
+        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
+        projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    bool quitRequested = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quitRequested] { quitRequested = true; });
+
+    window.show();
+
+    // Let the application settle into the fully idle state the bug report describes: every
+    // startup task (the qualified display processor build, the initial preview render) has
+    // reached a terminal state and the task scheduler has nothing in flight, well before the
+    // artist ever asks to quit.
+    expectations.expect(
+        waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+        "idle fixture settles to scheduler quiescence before any quit is requested");
+
+    // The same action MainWindow's close button (and File -> Quit, whatever menu action reaches
+    // it) triggers: QWidget::close() -> MainWindow::closeEvent() -> shutdownRequested().
+    window.close();
+
+    expectations.expect(
+        waitUntil([&quitRequested] { return quitRequested; }),
+        "an idle application reaches shutdown quiescence within a bounded timeout after close");
+    expectations.expect(scheduler.isQuiescent(),
+                        "shutdownQuiescent corresponds to scheduler quiescence for an idle app");
+    application->removeEventFilter(&shutdown);
+    window.hide();
+}
+
+// FORMAL AMENDMENT 1 (S1-A): the missing Quit action does not explain the owner's second
+// sentence -- "now it stuck at 'shutdown state'". The owner SAW a shutdown-state UI: reading
+// viewer_editor.cpp confirms CompositionPreviewController::beginShutdown()'s "Preview rendering
+// was cancelled during application shutdown" message paints as a literal banner over the last
+// retained frame (drawDiagnosticBanner(), gated on drewPixels && activity != Ready/Rendering) --
+// so beginShutdown() DID run (via the close button, the one path that worked before this task's
+// first commit), and the owner's window sat on that banner instead of closing. The owner's
+// session shape -- one solid layer, a preview actually delivered to the viewer, then close -- is
+// exactly what drewPixels requires (a previously retained frame), and exactly what the idle
+// fixture above never produces (it closes before anything ever reaches Ready). Each shape below
+// reproduces the SAME full production wiring as testIdleApplicationQuitsOnClose and asserts
+// shutdownQuiescent within the same 2s bound.
+
+// S1-A(a): a solid layer added, its preview delivered to the viewer (Ready, with real pixels),
+// THEN close -- the owner's literal reported session shape.
+void testShapeSolidLayerPreviewDeliveredThenClose(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(4, 4);
+    expectations.expect(format.has_value(), "shape (a): the small composition format is valid");
+    if (!format.has_value()) {
+        return;
+    }
+    auto newProject = document::makeNewProject("Solid Preview Shutdown Test", "Main",
+                                               core::RationalTime::fromInteger(10), *format);
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
+        "shape (a): the solid layer is added");
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "shape (a) fixture registers built-in node definitions");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+    auto* application = QCoreApplication::instance();
+    application->installEventFilter(&shutdown);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    ui::FrameExportController frameExportController(
+        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
+        projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    bool quitRequested = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quitRequested] { quitRequested = true; });
+
+    window.show();
+
+    expectations.expect(
+        waitUntilBounded(
+            [&] { return previewController.state().activity == ui::PreviewActivity::Ready; },
+            8'000),
+        "shape (a): the solid-layer preview reaches Ready with a delivered frame");
+    expectations.expect(previewController.state().frame != nullptr,
+                        "shape (a): the delivered frame carries real pixels before close");
+
+    window.close();
+
+    expectations.expect(
+        waitUntil([&quitRequested] { return quitRequested; }),
+        "shape (a): a delivered preview does not block shutdown quiescence within a bounded "
+        "timeout");
+    expectations.expect(scheduler.isQuiescent(),
+                        "shape (a): shutdownQuiescent corresponds to scheduler quiescence");
+    if (!quitRequested) {
+        const auto snapshots = scheduler.snapshots();
+        std::cerr << "shape (a) diagnostic: " << snapshots.size()
+                  << " scheduler task snapshot(s) at close+2s; non-terminal state(s):\n";
+        for (const auto& snapshot : snapshots) {
+            if (!runtime::isTerminal(snapshot.state)) {
+                std::cerr << "  task " << snapshot.id.value()
+                          << " executor=" << static_cast<int>(snapshot.executor)
+                          << " state=" << static_cast<int>(snapshot.state) << '\n';
+            }
+        }
+    }
+    application->removeEventFilter(&shutdown);
+    window.hide();
+}
+
+// S1-A(b): close while a preview render is genuinely in flight -- a fresh composition change
+// submits a task and close() is called immediately, before the event loop ever runs, so neither
+// the worker thread's completion nor TaskUiBridge's poll has been observed yet.
+void testShapeCloseWhilePreviewInFlight(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(4, 4);
+    expectations.expect(format.has_value(), "shape (b): the small composition format is valid");
+    if (!format.has_value()) {
+        return;
+    }
+    auto newProject = document::makeNewProject("In-Flight Preview Shutdown Test", "Main",
+                                               core::RationalTime::fromInteger(10), *format);
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "shape (b) fixture registers built-in node definitions");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+    auto* application = QCoreApplication::instance();
+    application->installEventFilter(&shutdown);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    ui::FrameExportController frameExportController(
+        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
+        projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    bool quitRequested = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quitRequested] { quitRequested = true; });
+
+    window.show();
+    // Settle the startup work (bootstrap build, the constructor's own initial preview request)
+    // first, so the in-flight task below is unambiguously the NEW one this shape adds.
+    (void)waitUntil([&scheduler] { return scheduler.isQuiescent(); });
+
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
+        "shape (b): the solid layer is added, submitting a fresh preview task");
+    expectations.expect(previewController.state().activity == ui::PreviewActivity::Rendering,
+                        "shape (b): the fresh preview request is still outstanding at close time");
+
+    window.close();
+
+    expectations.expect(
+        waitUntil([&quitRequested] { return quitRequested; }),
+        "shape (b): a preview genuinely in flight at close time still reaches quiescence within a "
+        "bounded timeout");
+    expectations.expect(scheduler.isQuiescent(),
+                        "shape (b): shutdownQuiescent corresponds to scheduler quiescence");
+    application->removeEventFilter(&shutdown);
+    window.hide();
+}
+
+// S1-A(c): close while CompositionPreviewController's Interactive-cadence gate is armed and a
+// PlaybackController-driven tick is in flight -- playback is never paused before close, so the
+// arming flag and any trailing-cadence-gated pending request are still live when beginShutdown()
+// runs. Composes the real bloom::ui::PlaybackController against the SAME session/previewController
+// the coordinator watches (playback_controller_tests.cpp's own ManualClock idiom), exactly the way
+// TimelineEditor wires it in production (composition_editors.cpp).
+void testShapeCloseWhilePlaybackArmed(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(4, 4);
+    expectations.expect(format.has_value(), "shape (c): the small composition format is valid");
+    if (!format.has_value()) {
+        return;
+    }
+    auto newProject = document::makeNewProject("Playback Shutdown Test", "Main",
+                                               core::RationalTime::fromInteger(4), *format);
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
+        "shape (c): the solid layer is added");
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "shape (c) fixture registers built-in node definitions");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ManualClock clock;
+    ui::PlaybackController playback(
+        session, previewController, [&clock] { return clock.now; }, 16ms);
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+    auto* application = QCoreApplication::instance();
+    application->installEventFilter(&shutdown);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    ui::FrameExportController frameExportController(
+        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
+        projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    bool quitRequested = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quitRequested] { quitRequested = true; });
+
+    window.show();
+    (void)waitUntil([&scheduler] { return scheduler.isQuiescent(); });
+
+    playback.play();
+    clock.advance(std::chrono::milliseconds{160});
+    playback.tick();
+    expectations.expect(playback.state() == ui::PlaybackState::Playing,
+                        "shape (c): playback is still armed and running at close time");
+
+    // The same action the close button triggers -- playback is never paused first, exactly like
+    // an artist closing the window mid-play.
+    window.close();
+
+    expectations.expect(
+        waitUntil([&quitRequested] { return quitRequested; }),
+        "shape (c): an application closed while playback is armed still reaches quiescence within "
+        "a bounded timeout");
+    expectations.expect(scheduler.isQuiescent(),
+                        "shape (c): shutdownQuiescent corresponds to scheduler quiescence");
+    application->removeEventFilter(&shutdown);
+    window.hide();
+}
+
+// S1-A(d): close right after a Frame Export attempt (PNG, to a temp dir) reaches a terminal,
+// published outcome -- mirrors frame_export_controller_tests.cpp's own PNG destination-seam drive.
+void testShapeCloseAfterFrameExportCompletes(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(4, 4);
+    expectations.expect(format.has_value(), "shape (d): the small composition format is valid");
+    if (!format.has_value()) {
+        return;
+    }
+    auto newProject = document::makeNewProject("Export Shutdown Test", "Main",
+                                               core::RationalTime::fromInteger(10), *format);
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
+        "shape (d): the solid layer is added");
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "shape (d) fixture registers built-in node definitions");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
+        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+    auto* application = QCoreApplication::instance();
+    application->installEventFilter(&shutdown);
+
+    ui::ProjectHost projectHost(scheduler);
+    ui::EditorRegistry registry;
+    QTemporaryDir exportDirectory;
+    expectations.expect(exportDirectory.isValid(), "shape (d): the export temp dir is valid");
+    ui::FrameExportController frameExportController(
+        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
+        projectHost.artifactCoordinator(),
+        std::filesystem::path(exportDirectory.path().toStdString()) / "scratch");
+    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    bool quitRequested = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quitRequested] { quitRequested = true; });
+
+    window.show();
+
+    const auto target =
+        std::filesystem::path(exportDirectory.path().toStdString()) / "shutdown-export.png";
+    frameExportController.setDestinationProvider(
+        [&target]() -> std::optional<std::filesystem::path> { return target; });
+    frameExportController.setApprovalDecisionProvider([](const ui::FrameExportApprovalPrompt&) {
+        return ui::FrameExportApprovalDecision::Export;
+    });
+
+    int exportFinishedCount = 0;
+    ui::FrameExportOutcome exportOutcome = ui::FrameExportOutcome::Refused;
+    QObject::connect(&frameExportController, &ui::FrameExportController::exportFinished,
+                     [&](const ui::FrameExportOutcome outcome, const QString&) {
+                         ++exportFinishedCount;
+                         exportOutcome = outcome;
+                     });
+    frameExportController.requestExport();
+    expectations.expect(waitUntilBounded([&] { return exportFinishedCount == 1; }, 8'000),
+                        "shape (d): the export reaches a terminal outcome before close");
+    expectations.expect(exportOutcome == ui::FrameExportOutcome::Published,
+                        "shape (d): the export publishes");
+
+    window.close();
+
+    expectations.expect(
+        waitUntil([&quitRequested] { return quitRequested; }),
+        "shape (d): an application closed right after a completed export still reaches quiescence "
+        "within a bounded timeout");
+    expectations.expect(scheduler.isQuiescent(),
+                        "shape (d): shutdownQuiescent corresponds to scheduler quiescence");
+    application->removeEventFilter(&shutdown);
+    window.hide();
+}
+
+// FORMAL AMENDMENT 1 (S1-C): none of the four shapes above reproduced a stuck shutdown, so this
+// covers the diagnostic S1-C asks for instead of a force-quit fallback -- a genuine in-flight
+// worker that never signals completion (this file's original gated-worker fixture, held past the
+// 5s watchdog rather than released quickly) makes ApplicationShutdownCoordinator log its
+// outstanding task bridge snapshots exactly once, through the coordinator's real qCWarning()
+// output rather than a white-box hook, and shutdown still completes normally once the worker
+// finally does complete.
+void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = document::makeNewProject("Stuck Shutdown Diagnostic Test", "Main",
+                                               core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    WorkerGate gate;
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&gate](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+                const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            gate.enterAndWait();
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
+
+    expectations.expect(waitUntil([&] { return gate.entered(); }),
+                        "diagnostic fixture starts worker preparation");
+
+    capturedDiagnosticMessages().clear();
+    QtMessageHandler previousHandler = qInstallMessageHandler(&captureDiagnosticMessages);
+
+    shutdown.beginShutdown();
+    // The gate holds the worker open indefinitely -- a genuine in-flight task that has not yet
+    // signalled completion, exactly the case the original task package allowed to "delay, never
+    // block forever" -- so shutdownQuiescent has not arrived by the time the 5s watchdog fires.
+    const bool loggedDiagnostic = waitUntilBounded(
+        [] { return capturedDiagnosticMessages().contains(QStringLiteral("outstanding task")); },
+        6'500);
+    qInstallMessageHandler(previousHandler);
+    expectations.expect(loggedDiagnostic,
+                        "the 5s watchdog logs a diagnostic while a genuine worker is still in "
+                        "flight, not a force-quit");
+
+    gate.release();
+    expectations.expect(
+        waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+        "releasing the gated worker still lets shutdown reach quiescence normally afterward");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -211,5 +787,12 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testShutdownAndCloseRouting(expectations);
+    testFileMenuQuitRoutesThroughShutdown(expectations);
+    testIdleApplicationQuitsOnClose(expectations);
+    testShapeSolidLayerPreviewDeliveredThenClose(expectations);
+    testShapeCloseWhilePreviewInFlight(expectations);
+    testShapeCloseWhilePlaybackArmed(expectations);
+    testShapeCloseAfterFrameExportCompletes(expectations);
+    testStuckShutdownDiagnosticLogsAfterFiveSeconds(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

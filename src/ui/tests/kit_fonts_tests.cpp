@@ -7,6 +7,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontInfo>
+#include <QFontMetricsF>
 #include <QString>
 #include <QStringList>
 
@@ -37,11 +38,11 @@ class Expectations final {
 using namespace bloom::ui;
 
 void testEveryBundledFaceIsInTheResourcePackAndRegisters(Expectations& expectations) {
-    for (const char* path : {":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-Regular.ttf",
-                             ":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-Medium.ttf",
-                             ":/bloom/kit/plus-jakarta-sans/PlusJakartaSans-SemiBold.ttf",
-                             ":/bloom/kit/geist-mono/GeistMono-Regular.ttf",
-                             ":/bloom/kit/geist-mono/GeistMono-Medium.ttf"}) {
+    for (const char* path :
+         {":/bloom/kit/dejavu-sans/DejaVuSans.ttf", ":/bloom/kit/dejavu-sans/DejaVuSans-Bold.ttf",
+          ":/bloom/kit/dejavu-sans/DejaVuSans-Oblique.ttf",
+          ":/bloom/kit/geist-mono/GeistMono-Regular.ttf",
+          ":/bloom/kit/geist-mono/GeistMono-Medium.ttf"}) {
         expectations.expect(QFile::exists(QString::fromLatin1(path)),
                             std::string{"the bundled face is embedded: "} + path);
     }
@@ -53,12 +54,21 @@ void testEveryBundledFaceIsInTheResourcePackAndRegisters(Expectations& expectati
     expectations.expect(status.interfaceRegistered, "the interface family registered");
     expectations.expect(status.monospaceRegistered, "the monospaced family registered");
 
-    for (const char* family : {"Plus Jakarta Sans", "Plus Jakarta Sans Medium",
-                               "Plus Jakarta Sans SemiBold", "Geist Mono", "Geist Mono Medium"}) {
+    // Three DejaVu files, ONE family: the faces are styles of DejaVu Sans, not families of their
+    // own (unlike the previous interface face, whose Medium and SemiBold cuts each registered a
+    // family). So the family list is three names, and the styles are asserted separately below.
+    for (const char* family : {"DejaVu Sans", "Geist Mono", "Geist Mono Medium"}) {
         expectations.expect(status.registeredFamilies.contains(QString::fromLatin1(family)),
                             std::string{"Qt registered the family "} + family);
         expectations.expect(QFontDatabase::families().contains(QString::fromLatin1(family)),
                             std::string{"the font database can see "} + family);
+    }
+    const QStringList interfaceStyles = QFontDatabase::styles(kit::interfaceFontFamily());
+    for (const char* style : {"Book", "Bold", "Oblique"}) {
+        expectations.expect(interfaceStyles.contains(QString::fromLatin1(style)),
+                            std::string{"the interface family offers the style "} + style +
+                                " (got " +
+                                interfaceStyles.join(QStringLiteral(" | ")).toStdString() + ')');
     }
 }
 
@@ -67,12 +77,12 @@ void testRegistrationIsIdempotent(Expectations& expectations) {
     const auto& again = kit::registerBundledFonts();
     expectations.expect(again.registeredFamilies == familiesBefore,
                         "re-registering returns the same result rather than duplicating faces");
-    expectations.expect(again.registeredFamilies.size() == 5,
-                        "exactly the five shipped faces are registered, got " +
+    expectations.expect(again.registeredFamilies.size() == 3,
+                        "the five shipped faces register exactly three distinct families, got " +
                             again.registeredFamilies.join(QStringLiteral(" | ")).toStdString());
     expectations.expect(again.registeredFamilies.count(kit::interfaceFontFamily()) == 1,
-                        "the typographic family Qt reports for the heavier faces is collapsed, not "
-                        "listed once per file");
+                        "the one interface family the three interface faces share is collapsed, "
+                        "not listed once per file");
 }
 
 void testEveryTypeRoleResolvesToItsBundledFace(Expectations& expectations) {
@@ -82,9 +92,9 @@ void testEveryTypeRoleResolvesToItsBundledFace(Expectations& expectations) {
         const char* what;
     };
     for (const auto& [role, expectedFamily, what] :
-         {Case{kit::TypeRole::Ui, "Plus Jakarta Sans", "the UI role"},
-          Case{kit::TypeRole::UiSmall, "Plus Jakarta Sans", "the small UI role"},
-          Case{kit::TypeRole::Title, "Plus Jakarta Sans", "the title role"},
+         {Case{kit::TypeRole::Ui, "DejaVu Sans", "the UI role"},
+          Case{kit::TypeRole::UiSmall, "DejaVu Sans", "the small UI role"},
+          Case{kit::TypeRole::Title, "DejaVu Sans", "the title role"},
           Case{kit::TypeRole::Value, "Geist Mono", "the value role"}}) {
         const QFont font = kit::font(role);
         const QFontInfo info(font);
@@ -101,23 +111,36 @@ void testEveryTypeRoleResolvesToItsBundledFace(Expectations& expectations) {
 }
 
 void testHeavierWeightsResolveToTheirOwnStaticFace(Expectations& expectations) {
-    // Static TTFs register their heavier weights as separate families, so a role that wants 500 or
-    // 600 has to name that face or silently get Regular. These are the assertions that catch the
-    // silent-Regular failure.
+    // Two different upstream cuts, two different rules. The interface faces are styles of one
+    // family, so a role names the family and its own weight picks the face -- the failure to catch
+    // here is a Title that silently renders at Book weight. The monospaced Medium face registers a
+    // family of its own, so the value role must still name that face first or silently get Regular.
     const QStringList uiFamilies = kit::fontFamiliesForRole(kit::TypeRole::Ui);
-    expectations.expect(uiFamilies.first() == QStringLiteral("Plus Jakarta Sans Medium"),
-                        "the 500-weight roles ask for the Medium face first");
+    expectations.expect(uiFamilies.first() == kit::interfaceFontFamily(),
+                        "the interface roles ask for the one interface family first");
     const QStringList titleFamilies = kit::fontFamiliesForRole(kit::TypeRole::Title);
-    expectations.expect(titleFamilies.first() == QStringLiteral("Plus Jakarta Sans SemiBold"),
-                        "the 600-weight role asks for the SemiBold face first");
+    expectations.expect(titleFamilies.first() == kit::interfaceFontFamily(),
+                        "the title role asks for the same interface family, not a weight-named one "
+                        "the font database never registered");
     const QStringList valueFamilies = kit::fontFamiliesForRole(kit::TypeRole::Value);
     expectations.expect(valueFamilies.first() == QStringLiteral("Geist Mono Medium"),
                         "the monospaced value role asks for the Medium face first");
 
-    expectations.expect(QFontInfo(kit::font(kit::TypeRole::Title)).family() !=
-                            QFontInfo(kit::font(kit::TypeRole::Ui)).family(),
-                        "the title role and the UI role resolve to different faces, not one face "
-                        "with a synthesized weight");
+    // QFontInfo::weight() echoes the requested weight here, so it cannot prove which face Qt
+    // rasterized. Advance width can: same family, same size, only the weight differs, and the Bold
+    // face is wider than Book. If the Bold file had failed to register, both requests would land on
+    // Book and these advances would be equal.
+    const QString sample = QStringLiteral("Bloom Handgloves 0123");
+    QFont bookRequest = kit::font(kit::TypeRole::Title);
+    bookRequest.setWeight(QFont::Normal);
+    const qreal boldAdvance =
+        QFontMetricsF(kit::font(kit::TypeRole::Title)).horizontalAdvance(sample);
+    const qreal bookAdvance = QFontMetricsF(bookRequest).horizontalAdvance(sample);
+    expectations.expect(boldAdvance > bookAdvance,
+                        "the 600-weight title role rasterizes the bundled Bold face, not Book "
+                        "(bold advance " +
+                            std::to_string(boldAdvance) + ", book advance " +
+                            std::to_string(bookAdvance) + ')');
 }
 
 void testEveryRoleEndsInAPlatformFallback(Expectations& expectations) {
