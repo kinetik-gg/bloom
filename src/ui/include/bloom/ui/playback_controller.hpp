@@ -10,6 +10,8 @@
 #include <functional>
 #include <optional>
 
+class QWidget;
+
 namespace bloom::core {
 class FrameTimeMapping;
 } // namespace bloom::core
@@ -27,41 +29,10 @@ enum class PlaybackState : std::uint8_t {
     Playing,
 };
 
-// Composes with CompositionSession and CompositionPreviewController without modifying either
-// (docs/architecture/animation-and-time.md, "Session Time And Scrubbing"; this task's frozen
-// design). Advances session time through the SAME CompositionSession::setCurrentTime() mutator a
-// scrub gesture uses, and arms/disarms the preview controller's existing Interactive-cadence gate
-// through its existing beginInteractiveScrub()/notifyScrubEnded() seam
-// (CompositionPreviewController:: handleCurrentTimeChanged() already grants Interactive priority to
-// any current-time change made while that arming flag is set -- verified by reading
-// composition_preview_controller.cpp; no new request kind was added). The
-// one-active/one-newest-pending gate, cadence, and stale-result rejection inside
-// CompositionPreviewController are never touched.
-//
-// TWO clocks, and which one a tick uses depends on one honest question: is the next frame already
-// in the RAM preview cache?
-//
-// NOT CACHED -- the original real-time, drop-frames-never-slow policy, unchanged. Every tick
-// recomputes the target frame from the TOTAL elapsed time since play() captured its start
-// clock/frame, so a slow evaluation causes the next tick to skip straight to whatever frame elapsed
-// time now demands rather than slowing played-back motion down, and the Viewer footer reports what
-// the preview path dropped.
-//
-// CACHED -- the frame-accurate clock (task PERF1, item 4). A cached frame costs a lookup, so there
-// is nothing to drop and skipping one would be a lie about what the composition does: the target
-// therefore advances by exactly ONE frame, and the due moment is still computed from the total
-// elapsed time since the same fixed start, so presentations track the ideal frame grid instead of
-// accumulating a per-tick rounding error. The one consequence worth stating plainly: if the host
-// stalls long enough to owe several frames, the transport plays every one of them -- at one frame
-// per tick until the debt is paid -- rather than skipping to the frame the wall clock now demands.
-//
-// Frame
-// arithmetic is exact and checked throughout: index -> time uses
-// bloom::core::FrameTimeMapping::timeForFrame() (exact rational multiplication, no rounding), and
-// elapsed-time -> frame-offset uses the new FrameTimeMapping::frameOffsetForElapsedNanoseconds()
-// (issue #105; checked multiword arithmetic, floors rather than rounds -- see its own
-// documentation for why playback needs floor semantics where scrub's nearestFrameIndex() rounds to
-// nearest). No floating-point time accumulates across ticks.
+// Exact elapsed-time transport with a frame-by-frame cached path. Cache misses never wait:
+// the preview controller admits Visible work only when its delivery estimate fits the next tick.
+// A cached next frame advances once per tick, preserving the explicit RAM Preview's exact mode.
+// Uncached catch-up skips indices and includes those skips in the run's dropped-frame count.
 class PlaybackController final : public QObject {
     Q_OBJECT
 
@@ -82,7 +53,11 @@ class PlaybackController final : public QObject {
         std::chrono::milliseconds tickInterval = std::chrono::milliseconds{16},
         FrameCachedPredicate frameCached = {}, QObject* parent = nullptr);
 
+    ~PlaybackController() override;
     [[nodiscard]] PlaybackState state() const noexcept;
+    // One action on the window, independent of panel visibility or lifetime. Text entry keeps
+    // Space via Qt's ShortcutOverride mechanism, just like the window's backtick shortcut.
+    void installWindowShortcut(QWidget& window);
 
   public slots:
     // No-op (guarded) if already playing, if no composition is available, or if the composition's

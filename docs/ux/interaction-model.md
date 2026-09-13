@@ -40,6 +40,7 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+O` | Open project |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `Ctrl+Q` | Quit |
+| `Space` | Play/pause immediately from cache in any panel; focused text entry keeps Space |
 | `Ctrl+Shift+Space` | RAM Preview: cache this composition's range, then play it |
 | `Esc` | Cancel the RAM preview being cached (bound only while one is) |
 | `F11` | Full screen |
@@ -52,7 +53,6 @@ hosts reach with a modifier — bare letters belong to tools.
 | --- | --- |
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
-| `Space` (held) + left drag | Pan |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
 | `Esc` | Cancel the drag in flight |
@@ -64,7 +64,6 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+0` | Fit the graph |
 | `Ctrl+1` | Actual size (100%) |
 | `Home` | Fit the graph (alias) |
-| `Space` (held) + left drag | Pan |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
 | `Tab` | Open the Add search at the pointer |
@@ -153,11 +152,11 @@ opinion.
 
 ## Timeline
 
-Transport bindings are unchanged by this document.
+Space uses the shared window transport, even with no Timeline panel open. Middle-drag pans the
+Viewer and Nodes; Space no longer arms a pan gesture.
 
 | Binding | Action |
 | --- | --- |
-| `Space` | Play / pause |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
 

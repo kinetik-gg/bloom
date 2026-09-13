@@ -21,17 +21,17 @@
 namespace bloom::ui {
 
 class CompositionSession;
+class PlaybackController;
 class TaskUiBridge;
 
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
     std::size_t{512} * 1024U * 1024U;
 
-// docs/architecture/animation-and-time.md, "Session Time And Scrubbing": scrub, playback, and
-// direct manipulation submit at Interactive priority; discrete typed time entry, key selection,
-// and document refresh submit at Visible priority (today's only submission priority).
+// Playback misses use Visible priority only when the delivery estimate fits the tick budget.
 enum class PreviewRequestKind : std::uint8_t {
     Interactive,
     Visible,
+    Playback,
 };
 
 struct CompositionPreviewSettings final {
@@ -114,7 +114,9 @@ class CompositionPreviewController final : public QObject {
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
+    [[nodiscard]] PlaybackController& playbackController();
     // The identity this controller WOULD request for `time` in the live composition, which is what
     // a caller asks the cache about when it wants to know whether a frame is already there (the RAM
     // preview controller, and the transport deciding which clock to keep). Only the request
@@ -122,24 +124,8 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] std::optional<PreviewFrameCacheKey>
     cacheKeyForTime(core::RationalTime time) const;
 
-    // --- Dropped-frame accounting (task S5, item 3b) -------------------------------------------
-    //
-    // How many preview frames this controller was ASKED for and never delivered, while counting is
-    // armed. A frame is counted dropped at exactly the three places this controller discards work
-    // it was asked to do:
-    //
-    //   * a newer request supersedes a pending one that had not been submitted yet (both the
-    //     active-task gate and the Interactive trailing-cadence window);
-    //   * a Visible request bypasses the cadence and discards an Interactive request still waiting
-    //     it out;
-    //   * an active task reaches terminal while a newer pending request exists, so its finished
-    //     result is thrown away unpublished.
-    //
-    // This is deliberately NOT a frame rate and makes no real-time claim: it counts requests the
-    // coalescing path dropped, which is the only honest number this layer actually knows. The
-    // transport's own decision to SKIP frame indices (PlaybackController recomputes its target from
-    // total elapsed time) never reaches this controller as a request at all and is therefore not
-    // counted here.
+    // Playback counts skipped frame indices, rejected misses, and requests discarded or late.
+    // Scrubbing outside playback never contributes. The last total survives pause().
     [[nodiscard]] std::uint64_t droppedFrameCount() const noexcept;
     [[nodiscard]] bool isCountingDroppedFrames() const noexcept;
     // Arms counting and RESETS the count to zero (the transport calls this from play()); disarms it
@@ -147,6 +133,12 @@ class CompositionPreviewController final : public QObject {
     // so a surface showing it cannot display a stale figure from a previous playback run.
     void beginDroppedFrameCounting();
     void endDroppedFrameCounting();
+    void noteDroppedFrames(std::uint64_t count);
+    void setPlaybackActive(bool playing);
+    void presentPlaybackFrame(std::chrono::nanoseconds untilNextTick);
+    // Includes admission/queue and UI delivery latency. Only matching live identities contribute.
+    void recordPreparationDuration(const runtime::PreviewRequestIdentity& identity,
+                                   std::chrono::nanoseconds duration);
 
     // --- RAM preview progress (task PERF1, item 3) ---------------------------------------------
     //
@@ -181,6 +173,10 @@ class CompositionPreviewController final : public QObject {
   signals:
     void stateChanged();
     void resolutionChanged();
+    // Synchronous cancellation seam for speculative work, before foreground admission.
+    void foregroundWorkRequested();
+    void playbackActiveChanged(bool playing);
+    void interactiveScrubStarted();
     // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
     // update()).
@@ -195,6 +191,9 @@ class CompositionPreviewController final : public QObject {
         // An overridden request's pixels are the gesture's, not the revision's, and nothing in
         // PreviewRequestIdentity distinguishes the two -- so its frame must never reach the cache.
         bool carriedInteractionOverride = false;
+        std::chrono::steady_clock::time_point submittedAt;
+        std::optional<std::chrono::steady_clock::time_point> playbackDeadline;
+        bool playbackOutstanding = false;
     };
 
     struct PendingRequest final {
@@ -221,6 +220,9 @@ class CompositionPreviewController final : public QObject {
     void handleCurrentTimeChanged();
     void handlePositionInteractionChanged();
     void consumeReadyResult();
+    [[nodiscard]] static FrameFreshness
+    freshnessFor(const PreparedPreviewFrameHandle& frame,
+                 const std::optional<runtime::PreviewRequestIdentity>& desiredIdentity);
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
     // Publishes `frame` as the answer to `desiredIdentity` with no task at all. Used only when the
@@ -252,6 +254,10 @@ class CompositionPreviewController final : public QObject {
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
     double displayedCompositionScale_ = 1.0;
+    std::unique_ptr<PlaybackController> playbackController_;
+    bool playbackActive_ = false;
+    std::chrono::nanoseconds playbackBudget_{};
+    std::optional<std::chrono::nanoseconds> preparationEstimate_;
 };
 
 } // namespace bloom::ui

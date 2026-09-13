@@ -62,7 +62,17 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
 }
 
 PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget) noexcept
-    : byteBudget_(byteBudget) {}
+    : byteBudget_(byteBudget) {
+    notificationTimer_.setSingleShot(true);
+    notificationTimer_.setInterval(50);
+    connect(&notificationTimer_, &QTimer::timeout, this, &PreviewFrameCache::contentsChanged);
+}
+
+void PreviewFrameCache::scheduleNotification() {
+    if (!notificationTimer_.isActive()) {
+        notificationTimer_.start();
+    }
+}
 
 std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept {
     // What RETAINING this frame costs, which is not what holding it costs right now: insertion
@@ -131,6 +141,7 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
                     Entry{.key = key, .frame = std::move(retained), .bytes = bytes});
     residentBytes_ += bytes;
     ++statistics_.insertions;
+    scheduleNotification();
     evictToBudget();
 }
 
@@ -138,12 +149,32 @@ bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
     return std::ranges::any_of(entries_, [&key](const Entry& entry) { return entry.key == key; });
 }
 
+std::vector<core::RationalTime>
+PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
+    std::vector<core::RationalTime> times;
+    auto key = probe;
+    for (const auto& entry : entries_) {
+        key.time = entry.key.time;
+        if (key == entry.key) {
+            times.push_back(entry.key.time);
+        }
+    }
+    return times;
+}
+
 void PreviewFrameCache::setByteBudget(const std::size_t bytes) {
+    if (byteBudget_ == bytes) {
+        return;
+    }
     byteBudget_ = bytes;
     evictToBudget();
+    emit byteBudgetChanged();
 }
 
 void PreviewFrameCache::clear() {
+    if (!entries_.empty()) {
+        scheduleNotification();
+    }
     entries_.clear();
     residentBytes_ = 0;
 }
@@ -168,6 +199,7 @@ void PreviewFrameCache::evictToBudget() {
 }
 
 void PreviewFrameCache::removeAt(const std::size_t index) {
+    scheduleNotification();
     residentBytes_ -= entries_[index].bytes;
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
 }

@@ -125,6 +125,7 @@ class TimelineRuler final : public QWidget {
     // collision test can assert disjointness without re-deriving the density math or rasterizing a
     // QImage to find text.
     [[nodiscard]] std::vector<QRectF> majorTickLabelRectsForTest() const;
+    [[nodiscard]] std::vector<QRectF> cachedFrameRects() const;
 
   protected:
     void paintEvent(QPaintEvent* event) override;
