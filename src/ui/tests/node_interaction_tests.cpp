@@ -1,11 +1,13 @@
 #include "node_interaction_test_support.hpp"
 #include <QImage>
+#include <QLabel>
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <string>
 
 namespace bloom::ui::test {
 namespace {
@@ -169,6 +171,128 @@ void testLayoutSelectionAndSockets() {
         }
     }
 }
+// Task NODES-1: the header menus (deliverable 1), grid snapping (deliverable 3), link style
+// (deliverable 2), and the footer (deliverable 4), all exercised on one fixture -- a Solid source
+// linked into a Layer Output, which is enough for a "select linked upstream/downstream" walk and
+// for a real edge to repaint under each link style.
+void testHeaderMenusGridSnappingLinkStyleAndFooter() {
+    Fixture f;
+    const auto a = f.add(document::kSolidSourceNodeType, {100, 100});
+    const auto b = f.add(document::kLayerOutputNodeType, {350, 100});
+    expect(f.edit<commands::ConnectPorts>(document::OutputPortRef{a, "image"},
+                                          document::NodeInputRef{b, "image"})
+               .changed(),
+           "fixture link for the grid snap/link style/select-linked walk");
+
+    // --- Deliverable 3: grid snapping, off by default, snaps on when enabled, Alt bypasses. ---
+    expect(!f.scene()->gridSnapEnabled(), "grid snapping is disabled by default");
+    expect(f.scene()->gridSize() == 16.0, "the default grid size is 16 design px");
+    f.scene()->setGridSnapEnabled(true);
+    f.click({120, 115});
+    f.press({120, 115});
+    f.move({131, 122}); // unsnapped target would be (111, 107) -- not on the 16px lattice
+    expect(f.card(a)->pos() == QPointF(112, 112),
+           "an in-flight drag snaps to the nearest 16px lattice point while enabled");
+    f.release({131, 122});
+    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{112, 112},
+           "the committed MoveNodes position is the snapped one, not the raw drag delta");
+    expect(f.session.undo(), "the snapped move undoes in one step");
+
+    f.click({120, 115});
+    f.press({120, 115});
+    f.move({131, 122}, Qt::LeftButton, Qt::AltModifier);
+    expect(f.card(a)->pos() == QPointF(111, 107), "Alt bypasses snapping for this drag only");
+    f.release({131, 122}, Qt::AltModifier);
+    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{111, 107},
+           "and the committed position is the exact, unsnapped one");
+    expect(f.session.undo(), "the Alt-bypassed move undoes in one step");
+    f.scene()->setGridSnapEnabled(false);
+
+    // --- Deliverable 2: link style. Hit-testing follows the path since NodeEdgeItem::shape()
+    // strokes path() itself, so this only has to pin the geometry each style produces. ---
+    QGraphicsPathItem* edge = nullptr;
+    for (auto* item : f.scene()->items())
+        if (item->data(kNodeItemKindRole).toString() == QStringLiteral("edge"))
+            if (auto* path = dynamic_cast<QGraphicsPathItem*>(item)) {
+                edge = path;
+                break;
+            }
+    expect(edge != nullptr, "the fixture link projects an edge item");
+    if (edge != nullptr) {
+        expect(edge->path().elementAt(1).type == QPainterPath::CurveToElement,
+               "Spline, the default, is the original cubic bezier");
+        f.scene()->setLinkStyle(LinkStyle::Straight);
+        expect(edge->path().elementCount() == 2 &&
+                   edge->path().elementAt(1).type == QPainterPath::LineToElement,
+               "Straight repaints the SAME edge item as a direct line, in place");
+        f.scene()->setLinkStyle(LinkStyle::Angled);
+        expect(edge->path().elementCount() == 4 &&
+                   edge->path().elementAt(1).type == QPainterPath::LineToElement &&
+                   edge->path().elementAt(1).x == edge->path().elementAt(2).x,
+               "Angled repaints it as a horizontal-vertical-horizontal path");
+        f.scene()->setLinkStyle(LinkStyle::Spline);
+    }
+
+    // --- Deliverable 1: the header menus, built once and reachable even without an EditorArea. ---
+    for (const char* which : {"add", "view", "select", "node"})
+        expect(f.editor.headerMenuForTest(which) != nullptr,
+               (std::string("the header exposes the ") + which + " menu").c_str());
+    auto* viewMenu = f.editor.headerMenuForTest("view");
+    for (const char* name : {"nodeFitAction", "nodeFrameSelectedAction", "nodeActualSizeAction",
+                             "nodeZoomInAction", "nodeZoomOutAction", "nodeGridSnapAction"})
+        expect(viewMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
+               (std::string("View offers ") + name).c_str());
+    auto* linkStyleMenu = viewMenu->findChild<QMenu*>(QStringLiteral("nodeLinkStyleMenu"));
+    expect(linkStyleMenu != nullptr, "View offers a Link Style submenu");
+    if (linkStyleMenu != nullptr)
+        for (const char* name : {"nodeLinkStyleSplineAction", "nodeLinkStyleStraightAction",
+                                 "nodeLinkStyleAngledAction"})
+            expect(linkStyleMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
+                   (std::string("Link Style offers ") + name).c_str());
+    auto* selectMenu = f.editor.headerMenuForTest("select");
+    for (const char* name : {"nodeSelectAllAction", "nodeSelectNoneAction", "nodeSelectInvertAction",
+                             "nodeSelectLinkedUpstreamAction", "nodeSelectLinkedDownstreamAction"})
+        expect(selectMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
+               (std::string("Select offers ") + name).c_str());
+    auto* nodeMenu = f.editor.headerMenuForTest("node");
+    for (const char* name : {"nodeGroupAction", "nodeUngroupAction", "nodeMuteAction",
+                             "nodeCollapseAction", "nodeRenameAction", "nodeDissolveAction",
+                             "nodeDeleteAction"})
+        expect(nodeMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
+               (std::string("Node offers ") + name).c_str());
+    auto* addMenu = f.editor.headerMenuForTest("add");
+    expect(addMenu->findChild<QAction*>(QStringLiteral("nodeAddSolidLayerAction")) != nullptr,
+           "the header's Add menu is the same categorized submenu the canvas offers");
+
+    // Select None/Invert/Linked Upstream actually do what they say.
+    f.session.clearSelection();
+    f.click({370, 115}); // card b, the Layer Output
+    selectMenu->findChild<QAction*>(QStringLiteral("nodeSelectLinkedUpstreamAction"))->trigger();
+    expect(f.session.selectedNodes().contains(a) && f.session.selectedNodes().contains(b),
+           "Linked Upstream extends the selection to the node feeding it");
+    selectMenu->findChild<QAction*>(QStringLiteral("nodeSelectNoneAction"))->trigger();
+    expect(f.session.selectedNodes().empty(), "Select None clears the selection");
+    selectMenu->findChild<QAction*>(QStringLiteral("nodeSelectInvertAction"))->trigger();
+    expect(f.session.selectedNodes().size() == f.session.composition()->graph().nodes().size(),
+           "Invert from nothing selects everything");
+
+    // --- Deliverable 4: the footer. ---
+    auto* footer = f.editor.footerWidgetForTest();
+    expect(footer != nullptr, "the footer widget exists");
+    if (footer != nullptr) {
+        expect(footer->findChild<QWidget*>(QStringLiteral("nodeZoomDropdown")) != nullptr &&
+                   footer->findChild<QWidget*>(QStringLiteral("nodeSnapSwitch")) != nullptr &&
+                   footer->findChild<QWidget*>(QStringLiteral("nodeLinkStyleDropdown")) != nullptr,
+               "the footer carries the zoom dropdown, snap switch, and link style dropdown");
+        auto* readout = footer->findChild<QLabel*>(QStringLiteral("nodeSelectionReadout"));
+        expect(readout != nullptr, "the footer carries the selection readout");
+        if (readout != nullptr) {
+            f.session.selectNodes({a, b}, a);
+            expect(readout->text() == QStringLiteral("2 nodes"),
+                   "the readout reflects the live selection count");
+        }
+    }
+}
 } // namespace bloom::ui::test
 
 int main(int argc, char** argv) {
@@ -177,6 +301,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testLayoutSelectionAndSockets();
         bloom::ui::test::testConnectionsCutAndInsertion();
         bloom::ui::test::testSearchKeyboardAndMenus();
+        bloom::ui::test::testHeaderMenusGridSnappingLinkStyleAndFooter();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
