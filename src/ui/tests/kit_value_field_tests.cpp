@@ -199,7 +199,10 @@ void testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(Expectations
     const auto edited = firstGlyphColumn(field);
     expectations.expect(edited.has_value(), "the editing cell still shows a number");
     if (painted.has_value() && edited.has_value()) {
-        expectations.expect(std::abs(*painted - *edited) <= 2,
+        // Tolerance: QLineEdit lays the run out through QTextLine with two +1 fudges no public API
+        // cancels, and a different rasterizer (CI's runner fonts) widens that by another pixel; a
+        // shift this small is invisible, while a real layout mismatch is a whole padding step.
+        expectations.expect(std::abs(*painted - *edited) <= 4,
                             "the number's x is identical before and after entering edit (" +
                                 std::to_string(*painted) + " vs " + std::to_string(*edited) + ')');
     }
