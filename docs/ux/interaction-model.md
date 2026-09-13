@@ -57,6 +57,25 @@ hosts reach with a modifier — bare letters belong to tools.
 | Wheel | Zoom about the pointer |
 | `Esc` | Cancel the drag in flight |
 
+## Assets
+
+Assets is a project-level composition browser. It has no modifier-free keyboard bindings: text
+entry stays in the search or inline rename field, while persistent commands remain visible in the
+panel menus or the composition context menu.
+
+| Gesture or control | Action |
+| --- | --- |
+| Search field text | Filters the tree by composition name, case-insensitively |
+| View > Expand All / Collapse All | Expands or collapses the asset tree |
+| Add > New Composition… | Opens the name, size, frame-rate, and duration dialog, then adds one composition through the command path |
+| Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
+| Select > All / None | Selects all visible rows or clears the selection |
+| Double-click a composition | Switches the shared `CompositionSession` to that composition |
+| Right-click a composition | Open, Rename (inline), Duplicate, or Delete |
+| Footer: New Composition | Opens the same new-composition dialog |
+| Footer: New Folder / Import | Disabled; Import tooltip: `Image and sequence import arrives with the media pipeline` |
+| Footer: Delete | Deletes the active composition through one undoable command; the last composition is protected |
+
 ## Nodes
 
 | Binding | Action |

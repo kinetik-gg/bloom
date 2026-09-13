@@ -228,6 +228,10 @@ bloom_enable_warnings(bloom_playback_controller_test)
 bloom_enable_warnings(bloom_timeline_editor_style_test)
 bloom_enable_warnings(bloom_node_editor_test)
 
+add_executable(bloom_assets_editor_test assets_editor_tests.cpp)
+target_link_libraries(bloom_assets_editor_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_assets_editor_test)
+
 include(BloomTesting)
 
 bloom_add_test(
@@ -554,6 +558,14 @@ bloom_add_test(
     NAME bloom.ui.node_editor
     COMMAND bloom_node_editor_test
     LABELS ui integration kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.assets-editor
+    COMMAND bloom_assets_editor_test
+    LABELS ui integration assets
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )

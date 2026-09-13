@@ -226,7 +226,7 @@ target_sources(
         jobs_editor.cpp
         licenses_window.cpp
         main_window.cpp
-        media_editor.cpp
+        assets_editor.cpp
         node_editor.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
@@ -266,7 +266,7 @@ target_sources(
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/licenses_window.hpp
             include/bloom/ui/main_window.hpp
-            include/bloom/ui/media_editor.hpp
+            include/bloom/ui/assets_editor.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preview_frame_cache.hpp

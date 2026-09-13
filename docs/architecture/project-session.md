@@ -53,6 +53,11 @@ Composition, preview, editor, scripting, and future headless contexts observe th
 commands through it. They never own the document, command stack, file path, round-trip state, or
 project tasks. A panel replacement neither cancels nor joins project work.
 
+The Assets editor follows this same boundary: it projects the installed snapshot's compositions,
+uses the shared session composition context for Open, and submits composition mutations through the
+session's command stack. Its tree, search, menus, and footer are UI/session presentation state;
+they are not a second asset or project model.
+
 ## Identity And Generations
 
 The following identities are deliberately separate:

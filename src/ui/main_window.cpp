@@ -521,8 +521,8 @@ void MainWindow::resetCompositingLayout() {
     auto* viewer = workspaceHost_->activeArea();
     (void)workspaceHost_->splitArea(*viewer, Qt::Vertical, "bloom.timeline", 0.32);
     auto* nodes = workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.nodes", 0.50);
-    auto* media = workspaceHost_->splitArea(*nodes, Qt::Horizontal, "bloom.media", 0.28);
-    (void)workspaceHost_->splitArea(*media, Qt::Vertical, "bloom.properties", 0.65);
+    auto* assets = workspaceHost_->splitArea(*nodes, Qt::Horizontal, "bloom.assets", 0.28);
+    (void)workspaceHost_->splitArea(*assets, Qt::Vertical, "bloom.properties", 0.65);
     workspaceHost_->setActiveArea(viewer);
     workspaceLayoutWritable_ = true;
 }
