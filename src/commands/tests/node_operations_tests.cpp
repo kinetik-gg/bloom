@@ -106,6 +106,21 @@ NodeId addSource(Fixture& fixture) {
     return *id;
 }
 
+void testLayerRanges(TestContext& test) {
+    Fixture fixture;
+    const auto in = core::RationalTime::fromInteger(1), out = core::RationalTime::fromInteger(4);
+    (void)exercise<SetLayerRange>(test, fixture, kFirstLayerId, in, out);
+    refuse<SetLayerRange>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId, out, in);
+    refuse<SplitLayerAtTime>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId, in);
+    const auto split = exercise<SplitLayerAtTime>(test, fixture, kFirstLayerId, core::RationalTime::fromInteger(2));
+    const auto copy = split.outputId<LayerId>("layer");
+    const auto snapshot = fixture.document.snapshot();
+    const auto& graph = snapshot.project().findComposition(kCompositionId)->graph();
+    test.expect(copy && graph.findLayer(*copy)->inPoint == core::RationalTime::fromInteger(2) &&
+        graph.findLayer(*copy)->outPoint == out && graph.findLayer(kFirstLayerId)->outPoint == core::RationalTime::fromInteger(2),
+        "split keeps adjacent half-open ranges and exact undo/redo IDs");
+}
+
 void testValidityQuery(TestContext& test) {
     Fixture fixture;
     const auto before = fixture.document.snapshot();
@@ -721,6 +736,7 @@ void testNodeGroups(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testWiringAndRename(test);

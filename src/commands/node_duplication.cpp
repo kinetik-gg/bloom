@@ -115,8 +115,11 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         const auto layerId = draft.ids().allocateLayer();
         if (!layerId)
             return detail::exhaustedIds();
-        if (!graph.addLayerOutput({nodeIds.at(boundary.nodeId), *layerId, boundary.name + " copy",
-                                   boundary.outputPort}))
+        auto copy = boundary;
+        copy.nodeId = nodeIds.at(boundary.nodeId);
+        copy.layerId = *layerId;
+        copy.name += " copy";
+        if (!graph.addLayerOutput(std::move(copy)))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Duplicated layer name or boundary is invalid");
         layerIds.emplace(boundary.layerId, *layerId);

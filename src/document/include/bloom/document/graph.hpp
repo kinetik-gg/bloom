@@ -108,6 +108,13 @@ struct LayerOutputBoundary {
     std::string name;
     std::string outputPort;
 
+    core::RationalTime inPoint{};
+    // Zero means the composition duration, including for boundaries created before insertion.
+    core::RationalTime outPoint{};
+    [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
+        return outPoint == core::RationalTime{} ? duration : outPoint;
+    }
+
     friend bool operator==(const LayerOutputBoundary&, const LayerOutputBoundary&) = default;
 };
 
@@ -144,6 +151,8 @@ class CanonicalGraph final {
     [[nodiscard]] std::optional<SocketValueKind>
     rerouteKind(NodeId id, const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
+    [[nodiscard]] LayerOutputBoundary* findLayer(LayerId id) noexcept;
+    [[nodiscard]] const LayerOutputBoundary* findLayer(LayerId id) const noexcept;
     [[nodiscard]] bool eraseNode(NodeId id);
     [[nodiscard]] bool eraseEdge(EdgeId id);
     [[nodiscard]] bool renameLayer(LayerId id, std::string name);

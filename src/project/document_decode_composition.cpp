@@ -1171,8 +1171,11 @@ template <typename Keyframe, typename DecodeOne>
 // until this closed shape's own match returns, like every other collection element's own shape.
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
-    static constexpr std::array<std::string_view, 4> keys{"nodeId", "layerId", "name",
-                                                          "outputPort"};
+    std::vector<std::string_view> keys{"nodeId", "layerId", "name", "outputPort"};
+    if (state.documentMinor >= 5) {
+        for (const auto* key : {"inPoint", "outPoint"})
+            if (node.findMember(key)) keys.push_back(key);
+    }
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1204,6 +1207,13 @@ template <typename Keyframe, typename DecodeOne>
     out.layerId = layerId;
     out.name = std::string(nameText);
     out.outputPort = std::string(outputPortText);
+    for (const auto* key : {"inPoint", "outPoint"}) {
+        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+            const AttachmentScope rangeScope(state, key);
+            auto& time = std::string_view(key) == "inPoint" ? out.inPoint : out.outPoint;
+            if (!decodeRationalTimeValue(*value, state, joinPath(path, key), time)) return false;
+        }
+    }
     return true;
 }
 

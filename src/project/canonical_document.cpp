@@ -1166,6 +1166,11 @@ emitInterpolation(EmitState& state,
             !state.ok(writer.stringValue(boundary.outputPort))) {
             return false;
         }
+        for (const auto& [key, time] : {std::pair{"inPoint", boundary.inPoint}, std::pair{"outPoint", boundary.outPoint}}) {
+            if (time == bloom::core::RationalTime{}) continue;
+            const PathScope timeScope(state, key);
+            if (!state.ok(writer.memberName(key)) || !emitRational(state, time.numerator(), time.denominator())) return false;
+        }
         if (!emitRetainedTrailing(state)) {
             return false;
         }

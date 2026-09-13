@@ -936,6 +936,23 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
                         "each stack entry contributes its own layer's blend mode");
 }
 
+void testLayerRangeIsHalfOpen(Expectations& expectations) {
+    auto definition = oneSolidPlan()->copyDefinition();
+    auto& layer = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
+    layer.inPoint = core::RationalTime::fromInteger(1);
+    layer.outPoint = core::RationalTime::fromInteger(2);
+    const auto plan = publishPlan(std::move(definition));
+    const runtime::CpuCompositionEvaluator evaluator;
+    for (const auto second : {0, 1, 2}) {
+        auto request = requestFor(*plan);
+        request.time = core::RationalTime::fromInteger(second);
+        const auto result = evaluator.evaluate(plan, request, {});
+        expectations.expect(result.frame() && std::ranges::all_of(result.frame()->processImage().pixels(),
+            [second](const auto& value) { return second == 1 ? value != render::Rgba32f::transparent() : value == render::Rgba32f::transparent(); }),
+            "one reused plan omits a layer before in and at out, and includes it at in");
+    }
+}
+
 void testEmptyStackIsTransparent(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto plan = emptyStackPlan();
@@ -1722,6 +1739,7 @@ int main() {
         testClippingAndOpacityEndpoints(expectations);
         testStackOrderingOpacityAndDisplay(expectations);
         testStackCompositesEachLayerUnderItsOwnBlendMode(expectations);
+        testLayerRangeIsHalfOpen(expectations);
         testEmptyStackIsTransparent(expectations);
         testProxyAndPeakBudget(expectations);
         testIdentityAndPreparedHandoff(expectations);

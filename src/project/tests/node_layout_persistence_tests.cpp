@@ -10,6 +10,7 @@
 #include <bloom/project/zip_container.hpp>
 
 #include <array>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -56,10 +57,16 @@ void migrationAndReopen() {
     const auto& composition = snapshot.project().compositions().front();
     expect(composition.nodeLayout() == document::defaultNodeLayout(composition.graph().nodes()),
            "legacy migration assigns all default records");
-    expect(opened.schemaMinor == 4 && !opened.roundTrip,
+    expect(opened.schemaMinor == 5 && !opened.roundTrip,
            "migration produces current editable schema");
     auto draft = opened.document->draft(snapshot);
-    auto& layout = draft.project().findComposition(composition.id())->nodeLayout();
+    auto* editing = draft.project().findComposition(composition.id());
+    for (const auto& boundary : composition.graph().layerOutputs()) {
+        auto* layer = editing->graph().findLayer(boundary.layerId);
+        layer->inPoint = *core::RationalTime::create(1, 24);
+        layer->outPoint = core::RationalTime::fromInteger(1);
+    }
+    auto& layout = editing->nodeLayout();
     const auto first = composition.graph().nodes().front().id;
     layout[first] = {{-123.5, 89.25}, 276.5, true, true};
     layout[document::NodeId::fromRaw(9999)] = {{45, 67}, 120, false, false};
@@ -83,6 +90,8 @@ void migrationAndReopen() {
     expect(reopenedSnapshot.project().compositions().front().nodeLayout() ==
                snapshot.project().compositions().front().nodeLayout(),
            "all layout fields and unknown-node records round-trip exactly");
+    expect(std::ranges::equal(reopenedSnapshot.project().compositions().front().graph().layerOutputs(),
+        snapshot.project().compositions().front().graph().layerOutputs()), "layer ranges survive verified archive reopen");
     expect(reopenedSnapshot.ids().highWater() == snapshot.ids().highWater(),
            "layout references never allocate semantic IDs");
 }
@@ -103,11 +112,11 @@ void futureLayoutAttachments() {
         throw std::logic_error("layout future entries");
     const auto bytes = entries.document()->documentBytes();
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto rootMinor = text.find("\"minor\": 4");
+    const auto rootMinor = text.find("\"minor\": 5");
     const auto layoutStart = text.find("\"nodeLayout\"");
     if (rootMinor == std::string::npos || layoutStart == std::string::npos)
         throw std::logic_error("layout future anchors");
-    text.replace(rootMinor, std::string_view("\"minor\": 4").size(), "\"minor\": 5");
+    text.replace(rootMinor, std::string_view("\"minor\": 5").size(), "\"minor\": 6");
     const auto y = text.find("\"y\": 32.0", layoutStart);
     if (y == std::string::npos)
         throw std::logic_error("layout position anchor");
@@ -116,7 +125,7 @@ void futureLayoutAttachments() {
     if (muted == std::string::npos)
         throw std::logic_error("layout record anchor");
     text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 5}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 6}};
     const auto size = canonicalManifestSize(manifest);
     if (!size)
         throw std::logic_error("future manifest size");
@@ -132,7 +141,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 5,
+    expect(opened.roundTrip && opened.schemaMinor == 6,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -142,7 +151,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 5},
+                                                     .schemaMinor = 6},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)

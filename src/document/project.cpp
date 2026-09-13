@@ -51,6 +51,11 @@ ValidationResult Composition::validate() const {
                    "Composition duration must be greater than zero");
     }
 
+    for (const auto& layer : graph_.layerOutputs()) {
+        if (layer.inPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_) ||
+            layer.endPoint(duration_) > duration_)
+            result.add(ValidationCode::InvalidValue, "graph.layerOutputs.range", "Invalid layer range");
+    }
     result.append("parameters", parameters_.validate());
     result.append("animationCurves", animationCurves_.validate());
     result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));

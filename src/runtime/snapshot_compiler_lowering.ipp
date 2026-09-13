@@ -406,7 +406,9 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         *rotation,
                                         *opacity,
                                         blendModeBinding->parameterId,
-                                        *blendMode};
+                                        *blendMode,
+                                        boundary->second->inPoint,
+                                        boundary->second->endPoint(composition_->duration())};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
