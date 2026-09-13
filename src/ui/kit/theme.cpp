@@ -232,6 +232,28 @@ QToolButton#maximizeAreaButton {
 QToolButton#maximizeAreaButton:hover {
     border-color: {color.BorderHover};
 }
+/* Task NODES-1: the node editor's header-hosted menu buttons (Add/View/Select/Node, and the "..."
+   overflow button that replaces all four once the header gets too narrow -- node_editor_menus.cpp's
+   NodeHeaderMenuBar) read as bare text labels, the same flat/transparent-until-hovered treatment
+   QMenuBar::item already gets above, rather than the bordered ControlSurface square every OTHER
+   header button (maximizeAreaButton) uses -- there are up to five of them in a row here, and that
+   many bordered boxes would read as a toolbar, not a menu strip. Selected via a dynamic property
+   rather than an objectName because every instance is built the same way, from the same class,
+   the same way QMenuBar::item is a type selector rather than one objectName per bar. */
+QToolButton[headerMenuButton="true"] {
+    background: transparent;
+    border: none;
+    border-radius: {radius.Small}px;
+    padding: {space.XXS}px {space.MenuItemX}px;
+    color: {color.Foreground};
+}
+QToolButton[headerMenuButton="true"]::menu-indicator {
+    image: none;
+    width: 0px;
+}
+QToolButton[headerMenuButton="true"]:hover {
+    background: {color.Accent};
+}
 QWidget#readOnlyPlaceholderPage {
     background: {color.Background};
 }

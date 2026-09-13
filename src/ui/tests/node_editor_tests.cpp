@@ -33,6 +33,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QString>
+#include <QToolButton>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -829,6 +830,76 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
                         "a node with no parameter bindings stays clean -- no placeholder rows");
 }
 
+// Task NODES-1, deliverable 1: "never wrap" -- a narrow header folds the four top-level menu
+// buttons into a single "..." overflow button holding the same menus as submenus, rather than
+// spilling onto a second row (the header's height is fixed).
+void testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Node Header Menu Bar Test"));
+    auto* bar = fixture.editor.takeHeaderMenuWidget();
+    expectations.expect(bar != nullptr, "the node editor offers a header menu widget");
+    if (bar == nullptr) {
+        return;
+    }
+    expectations.expect(fixture.editor.takeHeaderMenuWidget() == nullptr,
+                        "a second take returns nullptr, same idempotent contract as the footer");
+    bar->show();
+
+    bar->resize(2000, bar->sizeHint().height());
+    QCoreApplication::processEvents();
+    auto* overflow = bar->findChild<QToolButton*>(QStringLiteral("nodeHeaderOverflowButton"));
+    expectations.expect(overflow != nullptr, "the overflow button exists even while unused");
+    const auto topLevelButtons = [&] {
+        QList<QToolButton*> buttons;
+        for (auto* button : bar->findChildren<QToolButton*>())
+            if (button != overflow)
+                buttons.push_back(button);
+        return buttons;
+    }();
+    expectations.expect(topLevelButtons.size() == 4,
+                        "Add, View, Select, and Node each get their own header button");
+    if (overflow != nullptr) {
+        expectations.expect(!overflow->isVisible(),
+                            "a wide header shows the four menu buttons, not the overflow button");
+    }
+    for (auto* button : topLevelButtons)
+        expectations.expect(button->isVisible(), "every menu button shows at a wide header width");
+
+    bar->resize(40, bar->sizeHint().height());
+    QCoreApplication::processEvents();
+    if (overflow != nullptr) {
+        expectations.expect(overflow->isVisible(),
+                            "a header too narrow for four buttons shows the overflow button "
+                            "instead of wrapping to a second row");
+        auto* overflowMenu = overflow->menu();
+        expectations.expect(overflowMenu != nullptr && overflowMenu->objectName() ==
+                                                           QStringLiteral("nodeHeaderOverflowMenu"),
+                            "the overflow button opens nodeHeaderOverflowMenu");
+        if (overflowMenu != nullptr) {
+            // addMenu(QMenu*) lists an EXISTING menu as a submenu action without reparenting it
+            // (only addMenu(QString) does that), so the four menus stay findChild()-reachable from
+            // `bar` itself either way -- what is worth pinning here is that the overflow menu's own
+            // action LIST actually references the same four QMenu instances, not copies.
+            QList<QMenu*> submenus;
+            for (auto* action : overflowMenu->actions())
+                if (action->menu() != nullptr)
+                    submenus.push_back(action->menu());
+            expectations.expect(submenus.size() == 4,
+                                "the overflow menu lists all four top-level menus as submenus");
+            for (const char* name :
+                 {"nodeAddMenu", "nodeViewMenu", "nodeSelectMenu", "nodeNodeMenu"}) {
+                auto* menu = bar->findChild<QMenu*>(QString::fromLatin1(name));
+                expectations.expect(
+                    menu != nullptr && submenus.contains(menu),
+                    (std::string("the overflow menu still offers ") + name).c_str());
+            }
+        }
+    }
+    for (auto* button : topLevelButtons)
+        expectations.expect(
+            !button->isVisible(),
+            "the individual menu buttons hide once collapsed -- never a second row");
+}
+
 } // namespace
 
 namespace {
@@ -850,6 +921,7 @@ int runAll() {
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
     testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
+    testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
 
