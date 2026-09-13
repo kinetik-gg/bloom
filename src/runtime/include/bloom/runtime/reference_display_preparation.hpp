@@ -165,8 +165,8 @@ class CpuReferenceDisplayPreparer final {
     // `rowBands` spreads the display mapping's per-row kernel across the scheduler's row-band pool,
     // exactly as CpuCompositionEvaluator::evaluate() does with the evaluation kernels, and for the
     // same reason: at composition resolution this single pass is a fifth of a preview frame's cost.
-    // Null maps every band on the calling thread, in band order. The published buffer is the same to
-    // the bit either way, so the display identity does not mention the pool.
+    // Null maps every band on the calling thread, in band order. The published buffer is the same
+    // to the bit either way, so the display identity does not mention the pool.
     [[nodiscard]] ReferenceDisplayPreparationResult
     prepare(std::shared_ptr<const ProcessFrame> processFrame,
             const ReferenceDisplayPreparationRequest& request,

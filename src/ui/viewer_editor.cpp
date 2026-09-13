@@ -207,9 +207,7 @@ QString exactFrameAndTimecodeText(const CompositionSession& session) {
     if (!progress.has_value()) {
         return {};
     }
-    return ViewerEditor::tr("Caching %1/%2")
-        .arg(progress->cachedFrames)
-        .arg(progress->totalFrames);
+    return ViewerEditor::tr("Caching %1/%2").arg(progress->cachedFrames).arg(progress->totalFrames);
 }
 
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {

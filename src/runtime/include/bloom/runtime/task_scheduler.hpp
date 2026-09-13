@@ -396,9 +396,9 @@ class TaskScheduler final {
     [[nodiscard]] GpuExecutorAttachment attachGpuExecutor(GpuServiceGeneration generation,
                                                           GpuTaskWakeSink wakeSink);
 
-    // The row-band executor every TaskContext this scheduler makes hands to its task body. Null when
-    // TaskSchedulerConfig::rowBandWorkerCount was kSerialRowBandWorkers. Exposed for a caller that
-    // evaluates outside a task (a test, or a synchronous tool) and wants the same bounded
+    // The row-band executor every TaskContext this scheduler makes hands to its task body. Null
+    // when TaskSchedulerConfig::rowBandWorkerCount was kSerialRowBandWorkers. Exposed for a caller
+    // that evaluates outside a task (a test, or a synchronous tool) and wants the same bounded
     // parallelism a task would get.
     [[nodiscard]] CpuRowBandExecutor* rowBandExecutor() const noexcept;
 

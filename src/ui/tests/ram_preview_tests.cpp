@@ -1,9 +1,9 @@
 // Task PERF1: the RAM preview cache, the compiled-plan cache, and the RAM Preview command.
 //
-// Everything here is driven offscreen with a manually advanced clock and a preparation function that
-// counts what it was asked to render -- never by waiting on real wall time and never by measuring
-// speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at all: a cache
-// that works shows up as an invocation count that stops moving.
+// Everything here is driven offscreen with a manually advanced clock and a preparation function
+// that counts what it was asked to render -- never by waiting on real wall time and never by
+// measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
+// all: a cache that works shows up as an invocation count that stops moving.
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
@@ -107,9 +107,9 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
     return *value;
 }
 
-// 25 fps, so one frame is exactly 40,000,000 ns and the manual clock below lands on frame boundaries
-// exactly (the same reason playback_controller_tests.cpp chose it), and a small extent so twenty-four
-// frames of real evaluation cost microseconds rather than seconds.
+// 25 fps, so one frame is exactly 40,000,000 ns and the manual clock below lands on frame
+// boundaries exactly (the same reason playback_controller_tests.cpp chose it), and a small extent
+// so twenty-four frames of real evaluation cost microseconds rather than seconds.
 [[nodiscard]] document::CompositionFormat testFormat() {
     const auto rate = document::FrameRate::create(25, 1);
     if (!rate.has_value()) {
@@ -172,7 +172,7 @@ struct PipelineFixture final {
         }
         definitions.freeze();
         pipeline = ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
-                                                     qualifiedProcessorProvider, planCache);
+                                                      qualifiedProcessorProvider, planCache);
     }
 };
 
@@ -186,16 +186,17 @@ struct SessionFixture final {
     PipelineFixture pipelineFixture;
     ui::PreviewFrameCacheHandle frameCache = std::make_shared<ui::PreviewFrameCache>();
     std::atomic<int> preparationCount = 0;
-    // When set, the preparation whose ordinal (counting from zero) equals this one blocks in `gate`.
+    // When set, the preparation whose ordinal (counting from zero) equals this one blocks in
+    // `gate`.
     std::optional<int> gateAtCall;
     WorkerGate gate;
-    // Declared last, and constructed in the initializer list, so the counting preparation function it
-    // holds can capture `this` after every member it reads is already alive.
+    // Declared last, and constructed in the initializer list, so the counting preparation function
+    // it holds can capture `this` after every member it reads is already alive.
     ui::CompositionPreviewController controller;
 
-    // The one preparation function BOTH the preview controller and the RAM preview controller use, so
-    // every frame either of them renders is counted in the same number -- which is what lets a test
-    // say "this evaluated nothing" and mean it.
+    // The one preparation function BOTH the preview controller and the RAM preview controller use,
+    // so every frame either of them renders is counted in the same number -- which is what lets a
+    // test say "this evaluated nothing" and mean it.
     [[nodiscard]] ui::PreviewPreparationFunction countingPipeline() {
         return [this](const document::Snapshot& snapshot,
                       const runtime::PreviewRequestIdentity& desiredIdentity,
@@ -252,7 +253,6 @@ void finishFixture(SessionFixture& fixture, Expectations& expectations) {
     return session.setCurrentTime(time(0));
 }
 
-
 struct ManualClock final {
     std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 
@@ -275,25 +275,22 @@ void testCompiledPlanCacheCompilesOncePerRevision(Expectations& expectations) {
     const runtime::SnapshotCompiler compiler(definitions);
     ui::CompiledPlanCache cache;
 
-    const auto first = cache.compile(compiler, {.snapshot = session.snapshot(),
-                                                .compositionId = compositionId},
-                                     {});
-    const auto second = cache.compile(compiler, {.snapshot = session.snapshot(),
-                                                 .compositionId = compositionId},
-                                      {});
+    const auto first = cache.compile(
+        compiler, {.snapshot = session.snapshot(), .compositionId = compositionId}, {});
+    const auto second = cache.compile(
+        compiler, {.snapshot = session.snapshot(), .compositionId = compositionId}, {});
     expectations.expect(first.status == runtime::SnapshotCompileStatus::Compiled &&
                             first.plan != nullptr && second.plan == first.plan,
                         "two requests at one revision share one compiled plan object");
-    expectations.expect(cache.statistics() == ui::CompiledPlanCache::Statistics{.compiles = 1,
-                                                                               .hits = 1},
+    expectations.expect(cache.statistics() ==
+                            ui::CompiledPlanCache::Statistics{.compiles = 1, .hits = 1},
                         "the second request at one revision compiles nothing");
 
-    expectations.expect(session.addSolidLayer(QStringLiteral("Solid"),
-                                             core::Color4d{0.5, 0.5, 0.5, 1.0}),
-                        "a command advances the document revision");
-    const auto third = cache.compile(compiler, {.snapshot = session.snapshot(),
-                                                .compositionId = compositionId},
-                                     {});
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.5, 0.5, 0.5, 1.0}),
+        "a command advances the document revision");
+    const auto third = cache.compile(
+        compiler, {.snapshot = session.snapshot(), .compositionId = compositionId}, {});
     expectations.expect(third.plan != nullptr && third.plan != first.plan &&
                             cache.statistics().compiles == 2,
                         "a new revision recompiles, and produces a different plan");
@@ -308,8 +305,8 @@ void testCompiledPlanCacheCompilesOncePerRevision(Expectations& expectations) {
         {.snapshot = session.snapshot(),
          .compositionId = compositionId,
          .parameterOverride = runtime::SnapshotParameterOverride{session.snapshot().revision(),
-                                                                document::ParameterId{},
-                                                                document::Vec2d{1.0, 1.0}}},
+                                                                 document::ParameterId{},
+                                                                 document::Vec2d{1.0, 1.0}}},
         {});
     expectations.expect(cache.statistics().compiles == 3 && cache.size() == 2,
                         "an overridden request compiles directly and is never retained");
@@ -343,11 +340,10 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
                         "a cache hit evaluates nothing");
     expectations.expect(fixture.controller.frameCache().statistics().hits == 1,
                         "the cache counts the hit it served");
-    expectations.expect(
-        fixture.controller.state().frame != nullptr &&
-            fixture.controller.state().frame->desiredIdentity() ==
-                fixture.controller.state().desiredIdentity,
-        "the frame published from the cache carries this request's own identity");
+    expectations.expect(fixture.controller.state().frame != nullptr &&
+                            fixture.controller.state().frame->desiredIdentity() ==
+                                fixture.controller.state().desiredIdentity,
+                        "the frame published from the cache carries this request's own identity");
 
     finishFixture(fixture, expectations);
 }
@@ -384,9 +380,9 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     expectations.expect(cache.size() == 2 && cache.residentBytes() == frameBytes * 2 &&
                             cache.statistics().evictions == 1,
                         "the budget holds two frames and evicts the least recently used third");
-    expectations.expect(!cache.contains(ui::PreviewFrameCacheKey::forIdentity(
-                            frames[0]->desiredIdentity())),
-                        "the evicted entry is the one used longest ago");
+    expectations.expect(
+        !cache.contains(ui::PreviewFrameCacheKey::forIdentity(frames[0]->desiredIdentity())),
+        "the evicted entry is the one used longest ago");
 
     // Shrinking the budget evicts immediately rather than at the next insert.
     cache.setByteBudget(frameBytes);
@@ -405,9 +401,9 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
         cache.insert(frame);
     }
     const auto beforeEdit = cache.size();
-    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"),
-                                                     core::Color4d{1.0, 0.0, 0.0, 1.0}),
-                        "an edit advances the document revision");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Edit"), core::Color4d{1.0, 0.0, 0.0, 1.0}),
+        "an edit advances the document revision");
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the edited revision renders a frame");
     const auto newRevisionFrame = fixture.controller.state().frame;
@@ -447,11 +443,11 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     // Playback from here must not evaluate anything at all.
     const auto afterCaching = fixture.preparationCount.load();
     ManualClock clock;
-    ui::PlaybackController playback(fixture.session, fixture.controller,
-                                    [&clock] { return clock.now; }, 16ms);
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
     std::vector<core::RationalTime> presented;
-    QObject::connect(&fixture.session, &ui::CompositionSession::currentTimeChanged, &fixture.session,
-                     [&] { presented.push_back(fixture.session.currentTime()); });
+    QObject::connect(&fixture.session, &ui::CompositionSession::currentTimeChanged,
+                     &fixture.session, [&] { presented.push_back(fixture.session.currentTime()); });
     playback.play();
     for (int tickIndex = 0; tickIndex < 24; ++tickIndex) {
         clock.advance(40'000'000ns);
@@ -483,15 +479,48 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     finishFixture(fixture, expectations);
 }
 
+// A range that cannot fit the cache's budget is cached as the prefix that does fit, and the run stops
+// there rather than spending the rest of the range evicting its own beginning.
+void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Preview Budget", time(24, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the budget-limited fixture renders its first frame");
+    const auto frame = fixture.controller.state().frame;
+    expectations.expect(frame != nullptr, "the budget-limited fixture has a frame to measure");
+    if (frame == nullptr) {
+        finishFixture(fixture, expectations);
+        return;
+    }
+    // Room for three frames of this composition, against a range of twenty-four.
+    fixture.controller.frameCache().setByteBudget(ui::PreviewFrameCache::frameByteCost(*frame) * 3);
+
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    bool finishedCompleted = false;
+    QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &ramPreview,
+                     [&finishedCompleted](const bool completed) { finishedCompleted = completed; });
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
+                        "the budget-limited run ends on its own");
+    expectations.expect(ramPreview.cachedFrameCount() == 4 && ramPreview.totalFrameCount() == 24,
+                        "the run keeps the prefix that fits the budget and stops there");
+    expectations.expect(fixture.controller.frameCache().size() == 3,
+                        "the cache holds exactly what its budget allows");
+    expectations.expect(finishedCompleted,
+                        "a budget-limited run still finishes, so the cached prefix is played");
+
+    finishFixture(fixture, expectations);
+}
+
 void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Cancel", time(24, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the cancellation fixture renders its first frame");
     ui::ViewerEditor viewer(fixture.session, fixture.controller);
 
-    // Pause the run's FIRST preparation on the worker. Frame zero is already cached -- the fixture's
-    // own opening frame -- so the run counts that one without rendering it and pauses on frame one,
-    // which is exactly one frame into a twenty-four frame range.
+    // Pause the run's FIRST preparation on the worker. Frame zero is already cached -- the
+    // fixture's own opening frame -- so the run counts that one without rendering it and pauses on
+    // frame one, which is exactly one frame into a twenty-four frame range.
     fixture.gateAtCall = fixture.preparationCount.load();
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
                                         fixture.bridge, fixture.countingPipeline());
@@ -510,8 +539,10 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
                         "the footer says nothing about a run that is not caching");
     expectations.expect(ramPreview.cachedFrameCount() == 1,
                         "a cancelled run keeps every frame it had already cached");
-    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent() ||
-                                               !fixture.controller.state().taskId.has_value(); }),
+    expectations.expect(waitUntil([&] {
+                            return fixture.scheduler.isQuiescent() ||
+                                   !fixture.controller.state().taskId.has_value();
+                        }),
                         "the cancelled frame's task reaches terminal");
 
     finishFixture(fixture, expectations);
@@ -524,13 +555,14 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     // Same shape as cpu_composition_evaluator_tests.cpp's main(): the fixtures here compare
-    // std::variant-carrying identities, so the standard library's own throwing paths are reachable in
-    // principle and main() must not be the frame they escape from.
+    // std::variant-carrying identities, so the standard library's own throwing paths are reachable
+    // in principle and main() must not be the frame they escape from.
     try {
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
+        testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);
         testRamPreviewCancellationKeepsWhatItCached(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

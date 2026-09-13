@@ -38,8 +38,8 @@ enum class PlaybackState : std::uint8_t {
 // one-active/one-newest-pending gate, cadence, and stale-result rejection inside
 // CompositionPreviewController are never touched.
 //
-// TWO clocks, and which one a tick uses depends on one honest question: is the next frame already in
-// the RAM preview cache?
+// TWO clocks, and which one a tick uses depends on one honest question: is the next frame already
+// in the RAM preview cache?
 //
 // NOT CACHED -- the original real-time, drop-frames-never-slow policy, unchanged. Every tick
 // recomputes the target frame from the TOTAL elapsed time since play() captured its start
@@ -47,13 +47,13 @@ enum class PlaybackState : std::uint8_t {
 // time now demands rather than slowing played-back motion down, and the Viewer footer reports what
 // the preview path dropped.
 //
-// CACHED -- the frame-accurate clock (task PERF1, item 4). A cached frame costs a lookup, so there is
-// nothing to drop and skipping one would be a lie about what the composition does: the target
+// CACHED -- the frame-accurate clock (task PERF1, item 4). A cached frame costs a lookup, so there
+// is nothing to drop and skipping one would be a lie about what the composition does: the target
 // therefore advances by exactly ONE frame, and the due moment is still computed from the total
 // elapsed time since the same fixed start, so presentations track the ideal frame grid instead of
 // accumulating a per-tick rounding error. The one consequence worth stating plainly: if the host
-// stalls long enough to owe several frames, the transport plays every one of them -- at one frame per
-// tick until the debt is paid -- rather than skipping to the frame the wall clock now demands.
+// stalls long enough to owe several frames, the transport plays every one of them -- at one frame
+// per tick until the debt is paid -- rather than skipping to the frame the wall clock now demands.
 //
 // Frame
 // arithmetic is exact and checked throughout: index -> time uses
@@ -70,8 +70,8 @@ class PlaybackController final : public QObject {
     // std::chrono::steady_clock::now(); tests substitute a manually-advanced fake with no
     // dependency on real elapsed wall time.
     using ClockFunction = std::function<std::chrono::steady_clock::time_point()>;
-    // Whether the frame at this composition frame index is already in the RAM preview cache, which is
-    // what decides which of the two clocks above a tick uses. Empty means "ask the preview
+    // Whether the frame at this composition frame index is already in the RAM preview cache, which
+    // is what decides which of the two clocks above a tick uses. Empty means "ask the preview
     // controller's own cache", which is what production wants and what this controller does by
     // default; a test injects one to pin either clock without rendering a frame.
     using FrameCachedPredicate = std::function<bool(std::uint64_t frameIndex)>;
@@ -122,7 +122,8 @@ class PlaybackController final : public QObject {
     std::chrono::steady_clock::time_point startClock_{};
     std::uint64_t startFrameIndex_ = 0;
     // How many frames this run has advanced past startFrameIndex_. The uncached clock sets it to
-    // whatever total elapsed time demands (so it can jump); the cached clock raises it by exactly one.
+    // whatever total elapsed time demands (so it can jump); the cached clock raises it by exactly
+    // one.
     std::uint64_t appliedOffset_ = 0;
     std::optional<std::uint64_t> lastAppliedFrameIndex_;
     // Guards handleCurrentTimeChanged()'s scrub-during-playback detection: set around

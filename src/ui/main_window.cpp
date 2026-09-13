@@ -251,26 +251,25 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
 
 void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     // RAM Preview (task PERF1, item 3). Same command the Timeline transport's own button and
-    // Ctrl+Shift+Space reach -- one named method called by all three, never a menu item synthesizing a
-    // key press (docs/ux/interaction-model.md, "Ownership Boundary"). The shortcut itself is declared
-    // on the Timeline editor, which owns the transport; declaring it here too would give one key two
-    // owners.
+    // Ctrl+Shift+Space reach -- one named method called by all three, never a menu item
+    // synthesizing a key press (docs/ux/interaction-model.md, "Ownership Boundary"). The shortcut
+    // itself is declared on the Timeline editor, which owns the transport; declaring it here too
+    // would give one key two owners.
     ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
     ramPreviewAction_->setObjectName("compositionRamPreviewAction");
     ramPreviewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
     ramPreviewAction_->setShortcutContext(Qt::WindowShortcut);
     ramPreviewAction_->setEnabled(ramPreview_ != nullptr);
-    // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning whatever
-    // it already meant everywhere else the rest of the time -- the same gating the frame-export
-    // cancel uses.
+    // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning
+    // whatever it already meant everywhere else the rest of the time -- the same gating the
+    // frame-export cancel uses.
     cancelRamPreviewAction_ = compositionMenu.addAction("Cancel RAM Preview");
     cancelRamPreviewAction_->setObjectName("cancelRamPreviewAction");
     cancelRamPreviewAction_->setShortcut(QKeySequence(Qt::Key_Escape));
     cancelRamPreviewAction_->setShortcutContext(Qt::WindowShortcut);
     cancelRamPreviewAction_->setEnabled(false);
     if (ramPreview_ != nullptr) {
-        connect(ramPreviewAction_, &QAction::triggered, ramPreview_,
-                &RamPreviewController::toggle);
+        connect(ramPreviewAction_, &QAction::triggered, ramPreview_, &RamPreviewController::toggle);
         connect(cancelRamPreviewAction_, &QAction::triggered, ramPreview_,
                 &RamPreviewController::cancel);
         connect(ramPreview_, &RamPreviewController::stateChanged, this, [this] {

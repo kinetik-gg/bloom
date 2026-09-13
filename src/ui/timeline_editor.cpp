@@ -894,11 +894,12 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         kit::IconId::StepForward, tr("Step forward one frame (Right)"),
         tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), controls);
     // RAM Preview (task PERF1, item 3). IconId::Sequence is the nearest honest glyph in the kit's
-    // existing vocabulary -- a run of frames -- rather than a new vendored asset for one button; the
-    // tooltip and accessible name carry the meaning, as iconography rules require of an icon-only
-    // control.
+    // existing vocabulary -- a run of frames -- rather than a new vendored asset for one button;
+    // the tooltip and accessible name carry the meaning, as iconography rules require of an
+    // icon-only control.
     ramPreviewButton_ = makeIconToolButton(
-        kit::IconId::Sequence, tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"),
+        kit::IconId::Sequence,
+        tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"),
         tr("RAM preview"), QStringLiteral("timelineRamPreviewButton"), controls);
     ramPreviewButton_->setCheckable(true);
     ramPreviewButton_->setEnabled(ramPreview_ != nullptr);
@@ -1053,8 +1054,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                 &RamPreviewController::toggle);
         connect(ramPreview_, &RamPreviewController::stateChanged, this,
                 &TimelineEditor::updateRamPreviewButton);
-        // The cached range plays on THIS panel's transport: the RAM preview controller caches frames
-        // and says so, and the transport is what plays them (one owner per job).
+        // The cached range plays on THIS panel's transport: the RAM preview controller caches
+        // frames and says so, and the transport is what plays them (one owner per job).
         connect(ramPreview_, &RamPreviewController::cachingFinished, this,
                 [this](const bool completed) {
                     if (completed) {

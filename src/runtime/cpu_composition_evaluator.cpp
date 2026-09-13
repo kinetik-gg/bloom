@@ -69,11 +69,11 @@ using RowFailure = std::optional<EvaluationDiagnostic>;
 
 // The two Operation-stage progress events a BANDED row pass reports, both from the thread that owns
 // the frame. Rows are no longer reported one at a time: a band runs on another thread, and the
-// progress callback belongs to the task that owns the frame rather than to the pool. `completed == 0`
-// is the event an observer uses to rendezvous with the start of an operation's pixel work, and
+// progress callback belongs to the task that owns the frame rather than to the pool. `completed ==
+// 0` is the event an observer uses to rendezvous with the start of an operation's pixel work, and
 // `completed == total` the one that says the pass finished.
-void reportRowPassStarted(const EvaluationProgressCallback& callback, const OperationIndex operation,
-                          const std::uint64_t total) noexcept;
+void reportRowPassStarted(const EvaluationProgressCallback& callback,
+                          const OperationIndex operation, const std::uint64_t total) noexcept;
 void reportRowPassFinished(const EvaluationProgressCallback& callback,
                            const OperationIndex operation, const std::uint64_t total) noexcept;
 [[nodiscard]] RowFailure rowPassFailure(const RowBandPassOutcome<RowFailure>& outcome,
@@ -92,22 +92,21 @@ void reportProgress(const EvaluationProgressCallback& callback,
     }
 }
 
-// One banded row pass's failure in the evaluator's own vocabulary. `incomplete` means a band escaped
-// by throwing -- unreachable for a noexcept row kernel, and reported as the allocation failure it can
-// only have been rather than published as a half-written image.
+// One banded row pass's failure in the evaluator's own vocabulary. `incomplete` means a band
+// escaped by throwing -- unreachable for a noexcept row kernel, and reported as the allocation
+// failure it can only have been rather than published as a half-written image.
 RowFailure rowPassFailure(const RowBandPassOutcome<RowFailure>& outcome,
                           const EvaluationSubject& subject) {
     if (outcome.failure.has_value()) {
         return outcome.failure;
     }
-    return diagnostic(EvaluationDiagnosticCode::AllocationFailure,
-                      "An evaluation row band could not complete",
-                      "A parallel row band ended in an exception; the frame was not published.",
-                      subject);
+    return diagnostic(
+        EvaluationDiagnosticCode::AllocationFailure, "An evaluation row band could not complete",
+        "A parallel row band ended in an exception; the frame was not published.", subject);
 }
 
-void reportRowPassStarted(const EvaluationProgressCallback& callback, const OperationIndex operation,
-                          const std::uint64_t total) noexcept {
+void reportRowPassStarted(const EvaluationProgressCallback& callback,
+                          const OperationIndex operation, const std::uint64_t total) noexcept {
     reportProgress(callback, {.stage = EvaluationProgressStage::Operation,
                               .operation = operation,
                               .completed = 0,
@@ -1155,11 +1154,10 @@ using detail::rowPassFailure;
 using detail::subjectFor;
 using detail::unexpectedAllocationFailure;
 
-EvaluationResult CpuCompositionEvaluator::evaluate(std::shared_ptr<const CompiledCompositionPlan> plan,
-                                                  const EvaluationRequest& request,
-                                                  const CancellationToken& cancellation,
-                                                  EvaluationProgressCallback progress,
-                                                  CpuRowBandExecutor* const rowBands) const {
+EvaluationResult CpuCompositionEvaluator::evaluate(
+    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
+    const CancellationToken& cancellation, EvaluationProgressCallback progress,
+    CpuRowBandExecutor* const rowBands) const {
     try {
         auto checked = preflight(plan, request, cancellation, progress);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -1219,19 +1217,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(std::shared_ptr<const Compile
                         reportRowPassStarted(progress, operationIndex, height);
                         auto& image = *builder.value();
                         const auto solidPixel = *pixel.value();
-                        const auto outcome = runRowBandPass(
-                            rowBands, cancellation, height, window.originY(),
-                            [&image, solidPixel,
-                             &operationSubject](const std::int64_t y) -> RowFailure {
-                                auto row = image.row(y);
-                                if (!row) {
-                                    return imageDiagnostic(
-                                        *row.error(), operationSubject,
-                                        "Solid output row could not be addressed");
-                                }
-                                render::fillSolidRow(*row.value(), solidPixel);
-                                return std::nullopt;
-                            });
+                        const auto outcome =
+                            runRowBandPass(rowBands, cancellation, height, window.originY(),
+                                           [&image, solidPixel,
+                                            &operationSubject](const std::int64_t y) -> RowFailure {
+                                               auto row = image.row(y);
+                                               if (!row) {
+                                                   return imageDiagnostic(
+                                                       *row.error(), operationSubject,
+                                                       "Solid output row could not be addressed");
+                                               }
+                                               render::fillSolidRow(*row.value(), solidPixel);
+                                               return std::nullopt;
+                                           });
                         if (outcome.cancelled) {
                             operationCancelled = true;
                             return;
@@ -1335,9 +1333,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(std::shared_ptr<const Compile
                                         clipped.coverage, textPixel,
                                         outputRow.value()->subspan(clipped.outputOffset,
                                                                    clipped.coverage.size()))) {
-                                    return imageDiagnostic(
-                                        *rowStatus, operationSubject,
-                                        "Text coverage could not be composited");
+                                    return imageDiagnostic(*rowStatus, operationSubject,
+                                                           "Text coverage could not be composited");
                                 }
                                 return std::nullopt;
                             });
@@ -1635,11 +1632,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(std::shared_ptr<const Compile
                                 return;
                             }
                             completedRows += height;
-                            reportProgress(progress,
-                                           {.stage = EvaluationProgressStage::Operation,
-                                            .operation = operationIndex,
-                                            .completed = completedRows,
-                                            .total = totalRows});
+                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                                      .operation = operationIndex,
+                                                      .completed = completedRows,
+                                                      .total = totalRows});
                         }
                         if (stack.entries.empty()) {
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,

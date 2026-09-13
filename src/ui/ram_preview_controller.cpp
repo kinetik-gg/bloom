@@ -14,8 +14,8 @@
 namespace bloom::ui {
 namespace {
 
-// The same checked duration/frame-rate mapping the transport uses (playback_controller.cpp), refusing
-// exactly the cases it refuses -- a zero or invalid duration has no frames to cache.
+// The same checked duration/frame-rate mapping the transport uses (playback_controller.cpp),
+// refusing exactly the cases it refuses -- a zero or invalid duration has no frames to cache.
 [[nodiscard]] std::optional<core::FrameTimeMapping>
 mappingForComposition(const document::Composition& composition) noexcept {
     const auto rate = composition.format().frameRate();
@@ -38,11 +38,12 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
       scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)) {
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &RamPreviewController::consumeReadyResult);
-    // A document edit or a composition switch makes every frame this run would still cache belong to
-    // a document that is no longer live, so the run ends rather than caching frames of a revision the
-    // artist has already left behind.
+    // A document edit or a composition switch makes every frame this run would still cache belong
+    // to a document that is no longer live, so the run ends rather than caching frames of a
+    // revision the artist has already left behind.
     connect(&session_, &CompositionSession::snapshotChanged, this, &RamPreviewController::cancel);
-    connect(&session_, &CompositionSession::compositionChanged, this, &RamPreviewController::cancel);
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            &RamPreviewController::cancel);
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
@@ -66,6 +67,7 @@ void RamPreviewController::start() {
     totalFrameCount_ = mapping->maximumFrameIndex() + 1;
     nextFrameIndex_ = 0;
     cachedFrameCount_ = 0;
+    evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
     caching_ = true;
     previewController_.beginRamPreviewProgress(totalFrameCount_);
     emit stateChanged();
@@ -108,8 +110,9 @@ void RamPreviewController::submitNextFrame() {
     if (!caching_ || !snapshot_.has_value()) {
         return;
     }
-    // Copied once, rather than dereferenced through the optional below: a Snapshot is a revision plus a
-    // shared identity handle, and every path out of here that calls finish() clears snapshot_.
+    // Copied once, rather than dereferenced through the optional below: a Snapshot is a revision
+    // plus a shared identity handle, and every path out of here that calls finish() clears
+    // snapshot_.
     const document::Snapshot snapshot = *snapshot_;
     const auto* composition = snapshot.project().findComposition(compositionId_);
     if (composition == nullptr) {
@@ -123,7 +126,8 @@ void RamPreviewController::submitNextFrame() {
     }
 
     // Frames already cached are counted without being rendered: the second RAM preview of a range
-    // nobody has edited is immediate, and a range partly filled by ordinary playback finishes the rest.
+    // nobody has edited is immediate, and a range partly filled by ordinary playback finishes the
+    // rest.
     while (nextFrameIndex_ < totalFrameCount_) {
         const auto frameTime = mapping->timeForFrame(nextFrameIndex_);
         if (!frameTime.hasValue()) {
@@ -172,11 +176,10 @@ void RamPreviewController::submitNextFrame() {
     // Foreground, not Interactive: a RAM preview is a background fill the artist asked for, and it
     // must not outrank the preview frame they are looking at right now. No coalescing key either --
     // every frame of the range is its own work, and coalescing would discard frames the run needs.
-    runtime::TaskRequest request(
-        "Cache RAM preview frame",
-        {.kind = runtime::TaskOwnerKind::Composition,
-         .id = runtime::TaskOwnerId::fromRaw(compositionId_.value())},
-        runtime::TaskPriority::Foreground);
+    runtime::TaskRequest request("Cache RAM preview frame",
+                                 {.kind = runtime::TaskOwnerKind::Composition,
+                                  .id = runtime::TaskOwnerId::fromRaw(compositionId_.value())},
+                                 runtime::TaskPriority::Foreground);
     request.sourceVersion = {
         .documentRevision = desiredIdentity.sourceRevision.value(),
         .requestGeneration = desiredIdentity.requestGeneration,
@@ -216,9 +219,9 @@ void RamPreviewController::consumeReadyResult() {
     }
 
     if (result->state() != runtime::TaskState::Succeeded) {
-        // Cancelled or failed: the run ends and keeps whatever already reached the cache. A partially
-        // cached range is still useful -- the transport simply plays the rest on the elapsed-time
-        // clock and says so in the footer.
+        // Cancelled or failed: the run ends and keeps whatever already reached the cache. A
+        // partially cached range is still useful -- the transport simply plays the rest on the
+        // elapsed-time clock and says so in the footer.
         finish(false);
         return;
     }
@@ -233,6 +236,13 @@ void RamPreviewController::consumeReadyResult() {
     ++nextFrameIndex_;
     ++cachedFrameCount_;
     publishProgress();
+    if (previewController_.frameCache().statistics().evictions != evictionsAtStart_) {
+        // The range has outgrown the memory budget. Every further frame would evict one this run has
+        // already cached, so the run stops with the prefix that fits rather than spending the rest of
+        // the range throwing away its own beginning.
+        finish(true);
+        return;
+    }
     submitNextFrame();
 }
 
@@ -240,8 +250,8 @@ void RamPreviewController::finish(const bool completed) {
     caching_ = false;
     snapshot_.reset();
     nextFrameIndex_ = 0;
-    // The counts are KEPT: a surface (or a test) asking what the run that just ended achieved gets the
-    // truth, and isCaching() is what says whether they are still moving. start() resets them.
+    // The counts are KEPT: a surface (or a test) asking what the run that just ended achieved gets
+    // the truth, and isCaching() is what says whether they are still moving. start() resets them.
     previewController_.endRamPreviewProgress();
     emit stateChanged();
     emit cachingFinished(completed);

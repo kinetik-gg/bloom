@@ -11,8 +11,8 @@ namespace bloom::runtime {
 class CpuCompositionEvaluator final {
   public:
     // `rowBands` is the bounded pool the per-row kernels are spread across (the scheduler owns one;
-    // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band on
-    // the calling thread, in band order.
+    // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band
+    // on the calling thread, in band order.
     //
     // The pixels are the same either way, to the bit: banding partitions rows, and every row kernel
     // writes only its own row. The evaluator therefore does NOT enter the pool into

@@ -12,16 +12,16 @@ namespace {
 
 constexpr auto ramPreviewByteBudgetKey = "playback/ram-preview-memory-bytes";
 
-[[nodiscard]] PreparedPreviewFrameHandle
-restamp(const runtime::PreparedPreviewFrame& frame, const std::uint64_t requestGeneration) {
+[[nodiscard]] PreparedPreviewFrameHandle restamp(const runtime::PreparedPreviewFrame& frame,
+                                                 const std::uint64_t requestGeneration) {
     // The display product is what a frame IS; the request generation is only which ask it answered.
-    // Re-creating the envelope over the same immutable display frame is therefore a copy of one small
-    // identity struct and a shared-pointer increment -- no pixel is touched.
-    auto rebuilt = frame.isOcioQualified()
-                       ? runtime::PreparedPreviewFrame::createQualified(requestGeneration,
-                                                                        frame.qualifiedDisplayFrame())
-                       : runtime::PreparedPreviewFrame::create(requestGeneration,
-                                                               frame.displayFrame());
+    // Re-creating the envelope over the same immutable display frame is therefore a copy of one
+    // small identity struct and a shared-pointer increment -- no pixel is touched.
+    auto rebuilt =
+        frame.isOcioQualified()
+            ? runtime::PreparedPreviewFrame::createQualified(requestGeneration,
+                                                             frame.qualifiedDisplayFrame())
+            : runtime::PreparedPreviewFrame::create(requestGeneration, frame.displayFrame());
     if (!rebuilt.has_value()) {
         return nullptr;
     }
@@ -45,8 +45,7 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
 PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget) noexcept
     : byteBudget_(byteBudget) {}
 
-std::size_t
-PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept {
+std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept {
     std::size_t bytes = frame.processImage().pixels().size_bytes();
     if (const auto view = frame.displayBufferView(); view.has_value()) {
         bytes += view->pixels.size_bytes();
@@ -57,17 +56,17 @@ PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noe
 PreparedPreviewFrameHandle
 PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     const auto key = PreviewFrameCacheKey::forIdentity(identity);
-    const auto position = std::ranges::find_if(
-        entries_, [&key](const Entry& entry) { return entry.key == key; });
+    const auto position =
+        std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
     if (position == entries_.end()) {
         ++statistics_.misses;
         return nullptr;
     }
     auto frame = restamp(*position->frame, identity.requestGeneration);
     if (frame == nullptr || frame->desiredIdentity() != identity) {
-        // The key matched but the rebuilt envelope does not answer this request exactly. Nothing here
-        // can be served honestly, so the entry is dropped rather than published under an identity it
-        // does not have.
+        // The key matched but the rebuilt envelope does not answer this request exactly. Nothing
+        // here can be served honestly, so the entry is dropped rather than published under an
+        // identity it does not have.
         removeAt(static_cast<std::size_t>(position - entries_.begin()));
         ++statistics_.misses;
         return nullptr;
@@ -84,7 +83,8 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
     const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
     if (displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified()) {
         // The display transform itself changed (the qualified processor became available). Every
-        // retained frame was produced by the other one, so none of them is this composition any more.
+        // retained frame was produced by the other one, so none of them is this composition any
+        // more.
         clear();
     }
     displayQualified_ = frame->isOcioQualified();
@@ -110,8 +110,7 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
 }
 
 bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
-    return std::ranges::any_of(entries_,
-                               [&key](const Entry& entry) { return entry.key == key; });
+    return std::ranges::any_of(entries_, [&key](const Entry& entry) { return entry.key == key; });
 }
 
 void PreviewFrameCache::setByteBudget(const std::size_t bytes) {

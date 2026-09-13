@@ -371,10 +371,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         interactionOverride = session_.positionInteractionOverride();
     }
 
-    // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request whose
-    // key is cached is answered right here: no task, no coalescing, no cadence -- which is what makes
-    // cached playback frame-accurate rather than best-effort. An overridden request is never served
-    // from the cache, because its pixels are the gesture's, not the revision's.
+    // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request
+    // whose key is cached is answered right here: no task, no coalescing, no cadence -- which is
+    // what makes cached playback frame-accurate rather than best-effort. An overridden request is
+    // never served from the cache, because its pixels are the gesture's, not the revision's.
     if (allowCachedFrame && !interactionOverride.has_value()) {
         if (auto cached = frameCache_->take(desiredIdentity); cached != nullptr) {
             interactiveCadenceTimer_.stop();
@@ -385,8 +385,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                 pending_.reset();
             }
             // An in-flight task is for an older ask. Cancelling it leaves the admission gate closed
-            // until its terminal result is observed, which consumeReadyResult() already handles; the
-            // cached frame is published now regardless.
+            // until its terminal result is observed, which consumeReadyResult() already handles;
+            // the cached frame is published now regardless.
             if (active_.has_value()) {
                 active_->handle.cancel();
             }
@@ -616,9 +616,9 @@ void CompositionPreviewController::consumeReadyResult() {
             next.frame = frame;
             next.message = tr("The current composition frame is ready");
             // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
-            // second pass over the same range is a sequence of lookups (task PERF1, item 3). A frame
-            // rendered under an interactive override is the exception: its pixels belong to a gesture,
-            // and its identity cannot say so.
+            // second pass over the same range is a sequence of lookups (task PERF1, item 3). A
+            // frame rendered under an interactive override is the exception: its pixels belong to a
+            // gesture, and its identity cannot say so.
             if (!completed.carriedInteractionOverride) {
                 frameCache_->insert(frame);
             }

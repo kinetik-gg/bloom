@@ -32,7 +32,8 @@ class EditorRegistry final {
 };
 
 // `ramPreview` is handed to the Timeline editor, whose transport cluster carries the RAM Preview
-// command (task PERF1, item 3). Null leaves that one button disabled; every other editor is unaffected.
+// command (task PERF1, item 3). Null leaves that one button disabled; every other editor is
+// unaffected.
 [[nodiscard]] bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
                                              CompositionPreviewController& previewController,
                                              RamPreviewController* ramPreview = nullptr);

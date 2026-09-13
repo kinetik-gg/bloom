@@ -256,10 +256,10 @@ void testPlayAdvancesExactFrameTimesAndDropsFrames(Expectations& expectations) {
 
 // Controller test 2: loop wrap at duration is exact -- no drift after several wraps, verified by
 // exact RationalTime equality (never an approximate/epsilon comparison).
-// Task PERF1, item 4: the frame-accurate clock. A cached next frame costs a lookup, so the transport
-// has nothing to drop and must not skip -- it advances exactly one frame, even when several frame
-// durations have already elapsed. An uncached next frame keeps the original drop-not-slow jump, and
-// the two clocks have to be able to alternate within one run.
+// Task PERF1, item 4: the frame-accurate clock. A cached next frame costs a lookup, so the
+// transport has nothing to drop and must not skip -- it advances exactly one frame, even when
+// several frame durations have already elapsed. An uncached next frame keeps the original
+// drop-not-slow jump, and the two clocks have to be able to alternate within one run.
 void testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Cached Playback Clock", time(4)));

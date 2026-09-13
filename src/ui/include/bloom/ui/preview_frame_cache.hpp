@@ -12,10 +12,11 @@ class QSettings;
 
 namespace bloom::ui {
 
-// 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A composition-resolution
-// preview frame retains both its packed display buffer and the Float32 process image it was mapped
-// from, so it is tens of megabytes: the budget is what decides how many frames of a range can be held
-// at once, and the honest answer for a 1920x1080 composition is a few dozen.
+// 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A
+// composition-resolution preview frame retains both its packed display buffer and the Float32
+// process image it was mapped from, so it is tens of megabytes: the budget is what decides how many
+// frames of a range can be held at once, and the honest answer for a 1920x1080 composition is a few
+// dozen.
 inline constexpr std::size_t kDefaultPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
 
@@ -41,19 +42,20 @@ struct PreviewFrameCacheKey final {
 
 using PreparedPreviewFrameHandle = std::shared_ptr<const runtime::PreparedPreviewFrame>;
 
-// The RAM preview cache: prepared preview frames held in memory under a byte budget, so that playing
-// a range a second time, or stepping back to a frame already rendered, costs a lookup instead of an
-// evaluation.
+// The RAM preview cache: prepared preview frames held in memory under a byte budget, so that
+// playing a range a second time, or stepping back to a frame already rendered, costs a lookup
+// instead of an evaluation.
 //
 // Single-threaded by design and by ownership: every entry is put in and taken out on the interface
 // thread, by the preview controller publishing a finished frame and by the RAM preview controller
-// pre-rendering a range. Nothing here is locked, because nothing here is touched by a task worker --
-// a worker produces a frame and hands it back through the scheduler as it always did.
+// pre-rendering a range. Nothing here is locked, because nothing here is touched by a task worker
+// -- a worker produces a frame and hands it back through the scheduler as it always did.
 //
-// Invalidation is the key rather than a notification: a document edit advances the revision, so every
-// entry of an earlier revision is unreachable by construction. Those entries are dropped outright
-// when a frame of a newer revision arrives, which is both the cheapest invalidation and the one that
-// frees the most memory -- and it is why the cache never has to understand what an edit changed.
+// Invalidation is the key rather than a notification: a document edit advances the revision, so
+// every entry of an earlier revision is unreachable by construction. Those entries are dropped
+// outright when a frame of a newer revision arrives, which is both the cheapest invalidation and
+// the one that frees the most memory -- and it is why the cache never has to understand what an
+// edit changed.
 //
 // The display identity is a CACHE-WIDE tag rather than part of the key: the qualified display
 // processor publishes once per session, so an entry's display identity can change at most once, and
@@ -66,8 +68,8 @@ class PreviewFrameCache final {
         std::uint64_t misses = 0;
         std::uint64_t insertions = 0;
         // Entries dropped to stay inside the budget, and entries dropped because a newer document
-        // revision made them unreachable. Counted apart because they mean different things: the first
-        // says the budget is the limit, the second says the artist edited.
+        // revision made them unreachable. Counted apart because they mean different things: the
+        // first says the budget is the limit, the second says the artist edited.
         std::uint64_t evictions = 0;
         std::uint64_t staleDrops = 0;
         // Frames refused because one frame alone does not fit the budget.
@@ -76,17 +78,18 @@ class PreviewFrameCache final {
         friend bool operator==(const Statistics&, const Statistics&) = default;
     };
 
-    explicit PreviewFrameCache(std::size_t byteBudget = kDefaultPreviewFrameCacheByteBudget) noexcept;
+    explicit PreviewFrameCache(
+        std::size_t byteBudget = kDefaultPreviewFrameCacheByteBudget) noexcept;
 
-    // The cached frame for `identity`, re-stamped with that identity's own request generation so the
-    // caller can publish it as the answer to THIS request (a frame's generation says which ask it
-    // answered; its pixels are what the key matched on). Null on a miss. Counts a hit or a miss, and
-    // moves a hit to the front of the eviction order.
+    // The cached frame for `identity`, re-stamped with that identity's own request generation so
+    // the caller can publish it as the answer to THIS request (a frame's generation says which ask
+    // it answered; its pixels are what the key matched on). Null on a miss. Counts a hit or a miss,
+    // and moves a hit to the front of the eviction order.
     [[nodiscard]] PreparedPreviewFrameHandle take(const runtime::PreviewRequestIdentity& identity);
 
     // Retains `frame` under its own identity's key. Drops every entry of an older revision first,
-    // then evicts least-recently-used entries until the budget is satisfied. A frame larger than the
-    // whole budget is refused rather than allowed to evict everything for itself.
+    // then evicts least-recently-used entries until the budget is satisfied. A frame larger than
+    // the whole budget is refused rather than allowed to evict everything for itself.
     void insert(const PreparedPreviewFrameHandle& frame);
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;
@@ -99,8 +102,10 @@ class PreviewFrameCache final {
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
 
-    // What one retained frame costs: its packed display buffer plus the process image it keeps alive.
-    [[nodiscard]] static std::size_t frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
+    // What one retained frame costs: its packed display buffer plus the process image it keeps
+    // alive.
+    [[nodiscard]] static std::size_t
+    frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
 
   private:
     struct Entry final {
@@ -123,10 +128,10 @@ class PreviewFrameCache final {
 
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 
-// "playback/ram-preview-memory-bytes" = the RAM preview cache's byte budget. Missing, unparseable, or
-// zero reads as kDefaultPreviewFrameCacheByteBudget; any other value is taken at face value, because
-// how much of their own memory an artist wants to spend on cached frames is their decision, not
-// Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
+// "playback/ram-preview-memory-bytes" = the RAM preview cache's byte budget. Missing, unparseable,
+// or zero reads as kDefaultPreviewFrameCacheByteBudget; any other value is taken at face value,
+// because how much of their own memory an artist wants to spend on cached frames is their decision,
+// not Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
 // precedent -- nothing in src/ui constructs a QSettings of its own.
 [[nodiscard]] std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings);
 void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);

@@ -165,18 +165,17 @@ TaskSchedulerConfig TaskSchedulerConfig::defaults() noexcept {
 
 bool TaskSchedulerConfig::isValid() const noexcept {
     // rowBandWorkerCount accepts 0 (derive from the machine), kSerialRowBandWorkers (no pool at
-    // all), and any explicit width up to the CPU worker bound. An explicit width above that bound is
-    // refused for the same reason cpuWorkerCount is: a thread count nobody can service honestly.
+    // all), and any explicit width up to the CPU worker bound. An explicit width above that bound
+    // is refused for the same reason cpuWorkerCount is: a thread count nobody can service honestly.
     const bool rowBandWorkersValid = rowBandWorkerCount == 0 ||
                                      rowBandWorkerCount == kSerialRowBandWorkers ||
                                      rowBandWorkerCount <= kMaxCpuWorkers;
     return rowBandWorkersValid && cpuWorkerCount > 0 && cpuWorkerCount <= kMaxCpuWorkers &&
-           blockingIoWorkerCount > 0 &&
-           blockingIoWorkerCount <= kMaxBlockingIoWorkers && cpuQueueCapacity > 0 &&
-           cpuQueueCapacity <= kMaxQueueCapacity && blockingIoQueueCapacity > 0 &&
-           blockingIoQueueCapacity <= kMaxQueueCapacity && gpuPendingQueueCapacity > 0 &&
-           gpuPendingQueueCapacity <= kMaxGpuPendingQueue && gpuAdmittedStateCapacity > 0 &&
-           gpuAdmittedStateCapacity <= kMaxGpuAdmittedStates &&
+           blockingIoWorkerCount > 0 && blockingIoWorkerCount <= kMaxBlockingIoWorkers &&
+           cpuQueueCapacity > 0 && cpuQueueCapacity <= kMaxQueueCapacity &&
+           blockingIoQueueCapacity > 0 && blockingIoQueueCapacity <= kMaxQueueCapacity &&
+           gpuPendingQueueCapacity > 0 && gpuPendingQueueCapacity <= kMaxGpuPendingQueue &&
+           gpuAdmittedStateCapacity > 0 && gpuAdmittedStateCapacity <= kMaxGpuAdmittedStates &&
            gpuPendingQueueCapacity <= gpuAdmittedStateCapacity && gpuLiveContinuationCapacity > 0 &&
            gpuLiveContinuationCapacity <= kMaxGpuLiveContinuations &&
            gpuLiveContinuationCapacity <= gpuAdmittedStateCapacity &&

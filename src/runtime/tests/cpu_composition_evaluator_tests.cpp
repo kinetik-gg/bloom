@@ -1267,16 +1267,13 @@ void testRepeatability(Expectations& expectations) {
                                                   std::string("Bloom RAM preview"),
                                                   {kTextSize, 24.0},
                                                   {kTextColor, core::Color4d{1.0, 0.9, 0.8, 1.0}}});
-    operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
-                                        kLayerParametersB,
-                                        {.position = {80.0, 60.0},
-                                         .scale = {0.8, 0.8},
-                                         .rotation = 15.0,
-                                         .opacity = 0.75}));
-    operations.emplace_back(runtime::CompiledLayerStack{
-        kStackNode,
-        {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)},
-         {kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(layerOutput(
+        kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2), kLayerParametersB,
+        {.position = {80.0, 60.0}, .scale = {0.8, 0.8}, .rotation = 15.0, .opacity = 0.75}));
+    operations.emplace_back(
+        runtime::CompiledLayerStack{kStackNode,
+                                    {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)},
+                                     {kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return publishPlan(runtime::CompiledCompositionPlanDefinition{
@@ -1360,8 +1357,8 @@ void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
     expectations.expect(everyWidthAgrees, "every band width publishes the same pixels");
 
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
-    const auto serialDisplay = displayPreparer.prepare(serial.frame(), displayRequest(1U << 24U),
-                                                       {}, {}, nullptr);
+    const auto serialDisplay =
+        displayPreparer.prepare(serial.frame(), displayRequest(1U << 24U), {}, {}, nullptr);
     const auto parallelDisplay =
         displayPreparer.prepare(parallel.frame(), displayRequest(1U << 24U), {}, {}, &executor);
     const bool displayIdentical =
@@ -1371,18 +1368,19 @@ void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
         std::memcmp(serialDisplay.frame()->buffer().pixels().data(),
                     parallelDisplay.frame()->buffer().pixels().data(),
                     serialDisplay.frame()->buffer().pixels().size_bytes()) == 0;
-    expectations.expect(displayIdentical,
-                        "row-parallel display preparation produces byte-for-byte the serial buffer");
+    expectations.expect(
+        displayIdentical,
+        "row-parallel display preparation produces byte-for-byte the serial buffer");
 }
 
 class CancellationGate final {
   public:
     // ADAPTED (row bands): an operation's rows are now evaluated in BANDS, so the evaluator no
     // longer reports one progress event per row -- it reports the start of a row pass
-    // (`completed == 0`) and its end, both from the thread that owns the frame. Pausing on the start
-    // event is a stricter rendezvous than the old `completed == 1` one: it stops the worker before
-    // the first band has touched a pixel, so the cancellation this test requests has to be observed
-    // by a band's own per-row check rather than by the next operation.
+    // (`completed == 0`) and its end, both from the thread that owns the frame. Pausing on the
+    // start event is a stricter rendezvous than the old `completed == 1` one: it stops the worker
+    // before the first band has touched a pixel, so the cancellation this test requests has to be
+    // observed by a band's own per-row check rather than by the next operation.
     void pauseAtFirstRowPass(const runtime::EvaluationProgress& progress) {
         if (progress.stage != runtime::EvaluationProgressStage::Operation ||
             progress.completed != 0) {
@@ -1477,8 +1475,8 @@ void testDeterministicScanlineCancellation(Expectations& expectations) {
 }
 
 // The same rendezvous as the test above, but with the SCHEDULER's own row-band pool driving the
-// rows: cancellation has to be observed inside a band, by the per-row check every band makes, and no
-// band may go on to finish the frame after the token was cancelled.
+// rows: cancellation has to be observed inside a band, by the per-row check every band makes, and
+// no band may go on to finish the frame after the token was cancelled.
 void testBandedEvaluationCancelsInsideABand(Expectations& expectations) {
     const auto plan = bandedPlan();
     runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
@@ -1494,9 +1492,9 @@ void testBandedEvaluationCancelsInsideABand(Expectations& expectations) {
     std::atomic_bool framePublished = false;
     const runtime::CpuCompositionEvaluator evaluator;
     auto submission = scheduler.submit<void>(
-        runtime::TaskRequest("Banded cancellation fixture",
-                            {.kind = runtime::TaskOwnerKind::Composition,
-                             .id = runtime::TaskOwnerId::fromRaw(3)}),
+        runtime::TaskRequest(
+            "Banded cancellation fixture",
+            {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(3)}),
         [plan, &evaluator, &gate, &evaluatorCancelled,
          &framePublished](runtime::TaskContext& context) {
             const auto result = evaluator.evaluate(

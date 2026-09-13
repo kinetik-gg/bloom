@@ -20,10 +20,10 @@ namespace bloom::ui {
 // surfaces the diagnostic -- see composition_preview_controller.cpp's existing Failed handling,
 // unchanged) -- Bloom never auto-substitutes the reference transform for a qualified request once
 // qualification is known to have failed.
-// `planCache` is where the compiled plan for the live document revision is kept, so that scrubbing or
-// playing a composition compiles nothing (task PERF1; a compiled plan is time-independent -- see
-// CompiledPlanCache). Pass one to share it with another surface or to read its statistics; omit it and
-// the pipeline owns a cache of its own.
+// `planCache` is where the compiled plan for the live document revision is kept, so that scrubbing
+// or playing a composition compiles nothing (task PERF1; a compiled plan is time-independent -- see
+// CompiledPlanCache). Pass one to share it with another surface or to read its statistics; omit it
+// and the pipeline owns a cache of its own.
 //
 // The per-row kernels of both evaluation and display preparation run across the row-band pool the
 // TaskScheduler handed to this request's own TaskContext, so preview frames use the machine's cores

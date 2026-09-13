@@ -2,9 +2,9 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
-#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QObject>
 #include <QString>
@@ -76,9 +76,9 @@ enum class FrameFreshness : std::uint8_t {
     Stale,
 };
 
-// How far a RAM preview run has got, published here rather than on the RAM preview controller because
-// the Viewer footer's one dependency is this controller -- the same reason the dropped-frame counter
-// lives here (task S5, item 3b).
+// How far a RAM preview run has got, published here rather than on the RAM preview controller
+// because the Viewer footer's one dependency is this controller -- the same reason the
+// dropped-frame counter lives here (task S5, item 3b).
 struct RamPreviewProgress final {
     std::uint64_t cachedFrames = 0;
     std::uint64_t totalFrames = 0;
@@ -101,10 +101,10 @@ class CompositionPreviewController final : public QObject {
 
   public:
     // `frameCache` is the RAM preview cache (task PERF1): a request whose key is already cached is
-    // answered from it immediately, with no evaluation and without entering the coalescing path, and
-    // every frame this controller publishes is put into it -- so playing a range once makes the second
-    // pass a sequence of lookups. Pass one to share it with the RAM preview controller; omit it and
-    // this controller owns a cache of its own.
+    // answered from it immediately, with no evaluation and without entering the coalescing path,
+    // and every frame this controller publishes is put into it -- so playing a range once makes the
+    // second pass a sequence of lookups. Pass one to share it with the RAM preview controller; omit
+    // it and this controller owns a cache of its own.
     CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
                                  CompositionPreviewSettings settings = {},
@@ -115,10 +115,10 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
-    // The identity this controller WOULD request for `time` in the live composition, which is what a
-    // caller asks the cache about when it wants to know whether a frame is already there (the RAM
-    // preview controller, and the transport deciding which clock to keep). Only the request generation
-    // is missing from it, and the cache key does not carry one.
+    // The identity this controller WOULD request for `time` in the live composition, which is what
+    // a caller asks the cache about when it wants to know whether a frame is already there (the RAM
+    // preview controller, and the transport deciding which clock to keep). Only the request
+    // generation is missing from it, and the cache key does not carry one.
     [[nodiscard]] std::optional<PreviewFrameCacheKey>
     cacheKeyForTime(core::RationalTime time) const;
 
@@ -150,9 +150,9 @@ class CompositionPreviewController final : public QObject {
 
     // --- RAM preview progress (task PERF1, item 3) ---------------------------------------------
     //
-    // Engaged exactly while a RAM preview run is caching, so a surface reading it says nothing at all
-    // outside a run rather than "0/0". Driven by RamPreviewController; this controller neither starts
-    // nor interprets a run.
+    // Engaged exactly while a RAM preview run is caching, so a surface reading it says nothing at
+    // all outside a run rather than "0/0". Driven by RamPreviewController; this controller neither
+    // starts nor interprets a run.
     [[nodiscard]] const std::optional<RamPreviewProgress>& ramPreviewProgress() const noexcept;
     void beginRamPreviewProgress(std::uint64_t totalFrames);
     void setRamPreviewProgress(std::uint64_t cachedFrames);
@@ -203,8 +203,8 @@ class CompositionPreviewController final : public QObject {
 
     // `allowCachedFrame` is false for an explicit refresh: a refresh asks for the frame to be
     // re-derived because something the cache key does not cover may have changed -- the qualified
-    // display transform becoming available, or failing, is the live example -- so answering it from the
-    // cache would be answering a question nobody asked.
+    // display transform becoming available, or failing, is the live example -- so answering it from
+    // the cache would be answering a question nobody asked.
     void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind,
                         bool allowCachedFrame = true);
     void submitPreview(PendingRequest request, PreparedPreviewFrameHandle retainedFrame);

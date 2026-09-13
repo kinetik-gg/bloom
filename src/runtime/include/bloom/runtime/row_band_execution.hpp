@@ -36,8 +36,7 @@ struct RowBand final {
 // the same way, which is what makes a parallel evaluation reproducible rather than merely correct.
 // The remainder is spread one row at a time across the leading bands, so band sizes differ by at
 // most one.
-[[nodiscard]] std::vector<RowBand> planRowBands(std::uint32_t rowCount,
-                                                std::size_t maximumBands);
+[[nodiscard]] std::vector<RowBand> planRowBands(std::uint32_t rowCount, std::size_t maximumBands);
 
 // A bounded pool of worker threads that runs row bands, owned by the TaskScheduler so that ONE
 // object bounds how much CPU Bloom spends on pixels at a time (see TaskScheduler::rowBandExecutor()
@@ -94,9 +93,10 @@ class CpuRowBandExecutor final {
     bool stopping_ = false;
 };
 
-// What a banded row pass ended as: the ordinary success, cancellation observed at a row boundary, one
-// row's structured failure, or -- never expected, because every row kernel Bloom has is noexcept --
-// a band that escaped by throwing, which the caller reports in its own diagnostic vocabulary.
+// What a banded row pass ended as: the ordinary success, cancellation observed at a row boundary,
+// one row's structured failure, or -- never expected, because every row kernel Bloom has is
+// noexcept -- a band that escaped by throwing, which the caller reports in its own diagnostic
+// vocabulary.
 template <typename Failure> struct RowBandPassOutcome final {
     bool cancelled = false;
     bool incomplete = false;
@@ -104,29 +104,29 @@ template <typename Failure> struct RowBandPassOutcome final {
 };
 
 // Runs `rowFunction` once for every row in [originY, originY + rowCount), in row BANDS across
-// `executor` -- or inline in band order when `executor` is null, which is what a serial configuration
-// and any single-band image both get. `rowFunction` returns an engaged optional to fail the pass.
+// `executor` -- or inline in band order when `executor` is null, which is what a serial
+// configuration and any single-band image both get. `rowFunction` returns an engaged optional to
+// fail the pass.
 //
-// Why the pixels cannot depend on how the rows were divided: a row kernel writes only its own output
-// row span and reads only immutable inputs, bands partition the rows, so no two bands touch the same
-// destination pixel and no band observes another's output. The split itself is planRowBands(), a pure
-// function of the row count and the band limit. The one thing banding does change is WHICH failing
-// row is reported when several fail at once: the lowest band index wins, which is the row a serial
-// pass would have stopped at whenever only one row can fail.
+// Why the pixels cannot depend on how the rows were divided: a row kernel writes only its own
+// output row span and reads only immutable inputs, bands partition the rows, so no two bands touch
+// the same destination pixel and no band observes another's output. The split itself is
+// planRowBands(), a pure function of the row count and the band limit. The one thing banding does
+// change is WHICH failing row is reported when several fail at once: the lowest band index wins,
+// which is the row a serial pass would have stopped at whenever only one row can fail.
 //
 // Progress is deliberately NOT reported from inside a band: a progress callback belongs to the task
-// that owns the work and is not thread-safe. Callers report the start and the end of a row pass from
-// their own thread instead.
+// that owns the work and is not thread-safe. Callers report the start and the end of a row pass
+// from their own thread instead.
 //
-// Addressing the destination: a band reaches its rows through the builder's own row() accessor, which
-// is non-const only because it hands back a mutable span -- it reads the builder's descriptor and
-// storage pointer and mutates nothing, so concurrent calls from band threads are reads of shared
-// state and the spans they return are disjoint by construction.
+// Addressing the destination: a band reaches its rows through the builder's own row() accessor,
+// which is non-const only because it hands back a mutable span -- it reads the builder's descriptor
+// and storage pointer and mutates nothing, so concurrent calls from band threads are reads of
+// shared state and the spans they return are disjoint by construction.
 template <typename RowFunction>
-[[nodiscard]] auto runRowBandPass(CpuRowBandExecutor* const executor,
-                                  const CancellationToken& cancellation,
-                                  const std::uint32_t rowCount, const std::int64_t originY,
-                                  RowFunction&& rowFunction)
+[[nodiscard]] auto
+runRowBandPass(CpuRowBandExecutor* const executor, const CancellationToken& cancellation,
+               const std::uint32_t rowCount, const std::int64_t originY, RowFunction&& rowFunction)
     -> RowBandPassOutcome<std::invoke_result_t<RowFunction&, std::int64_t>> {
     using Failure = std::invoke_result_t<RowFunction&, std::int64_t>;
     RowBandPassOutcome<Failure> outcome;

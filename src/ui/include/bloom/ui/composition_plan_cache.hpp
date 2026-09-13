@@ -29,15 +29,15 @@ inline constexpr std::size_t kDefaultCompiledPlanCacheCapacity = 4;
 // belong to the request that asked, and re-deriving them costs what it cost the first time. Only a
 // Compiled or Unsupported outcome is retained, both of which are a property of the revision.
 //
-// Entries are held most-recently-used first and the oldest is dropped past the capacity, so undo and
-// redo across a few revisions still hit while a long editing session cannot grow the cache.
+// Entries are held most-recently-used first and the oldest is dropped past the capacity, so undo
+// and redo across a few revisions still hit while a long editing session cannot grow the cache.
 // Thread-safe: the preview pipeline runs on task workers.
 class CompiledPlanCache final {
   public:
     struct Statistics final {
-        // How many times a plan was actually compiled through this cache, and how many requests were
-        // answered from it. A preview that keeps compiling at one revision shows up here as compiles
-        // that should have been hits.
+        // How many times a plan was actually compiled through this cache, and how many requests
+        // were answered from it. A preview that keeps compiling at one revision shows up here as
+        // compiles that should have been hits.
         std::uint64_t compiles = 0;
         std::uint64_t hits = 0;
 

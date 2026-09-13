@@ -56,10 +56,10 @@ class TimelineEditor final : public QWidget {
     Q_OBJECT
 
   public:
-    // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition menu
-    // so both entry points call one method. Null leaves the transport's RAM Preview button and
-    // shortcut present but disabled -- an affordance that is visibly unavailable rather than one that
-    // silently does nothing.
+    // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
+    // menu so both entry points call one method. Null leaves the transport's RAM Preview button and
+    // shortcut present but disabled -- an affordance that is visibly unavailable rather than one
+    // that silently does nothing.
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
                    RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
     // Exists only to drop the application-wide focusChanged subscription BEFORE Qt starts deleting
@@ -81,7 +81,9 @@ class TimelineEditor final : public QWidget {
     [[nodiscard]] TimelineLaneRegion* laneRegionForTest() const noexcept { return lanes_; }
     [[nodiscard]] TimelineRuler* rulerForTest() const noexcept { return ruler_; }
     [[nodiscard]] QScrollBar* verticalScrollBarForTest() const noexcept { return scrollBar_; }
-    [[nodiscard]] QToolButton* ramPreviewButtonForTest() const noexcept { return ramPreviewButton_; }
+    [[nodiscard]] QToolButton* ramPreviewButtonForTest() const noexcept {
+        return ramPreviewButton_;
+    }
 
   private:
     void rebuild();

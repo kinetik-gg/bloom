@@ -170,10 +170,10 @@ void PlaybackController::tick() {
     }
     // The frame-accurate clock (task PERF1, item 4): when the NEXT frame is already cached there is
     // nothing to drop, so the target advances by exactly one frame however far behind the transport
-    // is -- no elapsed-time catch-up skipping. The due moment above is still total elapsed time since
-    // play()'s fixed start, so presentations track the ideal frame grid rather than accumulating a
-    // per-tick error. An uncached next frame keeps the original policy and jumps to whatever elapsed
-    // time demands.
+    // is -- no elapsed-time catch-up skipping. The due moment above is still total elapsed time
+    // since play()'s fixed start, so presentations track the ideal frame grid rather than
+    // accumulating a per-tick error. An uncached next frame keeps the original policy and jumps to
+    // whatever elapsed time demands.
     const auto steppedOffset = appliedOffset_ + 1;
     auto nextOffset = *frameOffset;
     if (steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
@@ -207,7 +207,7 @@ void PlaybackController::tick() {
 }
 
 bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,
-                                      const std::uint64_t frameIndex) const {
+                                       const std::uint64_t frameIndex) const {
     if (frameCached_) {
         return frameCached_(frameIndex);
     }

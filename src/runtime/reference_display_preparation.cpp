@@ -150,12 +150,10 @@ ReferenceDisplayPreparationResult::ReferenceDisplayPreparationResult(
     std::vector<ReferenceDisplayDiagnostic> diagnostics) noexcept
     : status_(status), frame_(std::move(frame)), diagnostics_(std::move(diagnostics)) {}
 
-ReferenceDisplayPreparationResult
-CpuReferenceDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> processFrame,
-                                     const ReferenceDisplayPreparationRequest& request,
-                                     const CancellationToken& cancellation,
-                                     const ReferenceDisplayProgressCallback& progress,
-                                     CpuRowBandExecutor* const rowBands) const {
+ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
+    std::shared_ptr<const ProcessFrame> processFrame,
+    const ReferenceDisplayPreparationRequest& request, const CancellationToken& cancellation,
+    const ReferenceDisplayProgressCallback& progress, CpuRowBandExecutor* const rowBands) const {
     try {
         if (cancellation.isCancellationRequested()) {
             return ReferenceDisplayPreparationResult::cancelled();
@@ -216,18 +214,18 @@ CpuReferenceDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
         }
         const auto window = displayDescriptorResult.value()->displayWindow();
         const auto height = window.extent().height();
-        // The mapping runs in row BANDS (task PERF1), so the two Mapping progress events bracket the
-        // pass instead of counting rows: a band runs on another thread and the callback belongs to the
-        // task that owns the frame. `completed == 0` is the start of the pass.
-        reportProgress(progress, {.stage = ReferenceDisplayProgressStage::Mapping,
-                                  .completed = 0,
-                                  .total = height});
+        // The mapping runs in row BANDS (task PERF1), so the two Mapping progress events bracket
+        // the pass instead of counting rows: a band runs on another thread and the callback belongs
+        // to the task that owns the frame. `completed == 0` is the start of the pass.
+        reportProgress(
+            progress,
+            {.stage = ReferenceDisplayProgressStage::Mapping, .completed = 0, .total = height});
         auto& buffer = *displayBuilder.value();
         const auto& source = *processView.value();
         const auto outcome = runRowBandPass(
             rowBands, cancellation, height, window.originY(),
-            [&buffer, &source, window](
-                const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
+            [&buffer, &source,
+             window](const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
                 auto outputRow = buffer.row(y);
                 if (!outputRow) {
                     return imageDiagnostic(*outputRow.error(),

@@ -55,7 +55,8 @@ CompiledPlanCache::compile(const runtime::SnapshotCompiler& compiler,
     // Compiled OUTSIDE the lock: compilation is the expensive part, and holding the cache's lock
     // across it would make two compositions compiling at once wait on each other for no reason. Two
     // requests racing on the same key can therefore both compile, which costs one redundant
-    // compilation and never produces a wrong plan -- the insert below keeps whichever arrives first.
+    // compilation and never produces a wrong plan -- the insert below keeps whichever arrives
+    // first.
     auto result = compiler.compile(request, cancellation);
     if (!isRetainable(result.status)) {
         return result;
