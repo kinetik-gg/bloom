@@ -189,7 +189,7 @@ void TimelineRuler::wheelEvent(QWheelEvent* event) {
 
 void TimelineWorkAreaRow::setRuler(TimelineRuler& ruler) {
     ruler_ = &ruler;
-    strip_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    strip_->setRuler(ruler);
     connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
 }
 

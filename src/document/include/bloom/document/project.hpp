@@ -17,6 +17,10 @@
 
 namespace bloom::document {
 
+struct WorkArea {
+    core::RationalTime start{}, end{};
+    friend bool operator==(const WorkArea&, const WorkArea&) = default;
+};
 class Composition final {
   public:
     Composition(CompositionId id, std::string name, core::RationalTime duration,
@@ -45,6 +49,8 @@ class Composition final {
     [[nodiscard]] const NodeGroups& nodeGroups() const noexcept { return nodeGroups_; }
     [[nodiscard]] NodeGroups& nodeGroups() noexcept { return nodeGroups_; }
 
+    [[nodiscard]] const std::optional<WorkArea>& workArea() const noexcept { return workArea_; }
+    void setWorkArea(std::optional<WorkArea> area) noexcept { workArea_ = area; }
     [[nodiscard]] bool nodeLocked(NodeId node) const;
     [[nodiscard]] bool parameterLocked(ParameterId parameter) const;
     void setName(std::string name) { name_ = std::move(name); }
@@ -54,6 +60,7 @@ class Composition final {
     [[nodiscard]] ValidationResult validate() const;
 
   private:
+    std::optional<WorkArea> workArea_{};
     CompositionId id_;
     std::string name_;
     core::RationalTime duration_;

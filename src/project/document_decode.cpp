@@ -582,9 +582,11 @@ using document::SchemaVersion;
     static constexpr std::array<std::string_view, 9> kKeys{
         "id",    "name",       "duration",  "format", "parameters", "animationCurves",
         "graph", "nodeLayout", "nodeGroups"};
-    const auto keys = std::span(kKeys).first(state.documentMinor == 0   ? 7U
+    const auto baseKeys = std::span(kKeys).first(state.documentMinor == 0   ? 7U
                                              : state.documentMinor == 1 ? 8U
                                                                         : 9U);
+    std::vector<std::string_view> keys(baseKeys.begin(), baseKeys.end());
+    if (state.documentMinor >= 5 && node.findMember("workArea")) keys.push_back("workArea");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -642,9 +644,22 @@ using document::SchemaVersion;
     if (state.documentMinor == 1) {
         return true;
     }
+    if (const auto* area = node.findMember("workArea"); area && state.documentMinor >= 5) {
+        const AttachmentScope scope(state, "workArea");
+        std::vector<const JsonValue*> range;
+        constexpr std::array<std::string_view, 2> rangeKeys{"start", "end"};
+        const auto areaPath = joinPath(path, "workArea");
+        if (!matchOrderedMembers(*area, rangeKeys, true, state, areaPath, range)) return false;
+        document::WorkArea value;
+        if (!detail::decodeRationalTimeValue(*range[0], state, joinPath(areaPath, "start"), value.start) ||
+            !detail::decodeRationalTimeValue(*range[1], state, joinPath(areaPath, "end"), value.end)) return false;
+        if (value.start < core::RationalTime{} || value.start >= value.end || value.end > out.duration) {
+            state.fail(DocumentDecodeError::DomainViolation, areaPath); return false;
+        }
+        out.workArea = value;
+    }
     const AttachmentScope groupsScope(state, "nodeGroups");
-    return detail::decodeNodeGroups(*members[8], state, joinPath(path, "nodeGroups"),
-                                    out.nodeGroups);
+    return detail::decodeNodeGroups(*members[8], state, joinPath(path, "nodeGroups"), out.nodeGroups);
 }
 
 [[nodiscard]] bool decodeLocator(const JsonValue& node, DecodeState& state, const std::string& path,

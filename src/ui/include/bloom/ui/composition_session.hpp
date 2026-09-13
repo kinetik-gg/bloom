@@ -156,6 +156,7 @@ class CompositionSession final : public QObject {
     void clearSelection();
     void selectLayer(document::LayerId layerId);
     void selectNode(document::NodeId nodeId);
+    [[nodiscard]] document::WorkArea workArea() const noexcept;
     [[nodiscard]] const std::set<document::NodeId>& selectedNodes() const noexcept {
         return selectedNodes_;
     }

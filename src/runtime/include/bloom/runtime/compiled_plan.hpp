@@ -133,7 +133,7 @@ struct CompiledLayerOutput {
 
     core::RationalTime inPoint{};
     // Absent means full duration; old/default plans retain identical behavior.
-    std::optional<core::RationalTime> outPoint;
+    std::optional<core::RationalTime> outPoint{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

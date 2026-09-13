@@ -245,6 +245,7 @@ target_sources(
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_work_area.cpp
         timeline_navigation.cpp
         viewer_editor.cpp
         workspace_host.cpp

@@ -67,12 +67,16 @@ void RamPreviewController::start() {
 
     snapshot_ = session_.snapshot();
     compositionId_ = session_.compositionId();
-    totalFrameCount_ = mapping->maximumFrameIndex() + 1;
-    nextFrameIndex_ = 0;
+    const auto range = session_.workArea();
+    const auto rate = composition->format().frameRate();
+    const auto endMapping = core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping) return;
+    totalFrameCount_ = endMapping.value()->maximumFrameIndex() + 1;
+    nextFrameIndex_ = mapping->nearestFrameIndex(range.start);
     cachedFrameCount_ = 0;
     evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
     caching_ = true;
-    previewController_.beginRamPreviewProgress(totalFrameCount_);
+    previewController_.beginRamPreviewProgress(totalFrameCount_ - nextFrameIndex_);
     emit stateChanged();
     submitNextFrame();
 }

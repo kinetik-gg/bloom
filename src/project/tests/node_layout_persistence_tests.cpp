@@ -70,6 +70,7 @@ void migrationAndReopen() {
         layer->inPoint = *core::RationalTime::create(1, 24);
         layer->outPoint = core::RationalTime::fromInteger(1);
     }
+    editing->setWorkArea(document::WorkArea{*core::RationalTime::create(1, 24), core::RationalTime::fromInteger(1)});
     auto& layout = editing->nodeLayout();
     const auto first = composition.graph().nodes().front().id;
     layout[first] = {{-123.5, 89.25}, 276.5, true, true};
@@ -94,6 +95,7 @@ void migrationAndReopen() {
     expect(reopenedSnapshot.project().compositions().front().nodeLayout() ==
                snapshot.project().compositions().front().nodeLayout(),
            "all layout fields and unknown-node records round-trip exactly");
+    expect(reopenedSnapshot.project().compositions().front().workArea() == snapshot.project().compositions().front().workArea(), "work area survives verified reopen");
     expect(std::ranges::equal(reopenedSnapshot.project().compositions().front().graph().layerOutputs(),
         snapshot.project().compositions().front().graph().layerOutputs()), "layer ranges survive verified archive reopen");
     expect(reopenedSnapshot.ids().highWater() == snapshot.ids().highWater(),

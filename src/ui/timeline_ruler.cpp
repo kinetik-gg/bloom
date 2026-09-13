@@ -887,25 +887,6 @@ TimelineWorkAreaStrip::TimelineWorkAreaStrip(CompositionSession& session, QWidge
             qOverload<>(&TimelineWorkAreaStrip::update));
 }
 
-void TimelineWorkAreaStrip::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    QPainter painter(this);
-    // Background chrome (Surface) shows through when no composition is active -- an honest empty
-    // strip, not a stale/leftover band.
-    painter.fillRect(rect(), kit::color(kit::Color::Surface));
-    if (session_.composition() == nullptr) {
-        return;
-    }
-    // The honest current work area is the WHOLE [0, duration) range (decision 3: no range-editing
-    // feature exists, so there is no separate in/out point to visualize) -- the band therefore
-    // always spans this widget's full width by construction, never a fake partial trim. Reuses
-    // kDisabledOpacity as the "dim" fraction (the same "dimmed ink and disabled ink are the same
-    // fade recipe" precedent PropertiesEditor's updateKeyframeIndicator() already uses) rather than
-    // inventing a new opacity literal.
-    painter.fillRect(rect(),
-                     kit::withOpacity(kit::color(kit::Color::Accent), kit::kDisabledOpacity));
-}
-
 TimelineWorkAreaRow::TimelineWorkAreaRow(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("timelineWorkAreaRow");

@@ -21,7 +21,7 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
     for (const auto& a : left.project().compositions()) {
         const auto* b = right.project().findComposition(a.id());
         if (!b || a.name() != b->name() || a.duration() != b->duration() ||
-            a.format() != b->format() || a.nodeLayout() != b->nodeLayout() ||
+            a.format() != b->format() || a.workArea() != b->workArea() || a.nodeLayout() != b->nodeLayout() ||
             a.nodeGroups() != b->nodeGroups() ||
             !std::ranges::equal(a.parameters().records(), b->parameters().records()) ||
             !std::ranges::equal(a.animationCurves().records(), b->animationCurves().records()) ||
@@ -108,6 +108,9 @@ NodeId addSource(Fixture& fixture) {
 
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
+    (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(3));
+    refuse<SetWorkArea>(test, fixture, OperationIssueCode::InvalidValue, core::RationalTime::fromInteger(3), core::RationalTime::fromInteger(1));
+    (void)exercise<ClearWorkArea>(test, fixture);
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::array<std::uint8_t, 3>{12, 34, 56});
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::nullopt);
     (void)exercise<SetLayerEnabled>(test, fixture, kFirstLayerId, false);

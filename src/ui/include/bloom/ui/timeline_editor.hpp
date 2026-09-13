@@ -48,7 +48,7 @@ struct TimelineLayerEntry final {
     QString kind;
     // The clip bar's fill, from the data-type palette -- the one thing that now carries kind.
     kit::Color clipColor = kit::Color::Muted;
-    QColor labelColor;
+    QColor labelColor{};
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,

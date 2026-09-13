@@ -14,6 +14,8 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/core/blend_mode.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
 
@@ -939,6 +941,20 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     auto* rulerLayout = new QVBoxLayout(rulerColumn);
     rulerLayout->setContentsMargins(0, 0, 0, 0);
     rulerLayout->setSpacing(0);
+    for (const auto& [key, start] : {std::pair{Qt::Key_B, true}, std::pair{Qt::Key_N, false}}) {
+        auto* action = new QAction(this);
+        action->setObjectName(start ? "timelineSetWorkAreaStartAction" : "timelineSetWorkAreaEndAction");
+        action->setShortcut(QKeySequence(key));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(action);
+        connect(action, &QAction::triggered, this, [this, start] {
+            auto area = session_.workArea();
+            if (start) area.start = session_.currentTime(); else area.end = session_.currentTime();
+            commands::Transaction transaction("Set Work Area", session_.snapshot().revision());
+            transaction.emplace<commands::SetWorkArea>(session_.compositionId(), area.start, area.end);
+            (void)session_.executeTransaction(std::move(transaction));
+        });
+    }
     workArea_ = new TimelineWorkAreaRow(session_, rulerColumn);
     workArea_->setFixedHeight(kit::px(kit::Spacing::M));
     ruler_ = new TimelineRuler(session_, previewController, rulerColumn);

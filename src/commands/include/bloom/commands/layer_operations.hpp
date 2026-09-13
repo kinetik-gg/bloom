@@ -72,4 +72,22 @@ class SetLayerLabelColor final : public Operation {
     document::LayerId layer_;
     std::optional<std::array<std::uint8_t, 3>> color_;
 };
+class SetWorkArea final : public Operation {
+ public:
+    SetWorkArea(document::CompositionId composition, core::RationalTime start, core::RationalTime end)
+        : composition_(composition), start_(start), end_(end) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+    core::RationalTime start_, end_;
+};
+class ClearWorkArea final : public Operation {
+ public:
+    explicit ClearWorkArea(document::CompositionId composition) : composition_(composition) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+};
 } // namespace bloom::commands

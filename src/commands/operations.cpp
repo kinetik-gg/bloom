@@ -190,6 +190,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
 
     document::Composition composition(ids->composition, name, source.duration(), std::move(graph),
                                       source.format());
+    composition.setWorkArea(source.workArea());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);

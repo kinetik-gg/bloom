@@ -357,6 +357,22 @@
           "items": {
             "$ref": "#/$defs/nodeGroup-1.2"
           }
+        },
+        "workArea": {
+          "type": "object",
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/rationalTime"
+            },
+            "end": {
+              "$ref": "#/$defs/rationalTime"
+            }
+          },
+          "unevaluatedProperties": false
         }
       },
       "unevaluatedProperties": true

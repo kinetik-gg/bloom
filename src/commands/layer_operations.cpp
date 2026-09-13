@@ -1,17 +1,21 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include "node_operation_support.hpp"
-#include <cmath>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <limits>
 
 namespace bloom::commands {
 namespace {
 std::optional<core::RationalTime> snap(const core::RationalTime time, const document::Composition& composition) {
     const auto rate = composition.format().frameRate();
-    const long double frame = std::round(static_cast<long double>(time.numerator()) / time.denominator() * rate.numerator() / rate.denominator());
-    if (frame < 0 || frame > static_cast<long double>(std::numeric_limits<std::int64_t>::max()) / static_cast<long double>(rate.denominator()))
-        return std::nullopt;
-    return core::RationalTime::create(static_cast<std::int64_t>(frame) * rate.denominator(), rate.numerator());
+    const auto mapping = core::FrameTimeMapping::create(composition.duration(), rate.numerator(), rate.denominator());
+    if (!mapping) return std::nullopt;
+    const auto index = mapping.value()->nearestFrameIndex(time);
+    auto result = mapping.value()->timeForFrame(index);
+    // The frame mapping clamps scrubs to the last frame. Range endpoints may also be duration.
+    if (time == composition.duration()) return time;
+    if (!result) return std::nullopt;
+    return *result.value();
 }
 OperationResult invalidRange() {
     return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer range must satisfy 0 <= in < out <= duration on composition frames");
@@ -101,6 +105,26 @@ OperationResult SetLayerLabelColor::apply(document::Draft& draft) const {
     if (!layer) return detail::invalidTarget();
     if (layer->labelColor == color_) return OperationResult::noChange();
     layer->labelColor = color_;
+    return OperationResult::applied();
+}
+std::string_view SetWorkArea::typeId() const noexcept { return "bloom.composition.set-work-area"; }
+OperationResult SetWorkArea::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition) return detail::invalidTarget();
+    if (start_ < core::RationalTime{} || start_ >= end_ || end_ > composition->duration()) return invalidRange();
+    const auto start = snap(start_, *composition), end = snap(end_, *composition);
+    if (!start || !end || *start >= *end) return invalidRange();
+    const document::WorkArea area{*start, *end};
+    if (composition->workArea() == area) return OperationResult::noChange();
+    composition->setWorkArea(area);
+    return OperationResult::applied();
+}
+std::string_view ClearWorkArea::typeId() const noexcept { return "bloom.composition.clear-work-area"; }
+OperationResult ClearWorkArea::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition) return detail::invalidTarget();
+    if (!composition->workArea()) return OperationResult::noChange();
+    composition->setWorkArea(std::nullopt);
     return OperationResult::applied();
 }
 } // namespace bloom::commands

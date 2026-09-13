@@ -74,6 +74,8 @@ ValidationResult Composition::validate() const {
                    "Composition duration must be greater than zero");
     }
 
+    if (workArea_ && (workArea_->start < core::RationalTime{} || workArea_->start >= workArea_->end || workArea_->end > duration_))
+        result.add(ValidationCode::InvalidValue, "workArea", "Invalid composition work area");
     for (const auto& layer : graph_.layerOutputs()) {
         if (layer.inPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_) ||
             layer.endPoint(duration_) > duration_)
