@@ -1623,10 +1623,35 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     mouse(QEvent::MouseButtonRelease, 5.5, yFor(opacity) + 10);
     expectations.expect(session.selection().keyframes.size() == 6,
                         "box-select spans parameter rows");
-    click(
-        3,
-        yFor(
-            opacity)); // Existing selection stays intact for dragging; explicitly select one below.
+    std::vector<ui::KeyframeSelection> stretchKeys;
+    for (const auto& selectedKey : session.selection().keyframes)
+        if (selectedKey.curveId == selected.front().curveId)
+            stretchKeys.push_back(selectedKey);
+    session.selectKeyframes(stretchKeys);
+    const auto stretchBefore = session.selectedKeyframeData();
+    const auto stretchRevision = session.snapshot().revision();
+    mouse(QEvent::MouseButtonPress, 5, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 9, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 9, yFor(opacity), Qt::AltModifier);
+    const auto stretched = session.selectedKeyframeData();
+    expectations.expect(stretched.size() == 3 && stretched[0].time == time(1) &&
+                            stretched[1].time == time(5) && stretched[2].time == time(9),
+                        "Alt-drag last key scales about the fixed first key");
+    expectations.expect(session.snapshot().revision().value() == stretchRevision.value() + 1,
+                        "stretch is one undo transaction");
+    (void)session.undo();
+    const auto restored = session.selectedKeyframeData();
+    expectations.expect(restored.size() == 3 && restored[1].time == stretchBefore[1].time &&
+                            session.selection().keyframes == stretchKeys,
+                        "stretch undo restores exact times and IDs");
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 3, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 3, yFor(opacity), Qt::AltModifier);
+    const auto compressed = session.selectedKeyframeData();
+    expectations.expect(compressed.size() == 3 && compressed[0].time == time(3) &&
+                            compressed[1].time == time(4) && compressed[2].time == time(5),
+                        "Alt-drag first key scales about the fixed last key");
+    (void)session.undo();
     session.selectKeyframe(selected[0].curveId, selected[0].keyframeId);
     mouse(QEvent::MouseButtonPress, 1, yFor(opacity), Qt::AltModifier);
     mouse(QEvent::MouseMove, 2, yFor(opacity), Qt::AltModifier);
@@ -1651,6 +1676,29 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     expectations.expect(session.composition()->animationCurves().find(selected.front().curveId) !=
                             nullptr,
                         "one undo restores deleted curve keys");
+    session.selectKeyframes(selected);
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity));
+    mouse(QEvent::MouseMove, 1.123, yFor(opacity), Qt::ShiftModifier);
+    mouse(QEvent::MouseButtonRelease, 1.123, yFor(opacity), Qt::ShiftModifier);
+    const auto unsnapped = session.selectedKeyframeData();
+    expectations.expect(unsnapped.size() == 2 && unsnapped[0].time == time(1123, 1000) &&
+                            unsnapped[1].time == time(3123, 1000),
+                        "Shift disables frame and magnetic snapping with one exact offset");
+    key(Qt::Key_C, Qt::ControlModifier);
+    (void)session.setCurrentTime(time(7011, 1000));
+    key(Qt::Key_V, Qt::ControlModifier);
+    const auto pastedSubframes = session.selectedKeyframeData();
+    expectations.expect(pastedSubframes.size() == 2 &&
+                            pastedSubframes[0].time == time(7011, 1000) &&
+                            pastedSubframes[1].time == time(9011, 1000),
+                        "clipboard preserves rational offsets relative to a subframe playhead");
+    const auto cancelledRevision = session.snapshot().revision();
+    mouse(QEvent::MouseButtonPress, 7.011, yFor(opacity));
+    mouse(QEvent::MouseMove, 7.3, yFor(opacity));
+    key(Qt::Key_Escape);
+    mouse(QEvent::MouseButtonRelease, 7.3, yFor(opacity));
+    expectations.expect(session.snapshot().revision() == cancelledRevision,
+                        "Escape cancels a multi-key drag without a transaction");
     finishFixture(fixture);
 }
 

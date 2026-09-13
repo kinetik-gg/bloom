@@ -1,3 +1,4 @@
+#include "timeline_keyframe_time.hpp"
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QKeyEvent>
@@ -114,6 +115,18 @@ void TimelineKeyframePanel::mousePressEvent(QMouseEvent* event) {
         gestureKeys_ = session_.selection().keyframes;
         gestureData_ = session_.selectedKeyframeData();
         copying_ = event->modifiers().testFlag(Qt::AltModifier) && gestureKeys_.size() == 1;
+        if (event->modifiers().testFlag(Qt::AltModifier) && gestureData_.size() >= 2 &&
+            std::ranges::all_of(gestureData_, [&](const auto& key) {
+                return key.parameterId == gestureData_.front().parameterId;
+            })) {
+            const auto [first, last] =
+                std::minmax_element(gestureData_.begin(), gestureData_.end(),
+                                    [](const auto& a, const auto& b) { return a.time < b.time; });
+            if (pressed_->time == first->time)
+                stretchAnchor_ = last->time;
+            else if (pressed_->time == last->time)
+                stretchAnchor_ = first->time;
+        }
     } else {
         boxing_ = true;
         gestureKeys_ = event->modifiers().testFlag(Qt::ShiftModifier)
@@ -181,6 +194,29 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
         if (snapGuide_)
             targetSeconds = snapGuide_->toSeconds();
     }
+    if (event->modifiers().testFlag(Qt::ShiftModifier) && !stretchAnchor_) {
+        const auto [first, last] =
+            std::minmax_element(gestureData_.begin(), gestureData_.end(),
+                                [](const auto& a, const auto& b) { return a.time < b.time; });
+        const double deltaSeconds =
+            std::clamp(targetSeconds - pressed_->time.toSeconds(), -first->time.toSeconds(),
+                       std::max(0.0, duration.toSeconds() - last->time.toSeconds() - 1e-9));
+        const auto offset = keyPointerOffset(deltaSeconds);
+        moves_.clear();
+        if (!offset)
+            return;
+        for (std::size_t i = 0; i < gestureData_.size(); ++i) {
+            const auto time = offsetKeyTime(gestureData_[i].time, *offset);
+            if (!time) {
+                moves_.clear();
+                return;
+            }
+            moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *time});
+        }
+        updateRows();
+        event->accept();
+        return;
+    }
     const auto targetIndex = axis->frameIndexForPixel(
         static_cast<int>(std::lround(axis->pixelForSeconds(targetSeconds))));
     long double delta = static_cast<long double>(targetIndex) - static_cast<long double>(*lead);
@@ -195,10 +231,25 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
     delta = std::clamp(delta, -static_cast<long double>(*first),
                        static_cast<long double>(axis->maxIndex - *last));
     moves_.clear();
+    const auto anchor =
+        stretchAnchor_ ? nearestFrameIndexForTime(rate, duration, *stretchAnchor_) : std::nullopt;
     for (std::size_t i = 0; i < frames.size(); ++i) {
-        const auto time = frameTimeForIndex(
-            rate, duration,
-            static_cast<std::uint64_t>(static_cast<long double>(frames[i]) + delta));
+        long double frame = static_cast<long double>(frames[i]) + delta;
+        if (anchor && *anchor != *lead) {
+            const long double fixed = static_cast<long double>(*anchor);
+            const long double oldSpan = static_cast<long double>(*lead) - fixed;
+            // Keep the dragged endpoint on its original side; a rounded collision still rejects
+            // atomically in MoveKeyframes, rather than dropping a key from the selection.
+            const long double newSpan =
+                oldSpan > 0 ? std::max(1.0L, static_cast<long double>(targetIndex) - fixed)
+                            : std::min(-1.0L, static_cast<long double>(targetIndex) - fixed);
+            frame = std::round(fixed +
+                               (static_cast<long double>(frames[i]) - fixed) * newSpan / oldSpan);
+        }
+        const auto time =
+            frameTimeForIndex(rate, duration,
+                              static_cast<std::uint64_t>(std::clamp(
+                                  frame, 0.0L, static_cast<long double>(axis->maxIndex))));
         if (!time) {
             moves_.clear();
             return;
@@ -316,6 +367,7 @@ void TimelineKeyframePanel::wheelEvent(QWheelEvent* event) {
     }
 }
 void TimelineKeyframePanel::cancelGesture() {
+    stretchAnchor_.reset();
     pressed_.reset();
     dragging_ = false;
     boxing_ = false;

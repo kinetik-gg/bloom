@@ -275,6 +275,7 @@ class TimelineKeyframePanel final : public QWidget {
     QPointF press_;
     std::optional<LaneKey> pressed_;
     bool dragging_ = false, boxing_ = false, copying_ = false;
+    std::optional<core::RationalTime> stretchAnchor_;
     document::Revision gestureRevision_{};
     std::vector<KeyframeSelection> gestureKeys_;
     std::vector<commands::KeyframePaste> gestureData_;

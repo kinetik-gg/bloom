@@ -1,3 +1,4 @@
+#include "timeline_keyframe_time.hpp"
 #include <QThread>
 #include <algorithm>
 #include <bloom/commands/transaction.hpp>
@@ -129,22 +130,17 @@ bool CompositionSession::pasteCopiedKeyframes() {
         return false;
     auto keys = keyframeClipboard_;
     const auto first = std::ranges::min_element(keys, {}, &commands::KeyframePaste::time)->time;
-    const auto rate = current->format().frameRate();
-    const auto duration = current->duration();
-    const auto origin = nearestFrameIndexForTime(rate, duration, first);
-    const auto destination = nearestFrameIndexForTime(rate, duration, currentTime_);
-    const auto maximum = maxFrameIndex(rate, duration);
-    if (!origin || !destination || !maximum)
+    const auto negativeOrigin = core::RationalTime::create(-first.numerator(), first.denominator());
+    const auto offset =
+        negativeOrigin ? offsetKeyTime(currentTime_, *negativeOrigin) : std::nullopt;
+    if (!offset)
         return false;
     for (auto& key : keys) {
-        const auto frame = nearestFrameIndexForTime(rate, duration, key.time);
-        if (!frame || *frame < *origin || *frame - *origin > *maximum - *destination) {
+        const auto time = offsetKeyTime(key.time, *offset);
+        if (!time || *time < core::RationalTime{} || *time >= current->duration()) {
             reportUnavailable(tr("Pasted keys would exceed the composition"));
             return false;
         }
-        const auto time = frameTimeForIndex(rate, duration, *destination + (*frame - *origin));
-        if (!time)
-            return false;
         key.time = *time;
     }
     return pasteKeyframes(std::move(keys), snapshot_.revision());
