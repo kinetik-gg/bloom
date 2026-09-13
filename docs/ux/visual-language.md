@@ -374,19 +374,22 @@ kind takes its own role here on the day it ships.
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from
 what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
-Six separated hues, none of them `Accent` or `AccentHover`:
+Seven separated hues for eight kinds, none of them `Accent` or `AccentHover`:
 
 | Socket kind | Palette token | Value | Hue |
 | --- | --- | --- | --- |
 | Image | `SocketImage` | `#2FC8A0` | teal |
 | Color | `SocketColor` | `#F2713C` | vermilion |
 | Scalar | `SocketScalar` | `#8FD44A` | yellow-green |
-| (reserved) Integer | `SocketInteger` | `#4AC8D4` | cyan |
+| Integer | `SocketInteger` | `#4AC8D4` | cyan |
 | Vector2 | `SocketVector` | `#C87AF0` | violet |
+| Vector3 | `SocketVector` | `#C87AF0` | violet |
+| Boolean | `SocketBoolean` | `#E0567B` | rose |
 | String | `SocketString` | `#F0C93C` | gold |
 
-`SocketInteger` has no `SocketValueKind` behind it yet; it is declared so the palette is complete
-rather than grown a hue at a time once an integer transport exists.
+The two vector widths share one token deliberately: they are one family, and giving them adjacent
+violets would have said "these connect" when a cross-width link is refused. What distinguishes them is
+the socket's own name and tooltip -- which is the rule below, not an exception to it.
 
 The same token inks the socket and every link leaving it. Socket labels must still identify the kind:
 color is never the only carrier.

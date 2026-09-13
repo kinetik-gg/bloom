@@ -2,6 +2,7 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/persisted_text.hpp>
+#include <bloom/document/value_operations.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,10 @@ namespace {
                 if (const auto* value = std::get_if<bloom::document::Vec2d>(&valueSource.value)) {
                     return std::isfinite(value->x) && std::isfinite(value->y);
                 }
+                if (const auto* value = std::get_if<bloom::document::Vec3d>(&valueSource.value)) {
+                    return std::isfinite(value->x) && std::isfinite(value->y) &&
+                           std::isfinite(value->z);
+                }
                 if (const auto* value = std::get_if<bloom::core::Color4d>(&valueSource.value)) {
                     return value->isValid();
                 }
@@ -34,10 +39,95 @@ namespace {
             } else if constexpr (std::is_same_v<Source, bloom::document::AnimationCurveSource>) {
                 return valueSource.curveId.isValid();
             } else {
-                return valueSource.driverId.isValid();
+                // A driver names a node and one of its output ports. Whether that node EXISTS and
+                // whether its kind fits belongs to CanonicalGraph::validate(), which can see the
+                // graph; a ParameterStore can only check that the reference is well formed.
+                return valueSource.sourceNodeId.isValid() &&
+                       bloom::document::isValidStructuralText(valueSource.outputPort);
             }
         },
         source);
+}
+
+// The value-graph schemas (task S7). Split out of constantMatchesSchema() rather than appended to
+// it because the two halves answer different questions: the layer schemas above each bound a value
+// to the picture it draws (an opacity is in [0, 1], a text size fits the rasterizer), while these
+// bound a value to the TYPE its socket carries. Every numeric one here is
+// finite-and-otherwise-free, because a value graph's whole purpose is arithmetic the artist
+// controls; the only real domains are the closed selector mappings and a non-negative tolerance.
+[[nodiscard]] bool
+valueGraphConstantMatchesSchema(const std::string_view schemaKey,
+                                const bloom::document::ConstantValueSource& constant) noexcept {
+    using namespace bloom::document;
+    const auto finiteScalar = [&] {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value);
+    };
+    const auto integer = [&] { return std::holds_alternative<std::int64_t>(constant.value); };
+    if (schemaKey == kScalarValueParameterSchemaKey ||
+        schemaKey == kScalarOperandParameterSchemaKey) {
+        return finiteScalar();
+    }
+    if (schemaKey == kIntegerValueParameterSchemaKey ||
+        schemaKey == kIntegerOperandParameterSchemaKey) {
+        return integer();
+    }
+    if (schemaKey == kBooleanValueParameterSchemaKey ||
+        schemaKey == kBooleanOperandParameterSchemaKey ||
+        schemaKey == kClampResultParameterSchemaKey) {
+        return std::holds_alternative<bool>(constant.value);
+    }
+    if (schemaKey == kVector2ValueParameterSchemaKey ||
+        schemaKey == kVector2OperandParameterSchemaKey) {
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y);
+    }
+    if (schemaKey == kVector3ValueParameterSchemaKey ||
+        schemaKey == kVector3OperandParameterSchemaKey) {
+        const auto* value = std::get_if<Vec3d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
+               std::isfinite(value->z);
+    }
+    if (schemaKey == kColorValueParameterSchemaKey ||
+        schemaKey == kColorOperandParameterSchemaKey) {
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid();
+    }
+    if (schemaKey == kStringValueParameterSchemaKey ||
+        schemaKey == kStringOperandParameterSchemaKey) {
+        return std::holds_alternative<std::string>(constant.value);
+    }
+    // The selectors. An integer naming no implemented operation is refused rather than folded to
+    // the default, exactly as an unknown blend mode is: computing a different operation than the
+    // document asked for would be a silent miscomputation.
+    if (schemaKey == kScalarOperationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && scalarOperationFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kVectorOperationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && vectorOperationFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kVectorReductionParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && vectorReductionFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kRangeInterpolationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && rangeInterpolationFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kCompareOperationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && compareOperationFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kCompareEpsilonParameterSchemaKey) {
+        // A negative tolerance is not a tolerance, and an infinite one makes every comparison true.
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) && *value >= 0.0;
+    }
+    // An unregistered schema key carries whatever it carries: this function is the gate for the
+    // schemas Bloom OWNS, and an extension's key is not one of them.
+    return true;
 }
 
 [[nodiscard]] bool
@@ -90,7 +180,7 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
     }
-    return true;
+    return valueGraphConstantMatchesSchema(schemaKey, constant);
 }
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,

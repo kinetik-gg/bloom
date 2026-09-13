@@ -1,5 +1,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 
+#include "value_node_definitions.hpp"
+
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 
@@ -10,6 +12,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -58,11 +61,35 @@ template <typename Definition>
     return true;
 }
 
-[[nodiscard]] bool hasImageInput(const NodeDefinition& definition,
-                                 const std::string_view name) noexcept {
-    return definition.inputs.size() == 1 && definition.inputs.front().name == name &&
+// The node's image transport input, which is always the FIRST one: task S7 gave every parameter
+// role its own linkable socket, so a Layer Output's input list is now the content image followed by
+// one operand socket per transform value. The image port's position is what the dissolve gesture,
+// the mute bypass and the empty-image propagation all read, so it stays pinned at the front.
+[[nodiscard]] bool hasLeadingImageInput(const NodeDefinition& definition,
+                                        const std::string_view name) noexcept {
+    return !definition.inputs.empty() && definition.inputs.front().name == name &&
            definition.inputs.front().valueKind == SocketValueKind::Image &&
            definition.inputs.front().required;
+}
+
+// Task S7, item 3: every parameter role of a node is ALSO a linkable input socket of its kind.
+// Checked here, generically, so no lowering can declare a parameter the editor cannot link or a
+// socket that writes nothing -- and so the rule has one statement rather than one per lowering.
+// `imageInputCount` is how many leading image transport ports precede the operand block.
+[[nodiscard]] bool hasParameterSockets(const NodeDefinition& definition,
+                                       const std::size_t imageInputCount) noexcept {
+    if (definition.inputs.size() != imageInputCount + definition.parameters.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < definition.parameters.size(); ++index) {
+        const auto& declared = definition.parameters[index];
+        const auto& socket = definition.inputs[imageInputCount + index];
+        if (socket.name != declared.role || socket.required ||
+            socket.valueKind != socketKindForParameterValueKind(declared.valueKind)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] bool hasImageOutput(const NodeDefinition& definition,
@@ -91,19 +118,19 @@ template <typename Definition>
     using namespace bloom::document;
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
-        return definition.inputs.empty() && hasImageOutput(definition, kSolidSourceOutputPort) &&
+        return hasImageOutput(definition, kSolidSourceOutputPort) &&
                definition.parameters.size() == 1 &&
                hasParameter(definition, 0, kSolidColorParameterRole, kSolidColorParameterSchemaKey,
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
-               !definition.layerSlotInput.has_value();
+               hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
         // then color. The font is not a parameter -- this lowering has exactly one face
         // (src/render's embedded DejaVu Sans), so a font parameter would promise a selection the
         // renderer cannot honor.
         return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
-               definition.inputs.empty() && hasImageOutput(definition, kTextSourceOutputPort) &&
+               hasImageOutput(definition, kTextSourceOutputPort) &&
                definition.parameters.size() == 3 &&
                hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
                             ParameterValueKind::String,
@@ -114,7 +141,7 @@ template <typename Definition>
                hasParameter(definition, 2, kTextColorParameterRole, kTextColorParameterSchemaKey,
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kTextColorParameterSchemaKey)) &&
-               !definition.layerSlotInput.has_value();
+               hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
         // Parameter ORDER is the authoring order the properties grid, the node card, and the
         // timeline all read: where the layer sits, the point it turns about, how big it is, how far
@@ -122,7 +149,7 @@ template <typename Definition>
         // beneath it. The two appearance values come after the four geometric ones, and the blend
         // mode comes last because it is the only one that is not a continuous value at all.
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
-               hasImageInput(definition, kLayerOutputContentInputPort) &&
+               hasLeadingImageInput(definition, kLayerOutputContentInputPort) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
                definition.parameters.size() == 6 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
@@ -137,7 +164,7 @@ template <typename Definition>
                             ParameterValueKind::Float64, true) &&
                hasParameter(definition, 5, kBlendModeParameterRole, kBlendModeParameterSchemaKey,
                             ParameterValueKind::Integer) &&
-               !definition.layerSlotInput.has_value();
+               hasParameterSockets(definition, 1) && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
                definition.cardinality == NodeCardinality::OnePerComposition &&
@@ -150,11 +177,31 @@ template <typename Definition>
         return hasCanonicalKey(definition, kCompositionOutputNodeType,
                                kCompositionOutputNodeSchemaVersion) &&
                definition.cardinality == NodeCardinality::OnePerComposition &&
-               hasImageInput(definition, kCompositionOutputInputPort) &&
+               hasLeadingImageInput(definition, kCompositionOutputInputPort) &&
+               definition.inputs.size() == 1 &&
                hasImageOutput(definition, kCompositionOutputOutputPort) &&
                definition.parameters.empty() && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Unsupported:
         return true;
+    // The value lowerings share ONE shape contract rather than fifteen bespoke ones; see
+    // value_node_definitions.cpp for what it requires and why the asymmetry with the five image
+    // lowerings above is deliberate.
+    case NodeLoweringKind::ValueConstant:
+    case NodeLoweringKind::ValueTime:
+    case NodeLoweringKind::ValueScalarMath:
+    case NodeLoweringKind::ValueVectorMath:
+    case NodeLoweringKind::ValueVectorReduce:
+    case NodeLoweringKind::ValueMapRange:
+    case NodeLoweringKind::ValueClamp:
+    case NodeLoweringKind::ValueMix:
+    case NodeLoweringKind::ValueColorMix:
+    case NodeLoweringKind::ValueCompare:
+    case NodeLoweringKind::ValueSwitch:
+    case NodeLoweringKind::ValueSeparate:
+    case NodeLoweringKind::ValueCombine:
+    case NodeLoweringKind::ValueRandom:
+    case NodeLoweringKind::ValueReroute:
+        return bloom::document::detail::hasValidValueLoweringShape(definition);
     }
     return false;
 }
@@ -175,7 +222,10 @@ template <typename Definition>
     using namespace bloom::document;
     return {{std::string(kSolidSourceNodeType), kSolidSourceNodeSchemaVersion},
             NodeLoweringKind::Solid,
-            {},
+            // Task S7, item 3: the colour parameter is a linkable socket as well as an inline chip.
+            // Optional, because the parameter IS the value when nothing is connected -- an
+            // unconnected operand is an authored constant, not a missing input.
+            {{std::string(kSolidColorParameterRole), SocketValueKind::Color, false}},
             {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
             // Task S5, item 1: supportsAnimation is true now. It is NOT a second opinion about what
             // is animatable -- the shape check below asserts it agrees with
@@ -192,7 +242,18 @@ template <typename Definition>
     using namespace bloom::document;
     return {{std::string(kLayerOutputNodeType), kLayerOutputNodeSchemaVersion},
             NodeLoweringKind::LayerOutput,
-            {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, true}},
+            // The content image first -- its position is what the dissolve gesture and the mute
+            // bypass read -- then one operand socket per transform parameter, in the registered
+            // authoring order (task S7, item 3). The blend mode's socket is Integer, and Integer
+            // only: there is no meaningful value between Multiply and Screen, so no other kind
+            // promotes into it.
+            {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, true},
+             {std::string(kPositionParameterRole), SocketValueKind::Vector2, false},
+             {std::string(kAnchorParameterRole), SocketValueKind::Vector2, false},
+             {std::string(kScaleParameterRole), SocketValueKind::Vector2, false},
+             {std::string(kRotationParameterRole), SocketValueKind::Scalar, false},
+             {std::string(kOpacityParameterRole), SocketValueKind::Scalar, false},
+             {std::string(kBlendModeParameterRole), SocketValueKind::Integer, false}},
             {{std::string(kLayerOutputOutputPort), SocketValueKind::Image}},
             {{std::string(kPositionParameterRole), std::string(kPositionParameterSchemaKey),
               ParameterValueKind::Vec2d, true, true, Vec2d{}},
@@ -244,7 +305,12 @@ template <typename Definition>
     using namespace bloom::document;
     return {{std::string(kTextSourceNodeType), kTextSourceNodeSchemaVersion},
             NodeLoweringKind::Text,
-            {},
+            // One operand socket per parameter, in the same order (task S7, item 3). The content
+            // port is a String socket: a text layer whose words come from a String node is the
+            // whole point of having a String kind at all.
+            {{std::string(kTextParameterRole), SocketValueKind::String, false},
+             {std::string(kTextSizeParameterRole), SocketValueKind::Scalar, false},
+             {std::string(kTextColorParameterRole), SocketValueKind::Color, false}},
             {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
             // Content stays constant-only (a String has no interpolation); size and colour became
             // animatable in task S5, which the shape check below cross-checks against the schema
@@ -324,8 +390,15 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::array definitions{solidDefinition(), layerOutputDefinition(), layerStackDefinition(),
-                           compositionOutputDefinition(), textDefinition()};
+    std::vector<NodeDefinition> definitions{solidDefinition(), layerOutputDefinition(),
+                                            layerStackDefinition(), compositionOutputDefinition(),
+                                            textDefinition()};
+    // The value library is appended, not interleaved: the five above are the structural node types
+    // a composition is built out of, and reading them first in one place is what makes the
+    // registry's own contract legible.
+    for (auto& definition : detail::valueNodeDefinitions()) {
+        definitions.push_back(std::move(definition));
+    }
     if (registry.isFrozen() || std::ranges::any_of(definitions, [&](const auto& definition) {
             return registry.find(definition.key.typeId, definition.key.schemaVersion) != nullptr;
         })) {

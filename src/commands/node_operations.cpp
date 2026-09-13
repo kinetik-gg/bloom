@@ -5,6 +5,7 @@
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
+#include <variant>
 
 namespace bloom::commands {
 bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& operation) {
@@ -129,9 +130,27 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
             "Connection requires existing registered source and destination ports");
-    if (sourceKind != inputKind)
+    if (!document::isAcceptedSocketConnection(*sourceKind, *inputKind))
         return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
                                          "Connected socket kinds do not match");
+    // Task S7: a link into an operand socket is the PARAMETER's driver binding, not an edge. One
+    // authored value, one durable record of where it comes from -- so there is nothing for an edge
+    // and a binding to disagree about, and DisconnectInput has one thing to undo.
+    if (const auto* binding = detail::parameterSocketBinding(graph, destination_)) {
+        const auto* parameter = composition->parameters().find(binding->parameterId);
+        if (parameter == nullptr)
+            return detail::invalidTarget();
+        const document::DriverBindingSource driver{source_.nodeId, source_.port};
+        if (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
+            std::get<document::DriverBindingSource>(parameter->source) == driver)
+            return OperationResult::noChange();
+        if (!composition->parameters().setSource(binding->parameterId, driver))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Driver binding could not be applied");
+        if (const auto failure = detail::validateGraph(*composition, registry_))
+            return *failure;
+        return OperationResult::applied();
+    }
     const auto* previous = detail::inputEdge(graph, destination_);
     if (previous && previous->source == source_)
         return OperationResult::noChange();
@@ -160,6 +179,30 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         slot && (slot->stackNodeId != graph.layerStack().nodeId() ||
                  !graph.layerStack().find(slot->slotId)))
         return detail::invalidTarget();
+    // Unlinking an operand socket restores its parameter to the constant its registered default
+    // names; see registeredDefault() for why that, and not a remembered previous value, is what an
+    // explicit disconnect lands on.
+    if (const auto* binding = detail::parameterSocketBinding(graph, input_)) {
+        const auto* parameter = composition->parameters().find(binding->parameterId);
+        if (parameter == nullptr)
+            return detail::invalidTarget();
+        if (!std::holds_alternative<document::DriverBindingSource>(parameter->source))
+            return OperationResult::noChange();
+        const auto* fixed = std::get_if<document::NodeInputRef>(&input_);
+        auto fallback = fixed == nullptr ? std::nullopt
+                                         : detail::registeredDefault(graph, fixed->nodeId,
+                                                                     binding->role, registry_);
+        if (!fallback.has_value())
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "This socket has no registered default to restore");
+        if (!composition->parameters().setSource(
+                binding->parameterId, document::ConstantValueSource{*std::move(fallback)}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Registered default violates its parameter schema");
+        if (const auto failure = detail::validateGraph(*composition, registry_))
+            return *failure;
+        return OperationResult::applied();
+    }
     const auto* edge = detail::inputEdge(graph, input_);
     if (!edge)
         return OperationResult::noChange();

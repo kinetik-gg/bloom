@@ -24,7 +24,7 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 3};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 4};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
@@ -94,7 +94,6 @@ enum class CanonicalDocumentError : std::uint8_t {
     InvalidProcessColorSpaceId,
     OcioPortabilityMismatch,
     InvalidOcioRevisionAlgorithm,
-    UnsupportedDriverBindingSource,
     SortBufferTooSmall,
     PayloadBufferTooSmall,
     ValueCountExceeded,
@@ -196,9 +195,10 @@ class [[nodiscard]] CanonicalDocumentWriteResult final {
 
 // Validates the complete v1 document shape against the format contract and returns the exact
 // canonical byte count. Document-owned lexical and domain rules for color settings are delegated to
-// ColorSettings::validate(); live DriverBindingSource parameters are rejected here because native
-// v1 Save is a restricted supported-subset encoder. No destination byte is touched and no memory is
-// allocated beyond the callers' provided scratch spans.
+// ColorSettings::validate(). Every parameter source is writable from document 1.4 on -- a driver
+// binding is the durable node-and-port pair it addresses -- so this writer no longer refuses one as
+// an unsupported save feature. No destination byte is touched and no memory is allocated beyond the
+// callers' provided scratch spans.
 [[nodiscard]] CanonicalDocumentSizeResult
 canonicalDocumentSize(const CanonicalDocumentV1& document,
                       CanonicalDocumentLimits limits = CanonicalDocumentLimits{}) noexcept;

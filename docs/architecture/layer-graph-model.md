@@ -162,9 +162,30 @@ Animation curves are strongly typed, composition-owned declarations rather than 
 values. The first scalar and `Vec2d` curve model, exact rational sampling, source transitions, and
 gesture boundary are defined in [`animation-and-time.md`](animation-and-time.md).
 
-Not every property is permanently shown as a socket. A layer or Properties view may present a
-curated schema while the node editor exposes the complete node schema. The following actions have
-distinct meanings:
+A `DriverBinding` is the durable pair `{sourceNodeId, outputPort}` -- structurally an output-port
+reference that lands in parameter-address space instead of on an input port, which is the whole of
+what a driver is. It carries no id of its own: a separate driver table would add a collection, an
+encoding, and an id space whose only content is that pair, plus a dangling-reference failure mode the
+pair cannot have. The `driverBinding` allocator high-water is still persisted even though no record
+uses one, so ids issued before this model are never reused (decision 0018).
+
+Every parameter role of a node IS an input socket of its kind, and an operand socket and the
+parameter behind it share one name. That pairing is what makes the rules below one sentence each
+rather than a per-node table:
+
+- **Unlinked** shows the inline widget, sourced from the parameter's `ConstantValueSource`.
+- **Linked** hides the widget and shows only the socket. What makes a role linked is its parameter's
+  `DriverBinding` -- not an edge. One authored value has one durable record of where it comes from,
+  so `CanonicalGraph::validate()` refuses an edge that terminates on an operand socket and there is
+  nothing for an edge and a binding to disagree about.
+- An **inline selector** -- a Math node's operation, a Map Range's interpolation, a clamp toggle --
+  declares no socket at all, because it decides which kernel the plan compiles and therefore has to
+  be known at compile time rather than delivered per frame.
+- A Reroute's pass-through is the one socket with no parameter behind it: it carries someone else's
+  value, so it is reached by an ordinary edge and is `required`.
+
+A layer or Properties view may still present a curated schema while the node editor exposes the
+complete node schema. The following actions have distinct meanings:
 
 - `Show Input Socket` changes node-editor presentation only.
 - `Drive from Graph` creates a typed connection.
@@ -499,12 +520,93 @@ actually reorder or reconnect a slot needs a command that does not exist yet.
 `Sources`, `Layers`, `Compositing`, `Values`, `Output`, `Utilities`. The vocabulary is the artist's --
 what a node is for -- so it is declared beside the type rather than derived from `NodeLoweringKind`,
 which spans several sections at once. The built-ins are Solid and Text under `Sources`, the layer
-boundary under `Layers`, Merge under `Compositing`, and Output under `Output`; `Values` and
-`Utilities` have no built-in members yet and are therefore never headed.
+boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the literal value sources
+and `Time` under `Values`, and the whole computing library under `Utilities` (see **Value Graph And
+Drivers**).
 
 Add surfaces list entries in that category order and alphabetically inside each one, and
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
 heading, and the list is exactly as tall as the rows and headings it holds.
+
+### Value Graph And Drivers
+
+A composition holds two graphs in one node set. The **image chain** produces pixels and is addressed
+by `OperationIndex`; the **value graph** produces one number per frame and is addressed by
+`ValueOutputIndex`. They share the reachable node set and the topological order, and nothing else --
+no `CompiledOperation` alternative was added, and the value graph is compiled and evaluated in its
+own pass BEFORE any image operation reads a parameter.
+
+Reachability follows drivers as well as edges: a node whose parameter is driven depends on the value
+node that drives it. Those dependencies feed the SAME indegree map the edge set builds, so a cycle
+through a driver is refused by the one existing acyclic check rather than by a second rule that could
+disagree with it.
+
+#### Socket Kinds And Promotion
+
+`SocketValueKind` is `Image`, `Color`, `Scalar`, `Vector2`, `Vector3`, `Integer`, `Boolean`, `String`.
+A connection is accepted when the kinds are equal, or when the source appears in this whitelist:
+
+| From | To | Meaning |
+| --- | --- | --- |
+| `Integer` | `Scalar` | Exact widen; every stored integer below 2^53 is representable |
+| `Boolean` | `Integer` | `false` is 0 and `true` is 1, the mapping every stored boolean has |
+| `Boolean` | `Scalar` | The same mapping, widened once more |
+| `Scalar` | `Vector2` | Splat: the one value in every component |
+| `Scalar` | `Vector3` | Splat |
+
+Nothing promotes into `Boolean`, `String` or `Image`, and no vector changes width: each of those would
+have to invent information. Every promotion compiles to its own operation rather than being folded
+into whoever reads the value, so a widening is visible in a plan dump and diagnosable like any other
+step. One predicate -- `document::isAcceptedSocketConnection()` -- answers for the editor's drag
+affinity, `ConnectPorts`, document validation and the compiler's edge check alike.
+
+#### Node Library
+
+Every type below ships inside Bloom and is therefore a foundation node type: no manifest requirement
+can claim to provide one. None is animatable -- a value graph already lets an artist shape a number
+upstream of an operand -- and three of the kinds have no curve model at all.
+
+| Category | Node | Shape |
+| --- | --- | --- |
+| Values | Integer, Scalar, Vector 2, Vector 3, String, Color, Boolean | One authored value, one output. No input: a literal is where a value comes FROM, and a node whose value arrives from elsewhere is a Reroute |
+| Values | Time | No inputs and no parameters. Two outputs, `seconds` (Scalar) and `frame` (Integer), both filled from the same request time the plan's curves are sampled at |
+| Utilities | Math | Five operand sockets, one definition, the frozen 24-operation `ScalarPrimitive` vocabulary verbatim, plus a clamp toggle. Only the operands the live operation reads are lowered |
+| Utilities | Vector 2/3 Math | Componentwise Add/Subtract/Multiply/Divide, Scale, Normalize, and Cross at three components. Componentwise operations route through the scalar kernel per component |
+| Utilities | Vector 2/3 Measure | Length, Dot Product, Distance. A separate type from Vector Math because the result is a Scalar, and a socket's kind is fixed by its definition |
+| Utilities | Map Range | Linear, Smoothstep, Smootherstep, with an optional clamp to the destination range |
+| Utilities | Clamp, Mix | Direct reuse of the scalar `clamp` and `mix` kernels |
+| Utilities | Mix Color | Four independent straight-value channel interpolations. Not vector math over four floats: a Color is not a Vec4, and no gamut or OCIO step is implied |
+| Utilities | Compare | Six predicates over two Scalars; Equal and NotEqual spend the node's epsilon, the four orderings do not |
+| Utilities | Switch | One definition per socket kind. Bloom has no polymorphic port, and a socket that retyped itself would be a socket that does not know what it carries |
+| Utilities | Separate/Combine XY, XYZ, RGBA | Pure de/interleave. Channel extraction is the only way to read a colour's channels as numbers, by the no-implicit-Color-to-Vec4 rule |
+| Utilities | Random | Deterministic hash of its seed into `[min, max)`. No entropy source: a cached or exported frame has to agree with the frame that produced it, so a seeded value changes over time only when something wires a changing number into the seed |
+| Utilities | Reroute | One definition per kind, Image included. Pure pass-through; an Image Reroute is elided during image lowering and costs nothing at evaluation |
+
+#### Fallbacks
+
+The `bloom_core` kernels report domain failures and never substitute a value, because only the caller
+knows what the number is for. At the node boundary that caller exists, so a failure substitutes the
+node's documented fallback and records a scoped diagnostic -- the frame still renders, degraded and
+explained, the same way a missing module or a mute bypass already behaves.
+
+| Failure | Fallback |
+| --- | --- |
+| Divide or reciprocal by zero, and every other scalar domain failure | `0` |
+| Normalize of a zero-length vector | The zero vector; it has no direction, and an arbitrary axis would look like a real one |
+| Degenerate Map Range source range | The destination minimum -- what every value in that range would map to if it had width |
+| Reversed Clamp bounds | The value UNCLAMPED; passing it through is visibly wrong, where silently swapping the bounds would look correct |
+| Frame number not representable at the request time | `0`, reported |
+
+#### Evaluable Parameter Kinds
+
+`CompiledScalarParameter`, `CompiledVec2Parameter` and `CompiledColorParameter` each gained one
+alternative for a value-graph output. A new alternative appearing is not a plan-semantics change, so
+neither the plan nor the evaluator semantics version moved and no cached frame digest shifted.
+
+The remaining kinds -- a Layer Output's `Integer` blend mode, a Text source's `String` content -- are
+linkable in the editor and durable in the document, but nothing yet carries their value into a
+compiled operation, so a driver on one is reported through the existing `UnsupportedParameterSource`
+diagnostic rather than silently ignored.
 
 ### Node Cardinality
 
@@ -586,10 +688,11 @@ With that adapter supplied, the following behavior is implemented and covered by
   operation and final validation on an isolated draft, without publishing or advancing live IDs,
   revisions or history. Menus do not maintain a second set of command eligibility rules.
 - Muted bodies and their proxy controls use 50% opacity; the header retains normal opacity and the
-  existing vendored Phosphor eye-slash badge. Collapsed cards are header-only pills. A linked
-  parameter-role input hides its corresponding widget; today's Image ports do not correspond to
-  numeric/color parameter roles, so connecting an Image input leaves those controls visible. No
-  parameter-socket data flow or evaluator behavior is introduced.
+  existing vendored Phosphor eye-slash badge. Collapsed cards are header-only pills. A driven
+  parameter role hides its corresponding widget and keeps its socket; every control a card builds
+  registers the role it edits, so the rule is applied by role rather than by a per-control list.
+  Linking an Image transport input never hides a value control, because an Image port backs no
+  parameter.
 
 ### Structural Edges
 
@@ -597,8 +700,9 @@ Stack-slot content edges and participating Layer Output boundary outputs are str
 projected with explanatory tooltips but cannot start or receive a drag, be cut, or be auto-insertion
 targets. Removing a layer uses `RemoveNodes`, which can remove its boundary and slot together.
 Disconnecting a mandatory slot or dissolving its participating Layer Output would violate the
-canonical graph. Driver duplication still refuses because there is no durable driver record to
-copy; duplication of incompatible canonical-stack topology still refuses through command validation.
+canonical graph. Duplicating a node whose parameter is driven still refuses: a copy would need a second driver
+nothing asked for. Duplication of incompatible canonical-stack topology still refuses through command
+validation.
 
 These are Qt scene/widget interactions without platform-specific input code. The same implementation
 and offscreen event tests apply to Linux, macOS and Windows; this change's executed gates are Linux.

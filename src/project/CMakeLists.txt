@@ -340,6 +340,19 @@ if(BUILD_TESTING)
         LABELS unit persistence
     )
 
+    add_executable(bloom_project_value_graph_test tests/value_graph_persistence_tests.cpp)
+    target_include_directories(
+        bloom_project_value_graph_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_value_graph_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_value_graph_test)
+    bloom_add_test(
+        NAME bloom.project.value-graph
+        COMMAND bloom_project_value_graph_test
+        LABELS unit persistence
+    )
+
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)
     target_include_directories(
         bloom_project_open_archive_test

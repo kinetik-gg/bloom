@@ -386,6 +386,10 @@ void checkProjectSchemas(const std::filesystem::path& repositoryRoot) {
         json::parseFile(repository / "schemas/project/manifest-1.3.schema.json"));
     validateDocumentSchemaV1_3(
         json::parseFile(repository / "schemas/project/document-1.3.schema.json"));
+    validateManifestSchemaV1_4(
+        json::parseFile(repository / "schemas/project/manifest-1.4.schema.json"));
+    validateDocumentSchemaV1_4(
+        json::parseFile(repository / "schemas/project/document-1.4.schema.json"));
 }
 
 } // namespace bloom::quality

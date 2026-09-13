@@ -97,7 +97,13 @@ void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
             continue;
         }
         const bool opposite = fromOutput ? socket->input.has_value() : socket->output.has_value();
-        const bool compatible = socket->draggable() && opposite && socket->kind == gesture.linkKind;
+        // The shared promotion whitelist, not kind equality: a socket an Integer output can widen
+        // into is a socket the drag can land on, so the affinity an artist SEES is the rule
+        // ConnectPorts will actually apply.
+        const bool compatible =
+            socket->draggable() && opposite &&
+            (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
+                        : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind));
         socket->setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
                                            : SocketItem::DragAffinity::Incompatible);
     }
@@ -415,9 +421,19 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
     }
     case NodeInteraction::Mode::Link: {
         const auto* target = socketAt(*this, event->scenePos());
+        // Task S7: the preview's refusal is the KIND rule now, not "this socket is not Image".
+        // Every socket is draggable, so what makes a landing site wrong is the same shared
+        // isAcceptedSocketConnection() predicate ConnectPorts will apply on release -- which is
+        // what keeps the red wire an honest preview of the refusal rather than a separate opinion.
+        const bool orientationWrong = target != nullptr && ((gesture.output && !target->input) ||
+                                                            (gesture.input && !target->output));
+        const bool kindWrong =
+            target != nullptr && !orientationWrong &&
+            !(gesture.output
+                  ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
+                  : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
         const bool incompatible =
-            target && (!target->draggable() || (gesture.output && !target->input) ||
-                       (gesture.input && !target->output));
+            target != nullptr && (!target->draggable() || orientationWrong || kindWrong);
         gesture.line->setPen(QPen(
             kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)), 2));
         gesture.line->setPath(gesture.output ? linkPath(gesture.origin, event->scenePos())

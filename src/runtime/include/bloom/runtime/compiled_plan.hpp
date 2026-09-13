@@ -6,6 +6,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <compare>
 #include <cstddef>
@@ -143,9 +144,14 @@ class Color4CurveIndex final {
     std::size_t value_ = 0;
 };
 
+// Each of the three typed operands gained ONE more alternative in task S7: a value-graph output,
+// for a parameter a driver binding supplies per frame. A new alternative appearing is deliberately
+// not a plan-semantics change -- no existing plan value means anything different than it did, and
+// the field at this position is still "where this parameter's value comes from" -- which is the
+// same reasoning the semantics-version comment at the top of this file already states.
 struct CompiledScalarParameter final {
     document::ParameterId id;
-    std::variant<double, ScalarCurveIndex> source;
+    std::variant<double, ScalarCurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledScalarParameter&,
                            const CompiledScalarParameter&) = default;
@@ -153,14 +159,14 @@ struct CompiledScalarParameter final {
 
 struct CompiledVec2Parameter final {
     document::ParameterId id;
-    std::variant<document::Vec2d, Vec2CurveIndex> source;
+    std::variant<document::Vec2d, Vec2CurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledVec2Parameter&, const CompiledVec2Parameter&) = default;
 };
 
 struct CompiledColorParameter final {
     document::ParameterId id;
-    std::variant<core::Color4d, Color4CurveIndex> source;
+    std::variant<core::Color4d, Color4CurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledColorParameter&, const CompiledColorParameter&) = default;
 };
@@ -269,6 +275,12 @@ struct CompiledCompositionPlanDefinition final {
     std::vector<CompiledScalarCurve> scalarCurves{};
     std::vector<CompiledVec2Curve> vec2Curves{};
     std::vector<CompiledColor4Curve> color4Curves{};
+    // The value graph (task S7), in topological order: every operation's operands name only earlier
+    // outputs, so one linear sweep evaluates the whole of it. `valueOutputCount` is the size of the
+    // flat output table the operations' runs partition, kept explicitly so the evaluator can
+    // bounds- check a ValueOutputIndex without summing the operations first.
+    std::vector<CompiledValueOperation> valueOperations{};
+    std::size_t valueOutputCount = 0;
     std::uint32_t planSemanticsVersion = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
@@ -310,6 +322,11 @@ class CompiledCompositionPlan final {
         return color4Curves_;
     }
     [[nodiscard]] std::span<const CompiledColor4Curve> color4Curves() const&& = delete;
+    [[nodiscard]] std::span<const CompiledValueOperation> valueOperations() const& noexcept {
+        return valueOperations_;
+    }
+    [[nodiscard]] std::span<const CompiledValueOperation> valueOperations() const&& = delete;
+    [[nodiscard]] std::size_t valueOutputCount() const noexcept { return valueOutputCount_; }
     [[nodiscard]] std::uint32_t planSemanticsVersion() const noexcept {
         return planSemanticsVersion_;
     }
@@ -334,6 +351,8 @@ class CompiledCompositionPlan final {
     std::vector<CompiledScalarCurve> scalarCurves_;
     std::vector<CompiledVec2Curve> vec2Curves_;
     std::vector<CompiledColor4Curve> color4Curves_;
+    std::vector<CompiledValueOperation> valueOperations_;
+    std::size_t valueOutputCount_ = 0;
     std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
 };

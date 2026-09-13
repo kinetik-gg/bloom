@@ -36,17 +36,20 @@ class Expectations final {
 
 [[nodiscard]] bloom::runtime::NodeDefinition customSolid(const std::uint32_t version = 1) {
     using namespace bloom;
-    return {{"example.solid", version},
-            runtime::NodeLoweringKind::Solid,
-            {},
-            {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-            // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
-            // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
-            // solid colour is animatable now -- so a custom Solid must declare it too.
-            {{std::string(document::kSolidColorParameterRole),
-              std::string(document::kSolidColorParameterSchemaKey),
-              runtime::ParameterValueKind::Color4d, true, true}},
-            std::nullopt};
+    return {
+        {"example.solid", version},
+        runtime::NodeLoweringKind::Solid,
+        // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable
+        // operand socket per parameter role, so a custom Solid declares the colour socket too.
+        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
+        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
+        // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
+        // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
+        // solid colour is animatable now -- so a custom Solid must declare it too.
+        {{std::string(document::kSolidColorParameterRole),
+          std::string(document::kSolidColorParameterSchemaKey),
+          runtime::ParameterValueKind::Color4d, true, true}},
+        std::nullopt};
 }
 
 [[nodiscard]] bloom::runtime::NodeDefinition unsupportedDefinition(std::string typeId) {
@@ -88,7 +91,7 @@ void testValidationAndDuplicates(Expectations& expectations) {
     expectations.expect(registry.registerDefinition(original) == NodeRegistrationStatus::Registered,
                         "valid definition is registered");
     auto replacement = original;
-    replacement.outputs.front().name = "replacement";
+    replacement.parameters.front().role = "replacement";
     expectations.expect(registry.registerDefinition(std::move(replacement)) ==
                             NodeRegistrationStatus::InvalidDefinition,
                         "malformed replacement is rejected before duplicate lookup");
@@ -109,8 +112,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    expectations.expect(registry.definitions().size() == 5,
-                        "startup contribution includes all five built-in lowerings");
+    // ADAPTED (task S7): the five structural node types plus the forty-node value library.
+    expectations.expect(registry.definitions().size() == 45,
+                        "startup contribution includes every built-in definition");
 
     registry.freeze();
     const auto* solid =
@@ -259,6 +263,119 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
                         "Solid remains an explicitly extensible lowering contract");
 }
 
+// Task S7: the value library's ONE shape contract, exercised through the registry rather than by
+// reaching into it. Every built-in registers (the count above proves that), so what is pinned here
+// is the refusals -- each perturbation below breaks exactly one clause of the contract, and a
+// definition that still registered would mean the clause is not being checked.
+void testValueLoweringShapeContract(Expectations& expectations) {
+    using namespace bloom;
+
+    const auto refuses = [&expectations](runtime::NodeDefinition definition,
+                                         const std::string_view message) {
+        runtime::NodeDefinitionRegistry registry;
+        expectations.expect(registry.registerDefinition(std::move(definition)) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            message);
+    };
+
+    // A literal: no inputs, one output, one parameter.
+    const auto literal =
+        builtInDefinition(document::kScalarValueNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto extraSocket = literal;
+        extraSocket.inputs.push_back(
+            {std::string(document::kValueParameterRole), runtime::SocketValueKind::Scalar, false});
+        refuses(std::move(extraSocket), "a literal Value node may not take an input at all");
+    }
+    {
+        auto animatable = literal;
+        animatable.parameters.front().supportsAnimation = true;
+        refuses(std::move(animatable),
+                "no value schema is animatable, so a definition may not claim one is");
+    }
+    {
+        auto structural = literal;
+        structural.cardinality = runtime::NodeCardinality::OnePerComposition;
+        refuses(std::move(structural), "a value node is never a structural singleton");
+    }
+    {
+        auto misfiled = literal;
+        misfiled.category = runtime::NodeCategory::Compositing;
+        refuses(std::move(misfiled),
+                "a value node is listed under Values or Utilities and nowhere else");
+    }
+
+    // An operand node: every socket backed by a parameter of the matching kind, and never required.
+    const auto clamp =
+        builtInDefinition(document::kClampNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto required = clamp;
+        required.inputs.front().required = true;
+        refuses(std::move(required),
+                "an operand socket is never required: its parameter is the value when nothing is "
+                "connected");
+    }
+    {
+        auto mismatched = clamp;
+        mismatched.inputs.front().valueKind = runtime::SocketValueKind::Color;
+        refuses(std::move(mismatched),
+                "an operand socket's kind must be the one its parameter's value kind carries");
+    }
+    {
+        auto unbacked = clamp;
+        unbacked.inputs.push_back({"stray", runtime::SocketValueKind::Scalar, false});
+        refuses(std::move(unbacked),
+                "a socket with no parameter behind it exists only on a Reroute");
+    }
+    {
+        auto unsocketed = clamp;
+        unsocketed.parameters.push_back(
+            {"stray", "example.operand", runtime::ParameterValueKind::Float64, true, false, 0.0});
+        refuses(
+            std::move(unsocketed),
+            "a parameter with no socket must be an inline selector, not an unreachable operand");
+    }
+
+    // A Reroute: the one value lowering whose single socket is required and carries no parameter.
+    const auto reroute =
+        builtInDefinition(document::kScalarRerouteNodeType, document::kValueNodeSchemaVersion);
+    {
+        auto optional = reroute;
+        optional.inputs.front().required = false;
+        refuses(std::move(optional),
+                "a Reroute's pass-through is required: nothing else can supply it");
+    }
+    {
+        auto retyped = reroute;
+        retyped.outputs.front().valueKind = runtime::SocketValueKind::Color;
+        refuses(std::move(retyped), "a Reroute passes its own kind through, not another");
+    }
+    {
+        auto pixels = reroute;
+        pixels.inputs.front().valueKind = runtime::SocketValueKind::Image;
+        pixels.outputs.front().valueKind = runtime::SocketValueKind::Image;
+        refuses(std::move(pixels),
+                "only the Image Reroute type may carry Image: a kind-named type and its sockets "
+                "cannot disagree");
+    }
+
+    // Time: no inputs, no parameters, and its two outputs in their declared units.
+    {
+        auto time =
+            builtInDefinition(document::kTimeValueNodeType, document::kValueNodeSchemaVersion);
+        time.outputs.pop_back();
+        refuses(std::move(time), "Time declares both of its units or neither");
+    }
+
+    // A Switch: both branches carry the result's kind, and the condition is Boolean.
+    {
+        auto mixedSwitch =
+            builtInDefinition(document::kScalarSwitchNodeType, document::kValueNodeSchemaVersion);
+        mixedSwitch.inputs.front().valueKind = runtime::SocketValueKind::Scalar;
+        refuses(std::move(mixedSwitch), "a Switch's condition is Boolean and only Boolean");
+    }
+}
+
 void testLargeFrozenRegistryLookup(Expectations& expectations) {
     using namespace bloom::runtime;
     constexpr std::size_t definitionCount = 4'096;
@@ -293,6 +410,7 @@ int main() try {
     testValidationAndDuplicates(expectations);
     testFreezeAndBuiltIns(expectations);
     testStructuralLoweringsRequireCanonicalKeys(expectations);
+    testValueLoweringShapeContract(expectations);
     testLargeFrozenRegistryLookup(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 } catch (const std::exception& error) {

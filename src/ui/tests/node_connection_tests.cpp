@@ -72,14 +72,23 @@ void testConnectionsCutAndInsertion() {
     expect(f.stack.size() == history && !refusals.empty() &&
                incoming(f, target)->source.nodeId == second,
            "cycle refusal preserves the prior link and surfaces a transient session status");
-    // Current registry ports are all Image. A fixture-only Scalar socket pins the UI's future-kind
-    // refusal; the command suite separately tests all 25 registry kind pairings.
-    auto* scalar = new node_editor::SocketItem(
-        target, QStringLiteral("scalar"), document::SocketValueKind::Scalar,
-        document::NodeInputRef{target, "image"}, {}, false, f.card(target));
-    scalar->setPos(0, 100);
-    scalar->setZValue(20);
-    end = scalar->scenePos();
+    // ADAPTED (task S7): no fixture-only socket any more. Every parameter role is a real linkable
+    // operand socket, so the Layer Output's own Scalar opacity port is what pins the UI's kind
+    // refusal -- an Image output dropped on it must paint red and change nothing.
+    auto* scalarSocket = [&]() -> node_editor::SocketItem* {
+        for (auto* candidate : f.card(target)->sockets()) {
+            if (candidate->input &&
+                candidate->name == QString::fromUtf8(document::kOpacityParameterRole)) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    }();
+    expect(scalarSocket != nullptr,
+           "the Layer Output card carries a Scalar opacity operand socket");
+    if (scalarSocket == nullptr)
+        return;
+    end = scalarSocket->scenePos();
     f.press(f.socket(source, false)->scenePos());
     f.move(end);
     for (auto* item : f.scene()->items())
@@ -90,7 +99,6 @@ void testConnectionsCutAndInsertion() {
     f.release(end);
     expect(f.stack.size() == history && incoming(f, target)->source.nodeId == second,
            "incompatible release leaves graph unchanged");
-    delete scalar;
     f.press(f.socket(target, true)->scenePos());
     f.move({850, 500});
     expect(!edgeItem(f, target)->isVisible() && incoming(f, target),

@@ -14,9 +14,17 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     case runtime::SocketValueKind::Scalar:
         return kit::Color::SocketScalar;
     case runtime::SocketValueKind::Vector2:
+    // Task S7: both vector widths share one token so they read as a family. The socket's NAME and
+    // tooltip are what distinguish them, and a cross-width link is refused by the kind check
+    // regardless -- two adjacent violets would have said "these connect" when they do not.
+    case runtime::SocketValueKind::Vector3:
         return kit::Color::SocketVector;
     case runtime::SocketValueKind::String:
         return kit::Color::SocketString;
+    case runtime::SocketValueKind::Integer:
+        return kit::Color::SocketInteger;
+    case runtime::SocketValueKind::Boolean:
+        return kit::Color::SocketBoolean;
     }
     return kit::Color::SocketImage;
 }
@@ -73,6 +81,59 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Merge");
     if (typeId == document::kCompositionOutputNodeType)
         return QCoreApplication::translate("node_editor", "Output");
+    // Task S7's library. Spelled out for the same reason the four above are: displayTypeName()
+    // reads a name out of an identifier, which gives "Value scalar" and "Separate xy" -- the
+    // implementation's spelling rather than the artist's. Type ids are untouched; this is
+    // vocabulary, not identity.
+    struct LibraryName final {
+        std::string_view typeId;
+        const char* name;
+    };
+    static const std::array kLibraryNames{
+        LibraryName{document::kIntegerValueNodeType, "Integer"},
+        LibraryName{document::kScalarValueNodeType, "Scalar"},
+        LibraryName{document::kVector2ValueNodeType, "Vector 2"},
+        LibraryName{document::kVector3ValueNodeType, "Vector 3"},
+        LibraryName{document::kStringValueNodeType, "String"},
+        LibraryName{document::kColorValueNodeType, "Color"},
+        LibraryName{document::kBooleanValueNodeType, "Boolean"},
+        LibraryName{document::kTimeValueNodeType, "Time"},
+        LibraryName{document::kScalarMathNodeType, "Math"},
+        LibraryName{document::kVector2MathNodeType, "Vector 2 Math"},
+        LibraryName{document::kVector3MathNodeType, "Vector 3 Math"},
+        LibraryName{document::kVector2ReduceNodeType, "Vector 2 Measure"},
+        LibraryName{document::kVector3ReduceNodeType, "Vector 3 Measure"},
+        LibraryName{document::kMapRangeNodeType, "Map Range"},
+        LibraryName{document::kClampNodeType, "Clamp"},
+        LibraryName{document::kMixNodeType, "Mix"},
+        LibraryName{document::kColorMixNodeType, "Mix Color"},
+        LibraryName{document::kCompareNodeType, "Compare"},
+        LibraryName{document::kScalarSwitchNodeType, "Switch Scalar"},
+        LibraryName{document::kIntegerSwitchNodeType, "Switch Integer"},
+        LibraryName{document::kBooleanSwitchNodeType, "Switch Boolean"},
+        LibraryName{document::kVector2SwitchNodeType, "Switch Vector 2"},
+        LibraryName{document::kVector3SwitchNodeType, "Switch Vector 3"},
+        LibraryName{document::kColorSwitchNodeType, "Switch Color"},
+        LibraryName{document::kStringSwitchNodeType, "Switch String"},
+        LibraryName{document::kSeparateXyNodeType, "Separate XY"},
+        LibraryName{document::kCombineXyNodeType, "Combine XY"},
+        LibraryName{document::kSeparateXyzNodeType, "Separate XYZ"},
+        LibraryName{document::kCombineXyzNodeType, "Combine XYZ"},
+        LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
+        LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
+        LibraryName{document::kRandomNodeType, "Random"},
+        LibraryName{document::kImageRerouteNodeType, "Reroute Image"},
+        LibraryName{document::kScalarRerouteNodeType, "Reroute Scalar"},
+        LibraryName{document::kIntegerRerouteNodeType, "Reroute Integer"},
+        LibraryName{document::kBooleanRerouteNodeType, "Reroute Boolean"},
+        LibraryName{document::kVector2RerouteNodeType, "Reroute Vector 2"},
+        LibraryName{document::kVector3RerouteNodeType, "Reroute Vector 3"},
+        LibraryName{document::kColorRerouteNodeType, "Reroute Color"},
+        LibraryName{document::kStringRerouteNodeType, "Reroute String"},
+    };
+    const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
+    if (match != kLibraryNames.end())
+        return QCoreApplication::translate("node_editor", match->name);
     return displayTypeName(typeId);
 }
 
@@ -126,6 +187,11 @@ QString parameterText(const document::ParameterRecord& parameter) {
                 return QString::number(value, 'f', 2);
             } else if constexpr (std::is_same_v<Value, document::Vec2d>) {
                 return QStringLiteral("%1, %2").arg(value.x, 0, 'f', 1).arg(value.y, 0, 'f', 1);
+            } else if constexpr (std::is_same_v<Value, document::Vec3d>) {
+                return QStringLiteral("%1, %2, %3")
+                    .arg(value.x, 0, 'f', 1)
+                    .arg(value.y, 0, 'f', 1)
+                    .arg(value.z, 0, 'f', 1);
             } else if constexpr (std::is_same_v<Value, core::Color4d>) {
                 return exactColorText(value);
             } else if constexpr (std::is_same_v<Value, std::string>) {
@@ -350,6 +416,12 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Vector2");
     case document::SocketValueKind::String:
         return QStringLiteral("String");
+    case document::SocketValueKind::Integer:
+        return QStringLiteral("Integer");
+    case document::SocketValueKind::Boolean:
+        return QStringLiteral("Boolean");
+    case document::SocketValueKind::Vector3:
+        return QStringLiteral("Vector3");
     }
     return {};
 }
@@ -380,8 +452,6 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
     if (structural)
         tip += QStringLiteral("\nStructural Layer Output / stack-slot boundary; remove the layer "
                               "to remove this connection");
-    else if (kind != document::SocketValueKind::Image)
-        tip += QStringLiteral("\nOnly Image ports are linkable in this editor");
     description_ = tip;
     setAuthoringEnabled(true);
 }
@@ -528,8 +598,25 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                             [&](const auto& layer) { return layer.nodeId == node.id; });
     for (const auto& port : definition->inputs) {
         document::InputPortRef input = document::NodeInputRef{node.id, port.name};
-        if (std::ranges::any_of(composition.graph().edges(),
-                                [&](const auto& edge) { return edge.destination == input; }))
+        // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
+        // carries a driver binding; an image transport port is linked when an edge terminates on
+        // it. That split is not an inconsistency -- each has exactly one durable record of where
+        // its value comes from, which is why an edge and a binding can never disagree about a
+        // socket.
+        const auto binding =
+            std::ranges::find(node.parameters, port.name, &document::ParameterBinding::role);
+        const bool linked =
+            binding != node.parameters.end()
+                ? [&] {
+                      const auto* parameter = composition.parameters().find(binding->parameterId);
+                      return parameter != nullptr &&
+                             std::holds_alternative<document::DriverBindingSource>(
+                                 parameter->source);
+                  }()
+                : std::ranges::any_of(composition.graph().edges(), [&](const auto& edge) {
+                      return edge.destination == input;
+                  });
+        if (linked)
             linkedInputs_.insert(QString::fromStdString(port.name));
         sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
                                           port.valueKind, input, std::nullopt, false, this));

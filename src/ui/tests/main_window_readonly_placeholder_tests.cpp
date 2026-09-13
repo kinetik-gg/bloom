@@ -361,7 +361,7 @@ class ArchiveWriter final {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const bloom::project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 3},
+    const bloom::project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4},
                                                        .requirements = {}};
     const bloom::project::CanonicalDocumentV1 documentInput{.snapshot = &snapshot,
                                                             .colorSettings = &colorSettings};

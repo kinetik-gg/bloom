@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <type_traits>
+#include <variant>
 
 namespace bloom::commands::detail {
 inline OperationResult invalidTarget() {
@@ -36,6 +37,44 @@ inline const document::EdgeRecord* inputEdge(const document::CanonicalGraph& gra
     const auto edge = std::ranges::find(graph.edges(), input, &document::EdgeRecord::destination);
     return edge == graph.edges().end() ? nullptr : &*edge;
 }
+// The parameter an input port fills, or nullptr when the port is image transport (or a Reroute's
+// pass-through, which carries someone else's value and therefore has no parameter of its own).
+// Task S7: a non-Image input socket and the ParameterDefinition behind it share one name, which is
+// what makes "linked" one question with one answer rather than a per-node table.
+inline const document::ParameterBinding*
+parameterSocketBinding(const document::CanonicalGraph& graph, const document::InputPortRef& input) {
+    const auto* fixed = std::get_if<document::NodeInputRef>(&input);
+    if (fixed == nullptr) {
+        return nullptr;
+    }
+    const auto* node = graph.findNode(fixed->nodeId);
+    if (node == nullptr) {
+        return nullptr;
+    }
+    const auto match =
+        std::ranges::find(node->parameters, fixed->port, &document::ParameterBinding::role);
+    return match == node->parameters.end() ? nullptr : &*match;
+}
+
+// The value the registry declares for this parameter role -- what an explicit disconnect restores.
+// The document has nowhere to remember a constant a driver superseded, and inventing a durable
+// "previous value" field would be a new persisted concept; undo is what restores the exact constant
+// the artist had, because a link and its removal are each one transaction.
+inline std::optional<document::ParameterValue>
+registeredDefault(const document::CanonicalGraph& graph, const document::NodeId nodeId,
+                  const std::string_view role, const document::NodeDefinitionRegistry& registry) {
+    const auto* node = graph.findNode(nodeId);
+    const auto* definition =
+        node == nullptr ? nullptr : registry.find(node->typeId, node->schemaVersion);
+    if (definition == nullptr) {
+        return std::nullopt;
+    }
+    const auto declared =
+        std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+    return declared == definition->parameters.end() ? std::nullopt
+                                                    : std::optional(declared->defaultValue);
+}
+
 inline bool protectedNode(const document::CanonicalGraph& graph, const document::NodeId id) {
     const auto* node = graph.findNode(id);
     return id == graph.layerStack().nodeId() ||

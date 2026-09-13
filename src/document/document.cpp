@@ -25,10 +25,10 @@ template <typename Visitor>
             if (!visitor(parameter.id)) {
                 return false;
             }
-            if (const auto* driver = std::get_if<DriverBindingSource>(&parameter.source);
-                driver != nullptr && !visitor(driver->driverId)) {
-                return false;
-            }
+            // A driver source carries a NodeId now (task S7), and that node is already visited by
+            // the graph walk below -- so there is nothing to visit here. A driver binding holds no
+            // id of its own any more; see DriverBindingSource in parameter.hpp for why the durable
+            // record is the node-and-port pair rather than an id into a driver table.
         }
         for (const auto& record : composition.animationCurves().records()) {
             if (!visitor(animationCurveId(record))) {

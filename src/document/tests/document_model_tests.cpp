@@ -325,11 +325,18 @@ void testIdsAndParameters(ExpectationContext& expectations) {
                             std::string(bloom::document::kOpacityParameterSchemaKey),
                             ConstantValueSource{std::string("opaque")}}),
         "known schemas reject a wrong-type constant during insertion");
-    expectations.expect(!parameters.setSource(parameterId, DriverBindingSource{DriverBindingId{}}),
-                        "invalid driver source is rejected");
+    // Task S7 made a driver source the durable node-and-port pair it addresses, so "invalid" is now
+    // a malformed reference rather than a zero id: an unset node, or a port name that is not valid
+    // structural text.
     expectations.expect(
-        parameters.setSource(parameterId, DriverBindingSource{id<DriverBindingId>(7)}),
-        "source changes are explicit and mutually exclusive");
+        !parameters.setSource(parameterId, DriverBindingSource{NodeId{}, std::string("result")}),
+        "a driver source naming no node is rejected");
+    expectations.expect(
+        !parameters.setSource(parameterId, DriverBindingSource{id<NodeId>(7), std::string()}),
+        "a driver source naming no output port is rejected");
+    expectations.expect(parameters.setSource(
+                            parameterId, DriverBindingSource{id<NodeId>(7), std::string("result")}),
+                        "source changes are explicit and mutually exclusive");
     expectations.expect(
         std::holds_alternative<DriverBindingSource>(parameters.find(parameterId)->source),
         "driver source replaces the prior constant source");

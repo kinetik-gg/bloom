@@ -462,15 +462,27 @@ void testDuplicationOwnershipEdges(TestContext& test) {
                            std::set<NodeId>{kFirstLayerNodeId},
                            Vec2d{std::numeric_limits<double>::max(), 0});
 
-    // Driver identity exists, but the document model has no driver record to clone.
+    // ADAPTED (task S7): a driver binding names a value node's output now, so the fixture adds the
+    // Scalar node the binding points at instead of allocating a bare driver id. The contract under
+    // test is unchanged -- duplicating a node whose parameter is driven is still refused, because a
+    // copy would need a second driver nothing asked for.
     auto before = fixture.document.snapshot();
     auto draft = fixture.document.draft(before);
-    const auto driver = draft.ids().allocateDriverBinding();
-    if (!driver ||
-        !draft.project()
-             .findComposition(kCompositionId)
-             ->parameters()
-             .setSource(kSecondOpacityId, DriverBindingSource{*driver}) ||
+    const auto valueNodeId = draft.ids().allocateNode();
+    const auto valueParameterId = draft.ids().allocateParameter();
+    auto* drivenComposition = draft.project().findComposition(kCompositionId);
+    if (!valueNodeId || !valueParameterId || drivenComposition == nullptr ||
+        !drivenComposition->parameters().insert(
+            {*valueParameterId, std::string(bloom::document::kScalarValueParameterSchemaKey),
+             ConstantValueSource{0.5}}) ||
+        !drivenComposition->graph().addNode(
+            {*valueNodeId,
+             std::string(bloom::document::kScalarValueNodeType),
+             {{std::string(bloom::document::kValueParameterRole), *valueParameterId}},
+             bloom::document::kValueNodeSchemaVersion}) ||
+        !drivenComposition->parameters().setSource(
+            kSecondOpacityId,
+            DriverBindingSource{*valueNodeId, std::string(bloom::document::kValuePortName)}) ||
         !fixture.document.commit(before.revision(), std::move(draft)).committed())
         throw std::logic_error("driver fixture");
     fixture.stack.clear();
@@ -480,6 +492,81 @@ void testDuplicationOwnershipEdges(TestContext& test) {
 
 // Node groups: one transaction each, undo/redo pinned by exercise() above, and the one rule that
 // spans them all -- a node belongs to exactly one group, and a frame emptied by any of these goes.
+// Task S7, items 2 and 3: a link into an operand socket is the parameter's driver binding, and the
+// same ConnectPorts/DisconnectInput pair that wires image transport authors it. No second gesture,
+// no second command, and undo restores the exact constant the link replaced.
+void testParameterSocketDrivers(TestContext& test) {
+    Fixture fixture;
+    const auto parameterOf = [&fixture](const NodeId nodeId, const std::string_view role) {
+        const auto snapshot = fixture.document.snapshot();
+        const auto& graph = composition(snapshot).graph();
+        const auto* node = graph.findNode(nodeId);
+        if (node == nullptr)
+            throw std::logic_error("driver fixture node");
+        const auto binding = std::ranges::find(node->parameters, role, &ParameterBinding::role);
+        if (binding == node->parameters.end())
+            throw std::logic_error("driver fixture role");
+        const auto* parameter = composition(snapshot).parameters().find(binding->parameterId);
+        if (parameter == nullptr)
+            throw std::logic_error("driver fixture parameter");
+        return *parameter;
+    };
+
+    const auto scalarNode = apply<AddNode>(fixture, std::string(kScalarValueNodeType), Vec2d{8, 9})
+                                .outputId<NodeId>(kAddNodeOutput);
+    if (!scalarNode.has_value())
+        throw std::logic_error("scalar value node fixture");
+
+    const InputPortRef opacitySocket =
+        NodeInputRef{kFirstLayerNodeId, std::string(kOpacityParameterRole)};
+    test.expect(std::holds_alternative<ConstantValueSource>(
+                    parameterOf(kFirstLayerNodeId, kOpacityParameterRole).source),
+                "an unlinked operand socket's parameter is a constant");
+
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*scalarNode, std::string(kValuePortName)},
+                           opacitySocket);
+    const auto linked = parameterOf(kFirstLayerNodeId, kOpacityParameterRole).source;
+    test.expect(std::holds_alternative<DriverBindingSource>(linked) &&
+                    std::get<DriverBindingSource>(linked) ==
+                        DriverBindingSource{*scalarNode, std::string(kValuePortName)},
+                "linking an operand socket sets its parameter's driver binding");
+    test.expect(
+        std::ranges::none_of(composition(fixture.document.snapshot()).graph().edges(),
+                             [&](const auto& edge) { return edge.destination == opacitySocket; }),
+        "and records no edge: one authored value has one durable source");
+    test.expect(apply<ConnectPorts>(
+                    fixture, OutputPortRef{*scalarNode, std::string(kValuePortName)}, opacitySocket)
+                        .status == CommandStatus::NoChange,
+                "relinking the same output is a no-op");
+
+    exercise<DisconnectInput>(test, fixture, opacitySocket);
+    test.expect(std::holds_alternative<ConstantValueSource>(
+                    parameterOf(kFirstLayerNodeId, kOpacityParameterRole).source),
+                "unlinking restores a constant source");
+    test.expect(apply<DisconnectInput>(fixture, opacitySocket).status == CommandStatus::NoChange,
+                "an already-unlinked operand socket is a no-op");
+
+    // The kind rule is the shared promotion whitelist: an Integer node drives a Scalar operand
+    // through an explicit widening, and a String node drives nothing numeric at all.
+    const auto integerNode =
+        apply<AddNode>(fixture, std::string(kIntegerValueNodeType), Vec2d{1, 2})
+            .outputId<NodeId>(kAddNodeOutput);
+    const auto stringNode = apply<AddNode>(fixture, std::string(kStringValueNodeType), Vec2d{3, 4})
+                                .outputId<NodeId>(kAddNodeOutput);
+    if (!integerNode.has_value() || !stringNode.has_value())
+        throw std::logic_error("promotion fixture nodes");
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*integerNode, std::string(kValuePortName)},
+                           opacitySocket);
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*stringNode, std::string(kValuePortName)}, opacitySocket);
+    // Nothing promotes INTO an Integer socket from a Scalar: the blend mode is a closed
+    // enumeration, and a number between two modes is not a mode.
+    refuse<ConnectPorts>(
+        test, fixture, OperationIssueCode::SocketKindMismatch,
+        OutputPortRef{*scalarNode, std::string(kValuePortName)},
+        InputPortRef{NodeInputRef{kFirstLayerNodeId, std::string(kBlendModeParameterRole)}});
+}
+
 void testNodeGroups(TestContext& test) {
     Fixture fixture;
     const auto composition = [&fixture] {
@@ -590,6 +677,7 @@ int main() {
         bloom::commands::test::testRemoveAndDissolve(test);
         bloom::commands::test::testDeepDuplication(test);
         bloom::commands::test::testDuplicationOwnershipEdges(test);
+        bloom::commands::test::testParameterSocketDrivers(test);
         bloom::commands::test::testNodeGroups(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

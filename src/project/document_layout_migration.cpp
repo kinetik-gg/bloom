@@ -122,13 +122,17 @@ bool layout(const JsonValue& composition, Buffer& output) {
 // what 1.3 adds is a new animation-curve KIND and a new interpolation TOKEN, neither of which an
 // older file can contain. It still walks the whole document through the same copy/rewrite path so
 // every numeric spelling is preserved byte for byte and the version rewrite is the only difference.
-enum class Step { NodeLayout, NodeGroups, AnimationBreadth };
+// ValueGraph (1.3 -> 1.4) is version-only for the same reason: what 1.4 adds is a new
+// constant-value kind ("vec3") and a new parameter-source kind ("driver"), and a 1.3 file can
+// contain neither -- the step exists so the chain has no hole, not because a 1.3 document is
+// missing anything.
+enum class Step { NodeLayout, NodeGroups, AnimationBreadth, ValueGraph };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
     // A version-only step adds nothing, so there is no member whose presence could prove it already
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
-    if (step == Step::AnimationBreadth)
+    if (step == Step::AnimationBreadth || step == Step::ValueGraph)
         return false;
     if (scope == Scope::Composition)
         return value.findMember(step == Step::NodeLayout ? "nodeLayout" : "nodeGroups") != nullptr;
@@ -151,9 +155,10 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             return transform(member.value(), child, step, output);
         };
         if (scope == Scope::Root && member.key() == "schemaVersion") {
-            append(output, step == Step::NodeLayout   ? "{\"major\":1,\"minor\":1}"
-                           : step == Step::NodeGroups ? "{\"major\":1,\"minor\":2}"
-                                                      : "{\"major\":1,\"minor\":3}");
+            append(output, step == Step::NodeLayout         ? "{\"major\":1,\"minor\":1}"
+                           : step == Step::NodeGroups       ? "{\"major\":1,\"minor\":2}"
+                           : step == Step::AnimationBreadth ? "{\"major\":1,\"minor\":3}"
+                                                            : "{\"major\":1,\"minor\":4}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -231,6 +236,16 @@ MigrationStepOutcome migrateAnimationBreadthV1_2(const JsonValue& root,
     if (!sourceVersionIs(root, "2"))
         return MigrationStepOutcome::failure("/schemaVersion");
     if (!transform(root, Scope::Root, Step::AnimationBreadth, output))
+        return MigrationStepOutcome::failure("/project/compositions");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateValueGraphV1_3(const JsonValue& root,
+                                           std::pmr::memory_resource* /*resource*/,
+                                           Buffer& output) {
+    if (!sourceVersionIs(root, "3"))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    if (!transform(root, Scope::Root, Step::ValueGraph, output))
         return MigrationStepOutcome::failure("/project/compositions");
     return MigrationStepOutcome::success();
 }
