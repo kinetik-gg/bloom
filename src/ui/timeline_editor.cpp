@@ -68,7 +68,7 @@ constexpr int kCellGap = kit::px(kit::Spacing::XS);
 constexpr int kColumnPadding = kit::px(kit::Spacing::XS);
 constexpr int kToggleCellWidth = kit::px(kit::Size::IconMedium) + kit::px(kit::Spacing::XS);
 constexpr int kToggleCellCount = 3;
-constexpr int kNameCellWidth = kit::px(kit::Size::ControlRoomy) * 6;
+constexpr int kNameCellWidth = kit::px(kit::Size::ControlRoomy) * 7;
 constexpr int kBlendingCellWidth = kit::px(kit::Size::ControlRoomy) * 3;
 
 constexpr int kToggleStripX = kColumnPadding;
@@ -1148,7 +1148,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
             for (const auto time : keySummaryTimes(row)) {
                 if (time.toSeconds() < axis->t0 || time.toSeconds() >= axis->t1)
                     continue;
-                const qreal x = axis->pixelForTime(time), y = top + kTimelineRowHeight / 2;
+                const qreal x = axis->pixelForTime(time), y = top + kTimelineRowHeight / 2.0;
                 painter.drawPolygon(QPolygonF{QPointF(x, y - radius), QPointF(x + radius, y),
                                               QPointF(x, y + radius), QPointF(x - radius, y)});
             }
@@ -1347,6 +1347,11 @@ void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
 }
 
 // ---------------------------------------------------------------------------------------------
+
+int TimelineEditor::propertyNameIndent() {
+    return kNameCellX + kit::px(kit::Spacing::S) + kCellGap + kit::px(kit::Size::IconMedium) +
+           kit::px(kit::Spacing::L);
+}
 
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 

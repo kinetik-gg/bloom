@@ -22,15 +22,18 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
@@ -47,6 +50,7 @@
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -1543,6 +1547,34 @@ void testPropertyRows(Expectations& expectations) {
                             "every child shares its lane y");
     }
     expectations.expect(positions == 1, "Position is one parameter row");
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible() ||
+            row->property("role").toString() !=
+                QString::fromStdString(std::string(document::kPositionParameterRole)))
+            continue;
+        const auto id = document::ParameterId::fromRaw(row->property("parameterId").toULongLong());
+        const auto before = fixture.session.effectiveVec2Value(id);
+        const auto fields = row->findChildren<ui::kit::KValueField*>();
+        expectations.expect(fields.size() == 2 && fields.front()->cellRect().width() >= 40,
+                            "one vector row has two usable compact value cells");
+        const auto history = fixture.commands.size();
+        fields.front()->stepBy(1);
+        const auto after = fixture.session.effectiveVec2Value(id);
+        expectations.expect(before && after && after->x == before->x + 1 && after->y == before->y &&
+                                fixture.commands.size() == history + 1,
+                            "inline X commits the exact row parameter through its session setter");
+    }
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible() || row->property("role").toString() != "color")
+            continue;
+        auto* chip = row->findChild<ui::kit::KColorChip*>("timelinePropertyColor");
+        chip->colorChanged({0.25F, 0.5F, 0.75F, 1.0F});
+        expectations.expect(fixture.commands.undoLabel() ==
+                                std::optional<std::string_view>{"Set Text Color"},
+                            "text color row uses the same setter and history label as Properties");
+    }
+    if (const auto path = qEnvironmentVariable("BLOOM_TIMELINE_TEST_IMAGE"); !path.isEmpty())
+        expectations.expect(editor.grab().save(path), "save requested timeline inspection image");
     auto* panel = editor.findChild<QWidget*>("timelineKeyframePanel");
     auto* area = editor.findChild<QWidget*>("timelineKeyframeArea");
     expectations.expect(panel && area && editor.laneRegionForTest()->isAncestorOf(area),
@@ -1578,10 +1610,12 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     const auto summarySelection = session.selection();
     const auto summaryAxis =
         editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
+    if (!summaryAxis)
+        throw std::runtime_error("Missing summary axis");
     sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonPress,
-              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2);
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2.0);
     sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonRelease,
-              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2);
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2.0);
     expectations.expect(editor.layerStackForTest()->rowCount() > 1 &&
                             editor.laneRegionForTest()->keySummaryTimes(0).empty(),
                         "clicking a summary expands its layer and exposes parameter lanes");
@@ -1591,6 +1625,8 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     QCoreApplication::processEvents();
     auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
     const auto axis = editor.rulerForTest()->axisForWidth(panel->width());
+    if (!axis)
+        throw std::runtime_error("Missing parameter lane axis");
     const auto yFor = [&](document::ParameterId parameter) {
         const auto& entries = editor.layerStackForTest()->entries();
         for (std::size_t i = 0; i < entries.size(); ++i)
@@ -1715,6 +1751,47 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     mouse(QEvent::MouseButtonRelease, 7.3, yFor(opacity));
     expectations.expect(session.snapshot().revision() == cancelledRevision,
                         "Escape cancels a multi-key drag without a transaction");
+    session.selectKeyframes(selected);
+    bool pickedInterpolation = false;
+    const auto menuRevision = session.snapshot().revision();
+    QTimer::singleShot(0, panel, [&] {
+        for (auto* menu : panel->findChildren<QMenu*>()) {
+            for (auto* action : menu->actions())
+                if (action->objectName() == "keyframeInterpolationAction" &&
+                    action->text() == "Hold") {
+                    pickedInterpolation = true;
+                    action->trigger();
+                    break;
+                }
+            menu->close();
+        }
+    });
+    const QPoint contextPoint(static_cast<int>(std::lround(axis->pixelForSeconds(1.123))),
+                              yFor(opacity));
+    QContextMenuEvent context(QContextMenuEvent::Mouse, contextPoint,
+                              panel->mapToGlobal(contextPoint));
+    QCoreApplication::sendEvent(panel, &context);
+    const auto interpolated = session.selectedKeyframeData();
+    expectations.expect(pickedInterpolation &&
+                            session.snapshot().revision().value() == menuRevision.value() + 1 &&
+                            interpolated.size() == 2 &&
+                            std::ranges::all_of(interpolated,
+                                                [](const auto& item) {
+                                                    return item.interpolation ==
+                                                           document::KeyframeInterpolation::Hold;
+                                                }),
+                        "context menu edits every selected interpolation in one transaction");
+    const auto lockedLayer = session.selection().contextualLayer;
+    if (!lockedLayer)
+        throw std::runtime_error("Missing keyframe contextual layer");
+    commands::Transaction lock("Lock key target", session.snapshot().revision());
+    lock.emplace<commands::SetLayerLocked>(session.compositionId(), *lockedLayer, true);
+    (void)session.executeTransaction(std::move(lock));
+    const auto lockedRevision = session.snapshot().revision();
+    key(Qt::Key_Delete);
+    expectations.expect(session.snapshot().revision() == lockedRevision &&
+                            session.selection().keyframes.size() == 2,
+                        "locked-layer keys reject a batch deletion without changing selection");
     finishFixture(fixture);
 }
 

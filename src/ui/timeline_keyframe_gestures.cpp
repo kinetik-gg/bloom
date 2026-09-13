@@ -221,6 +221,7 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
         static_cast<int>(std::lround(axis->pixelForSeconds(targetSeconds))));
     long double delta = static_cast<long double>(targetIndex) - static_cast<long double>(*lead);
     std::vector<std::uint64_t> frames;
+    frames.reserve(gestureData_.size());
     for (const auto& key : gestureData_) {
         const auto frame = nearestFrameIndexForTime(rate, duration, key.time);
         if (!frame)
@@ -275,7 +276,7 @@ void TimelineKeyframePanel::mouseReleaseEvent(QMouseEvent* event) {
             for (const auto& key : laneKeys()) {
                 const QPointF point(axis->pixelForTime(key.time), key.row * kTimelineRowHeight -
                                                                       gridScroll_ +
-                                                                      kTimelineRowHeight / 2);
+                                                                      kTimelineRowHeight / 2.0);
                 if (box_->contains(point) && std::ranges::find(keys, key.selection) == keys.end())
                     keys.push_back(key.selection);
             }
@@ -404,7 +405,7 @@ void TimelineKeyframePanel::paintGridOverlay(QPainter& painter, const QWidget& r
             if (key.selection != KeyframeSelection{move.key.curveId, move.key.keyframeId})
                 continue;
             const qreal x = axis->pixelForTime(move.time),
-                        y = key.row * kTimelineRowHeight - gridScroll_ + kTimelineRowHeight / 2;
+                        y = key.row * kTimelineRowHeight - gridScroll_ + kTimelineRowHeight / 2.0;
             const qreal r = kit::px(kit::Spacing::XS);
             painter.drawPolygon(QPolygonF{QPointF(x, y - r), QPointF(x + r, y), QPointF(x, y + r),
                                           QPointF(x - r, y)});

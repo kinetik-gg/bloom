@@ -28,7 +28,9 @@ class TimelinePropertyRow final : public QWidget {
     TimelineLayerEntry entry_;
     QLabel* label_;
     KeyframeDiamond* diamond_;
-    std::array<kit::KValueField*, 4> fields_{};
+    std::array<kit::KValueField*, 2> fields_{};
+    std::array<QWidget*, 2> cells_{};
+    std::array<QLabel*, 2> components_{};
     kit::KDropdown* blending_;
     kit::KColorChip* color_;
     bool binding_ = false;

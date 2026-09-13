@@ -88,6 +88,7 @@ class TimelineEditor final : public QWidget,
     // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
     // that alignment against one number instead of re-deriving the cell table.
     [[nodiscard]] static int layerColumnWidth();
+    [[nodiscard]] static int propertyNameIndent();
 
     // Test seams (mirroring TimelineRuler::majorTickLabelRectsForTest()'s precedent): the three
     // widgets whose geometry is this task's pinned contract.
@@ -142,7 +143,6 @@ class TimelineEditor final : public QWidget,
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;
-    TimelineKeyframePanel* keyframes_ = nullptr;
     // The two halves of one row grid (task T1), replacing the QTreeWidget this panel used to be.
     TimelineLayerStack* stack_ = nullptr;
     TimelineLaneRegion* lanes_ = nullptr;

@@ -59,8 +59,10 @@ timelinePropertyEntries(const CompositionSession& session,
             const auto* node = composition->graph().findNode(*source);
             bool heading = false;
             for (const auto& binding : node->parameters) {
-                if (session.keyframeDiamondStateForParameter(binding.parameterId) ==
-                    KeyframeDiamondState::Unsupported)
+                const auto* parameter = composition->parameters().find(binding.parameterId);
+                if (!parameter || !(document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
+                                    document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
+                                    document::isColor4AnimatableSchemaKey(parameter->schemaKey)))
                     continue;
                 if (!heading) {
                     group(QObject::tr("Source"));
@@ -85,19 +87,31 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
       color_(new kit::KColorChip(this)) {
     setObjectName("timelinePropertyRow");
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(kit::px(kit::Spacing::L), 0, kit::px(kit::Spacing::XS), 0);
+    layout->setContentsMargins(TimelineEditor::propertyNameIndent(), 0, kit::px(kit::Spacing::XS),
+                               0);
     layout->setSpacing(kit::px(kit::Spacing::XS));
     label_->setObjectName("timelinePropertyLabel");
-    label_->setFixedWidth(kit::px(kit::Size::ControlRoomy) * 3);
+    label_->setFixedWidth(kit::px(kit::Size::ControlRoomy) * 2);
     label_->setFont(kit::font(kit::TypeRole::Ui));
     layout->addWidget(label_);
     diamond_->setObjectName("timelinePropertyDiamond");
     layout->addWidget(diamond_);
-    for (auto*& field : fields_) {
-        field = new kit::KValueField(this);
+    for (std::size_t i = 0; i < fields_.size(); ++i) {
+        auto* cell = cells_[i] = new QWidget(this);
+        auto* cellLayout = new QHBoxLayout(cell);
+        cellLayout->setContentsMargins(0, 0, 0, 0);
+        cellLayout->setSpacing(kit::px(kit::Spacing::XXS));
+        auto* component = components_[i] = new QLabel(i == 0 ? "X" : "Y", cell);
+        component->setObjectName("timelinePropertyComponent");
+        component->setFont(kit::font(kit::TypeRole::UiSmall));
+        component->setFixedWidth(kit::px(kit::Spacing::M));
+        cellLayout->addWidget(component);
+        auto* field = fields_[i] = new kit::KValueField(cell);
         field->setObjectName("timelinePropertyValue");
         field->setMinimumWidth(0);
-        layout->addWidget(field, 1);
+        field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        cellLayout->addWidget(field, 1);
+        layout->addWidget(cell, 1);
         connect(field, &kit::KValueField::valueChanged, this, [this] {
             if (!binding_)
                 commitValues();
@@ -124,10 +138,21 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         if (binding_)
             return;
         const auto layer = entry_.layerId;
+        const auto parameter = entry_.parameterId;
+        const auto* composition = session_.composition();
+        const auto* record = composition ? composition->parameters().find(parameter) : nullptr;
+        const bool solid = record && record->schemaKey == document::kSolidColorParameterSchemaKey;
+        const bool text = record && record->schemaKey == document::kTextColorParameterSchemaKey;
         session_.selectLayer(layer);
-        (void)session_.setSelectedTextColor(
-            {static_cast<double>(color.red), static_cast<double>(color.green),
-             static_cast<double>(color.blue), static_cast<double>(color.alpha)});
+        const core::Color4d value{static_cast<double>(color.red), static_cast<double>(color.green),
+                                  static_cast<double>(color.blue),
+                                  static_cast<double>(color.alpha)};
+        if (solid)
+            (void)session_.setSelectedSolidColor(value);
+        else if (text)
+            (void)session_.setSelectedTextColor(value);
+        else
+            (void)session_.setParameterValue(parameter, value, tr("Set Color"));
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
         if (isVisible())
@@ -142,17 +167,20 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                 QVariant::fromValue(static_cast<qulonglong>(entry.parameterId.value())));
     setProperty("role", QString::fromStdString(entry.role));
     const bool group = entry.rowKind == TimelineLayerEntry::Kind::Group;
+    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : kit::px(kit::Size::ControlRoomy) * 2);
     label_->setText(group ? entry.name.toUpper() : entry.name);
+    label_->setFont(kit::font(group ? kit::TypeRole::UiSmall : kit::TypeRole::Ui));
     label_->setToolTip(entry.name);
     setEnabled(true);
     if (group) {
-        for (auto* field : fields_)
-            field->hide();
+        for (auto* cell : cells_)
+            cell->hide();
         blending_->hide();
         color_->hide();
         diamond_->hide();
     }
     if (!group) {
+        diamond_->setRole(entry.role);
         diamond_->setParameterId(entry.parameterId);
         diamond_->refresh();
         const auto role = std::string_view(entry.role);
@@ -163,14 +191,14 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const auto vector = session_.effectiveVec2Value(entry.parameterId);
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
-        const int count = vector                                                ? 2
-                          : scalar                                              ? 1
-                          : color && role == document::kSolidColorParameterRole ? 4
-                                                                                : 0;
-        for (std::size_t i = 0; i < fields_.size(); ++i)
-            fields_[i]->setVisible(static_cast<int>(i) < count);
+        const int count = vector ? 2 : scalar ? 1 : 0;
+        for (std::size_t i = 0; i < fields_.size(); ++i) {
+            cells_[i]->setVisible(static_cast<int>(i) < count);
+            components_[i]->setVisible(vector.has_value());
+            fields_[i]->setAccessibleName(entry.name + (vector ? (i == 0 ? " X" : " Y") : ""));
+        }
         blending_->setVisible(role == document::kBlendModeParameterRole);
-        color_->setVisible(color.has_value() && role == document::kTextColorParameterRole);
+        color_->setVisible(color.has_value());
         std::array<double, 4> values{};
         if (vector) {
             values[0] = vector->x * (scale ? 100 : 1);
@@ -192,9 +220,6 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                                                 : 1'000'000);
             field->setDecimals(color ? 3 : opacity || size ? 1 : 2);
             field->setSingleStep(color ? 0.01 : 1);
-            field->setLabel(vector  ? (i == 0 ? "X" : "Y")
-                            : color ? QString("RGBA").mid(i, 1)
-                                    : QString());
             field->setUnit(scale || opacity ? "%"
                            : rotation       ? QString::fromUtf8("°")
                            : vector || size ? "px"
@@ -209,7 +234,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                     std::ranges::find(core::kBlendModes, *mode) - core::kBlendModes.begin()));
             blending_->show();
         }
-        if (color && role == document::kTextColorParameterRole) {
+        if (color) {
             color_->setColor({static_cast<float>(color->red), static_cast<float>(color->green),
                               static_cast<float>(color->blue), static_cast<float>(color->alpha)});
             color_->setToolTip(exactColorText(*color));
@@ -226,7 +251,6 @@ void TimelinePropertyRow::commitValues() {
     const auto entry = entry_;
     const auto role = std::string_view(entry.role);
     const double x = fields_[0]->value(), y = fields_[1]->value();
-    const core::Color4d color{x, y, fields_[2]->value(), fields_[3]->value()};
     session_.selectLayer(entry.layerId);
     if (role == document::kPositionParameterRole)
         (void)session_.setSelectedPosition(x, y);
@@ -238,9 +262,12 @@ void TimelinePropertyRow::commitValues() {
         (void)session_.setSelectedRotation(x);
     else if (role == document::kOpacityParameterRole)
         (void)session_.setSelectedOpacity(x / 100);
-    else if (role == document::kSolidColorParameterRole)
-        (void)session_.setSelectedSolidColor(color);
     else if (role == document::kTextSizeParameterRole)
         (void)session_.setSelectedTextSize(x);
+    else if (session_.effectiveVec2Value(entry.parameterId))
+        (void)session_.setParameterValue(entry.parameterId, document::Vec2d{x, y},
+                                         tr("Set Parameter"));
+    else
+        (void)session_.setParameterValue(entry.parameterId, x, tr("Set Parameter"));
 }
 } // namespace bloom::ui

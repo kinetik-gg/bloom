@@ -7,6 +7,23 @@
 #include <bloom/ui/timeline_frame_math.hpp>
 
 namespace bloom::ui {
+namespace {
+bool editableParameter(const CompositionSession& session, document::ParameterId parameter) {
+    const auto* composition = session.composition();
+    if (!composition || !composition->parameters().find(parameter))
+        return false;
+    for (const auto& node : composition->graph().nodes())
+        for (const auto& binding : node.parameters) {
+            if (binding.parameterId != parameter)
+                continue;
+            const auto layerId = session.layerForNode(node.id);
+            const auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
+            if (layer && layer->locked)
+                return false;
+        }
+    return true;
+}
+} // namespace
 void CompositionSession::selectKeyframe(document::AnimationCurveId curve, document::KeyframeId key,
                                         bool extend) {
     auto keys = extend ? selection_.keyframes : std::vector<KeyframeSelection>{};
@@ -17,7 +34,7 @@ void CompositionSession::selectKeyframe(document::AnimationCurveId curve, docume
     }
     std::erase(keys, target);
     keys.push_back(target);
-    selectKeyframes(std::move(keys));
+    selectKeyframes(keys);
 }
 void CompositionSession::selectKeyframes(const std::vector<KeyframeSelection>& keys) {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -67,12 +84,24 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
 }
 bool CompositionSession::moveKeyframes(std::vector<commands::KeyframeMove> keys,
                                        document::Revision revision) {
+    for (const auto& key : keys) {
+        const auto parameter = parameterForCurve(key.key.curveId);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    }
     commands::Transaction transaction("Move Keyframes", revision);
     transaction.emplace<commands::MoveKeyframes>(compositionId_, std::move(keys));
     return execute(std::move(transaction));
 }
 bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
                                         document::Revision revision) {
+    for (const auto& key : keys)
+        if (!editableParameter(*this, key.parameterId)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
     commands::Transaction transaction("Paste Keyframes", revision);
     transaction.emplace<commands::PasteKeyframes>(compositionId_, keys);
     if (!execute(std::move(transaction)))
@@ -96,7 +125,7 @@ bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePast
             },
             *record);
     }
-    selectKeyframes(std::move(selection));
+    selectKeyframes(selection);
     return true;
 }
 bool CompositionSession::deleteSelectedKeyframes() {
@@ -106,6 +135,13 @@ bool CompositionSession::deleteSelectedKeyframes() {
         keys.push_back({key.curveId, key.keyframeId});
     if (keys.empty())
         return false;
+    for (const auto& key : keys) {
+        const auto parameter = parameterForCurve(key.curveId);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    }
     commands::Transaction transaction("Delete Keyframes", snapshot_.revision());
     transaction.emplace<commands::DeleteKeyframes>(compositionId_, std::move(keys));
     return execute(std::move(transaction));
@@ -118,6 +154,13 @@ bool CompositionSession::setSelectedKeyframesInterpolation(
         keys.push_back({key.curveId, key.keyframeId});
     if (keys.empty())
         return false;
+    for (const auto& key : keys) {
+        const auto parameter = parameterForCurve(key.curveId);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    }
     commands::Transaction transaction("Set Keyframes Interpolation", snapshot_.revision());
     transaction.emplace<commands::SetKeyframesInterpolation>(compositionId_, std::move(keys),
                                                              interpolation);
@@ -143,6 +186,6 @@ bool CompositionSession::pasteCopiedKeyframes() {
         }
         key.time = *time;
     }
-    return pasteKeyframes(std::move(keys), snapshot_.revision());
+    return pasteKeyframes(keys, snapshot_.revision());
 }
 } // namespace bloom::ui
