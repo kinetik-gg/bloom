@@ -679,8 +679,10 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     setAcceptHoverEvents(true);
     setAcceptedMouseButtons(Qt::NoButton);
     setZValue(-1);
-    if (structural)
-        setToolTip(input.toolTip());
+    // Every link names both of its ends (task FIX1, item C), so hovering a wire in a dense graph
+    // says what it connects instead of leaving the artist to trace it.
+    setToolTip(QCoreApplication::translate("node_editor", "%1 · %2  →  %3 · %4")
+                   .arg(source.title(), output.name, destination.title(), input.name));
     source_.addEdge(*this);
     destination_.addEdge(*this);
     updatePath();

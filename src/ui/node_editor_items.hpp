@@ -228,6 +228,9 @@ class NodeItem final : public QGraphicsObject {
     }
 
     [[nodiscard]] document::NodeId id() const noexcept { return id_; }
+    // The name this card shows. Exposed so a link can name both of its ends in its own tooltip
+    // (task FIX1, item C) without re-deriving either from the document.
+    [[nodiscard]] QString title() const { return title_; }
 
     // Reconciles this card against the node record IN PLACE. Field widgets are created once, on the
     // first refresh that sees a given set of parameter roles, and afterwards only reconfigured --

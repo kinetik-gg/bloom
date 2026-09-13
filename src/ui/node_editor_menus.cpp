@@ -330,8 +330,64 @@ QMenu* NodeGraphEditor::contextMenuForTest(const bool nodeMenu,
                                            const std::optional<document::NodeGroupId> group) {
     return buildContextMenu(this, nodeMenu, group);
 }
+
+QMenu* NodeGraphEditor::linkContextMenuForTest(const QPoint viewportPosition) {
+    return buildLinkContextMenu(this, viewportPosition);
+}
+
+// Task FIX1, item C: a link is a thing an artist can act on, not only a thing to look at. One
+// command, offered under the two names an artist might look for it by -- "Disconnect" says what
+// happens to the connection, "Delete Link" says what happens to the wire, and they are the same
+// DisconnectInput on the same destination. Which durable record that destination is addressed
+// through -- an edge, a driver binding, or a stack slot -- is DisconnectInput's business, not this
+// menu's, which is why every link kind works here.
+QMenu* NodeGraphEditor::buildLinkContextMenu(QWidget* parent, const QPoint viewportPosition) {
+    if (!scene_->canSubmit() || session_.composition() == nullptr)
+        return nullptr;
+    const node_editor::NodeEdgeItem* link = nullptr;
+    for (auto* item : view_->items(viewportPosition))
+        if (const auto* candidate = dynamic_cast<node_editor::NodeEdgeItem*>(item);
+            candidate != nullptr) {
+            link = candidate;
+            break;
+        }
+    if (link == nullptr)
+        return nullptr;
+    auto* menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("nodeLinkMenu"));
+    menu->setAccessibleName(tr("Link menu"));
+    const auto input = link->edge.destination;
+    auto* disconnect = menu->addAction(tr("Disconnect"));
+    disconnect->setObjectName(QStringLiteral("nodeLinkDisconnectAction"));
+    connect(disconnect, &QAction::triggered, this, [this, input] { disconnectLink(input); });
+    auto* remove = menu->addAction(tr("Delete Link"));
+    remove->setObjectName(QStringLiteral("nodeLinkDeleteAction"));
+    connect(remove, &QAction::triggered, this, [this, input] { disconnectLink(input); });
+    return menu;
+}
+
+void NodeGraphEditor::disconnectLink(document::InputPortRef input) {
+    if (!scene_->canSubmit()) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    if (scene_->gestureActive())
+        scene_->cancelGesture();
+    commands::Transaction transaction("Disconnect Link", session_.snapshot().revision());
+    transaction.emplace<commands::DisconnectInput>(session_.compositionId(), std::move(input));
+    (void)scene_->submit(std::move(transaction));
+}
 void NodeGraphEditor::showContextMenu(const QPoint& viewportPosition) {
     auto* card = nodeItemAncestor(view_->itemAt(viewportPosition));
+    // A link under the pointer owns the click, and only where there is no card there: a wire
+    // passing behind a card is the card's business.
+    if (card == nullptr) {
+        if (const QPointer<QMenu> linkMenu = buildLinkContextMenu(view_, viewportPosition)) {
+            linkMenu->setAttribute(Qt::WA_DeleteOnClose);
+            linkMenu->popup(view_->viewport()->mapToGlobal(viewportPosition));
+            return;
+        }
+    }
     if (card && !session_.selectedNodes().contains(card->id()))
         session_.selectNode(card->id());
     addPosition_ = view_->sceneFromViewport(viewportPosition);
@@ -423,14 +479,10 @@ void NodeGraphEditor::addNode(const QString& type) {
             (void)addDefaultTextLayer(session_);
         return;
     }
-    const auto typeId = type.toStdString();
-    const char* label = "Add Node";
-    if (typeId == document::kSolidSourceNodeType) {
-        label = "Add Solid Layer";
-    } else if (typeId == document::kTextSourceNodeType) {
-        label = "Add Text Layer";
-    }
-    commands::Transaction transaction(label, addRevision_);
+    // One label, because there is one thing the canvas's Add does now: it adds the node that was
+    // asked for (task FIX1, item B). "Add Solid Layer" would have been a promise about structure
+    // the artist makes themselves.
+    commands::Transaction transaction("Add Node", addRevision_);
     transaction.emplace<AddEditorNode>(session_.compositionId(), type.toStdString(),
                                        document::Vec2d{addPosition_.x(), addPosition_.y()},
                                        addInput_, addOutput_);

@@ -163,22 +163,34 @@ void testConnectionsCutAndInsertion() {
                "choosing from drag-armed search adds and connects one first-compatible port "
                "transaction");
     }
+    // ADAPTED (task FIX1, item C): no link is structural any more. The two that could not be
+    // detached
+    // -- a Layer's boundary output into Merge, and the stack slot it lands in -- are now created by
+    // connecting and removed by disconnecting, so the cut gesture reaches them like any other wire
+    // and the layer row goes with the slot.
     expect(f.session.addSolidLayer(QStringLiteral("Boundary"), core::Color4d{1, 0, 0, 1}),
-           "structural layer fixture");
-    auto* structural = static_cast<node_editor::NodeEdgeItem*>(nullptr);
+           "boundary layer fixture");
+    auto* slotLink = static_cast<node_editor::NodeEdgeItem*>(nullptr);
     for (auto* item : f.scene()->items())
-        if (auto* edge = dynamic_cast<node_editor::NodeEdgeItem*>(item); edge && edge->structural)
-            structural = edge;
-    expect(structural && structural->toolTip().contains(QStringLiteral("Structural")),
-           "structural boundary edges explain why they cannot be dragged");
-    if (structural) {
-        const auto record = structural->edge;
-        midpoint = structural->path().pointAtPercent(0.5);
+        if (auto* edge = dynamic_cast<node_editor::NodeEdgeItem*>(item);
+            edge != nullptr &&
+            std::holds_alternative<document::LayerStackInputRef>(edge->edge.destination))
+            slotLink = edge;
+    expect(slotLink != nullptr, "the layer's slot link is projected");
+    if (slotLink != nullptr) {
+        expect(!slotLink->structural, "a stack-slot link is an ordinary link now");
+        expect(slotLink->toolTip().contains(QStringLiteral("Merge")) ||
+                   slotLink->toolTip().contains(QStringLiteral("content")),
+               "and its tooltip names where it lands");
+        const auto slotsBefore = f.session.composition()->graph().layerStack().entries().size();
+        midpoint = slotLink->path().pointAtPercent(0.5);
         f.drag(midpoint - QPointF(0, 20), midpoint + QPointF(0, 20), Qt::ControlModifier,
                Qt::RightButton);
-        expect(std::ranges::find(f.session.composition()->graph().edges(), record) !=
-                   f.session.composition()->graph().edges().end(),
-               "cut never disconnects a structural Layer Output / stack-slot edge");
+        expect(f.session.composition()->graph().layerStack().entries().size() == slotsBefore - 1,
+               "cutting a stack-slot link removes the slot it fed");
+        expect(f.session.undo() &&
+                   f.session.composition()->graph().layerStack().entries().size() == slotsBefore,
+               "one undo restores the slot");
     }
 }
 } // namespace bloom::ui::test
