@@ -45,6 +45,8 @@ PlaybackController::PlaybackController(CompositionSession& session,
     timer_.setTimerType(Qt::PreciseTimer);
     timer_.setInterval(static_cast<int>(tickInterval.count()));
     connect(&timer_, &QTimer::timeout, this, &PlaybackController::tick);
+    connect(&previewController_, &CompositionPreviewController::interactiveScrubStarted, this,
+            &PlaybackController::pause);
 
     // Design decision 2: a composition switch or document rebind stops playback rather than
     // leaving it running against whatever composition happens to be live next.

@@ -25,6 +25,9 @@ void CompositionPreviewController::setPlaybackActive(const bool playing) {
         active_->playbackOutstanding = false;
         noteDroppedFrame();
     }
+    if (!playing) {
+        handleCurrentTimeChanged();
+    }
 }
 
 void CompositionPreviewController::presentPlaybackFrame(

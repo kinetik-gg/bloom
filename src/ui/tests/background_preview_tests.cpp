@@ -27,6 +27,8 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QMouseEvent>
+#include <QWidget>
 
 #include <algorithm>
 #include <atomic>
@@ -344,6 +346,34 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
     finishFixture(fixture, expectations);
 }
 
+void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Pointer yields speculation", time(4, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "opening ready");
+    WorkerGate gate;
+    std::atomic<bool> cancelled = false;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, std::size_t limit,
+                       const std::optional<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        gate.enterAndWait();
+        cancelled = context.isCancellationRequested();
+        return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge, prepare);
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return gate.entered(); }), "speculation in flight");
+    QWidget panel;
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(1, 1), QPointF(1, 1), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&panel, &press);
+    gate.release();
+    expectations.expect(waitUntil([&] { return cancelled.load(); }),
+                        "any panel pointer press cancels speculation before session changes");
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 void testHalfCachedPlaybackNeverWaits(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Half cached playback", time(8, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
@@ -467,6 +497,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     try {
+        testPointerPressCancelsBeforePreviewChanges(expectations);
         testHalfCachedPlaybackNeverWaits(expectations);
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);

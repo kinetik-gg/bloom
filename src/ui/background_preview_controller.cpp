@@ -6,6 +6,7 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 
 #include <QApplication>
+#include <QEvent>
 
 #include <algorithm>
 #include <limits>
@@ -19,6 +20,7 @@ BackgroundPreviewController::BackgroundPreviewController(
     QObject* parent)
     : QObject(parent), session_(session), previewController_(previewController),
       scheduler_(scheduler), bridge_(bridge), preparation_(std::move(preparation)) {
+    qApp->installEventFilter(this);
     idleTimer_.setInterval(50);
     connect(&idleTimer_, &QTimer::timeout, this, &BackgroundPreviewController::fillNextFrame);
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this,
@@ -50,6 +52,16 @@ BackgroundPreviewController::BackgroundPreviewController(
 }
 
 BackgroundPreviewController::~BackgroundPreviewController() { beginShutdown(); }
+
+bool BackgroundPreviewController::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress ||
+        event->type() == QEvent::NonClientAreaMouseButtonPress) {
+        // Node/layer drags may not change preview state until release. Yield at press, before
+        // their first movement, and keep the ordinary mouse-button guard on subsequent fills.
+        restart();
+    }
+    return QObject::eventFilter(watched, event);
+}
 
 void BackgroundPreviewController::cancelActive() {
     if (active_.has_value()) {

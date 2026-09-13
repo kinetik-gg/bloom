@@ -247,6 +247,7 @@ void CompositionPreviewController::handlePositionInteractionChanged() {
 void CompositionPreviewController::beginInteractiveScrub() {
     Q_ASSERT(QThread::currentThread() == thread());
     interactiveTimeChangeArmed_ = true;
+    emit interactiveScrubStarted();
     emit foregroundWorkRequested();
 }
 

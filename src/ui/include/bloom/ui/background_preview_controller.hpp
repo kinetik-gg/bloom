@@ -30,6 +30,9 @@ class BackgroundPreviewController final : public QObject {
     // Also callable by tests without waiting for the idle timer.
     void fillNextFrame();
 
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
   private:
     void cancelActive();
     void consumeReadyResult();

@@ -176,6 +176,7 @@ class CompositionPreviewController final : public QObject {
     // Synchronous cancellation seam for speculative work, before foreground admission.
     void foregroundWorkRequested();
     void playbackActiveChanged(bool playing);
+    void interactiveScrubStarted();
     // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
     // update()).

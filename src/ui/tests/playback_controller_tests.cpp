@@ -411,6 +411,16 @@ void testScrubDuringPlaybackPauses(Expectations& expectations) {
                         "the scrub's own target time is left exactly as the scrub set it -- "
                         "playback does not fight or revert it");
 
+    playback.play();
+    fixture.controller.beginInteractiveScrub();
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped,
+                        "gesture press pauses playback before its first time change");
+    (void)fixture.session.setCurrentTime(time(1, 25));
+    fixture.controller.notifyScrubEnded();
+    expectations.expect(fixture.controller.state().desiredIdentity.has_value() &&
+                            fixture.controller.state().desiredIdentity->time == time(1, 25),
+                        "the first scrub frame still requests a preview");
+
     finishFixture(fixture, expectations);
 }
 
