@@ -900,6 +900,69 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
                         "selecting a solid hides the Text Source group and shows the Solid one");
 }
 
+// task WIDTH-1 (owner: "let it have min width of something like 300px ... so inner sections and
+// users can compromise"): a narrow label column elides its text with an ellipsis rather than
+// forcing the row wider or clipping raw, and always keeps the untruncated parameter name
+// reachable through its tooltip.
+void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Elide Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    properties.resize(properties.sizeHint());
+
+    auto* positionField = properties.findChild<ui::kit::KValueField*>("positionXEditor");
+    expectations.expect(positionField != nullptr, "the Position row resolves its value cell");
+    if (positionField == nullptr) {
+        return;
+    }
+    // positionXEditor -> positionFieldGroup -> propertiesRow.
+    auto* row = positionField->parentWidget()->parentWidget();
+    expectations.expect(row != nullptr, "the Position row's container resolves");
+    if (row == nullptr) {
+        return;
+    }
+    auto* label = row->findChild<QLabel*>("propertiesRowLabel");
+    expectations.expect(label != nullptr, "the row exposes its outer label");
+    if (label == nullptr) {
+        return;
+    }
+    expectations.expect(label->text() == QStringLiteral("Position"),
+                        "at its preferred width the label shows the full parameter name");
+
+    label->resize(18, label->height());
+    expectations.expect(
+        label->text() != QStringLiteral("Position") &&
+            label->text().endsWith(QString::fromUtf8("\xE2\x80\xA6")),
+        "a narrow label column elides to an ellipsis instead of forcing the row wider");
+    expectations.expect(label->toolTip() == QStringLiteral("Position"),
+                        "the tooltip always carries the full, untruncated parameter name");
+}
+
+// task WIDTH-1: kit::KValueField::minimumSizeHint() is a real floor now (Size::ValueCellMin),
+// smaller than its sizeHint() -- the widest-number PREFERRED width -- so a narrow Properties panel
+// can shrink every value cell down to the same legible floor instead of each row committing to its
+// own widest-possible-number width.
+void testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(Expectations& expectations) {
+    ui::kit::KValueField field;
+    field.setRange(-1'000'000.0, 1'000'000.0);
+    field.setDecimals(2);
+    field.setUnit(QStringLiteral("px"));
+
+    const int preferredWidth = field.sizeHint().width();
+    const int minimumWidth = field.minimumSizeHint().width();
+    expectations.expect(minimumWidth < preferredWidth,
+                        "a value cell's minimum width is smaller than its widest-number "
+                        "preferred width");
+    expectations.expect(minimumWidth == ui::kit::px(ui::kit::Size::ValueCellMin),
+                        "a label-less cell's floor is exactly Size::ValueCellMin");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -919,6 +982,8 @@ int main(int argc, char** argv) {
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
     testTextSourceRowsEditThroughCommands(expectations);
+    testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(expectations);
+    testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";
         return 1;
