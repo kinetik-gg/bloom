@@ -46,6 +46,9 @@ inline constexpr std::string_view kAddSolidLayerBlendModeParameterOutput = "blen
 inline constexpr std::string_view kAddSolidLayerSolidToLayerEdgeOutput = "solidToLayerEdge";
 inline constexpr std::string_view kAddSolidLayerLayerToStackEdgeOutput = "layerToStackEdge";
 
+inline constexpr std::string_view kAddCompositionOutput = "composition";
+inline constexpr std::string_view kDuplicateCompositionOutput = "composition";
+
 class AddSolidLayer final : public Operation {
   public:
     AddSolidLayer(document::CompositionId compositionId, std::string name, core::Color4d color,
@@ -103,6 +106,50 @@ class SetProjectName final : public Operation {
 
   private:
     std::string name_;
+};
+
+class AddComposition final : public Operation {
+  public:
+    AddComposition(std::string name, document::CompositionFormat format,
+                   document::FrameRate frameRate, core::RationalTime duration)
+        : name_(std::move(name)), format_(format), frameRate_(frameRate), duration_(duration) {}
+
+    AddComposition(std::string name, document::CompositionFormat format,
+                   core::RationalTime duration)
+        : AddComposition(std::move(name), format, format.frameRate(), duration) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::string name_;
+    document::CompositionFormat format_;
+    document::FrameRate frameRate_;
+    core::RationalTime duration_;
+};
+
+class DeleteComposition final : public Operation {
+  public:
+    explicit DeleteComposition(document::CompositionId compositionId)
+        : compositionId_(compositionId) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+};
+
+class DuplicateComposition final : public Operation {
+  public:
+    explicit DuplicateComposition(document::CompositionId compositionId)
+        : compositionId_(compositionId) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
 };
 
 class SetCompositionName final : public Operation {
