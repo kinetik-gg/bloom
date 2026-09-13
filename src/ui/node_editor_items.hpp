@@ -278,6 +278,16 @@ class NodeItem final : public QGraphicsObject {
         relayout();
     }
 
+    // Re-reads this card's values and keyframe diamonds from the snapshot WITHOUT reconciling its
+    // structure. What changes between two calls here is not the document but the session TIME an
+    // animated parameter is sampled at, and the rows are the only thing that asks. Layout is
+    // deliberately untouched: a cell's width comes from its schema's range, never from the digits
+    // in it, so no value can move the card's geometry.
+    void refreshCurrentValues(const document::NodeRecord& node,
+                              const document::Composition& composition) {
+        refreshValues(node, composition);
+    }
+
     [[nodiscard]] bool hasInputSocket() const {
         return std::ranges::any_of(sockets_,
                                    [](const auto* socket) { return socket->input.has_value(); });

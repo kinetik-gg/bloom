@@ -199,6 +199,23 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
                                                     kNodeSceneMargin, kNodeSceneMargin));
 }
 
+void NodeGraphicsScene::refreshValues() {
+    const auto* composition =
+        session_ == nullptr
+            ? nullptr
+            : session_->snapshot().project().findComposition(session_->compositionId());
+    if (composition == nullptr) {
+        return;
+    }
+    for (auto* item : items()) {
+        auto* card = dynamic_cast<NodeItem*>(item);
+        const auto* node = card == nullptr ? nullptr : composition->graph().findNode(card->id());
+        if (node != nullptr) {
+            card->refreshCurrentValues(*node, *composition);
+        }
+    }
+}
+
 QGraphicsItem* NodeGraphicsScene::findNodeItem(const document::NodeId nodeId) const {
     const auto matching = items();
     const auto found = std::ranges::find_if(matching, [nodeId](const auto* item) {
@@ -370,6 +387,12 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     connect(&session_, &CompositionSession::compositionChanged, this, &NodeGraphEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &NodeGraphEditor::updateSelection);
+    // The playhead is not a document change, so it is deliberately NOT a projection rebuild -- but
+    // an animated cell shows the curve's value AT the session time and its diamond says whether a
+    // key sits there, so both have to follow the time or the canvas quietly disagrees with the
+    // Properties panel and the timeline about what the frame currently holds.
+    connect(&session_, &CompositionSession::currentTimeChanged, scene_,
+            &NodeGraphicsScene::refreshValues);
     connect(scene_, &QGraphicsScene::selectionChanged, this,
             &NodeGraphEditor::sceneSelectionChanged);
     connect(view_, &NodeGraphicsView::contextMenuRequested, this,

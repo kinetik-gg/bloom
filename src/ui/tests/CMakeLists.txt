@@ -650,6 +650,15 @@ target_link_libraries(bloom_node_driver_gesture_test PRIVATE bloom_ui bloom_runt
 bloom_enable_warnings(bloom_node_driver_gesture_test)
 bloom_add_test(NAME bloom.ui.node-driver-gesture COMMAND bloom_node_driver_gesture_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Task FIX2, deliverable 2: one truth across every surface. Its own executable rather than more
+# cases inside composition_projection_test.cpp, which owns the cross-editor projection contract this
+# task keeps intact.
+add_executable(bloom_surface_synchronization_test surface_synchronization_tests.cpp)
+target_include_directories(bloom_surface_synchronization_test PRIVATE ..)
+target_link_libraries(bloom_surface_synchronization_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_surface_synchronization_test)
+bloom_add_test(NAME bloom.ui.surface-synchronization COMMAND bloom_surface_synchronization_test LABELS ui integration kit TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Task FIX2, the owner's known case: the timeline row's own controls under a real pointer. Its own
 # executable rather than more cases inside timeline_editor_style_tests.cpp, which owns the row
 # CHROME contract this task keeps intact.

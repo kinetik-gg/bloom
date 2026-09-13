@@ -681,6 +681,11 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &PropertiesEditor::configureMergeInputs);
+    // Same reason the node canvas follows it: every animated row shows its curve's value at the
+    // session time, and its keyframe diamond says whether a key sits there. Neither question has
+    // the same answer at two different times, so a playhead move is a rebuild here even though the
+    // document did not change.
+    connect(&session_, &CompositionSession::currentTimeChanged, this, &PropertiesEditor::rebuild);
 
     rebuild();
 }
