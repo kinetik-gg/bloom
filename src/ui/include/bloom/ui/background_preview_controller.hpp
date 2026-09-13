@@ -42,6 +42,7 @@ class BackgroundPreviewController final : public QObject {
     QTimer idleTimer_;
     std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
     std::optional<runtime::PreviewRequestIdentity> activeIdentity_;
+    std::chrono::steady_clock::time_point submittedAt_;
     std::uint64_t generation_ = 0;
     std::uint64_t cursor_ = 0;
     std::uint64_t considered_ = 0;

@@ -25,6 +25,8 @@ BackgroundPreviewController::BackgroundPreviewController(
             &BackgroundPreviewController::consumeReadyResult);
     connect(&previewController_, &CompositionPreviewController::foregroundWorkRequested, this,
             &BackgroundPreviewController::restart);
+    connect(&previewController_, &CompositionPreviewController::playbackActiveChanged, this,
+            &BackgroundPreviewController::setPlaying);
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &BackgroundPreviewController::restart);
     connect(&session_, &CompositionSession::snapshotChanged, this,
@@ -167,6 +169,7 @@ void BackgroundPreviewController::fillNextFrame() {
             runtime::TaskPriority::Background);
         request.sourceVersion = {.documentRevision = key->sourceRevision.value(),
                                  .requestGeneration = identity.requestGeneration};
+        submittedAt_ = std::chrono::steady_clock::now();
         auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
             std::move(request),
             [snapshot = session_.snapshot(), identity, preparation = preparation_,
@@ -216,6 +219,8 @@ void BackgroundPreviewController::consumeReadyResult() {
         exhausted_ = true;
         return;
     }
+    previewController_.recordPreparationDuration(*activeIdentity_,
+                                                 std::chrono::steady_clock::now() - submittedAt_);
     previewController_.frameCache().insert((*value)->frame());
     fillNextFrame();
 }

@@ -499,11 +499,7 @@ void testOverflowingDurationCompositionPlaybackIsNoOp(Expectations& expectations
     finishFixture(fixture, expectations);
 }
 
-// Integration test: with the real CompositionPreviewController, playing produces Interactive-kind
-// requests honoring the one-active/newest-pending gate -- asserted via the controller's existing
-// observable seams (runtime::TaskScheduler::snapshots(), each TaskSnapshot's sourceVersion/
-// priority), with NO gate modification, mirroring composition_preview_controller_tests.cpp's own
-// testNewestPendingRequestGate()/testInteractiveCadenceCoalescesBurstAndVisibleBypasses() idiom.
+// Hold initial work on the worker: playback must skip immediately without queuing behind it.
 struct WorkerGate final {
     void enterAndWait() {
         std::unique_lock lock(mutex_);
@@ -541,7 +537,7 @@ snapshotForGeneration(const bloom::runtime::TaskScheduler& scheduler,
     return std::nullopt;
 }
 
-void testIntegrationPlaybackDrivesInteractivePriorityUnderGate(Expectations& expectations) {
+void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Playback Interactive Gate", time(4));
     const auto compositionId = newProject.initialCompositionId;
@@ -584,19 +580,14 @@ void testIntegrationPlaybackDrivesInteractivePriorityUnderGate(Expectations& exp
                                     : 0;
     expectations.expect(tickGeneration != 0, "the tick's own request identity is observable");
     expectations.expect(scheduler.snapshots().size() == 1,
-                        "the tick's request is held as the newest pending request behind the "
-                        "still-active initial request -- the gate is not bypassed");
+                        "the tick skips the busy foreground gate without adding pending work");
 
     firstRequest.release();
-    expectations.expect(
-        waitUntil([&] { return scheduler.snapshots().size() == 2; }),
-        "the pending request submits once the active initial request reaches terminal");
+    expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
+                        "the initial request terminates without a playback request behind it");
     const auto tickSnapshot = snapshotForGeneration(scheduler, tickGeneration);
-    expectations.expect(tickSnapshot.has_value() &&
-                            tickSnapshot->priority == runtime::TaskPriority::Interactive,
-                        "playback's own session-time change submits at Interactive priority, "
-                        "through the SAME arming CompositionPreviewController::"
-                        "beginInteractiveScrub() already grants scrub -- no new request kind");
+    expectations.expect(!tickSnapshot.has_value() && controller.droppedFrameCount() == 1,
+                        "the skipped tick is counted once and is never submitted later");
 
     playback.pause();
     controller.beginShutdown();
@@ -1044,7 +1035,7 @@ int main(int argc, char** argv) {
     testScrubDuringPlaybackPauses(expectations);
     testStopsOnCompositionSwitch(expectations);
     testOverflowingDurationCompositionPlaybackIsNoOp(expectations);
-    testIntegrationPlaybackDrivesInteractivePriorityUnderGate(expectations);
+    testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(expectations);
     testPlaybackToggleButtonAndSpaceShortcut(expectations);
     testStepForwardFromZeroLandsOnFrameOne(expectations);
     testStepBackwardAtZeroClampsWithNoSignalChurn(expectations);

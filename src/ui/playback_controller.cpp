@@ -87,17 +87,7 @@ void PlaybackController::play() {
     lastAppliedFrameIndex_ = startFrameIndex_;
 
     state_ = PlaybackState::Playing;
-    // Same arming CompositionPreviewController::beginInteractiveScrub()/notifyScrubEnded()
-    // TimelineRuler's own scrub gesture and the Viewer's position-drag gesture already use (see
-    // timeline_ruler.cpp's mousePressEvent/mouseReleaseEvent and viewer_editor.cpp's endDrag()):
-    // read directly in composition_preview_controller.cpp, handleCurrentTimeChanged() submits at
-    // Interactive priority precisely while this flag is armed, and this is the one place that
-    // grants that priority to session-time changes -- no new request kind needed.
-    previewController_.beginInteractiveScrub();
-    // Task S5, item 3b: the dropped-frame counter is armed and reset by PLAY, not by scrubbing, so
-    // the figure a surface shows always belongs to the run in progress. The transport is the only
-    // thing that knows a playback run has started; the preview controller only knows it is being
-    // asked for frames.
+    previewController_.setPlaybackActive(true);
     previewController_.beginDroppedFrameCounting();
     timer_.start();
     emit stateChanged(state_);
@@ -110,10 +100,7 @@ void PlaybackController::pause() {
     }
     state_ = PlaybackState::Stopped;
     timer_.stop();
-    // Bypasses any remaining trailing-cadence delay for the last applied time, mirroring
-    // TimelineRuler::mouseReleaseEvent()/ViewerEditor::endDrag()'s own notifyScrubEnded() call on
-    // gesture end.
-    previewController_.notifyScrubEnded();
+    previewController_.setPlaybackActive(false);
     previewController_.endDroppedFrameCounting();
     emit stateChanged(state_);
 }
@@ -188,13 +175,9 @@ void PlaybackController::tick() {
     // The offset is exact in both clocks -- elapsed-derived or one frame on -- so repeated wraps
     // never drift.
     const auto targetFrameIndex = (startFrameIndex_ + nextOffset) % frameCount;
+    previewController_.noteDroppedFrames(nextOffset - appliedOffset_ - 1);
     appliedOffset_ = nextOffset;
 
-    if (lastAppliedFrameIndex_.has_value() && *lastAppliedFrameIndex_ == targetFrameIndex) {
-        // A whole loop landed back on the frame already shown: nothing to publish, but the offset
-        // above has moved on so the next frame is still due at the right moment.
-        return;
-    }
     const auto targetTime = mapping->timeForFrame(targetFrameIndex);
     if (!targetTime.hasValue()) {
         return;
@@ -204,6 +187,7 @@ void PlaybackController::tick() {
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*targetTime.value());
     applyingOwnTimeChange_ = false;
+    previewController_.presentPlaybackFrame(std::chrono::milliseconds{timer_.interval()});
 }
 
 bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,

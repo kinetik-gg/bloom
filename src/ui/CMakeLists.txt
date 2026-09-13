@@ -216,6 +216,8 @@ target_sources(
         composition_plan_cache.cpp
         composition_preview_controller.cpp
         composition_preview_pipeline.cpp
+        composition_preview_playback.cpp
+        composition_preview_result.cpp
         composition_session.cpp
         editor_area.cpp
         editor_registry.cpp
