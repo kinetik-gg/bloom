@@ -8,6 +8,7 @@
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/node_layout.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -30,15 +31,18 @@
 //
 // Scope (R2): the document envelope and every durable value inside a composition -- schemaVersion,
 // project id/name/colorSettings, and per-composition id/name/duration/format/parameters/
-// animationCurves/graph. A composition object is now closed: it must contain exactly those seven
-// members in exact order, and an unrecognized or trailing member is a typed decode error. Within a
+// animationCurves/graph/nodeLayout/nodeGroups. Known-schema compositions contain these nine
+// members in order (legacy 1.0 has seven and receives default layout; 1.1 has eight and no
+// groups). Unknown trailing members are retained
+// only for a compatible newer minor. Within a
 // composition, cross-references are checked against records decoded elsewhere in that same
 // composition -- a parameter binding's parameterId, an animation-curve source's curveId, and every
 // edge/Layer Output/Layer Stack/compositionOutput node id must each name a record this module
 // itself decoded; an unresolved reference is DanglingReference. Cross-composition and
 // project-level references (e.g. a future extension-record subject) remain out of scope.
 // idAllocation.highestIssued and every extension record are also fully decoded (R3): the closed
-// ten-member highestIssued object into document::IdAllocatorHighWater, and the extensions array --
+// highestIssued object into document::IdAllocatorHighWater -- eleven members from 1.2, ten
+// before it -- and the extensions array --
 // sorted, duplicate-free by numeric ExtensionRecordId -- into document::ExtensionRecord values
 // (typed subject/target kinds, all three reference-policy shapes, and the base64 payload decoded
 // through canonical_base64.hpp). This module still deliberately does not construct
@@ -52,7 +56,7 @@
 // RT1: unknown-additive-member capture for a same-major newer-minor document (schemaVersion
 // {1, minor > 0}) is implemented; the writer-side overlay that reconciles retained data back onto
 // a canonical rewrite remains a later slice (see docs/architecture/project-format.md, "Versions,
-// Migrations, And Preservation"). An exact {1,0} document keeps the original strict behavior: an
+// Migrations, And Preservation"). Exact supported schemas keep the strict behavior: an
 // unrecognized member anywhere is a typed UnknownMember/MemberOutOfOrder decode error and no
 // RoundTripState is ever produced. A {1, minor > 0} document additionally accepts a trailing
 // unknown member on any closed object -- but only strictly after every known member of that same
@@ -130,6 +134,8 @@ struct DecodedComposition final {
     std::vector<document::ParameterRecord> parameters;
     std::vector<document::AnimationCurveRecord> animationCurves;
     DecodedGraph graph;
+    document::NodeLayout nodeLayout;
+    document::NodeGroups nodeGroups;
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };
@@ -311,7 +317,7 @@ enum class DocumentDecodeOutcome : std::uint8_t {
     // decodeDocumentEnvelope() found a typed decode error; error()/path() are valid.
     Failed,
     // A DecodedDocumentEnvelope was constructed; value() is non-null. classification()
-    // distinguishes an exact {1,0} document (no RoundTripState; roundTrip() is nullptr) from a
+    // distinguishes an exact supported document (no RoundTripState; roundTrip() is nullptr) from a
     // same-major newer-minor document with only safely additive unknown members
     // (EditableWithRoundTrip; roundTrip() is non-null, though it may be empty()).
     Decoded,
@@ -324,10 +330,10 @@ enum class DocumentDecodeOutcome : std::uint8_t {
 enum class DocumentClassification : std::uint8_t {
     // Not meaningful unless outcome() == Decoded.
     None,
-    // schemaVersion is exactly {1, 0}; no unknown additive members are possible (the 1.0 writer
-    // never emits them) and no RoundTripState is produced.
+    // Historical API name: exact supported schemas 1.0 and 1.1 produce no RoundTripState.
     ExactSchemaV1_0,
-    // schemaVersion is {1, minor > 0} and every unknown additive member encountered was safely
+    // schemaVersion is {1, minor > current} and every unknown additive member encountered was
+    // safely
     // captured; roundTrip() names the (possibly empty) retained state.
     EditableWithRoundTrip,
 };

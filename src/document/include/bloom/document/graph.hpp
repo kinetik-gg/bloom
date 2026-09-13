@@ -2,8 +2,10 @@
 
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_stack.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
+#include <bloom/document/value_nodes.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -21,7 +23,12 @@ inline constexpr std::string_view kLayerStackNodeType = "bloom.layer-stack";
 inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
-inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 1;
+// Bumped to 2 by the layer transform breadth slice (task S4): a Layer Output now binds anchor,
+// scale, and rotation alongside position and opacity. A version-1 node is not rejected -- Project
+// I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
+// the version-1 picture exactly (see src/project/document_node_schema_upgrade.cpp and
+// docs/architecture/project-format.md, "Node Schema Upgrades").
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 3;
 inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 1;
 inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 1;
@@ -38,8 +45,20 @@ inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 
 inline constexpr std::string_view kSolidColorParameterRole = "color";
 inline constexpr std::string_view kTextParameterRole = "text";
+inline constexpr std::string_view kTextSizeParameterRole = "size";
+// Deliberately the same role string as kSolidColorParameterRole. A role is node-local -- it names
+// which binding of THIS node a parameter fills -- while the schema key is the global identity of
+// the value's meaning, and a text source's color means what a solid source's color means. Keeping
+// the role spelling identical is what lets one properties row, one node-card color chip, and one
+// session write path serve both sources without a second branch; the two distinct schema keys are
+// what keep their validation and defaults separate.
+inline constexpr std::string_view kTextColorParameterRole = "color";
 inline constexpr std::string_view kPositionParameterRole = "position";
+inline constexpr std::string_view kAnchorParameterRole = "anchor";
+inline constexpr std::string_view kScaleParameterRole = "scale";
+inline constexpr std::string_view kRotationParameterRole = "rotation";
 inline constexpr std::string_view kOpacityParameterRole = "opacity";
+inline constexpr std::string_view kBlendModeParameterRole = "blendMode";
 
 struct NodeRecord {
     NodeId id;
@@ -110,11 +129,23 @@ class CanonicalGraph final {
     }
 
     [[nodiscard]] bool addNode(NodeRecord node);
-    [[nodiscard]] bool addEdge(EdgeRecord edge);
+    [[nodiscard]] bool addEdge(EdgeRecord edge,
+                               const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+    [[nodiscard]] std::optional<SocketValueKind>
+    outputKind(const OutputPortRef& output,
+               const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
+    [[nodiscard]] std::optional<SocketValueKind>
+    inputKind(const InputPortRef& input,
+              const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
+    [[nodiscard]] bool eraseNode(NodeId id);
+    [[nodiscard]] bool eraseEdge(EdgeId id);
+    [[nodiscard]] bool renameLayer(LayerId id, std::string name);
     void setCompositionOutput(OutputPortRef output) { compositionOutput_ = std::move(output); }
 
-    [[nodiscard]] ValidationResult validate(const ParameterStore& parameters) const;
+    [[nodiscard]] ValidationResult
+    validate(const ParameterStore& parameters,
+             const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
 
   private:
     std::vector<NodeRecord> nodes_;

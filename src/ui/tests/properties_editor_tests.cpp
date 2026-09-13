@@ -7,6 +7,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -15,8 +16,12 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -26,14 +31,18 @@
 #include <QEnterEvent>
 #include <QImage>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointF>
+#include <QVariant>
 #include <QWidget>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <variant>
@@ -80,6 +89,9 @@ struct LayerIds final {
     document::ParameterId position;
     document::ParameterId opacity;
     document::ParameterId color;
+    document::ParameterId anchor;
+    document::ParameterId scale;
+    document::ParameterId rotation;
 };
 
 // Mirrors composition_session_animation_tests.cpp's addSolidLayer() fixture exactly (same
@@ -98,12 +110,18 @@ struct LayerIds final {
         result.outputId<document::ParameterId>(commands::kAddSolidLayerOpacityParameterOutput);
     const auto color =
         result.outputId<document::ParameterId>(commands::kAddSolidLayerColorParameterOutput);
+    const auto anchor =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerAnchorParameterOutput);
+    const auto scale =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerScaleParameterOutput);
+    const auto rotation =
+        result.outputId<document::ParameterId>(commands::kAddSolidLayerRotationParameterOutput);
     if (!(result.changed() && layer.has_value() && position.has_value() && opacity.has_value() &&
-          color.has_value())) {
+          color.has_value() && anchor.has_value() && scale.has_value() && rotation.has_value())) {
         std::cerr << "properties editor test: solid layer command must expose its stable IDs\n";
         std::exit(1);
     }
-    return {*layer, *position, *opacity, *color};
+    return {*layer, *position, *opacity, *color, *anchor, *scale, *rotation};
 }
 
 // Mirrors composition_session_animation_tests.cpp's animateParameter() fixture exactly.
@@ -125,7 +143,9 @@ animateParameter(document::Document& document, commands::CommandStack& stack,
 // A row's keyframe indicator paints IconId::Keyframe tinted either Color::Keyframe (animated) or
 // a dimmed Color::Muted (static) -- resolve which one is actually on-screen by grabbing the
 // indicator and comparing its dominant non-transparent pixel against both candidate tints.
-[[nodiscard]] bool indicatorLooksAnimated(QLabel& indicator) {
+// Task S5, item 0: the row's indicator is a clickable ui::KeyframeDiamond now rather than a QLabel.
+// objectName "propertiesKeyframeIndicator" is unchanged, so only the looked-up TYPE moved here.
+[[nodiscard]] bool indicatorLooksAnimated(QWidget& indicator) {
     const QImage image = indicator.grab().toImage();
     const QColor gold = ui::kit::color(ui::kit::Color::Keyframe);
     for (int y = 0; y < image.height(); ++y) {
@@ -237,8 +257,10 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
     if (opacityRow == nullptr || positionRow == nullptr) {
         return;
     }
-    auto* opacityIndicator = opacityRow->findChild<QLabel*>("propertiesKeyframeIndicator");
-    auto* positionIndicator = positionRow->findChild<QLabel*>("propertiesKeyframeIndicator");
+    auto* opacityIndicator =
+        opacityRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
+    auto* positionIndicator =
+        positionRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
     expectations.expect(opacityIndicator != nullptr && positionIndicator != nullptr,
                         "both rows carry a keyframe indicator");
     if (opacityIndicator == nullptr || positionIndicator == nullptr) {
@@ -453,6 +475,195 @@ void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
 // the former read-only label promised no clipping. The RGBA cells are unbounded and must restore
 // that exact guarantee: display the exact stored value for a negative/HDR channel, with no
 // clipping.
+// Task S4: the Transform group's three new rows. What is pinned here is the full authoring loop --
+// the row shows the stored value in its authored unit, an edit commits through a command, and undo
+// restores the exact prior value -- for each of the three, plus the unit conversions (scale as a
+// percentage of a unitless factor) and the fact that rotation is NOT clamped to one turn.
+void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Transform Rows Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* anchorX = properties.findChild<ui::kit::KValueField*>("anchorXEditor");
+    auto* anchorY = properties.findChild<ui::kit::KValueField*>("anchorYEditor");
+    auto* scaleX = properties.findChild<ui::kit::KValueField*>("scaleXEditor");
+    auto* scaleY = properties.findChild<ui::kit::KValueField*>("scaleYEditor");
+    auto* rotation = properties.findChild<ui::kit::KValueField*>("rotationEditor");
+    expectations.expect(anchorX != nullptr && anchorY != nullptr && scaleX != nullptr &&
+                            scaleY != nullptr && rotation != nullptr,
+                        "the Transform group exposes Anchor X/Y, Scale X/Y, and Rotation rows");
+    if (anchorX == nullptr || anchorY == nullptr || scaleX == nullptr || scaleY == nullptr ||
+        rotation == nullptr) {
+        return;
+    }
+
+    // A new layer starts at the identity transform, which reads as a centre anchor, 100% on both
+    // axes, and zero degrees.
+    expectations.expect(anchorX->value() == 0.0 && anchorY->value() == 0.0 &&
+                            scaleX->value() == 100.0 && scaleY->value() == 100.0 &&
+                            rotation->value() == 0.0,
+                        "a new layer's transform rows read as the identity transform");
+    expectations.expect(anchorX->unit() == QStringLiteral("px") &&
+                            scaleX->unit() == QStringLiteral("%") &&
+                            rotation->unit() == QString::fromUtf8("\u00b0"),
+                        "the transform rows carry pixel, percent, and degree units");
+    expectations.expect(rotation->singleStep() == 1.0 && scaleX->singleStep() == 1.0,
+                        "rotation scrubs in whole degrees and scale in whole percent");
+
+    const auto revisionBefore = document.snapshot().revision();
+    anchorX->setValue(-24.0);
+    const auto anchorValue = session.constantVec2Value(ids.anchor);
+    expectations.expect(anchorValue.has_value() && anchorValue->x == -24.0 && anchorValue->y == 0.0,
+                        "editing Anchor X commits through a command and leaves Y alone");
+
+    scaleY->setValue(50.0);
+    const auto scaleValue = session.constantVec2Value(ids.scale);
+    expectations.expect(scaleValue.has_value() && scaleValue->x == 1.0 && scaleValue->y == 0.5,
+                        "a scale row authored as a percentage stores a unitless factor");
+
+    // 450 degrees is a legitimate authored value: the row must not fold or clamp it, because a
+    // rotation curve has to be able to wind past a full turn.
+    rotation->setValue(450.0);
+    const auto rotationValue = session.constantValue(ids.rotation);
+    expectations.expect(rotationValue.has_value() && *rotationValue == 450.0,
+                        "a rotation past a full turn is stored exactly as authored");
+
+    expectations.expect(document.snapshot().revision() != revisionBefore && session.canUndo(),
+                        "each transform edit is one undoable command");
+    expectations.expect(session.undo() && session.undo() && session.undo(),
+                        "all three transform edits undo");
+    const auto restoredAnchor = session.constantVec2Value(ids.anchor);
+    const auto restoredScale = session.constantVec2Value(ids.scale);
+    const auto restoredRotation = session.constantValue(ids.rotation);
+    expectations.expect(
+        restoredAnchor.has_value() && *restoredAnchor == document::kDefaultAnchor &&
+            restoredScale.has_value() && *restoredScale == document::kDefaultScale &&
+            restoredRotation.has_value() && *restoredRotation == document::kDefaultRotationDegrees,
+        "undo restores the exact identity transform");
+}
+
+// The Appearance group's Blending row: a real control over a real parameter, one undoable command
+// per change, reading back what the document stores. It carries no keyframe indicator on purpose --
+// the blend-mode schema is not animatable -- which is why this case lives beside the transform-row
+// case rather than inside the keyframe-indicator one below.
+void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Blending Row Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* blending = properties.findChild<ui::kit::KDropdown*>("blendModeEditor");
+    expectations.expect(blending != nullptr, "the Appearance group exposes a Blending row");
+    if (blending == nullptr) {
+        return;
+    }
+    expectations.expect(
+        blending->isEnabled() && blending->count() == static_cast<int>(core::kBlendModes.size()) &&
+            blending->currentText() == ui::blendModeDisplayName(core::kDefaultBlendMode),
+        "a new layer's Blending row is enabled, offers every mode, and reads Normal");
+
+    const auto overlayRow = [blending] {
+        const auto stored = core::blendModeStoredValue(core::BlendMode::Overlay);
+        for (int index = 0; index < blending->count(); ++index) {
+            if (blending->itemData(index).value<std::int64_t>() == stored) {
+                return index;
+            }
+        }
+        return -1;
+    }();
+    expectations.expect(overlayRow >= 0, "the vocabulary includes Overlay");
+    if (overlayRow < 0) {
+        return;
+    }
+
+    const auto revisionBefore = document.snapshot().revision();
+    blending->setCurrentIndex(overlayRow);
+    expectations.expect(session.blendModeForLayer(ids.layer) == core::BlendMode::Overlay,
+                        "picking a mode commits it to the layer's own parameter");
+    expectations.expect(document.snapshot().revision() != revisionBefore && session.canUndo() &&
+                            session.undoLabel() == QStringLiteral("Set Blend Mode"),
+                        "the edit is exactly one undoable command, named for what it did");
+    expectations.expect(session.undo() &&
+                            session.blendModeForLayer(ids.layer) == core::kDefaultBlendMode,
+                        "undo restores the authored Normal");
+    expectations.expect(blending->currentText() ==
+                            ui::blendModeDisplayName(core::kDefaultBlendMode),
+                        "and the row follows the undone document rather than its own last choice");
+
+    // A committing no-op: re-picking the mode the layer already has must publish no revision and no
+    // history entry, exactly as the text-content row's equal-value path does.
+    const auto settled = document.snapshot().revision();
+    const auto historyBefore = session.canUndo();
+    blending->setCurrentIndex(blending->currentIndex());
+    expectations.expect(document.snapshot().revision() == settled &&
+                            session.canUndo() == historyBefore,
+                        "re-picking the current mode commits nothing");
+}
+
+// Every Transform row carries its own keyframe indicator, and each must light up for its own
+// parameter only -- the three new rows are animatable exactly as position and opacity are.
+void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Transform Keyframe Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    static_cast<void>(animateParameter(document, stack, compositionId, ids.scale));
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    properties.resize(420, 600);
+    properties.show();
+
+    auto* anchorX = properties.findChild<ui::kit::KValueField*>("anchorXEditor");
+    auto* scaleX = properties.findChild<ui::kit::KValueField*>("scaleXEditor");
+    auto* rotation = properties.findChild<ui::kit::KValueField*>("rotationEditor");
+    expectations.expect(anchorX != nullptr && scaleX != nullptr && rotation != nullptr,
+                        "the three transform rows resolve for the indicator check");
+    if (anchorX == nullptr || scaleX == nullptr || rotation == nullptr) {
+        return;
+    }
+    // Each row is [label, indicator, value]; a paired X/Y row wraps its two fields in a group, so
+    // the row is one level further up than it is for the single rotation field.
+    const auto indicatorOf = [](QWidget* field, const bool paired) -> ui::KeyframeDiamond* {
+        auto* row = paired ? field->parentWidget()->parentWidget() : field->parentWidget();
+        return row == nullptr ? nullptr
+                              : row->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator",
+                                                                     Qt::FindDirectChildrenOnly);
+    };
+    auto* anchorIndicator = indicatorOf(anchorX, true);
+    auto* scaleIndicator = indicatorOf(scaleX, true);
+    auto* rotationIndicator = indicatorOf(rotation, false);
+    expectations.expect(anchorIndicator != nullptr && scaleIndicator != nullptr &&
+                            rotationIndicator != nullptr,
+                        "every transform row carries its own keyframe indicator");
+    if (anchorIndicator == nullptr || scaleIndicator == nullptr || rotationIndicator == nullptr) {
+        return;
+    }
+    expectations.expect(indicatorLooksAnimated(*scaleIndicator) &&
+                            !indicatorLooksAnimated(*anchorIndicator) &&
+                            !indicatorLooksAnimated(*rotationIndicator),
+                        "only the animated transform parameter's own indicator reads as animated");
+    // Task S5, item 0 inverted this: an animated row stays EDITABLE and shows the curve's exactly
+    // sampled value at the current time, because typing into it at a time with no key is how AE
+    // inserts one (CompositionSession::effectiveVec2Value() + the existing SetKeyframeAtTime write
+    // path). Before this task the field was disabled, which made that gesture unreachable.
+    expectations.expect(scaleX->isEnabled() && rotation->isEnabled() && anchorX->isEnabled(),
+                        "an animated transform row stays editable so editing it can insert a key");
+}
+
 void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
     auto newProject = document::makeNewProject("HDR Color Test", "Main", time(10));
     const auto compositionId = newProject.initialCompositionId;
@@ -586,6 +797,109 @@ void testFocusedHoveredCellBorderIsAccentOnScreen(Expectations& expectations) {
                         "inside the panel, with no separate focus ring painted underneath it");
 }
 
+// Task S3: the Text Source group. Content, size, and color are real editable rows that read project
+// truth and commit through the session's own commands, and the Solid Source group is hidden while a
+// text layer is selected (and the other way round), so the two can never both claim a selection.
+void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Text Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    expectations.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Hello"), 48.0,
+                                             core::Color4d{0.25, 0.5, 0.75, 1.0}),
+                        "a text layer can be added for the text rows");
+    ui::PropertiesEditor properties(session);
+
+    auto* textPanel = properties.findChild<QWidget*>("textSourceProperties");
+    auto* solidPanel = properties.findChild<QWidget*>("solidColorProperties");
+    auto* content = properties.findChild<QLineEdit*>("textContentEditor");
+    auto* size = properties.findChild<ui::kit::KValueField*>("textSizeEditor");
+    auto* color = properties.findChild<ui::kit::KColorChip*>("textColorChip");
+    auto* font = properties.findChild<QLabel*>("textFontName");
+    expectations.expect(textPanel != nullptr && solidPanel != nullptr && content != nullptr &&
+                            size != nullptr && color != nullptr && font != nullptr,
+                        "the Text Source group exposes content, size, color, and font rows");
+    if (textPanel == nullptr || solidPanel == nullptr || content == nullptr || size == nullptr ||
+        color == nullptr || font == nullptr) {
+        return;
+    }
+
+    properties.resize(properties.sizeHint());
+    properties.show();
+    QCoreApplication::processEvents();
+    expectations.expect(textPanel->isVisible() && !solidPanel->isVisible(),
+                        "a text selection shows the Text Source group and hides the Solid one");
+    expectations.expect(content->text() == QStringLiteral("Hello") && size->value() == 48.0,
+                        "the rows read the authored content and em size from project truth");
+    expectations.expect(near(color->color().toQColor(), QColor::fromRgbF(0.25F, 0.5F, 0.75F), 2),
+                        "and the swatch reads the authored color");
+    expectations.expect(content->isEnabled() && size->isEnabled() && color->isEnabled(),
+                        "all three are editable, because a command exists for each");
+    expectations.expect(font->text().contains(QStringLiteral("DejaVu Sans")) &&
+                            font->text().contains(QStringLiteral("embedded")),
+                        "the font row names the one embedded face rather than offering a choice");
+
+    const auto historyBefore = stack.size();
+    content->setText(QStringLiteral("Edited"));
+    Q_EMIT content->editingFinished();
+    expectations.expect(stack.size() == historyBefore + 1,
+                        "committing the content field is exactly one history entry");
+    size->setValue(96.0);
+    expectations.expect(stack.size() == historyBefore + 2,
+                        "committing the size field is exactly one more");
+
+    const auto* textNode = [&]() -> const document::NodeRecord* {
+        const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary);
+        const auto nodeId =
+            layerId == nullptr ? std::nullopt : session.directSourceNodeForLayer(*layerId);
+        return nodeId.has_value() ? session.composition()->graph().findNode(*nodeId) : nullptr;
+    }();
+    expectations.expect(textNode != nullptr, "the selection still resolves its text source node");
+    if (textNode == nullptr) {
+        return;
+    }
+    const auto* contentParameter = session.parameterForSelection(document::kTextParameterRole);
+    const auto* sizeParameter = session.parameterForSelection(document::kTextSizeParameterRole);
+    expectations.expect(contentParameter != nullptr &&
+                            session.constantStringValue(contentParameter->id) ==
+                                QStringLiteral("Edited"),
+                        "the committed content reached project truth");
+    expectations.expect(sizeParameter != nullptr &&
+                            session.constantValue(sizeParameter->id) == 96.0,
+                        "and so did the committed size");
+
+    expectations.expect(session.setSelectedTextColor(core::Color4d{0.1, 0.2, 0.3, 0.5}),
+                        "the text color commits through its own session command");
+    const auto* colorParameter = session.parameterForSelection(document::kTextColorParameterRole);
+    expectations.expect(colorParameter != nullptr &&
+                            session.constantColorValue(colorParameter->id) ==
+                                core::Color4d{0.1, 0.2, 0.3, 0.5},
+                        "and reaches project truth with its alpha intact");
+    expectations.expect(
+        near(color->color().toQColor(), QColor::fromRgbF(0.1F, 0.2F, 0.3F, 0.5F), 2),
+        "and the swatch re-reads it after the snapshot change");
+
+    // Undone through the SESSION, not the bare stack: the session owns the snapshot every later
+    // command is based on, so undoing behind its back would leave it on a stale revision.
+    expectations.expect(session.undo(), "a text color edit is undoable");
+    const auto* colorAfterUndo = session.parameterForSelection(document::kTextColorParameterRole);
+    expectations.expect(colorAfterUndo != nullptr &&
+                            session.constantColorValue(colorAfterUndo->id) ==
+                                core::Color4d{0.25, 0.5, 0.75, 1.0},
+                        "and restores the previously authored color exactly");
+
+    // A solid selection swaps the groups back, which is what proves the two are mutually exclusive
+    // rather than both keyed off the shared "color" role.
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Plate"), core::Color4d{0.9, 0.1, 0.5, 1.0}),
+        "a solid layer can be added for the group swap");
+    QCoreApplication::processEvents();
+    expectations.expect(!textPanel->isVisible() && solidPanel->isVisible(),
+                        "selecting a solid hides the Text Source group and shows the Solid one");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -598,9 +912,13 @@ int main(int argc, char** argv) {
     testNoSelectionShowsDocumentProperties(expectations);
     testSelectionSwapUpdatesRows(expectations);
     testRgbaCellsEditThroughCommandWithUndo(expectations);
+    testTransformRowsEditThroughCommandsWithUndo(expectations);
+    testBlendingRowEditsThroughOneCommandWithUndo(expectations);
+    testTransformRowsShowTheirOwnKeyframeIndicators(expectations);
     testRgbaCellsNeverClipNegativeOrHdrChannels(expectations);
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
+    testTextSourceRowsEditThroughCommands(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";
         return 1;

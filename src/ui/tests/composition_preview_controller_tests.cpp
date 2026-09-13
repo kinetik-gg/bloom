@@ -442,6 +442,86 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// Task S5, item 3b: the dropped-frame counter. It counts requests the COALESCING path discarded --
+// nothing more -- and makes no claim about frame rate or real time. It is armed and reset by the
+// transport's own play(), so the figure a surface shows always belongs to the run in progress.
+void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Dropped Frame Test");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    ui::CompositionPreviewSettings settings;
+    settings.interactiveTrailingCadence = 40ms;
+    ui::CompositionPreviewController controller(session, scheduler, bridge, fixture.pipeline,
+                                                settings);
+
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the dropped-frame fixture reaches its first ready frame");
+
+    // Disarmed: a burst that definitely coalesces counts nothing, because nothing has claimed to be
+    // measuring.
+    expectations.expect(!controller.isCountingDroppedFrames() &&
+                            controller.droppedFrameCount() == 0,
+                        "counting starts disarmed and at zero");
+    controller.beginInteractiveScrub();
+    for (std::int64_t numerator = 1; numerator <= 5; ++numerator) {
+        const auto time = core::RationalTime::create(numerator, 100);
+        expectations.expect(time.has_value(), "disarmed burst time is valid");
+        expectations.expect(session.setCurrentTime(time.value_or(core::RationalTime{})),
+                            "each disarmed burst time is accepted");
+    }
+    expectations.expect(controller.droppedFrameCount() == 0,
+                        "a coalesced burst counts nothing while counting is disarmed, so a surface "
+                        "can never show a figure nobody asked for");
+    controller.notifyScrubEnded();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the disarmed burst completes");
+
+    // Armed: the same burst now counts every request the cadence window discarded. Five distinct
+    // times produce one submitted request and four supersessions.
+    int countChangedSignals = 0;
+    QObject::connect(&controller, &ui::CompositionPreviewController::droppedFrameCountChanged,
+                     &controller, [&countChangedSignals] { ++countChangedSignals; });
+    controller.beginDroppedFrameCounting();
+    expectations.expect(controller.isCountingDroppedFrames() &&
+                            controller.droppedFrameCount() == 0 && countChangedSignals == 1,
+                        "arming resets the count to zero and announces it");
+    controller.beginInteractiveScrub();
+    for (std::int64_t numerator = 10; numerator <= 14; ++numerator) {
+        const auto time = core::RationalTime::create(numerator, 100);
+        expectations.expect(time.has_value(), "armed burst time is valid");
+        expectations.expect(session.setCurrentTime(time.value_or(core::RationalTime{})),
+                            "each armed burst time is accepted");
+    }
+    expectations.expect(controller.droppedFrameCount() > 0,
+                        "a coalesced burst counts the requests it discarded");
+    expectations.expect(countChangedSignals > 1,
+                        "and announces each one, so a footer never has to poll");
+    const auto burstCount = controller.droppedFrameCount();
+
+    controller.notifyScrubEnded();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the armed burst's newest request still completes");
+
+    // Disarming keeps the run's total readable but stops counting, so the surface can decide to
+    // stop showing it without the number changing underneath.
+    controller.endDroppedFrameCounting();
+    expectations.expect(!controller.isCountingDroppedFrames() &&
+                            controller.droppedFrameCount() == burstCount,
+                        "disarming stops counting but keeps the finished run's total");
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "a later request still completes after disarming");
+    expectations.expect(controller.droppedFrameCount() == burstCount,
+                        "and nothing after the run can change its figure");
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 // The one-active/one-newest gate is untouched beneath the cadence: while a task is active, an
 // Interactive burst never invokes preparation again; the superseded active request still runs to
 // terminal before the newest pending request submits, and notifyScrubEnded() bypasses the
@@ -974,6 +1054,7 @@ int main(int argc, char** argv) {
     testRevisionAndPanelSuppression(expectations);
     testNewestPendingRequestGate(expectations);
     testInteractiveCadenceCoalescesBurstAndVisibleBypasses(expectations);
+    testDroppedFrameCountingIsArmedAndHonest(expectations);
     testActiveGateHoldsAndScrubEndBypassesRemainingCadence(expectations);
     testSameRevisionGenerationAndSelection(expectations);
     testLastGoodAndOutcomeMapping(expectations);

@@ -23,7 +23,11 @@ struct SolidOutputIds final {
     NodeId layerOutputNodeId;
     ParameterId colorParameterId;
     ParameterId positionParameterId;
+    ParameterId anchorParameterId;
+    ParameterId scaleParameterId;
+    ParameterId rotationParameterId;
     ParameterId opacityParameterId;
+    ParameterId blendModeParameterId;
     EdgeId solidToLayerEdgeId;
     EdgeId layerToStackEdgeId;
 };
@@ -43,12 +47,21 @@ template <typename Id, std::size_t LeftSize, std::size_t RightSize>
     const auto colorParameterId = result.outputId<ParameterId>(kAddSolidLayerColorParameterOutput);
     const auto positionParameterId =
         result.outputId<ParameterId>(kAddSolidLayerPositionParameterOutput);
+    const auto anchorParameterId =
+        result.outputId<ParameterId>(kAddSolidLayerAnchorParameterOutput);
+    const auto scaleParameterId = result.outputId<ParameterId>(kAddSolidLayerScaleParameterOutput);
+    const auto rotationParameterId =
+        result.outputId<ParameterId>(kAddSolidLayerRotationParameterOutput);
     const auto opacityParameterId =
         result.outputId<ParameterId>(kAddSolidLayerOpacityParameterOutput);
+    const auto blendModeParameterId =
+        result.outputId<ParameterId>(kAddSolidLayerBlendModeParameterOutput);
     const auto solidToLayerEdgeId = result.outputId<EdgeId>(kAddSolidLayerSolidToLayerEdgeOutput);
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddSolidLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !solidNodeId || !layerOutputNodeId || !colorParameterId ||
-        !positionParameterId || !opacityParameterId || !solidToLayerEdgeId || !layerToStackEdgeId) {
+        !positionParameterId || !anchorParameterId || !scaleParameterId || !rotationParameterId ||
+        !opacityParameterId || !blendModeParameterId || !solidToLayerEdgeId ||
+        !layerToStackEdgeId) {
         return std::nullopt;
     }
     return SolidOutputIds{*layerId,
@@ -57,7 +70,11 @@ template <typename Id, std::size_t LeftSize, std::size_t RightSize>
                           *layerOutputNodeId,
                           *colorParameterId,
                           *positionParameterId,
+                          *anchorParameterId,
+                          *scaleParameterId,
+                          *rotationParameterId,
                           *opacityParameterId,
+                          *blendModeParameterId,
                           *solidToLayerEdgeId,
                           *layerToStackEdgeId};
 }
@@ -77,7 +94,11 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
         std::string(document::kLayerOutputNodeType),
         {
             {std::string(document::kPositionParameterRole), ids.positionParameterId},
+            {std::string(document::kAnchorParameterRole), ids.anchorParameterId},
+            {std::string(document::kScaleParameterRole), ids.scaleParameterId},
+            {std::string(document::kRotationParameterRole), ids.rotationParameterId},
             {std::string(document::kOpacityParameterRole), ids.opacityParameterId},
+            {std::string(document::kBlendModeParameterRole), ids.blendModeParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };
@@ -99,6 +120,29 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
         ids.opacityParameterId,
         std::string(document::kOpacityParameterSchemaKey),
         ConstantValueSource{opacityValue},
+    };
+    // A newly created layer always starts at the identity transform and Normal blending: the
+    // command takes no anchor, scale, rotation, or blend-mode argument, so these four are pinned to
+    // their schema defaults rather than to anything the caller passed.
+    const ParameterRecord expectedAnchorParameter{
+        ids.anchorParameterId,
+        std::string(document::kAnchorParameterSchemaKey),
+        ConstantValueSource{document::kDefaultAnchor},
+    };
+    const ParameterRecord expectedScaleParameter{
+        ids.scaleParameterId,
+        std::string(document::kScaleParameterSchemaKey),
+        ConstantValueSource{document::kDefaultScale},
+    };
+    const ParameterRecord expectedRotationParameter{
+        ids.rotationParameterId,
+        std::string(document::kRotationParameterSchemaKey),
+        ConstantValueSource{document::kDefaultRotationDegrees},
+    };
+    const ParameterRecord expectedBlendModeParameter{
+        ids.blendModeParameterId,
+        std::string(document::kBlendModeParameterSchemaKey),
+        ConstantValueSource{document::kDefaultBlendModeValue},
     };
     const EdgeRecord expectedSolidToLayerEdge{
         ids.solidToLayerEdgeId,
@@ -134,6 +178,16 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
                 "solid position parameter should preserve exact schema and value");
     test.expect(opacityParameter != nullptr && *opacityParameter == expectedOpacityParameter,
                 "solid opacity parameter should preserve exact schema and value");
+    const auto* anchorParameter = value.parameters().find(ids.anchorParameterId);
+    const auto* scaleParameter = value.parameters().find(ids.scaleParameterId);
+    const auto* rotationParameter = value.parameters().find(ids.rotationParameterId);
+    const auto* blendModeParameter = value.parameters().find(ids.blendModeParameterId);
+    test.expect(
+        anchorParameter != nullptr && *anchorParameter == expectedAnchorParameter &&
+            scaleParameter != nullptr && *scaleParameter == expectedScaleParameter &&
+            rotationParameter != nullptr && *rotationParameter == expectedRotationParameter &&
+            blendModeParameter != nullptr && *blendModeParameter == expectedBlendModeParameter,
+        "a new solid layer starts at the identity transform and Normal blending");
     test.expect(std::ranges::find(value.graph().edges(), expectedSolidToLayerEdge) !=
                     value.graph().edges().end(),
                 "solid source edge should preserve exact ports and identity");
@@ -154,68 +208,180 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
            left.graph().compositionOutput() == right.graph().compositionOutput();
 }
 
+// ADAPTED (task S3): this was testAddTextLayerRefusesUntilRenderable, which pinned the
+// Unsupported refusal AddTextLayer returned while no portable CPU text renderer existed. Text
+// layers now build the same canonical structured-layer topology a solid does, so what is pinned
+// here is that topology, its parameter schemas and values, and that the whole thing is one undoable
+// history entry. The atomicity proof the old case carried (a rejected operation publishes nothing,
+// not even IDs) moves to testAddTextLayerRejectsInvalidInputs() below, which still has real
+// refusals to exercise.
 void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
-    const auto original = document.snapshot();
-    const auto& originalComposition = composition(original);
-    const auto originalNodeCount = originalComposition.graph().nodes().size();
-    const auto originalEdgeCount = originalComposition.graph().edges().size();
-    const auto originalParameterCount = originalComposition.parameters().records().size();
-
-    Transaction add("Add text layer", original.revision());
-    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960.0, 540.0}, 0.75);
+    const auto before = document.snapshot();
+    const auto color = core::Color4d{0.9, 0.8, 0.7, 1.0};
+    Transaction add("Add text layer", before.revision());
+    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hello, Bloom!", Vec2d{960, 540}, 0.75, 48.0,
+                              color);
     const auto result = stack.execute(std::move(add));
-    test.expect(result.status == CommandStatus::Succeeded && result.outputs.size() == 9,
-                "AddTextLayer should commit one topology edit and report every durable ID");
+    test.expect(result.changed(), "text layer creation applies");
 
     const auto layerId = result.outputId<LayerId>(kAddTextLayerLayerOutput);
     const auto slotId = result.outputId<LayerSlotId>(kAddTextLayerSlotOutput);
     const auto textNodeId = result.outputId<NodeId>(kAddTextLayerTextNodeOutput);
     const auto layerOutputNodeId = result.outputId<NodeId>(kAddTextLayerLayerOutputNodeOutput);
-    const auto textParameterId = result.outputId<ParameterId>(kAddTextLayerTextParameterOutput);
+    const auto contentParameterId = result.outputId<ParameterId>(kAddTextLayerTextParameterOutput);
+    const auto sizeParameterId = result.outputId<ParameterId>(kAddTextLayerSizeParameterOutput);
+    const auto colorParameterId = result.outputId<ParameterId>(kAddTextLayerColorParameterOutput);
     const auto positionParameterId =
         result.outputId<ParameterId>(kAddTextLayerPositionParameterOutput);
+    const auto anchorParameterId = result.outputId<ParameterId>(kAddTextLayerAnchorParameterOutput);
+    const auto scaleParameterId = result.outputId<ParameterId>(kAddTextLayerScaleParameterOutput);
+    const auto rotationParameterId =
+        result.outputId<ParameterId>(kAddTextLayerRotationParameterOutput);
     const auto opacityParameterId =
         result.outputId<ParameterId>(kAddTextLayerOpacityParameterOutput);
-    test.expect(layerId && slotId && textNodeId && layerOutputNodeId && textParameterId &&
-                    positionParameterId && opacityParameterId,
-                "AddTextLayer should return every typed object identity");
-    if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !textParameterId ||
-        !positionParameterId || !opacityParameterId) {
+    const auto blendModeParameterId =
+        result.outputId<ParameterId>(kAddTextLayerBlendModeParameterOutput);
+    const auto textToLayerEdgeId = result.outputId<EdgeId>(kAddTextLayerTextToLayerEdgeOutput);
+    const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
+    if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
+        !sizeParameterId || !colorParameterId || !positionParameterId || !anchorParameterId ||
+        !scaleParameterId || !rotationParameterId || !opacityParameterId || !blendModeParameterId ||
+        !textToLayerEdgeId || !layerToStackEdgeId) {
+        test.fail("text branch should return all fifteen durable IDs");
         return;
     }
+    const std::array textParameters{
+        *contentParameterId,  *sizeParameterId,    *colorParameterId,
+        *positionParameterId, *anchorParameterId,  *scaleParameterId,
+        *rotationParameterId, *opacityParameterId, *blendModeParameterId};
+    test.expect(std::ranges::adjacent_find(textParameters) == textParameters.end(),
+                "every parameter in a text branch has its own identity");
 
-    const auto added = document.snapshot();
-    const auto& addedComposition = composition(added);
-    test.expect(addedComposition.graph().nodes().size() == originalNodeCount + 2 &&
-                    addedComposition.graph().edges().size() == originalEdgeCount + 2 &&
-                    addedComposition.parameters().records().size() == originalParameterCount + 3 &&
-                    added.project().validate().ok(),
-                "AddTextLayer should create one valid source-to-boundary-to-stack topology");
-    const auto* textParameter = addedComposition.parameters().find(*textParameterId);
-    const auto* textConstant = textParameter == nullptr
-                                   ? nullptr
-                                   : std::get_if<ConstantValueSource>(&textParameter->source);
-    const auto* text =
-        textConstant == nullptr ? nullptr : std::get_if<std::string>(&textConstant->value);
-    test.expect(text != nullptr && *text == "Hello, Bloom!",
-                "created text parameter should preserve its exact text");
+    const auto& value = composition(document.snapshot());
+    const NodeRecord expectedTextNode{
+        *textNodeId,
+        std::string(document::kTextSourceNodeType),
+        {
+            {std::string(document::kTextParameterRole), *contentParameterId},
+            {std::string(document::kTextSizeParameterRole), *sizeParameterId},
+            {std::string(document::kTextColorParameterRole), *colorParameterId},
+        },
+        document::kTextSourceNodeSchemaVersion,
+    };
+    const auto* textNode = value.graph().findNode(*textNodeId);
+    test.expect(textNode != nullptr && *textNode == expectedTextNode,
+                "text source should bind content, size, and color in the registered order");
 
-    test.expect(stack.undo().changed(), "AddTextLayer should undo as one history entry");
-    const auto undone = document.snapshot();
-    test.expect(composition(undone).graph().nodes().size() == originalNodeCount &&
-                    composition(undone).graph().edges().size() == originalEdgeCount &&
-                    composition(undone).parameters().records().size() == originalParameterCount,
-                "AddTextLayer undo should remove its complete topology exactly");
-    test.expect(stack.redo().changed(), "AddTextLayer should redo as one history entry");
-    const auto boundaries = composition(document.snapshot()).graph().layerOutputs();
-    test.expect(std::ranges::find_if(boundaries,
-                                     [&](const auto& item) {
-                                         return item.layerId == *layerId &&
-                                                item.nodeId == *layerOutputNodeId;
-                                     }) != boundaries.end(),
-                "AddTextLayer redo should restore the exact layer identity");
+    const ParameterRecord expectedContent{*contentParameterId,
+                                          std::string(document::kTextParameterSchemaKey),
+                                          ConstantValueSource{std::string("Hello, Bloom!")}};
+    const ParameterRecord expectedSize{*sizeParameterId,
+                                       std::string(document::kTextSizeParameterSchemaKey),
+                                       ConstantValueSource{48.0}};
+    const ParameterRecord expectedColor{*colorParameterId,
+                                        std::string(document::kTextColorParameterSchemaKey),
+                                        ConstantValueSource{color}};
+    const auto* content = value.parameters().find(*contentParameterId);
+    const auto* size = value.parameters().find(*sizeParameterId);
+    const auto* storedColor = value.parameters().find(*colorParameterId);
+    test.expect(content != nullptr && *content == expectedContent,
+                "text content parameter should preserve exact schema and UTF-8 value");
+    test.expect(size != nullptr && *size == expectedSize,
+                "text size parameter should preserve exact schema and em pixel value");
+    test.expect(storedColor != nullptr && *storedColor == expectedColor,
+                "text color parameter should preserve exact schema and straight authoring value");
+
+    const LayerOutputBoundary expectedBoundary{*layerOutputNodeId, *layerId, "Title",
+                                               std::string(document::kLayerOutputOutputPort)};
+    test.expect(std::ranges::find(value.graph().layerOutputs(), expectedBoundary) !=
+                    value.graph().layerOutputs().end(),
+                "text layer boundary should preserve exact name, port, and stable IDs");
+    const EdgeRecord expectedTextToLayerEdge{
+        *textToLayerEdgeId,
+        {*textNodeId, std::string(document::kTextSourceOutputPort)},
+        NodeInputRef{*layerOutputNodeId, std::string(document::kLayerOutputContentInputPort)},
+    };
+    test.expect(std::ranges::find(value.graph().edges(), expectedTextToLayerEdge) !=
+                    value.graph().edges().end(),
+                "text source edge should reach the Layer Output content port");
+    test.expect(value.graph().layerStack().find(*slotId) != nullptr,
+                "text layer should occupy its own stable stack slot");
+    test.expect(value.parameters().find(*positionParameterId) != nullptr &&
+                    value.parameters().find(*anchorParameterId) != nullptr &&
+                    value.parameters().find(*scaleParameterId) != nullptr &&
+                    value.parameters().find(*rotationParameterId) != nullptr &&
+                    value.parameters().find(*opacityParameterId) != nullptr &&
+                    value.parameters().find(*blendModeParameterId) != nullptr,
+                "a text layer owns the same six Layer Output parameters a solid does");
+
+    test.expect(stack.size() == 1 && stack.canUndo(),
+                "text layer creation is exactly one history entry");
+    test.expect(stack.undo().changed() &&
+                    hasSameTruth(composition(document.snapshot()), composition(before)),
+                "AddTextLayer undo should restore exact prior composition truth");
+    test.expect(document.snapshot()
+                        .project()
+                        .findComposition(kCompositionId)
+                        ->graph()
+                        .findNode(*textNodeId) == nullptr,
+                "and leave no text node behind");
+    test.expect(stack.redo().changed() && document.snapshot()
+                                                  .project()
+                                                  .findComposition(kCompositionId)
+                                                  ->graph()
+                                                  .findNode(*textNodeId) != nullptr,
+                "AddTextLayer should redo as one history entry");
+}
+
+void testAddTextLayerRejectsInvalidInputs(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto before = document.snapshot();
+    const auto rejects = [&](std::string name, std::string content, const Vec2d position,
+                             const double opacityValue, const double size,
+                             const core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0}) {
+        Transaction transaction("Reject invalid text", before.revision());
+        // A second operation in the same transaction proves the refusal is atomic across the whole
+        // transaction, which is what the old refusal case proved with SetProjectName.
+        transaction.emplace<SetProjectName>("Must not publish");
+        transaction.emplace<AddTextLayer>(kCompositionId, std::move(name), std::move(content),
+                                          position, opacityValue, size, color);
+        return stack.execute(std::move(transaction)).status == CommandStatus::Rejected;
+    };
+
+    test.expect(rejects("", "Body", {}, 1.0, 72.0), "text layer should reject an empty name");
+    test.expect(rejects("Size", "Body", {}, 1.0, 0.0),
+                "text layer should reject a size of zero pixels");
+    test.expect(rejects("Size", "Body", {}, 1.0, document::kMaximumTextSizePixels + 1.0),
+                "text layer should reject a size past the schema maximum");
+    test.expect(rejects("Size", "Body", {}, 1.0, std::numeric_limits<double>::infinity()),
+                "text layer should reject a non-finite size");
+    test.expect(rejects("Color", "Body", {}, 1.0, 72.0, {0.0, 0.0, 0.0, 1.5}),
+                "text layer should reject color alpha outside the unit interval");
+    test.expect(rejects("Content", std::string("\xff\xfe"), {}, 1.0, 72.0),
+                "text layer should reject content that is not valid UTF-8");
+    test.expect(
+        rejects("Position", "Body", {std::numeric_limits<double>::infinity(), 0.0}, 1.0, 72.0),
+        "text layer should reject a non-finite position");
+    test.expect(rejects("Opacity", "Body", {}, -0.1, 72.0),
+                "text layer should reject opacity outside the unit interval");
+
+    const auto after = document.snapshot();
+    test.expect(after.revision() == before.revision() &&
+                    after.project().name() == before.project().name() &&
+                    after.ids().highWater() == before.ids().highWater() &&
+                    hasSameTruth(composition(after), composition(before)) && stack.size() == 0 &&
+                    !stack.canUndo() && !stack.canRedo(),
+                "every text refusal is atomic including IDs, names, and history");
+
+    // Empty content is deliberately NOT a refusal: an artist adds a text layer and then types into
+    // it, so a layer with nothing typed yet has to be a real, selectable, editable layer.
+    Transaction empty("Add empty text layer", before.revision());
+    empty.emplace<AddTextLayer>(kCompositionId, "Untyped", "", Vec2d{0.0, 0.0});
+    test.expect(stack.execute(std::move(empty)).changed(),
+                "a text layer with no content yet is accepted");
 }
 
 void testCompositionFormatCommand(TestContext& test) {
@@ -258,10 +424,10 @@ void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto result = stack.execute(std::move(add));
     const auto ids = solidOutputIds(result);
     if (!ids) {
-        test.fail("AddSolidLayer should expose all nine typed durable IDs");
+        test.fail("AddSolidLayer should expose all thirteen typed durable IDs");
         return;
     }
-    test.expect(result.changed() && result.outputs.size() == 9 &&
+    test.expect(result.changed() && result.outputs.size() == 13 &&
                     document.snapshot().project().validate().ok(),
                 "AddSolidLayer should publish one valid topology and every durable ID");
     expectSolidState(test, document.snapshot(), *ids, "Plate", color, Vec2d{320.0, 180.0}, 0.75);
@@ -282,7 +448,7 @@ void testPublishedSolidBranchIdsAreNeverReused(TestContext& test) {
                                     1.0);
     const auto firstIds = solidOutputIds(stack.execute(std::move(firstAdd)));
     if (!firstIds) {
-        test.fail("first solid branch should return all nine durable IDs");
+        test.fail("first solid branch should return all thirteen durable IDs");
         return;
     }
     test.expect(stack.undo().changed(), "published solid branch should be undoable");
@@ -292,18 +458,20 @@ void testPublishedSolidBranchIdsAreNeverReused(TestContext& test) {
         kCompositionId, "Replacement", core::Color4d{0.2, 0.3, 0.4, 1.0}, Vec2d{30.0, 40.0}, 0.5);
     const auto replacementIds = solidOutputIds(stack.execute(std::move(replacementAdd)));
     if (!replacementIds) {
-        test.fail("replacement solid branch should return all nine durable IDs");
+        test.fail("replacement solid branch should return all thirteen durable IDs");
         return;
     }
 
     const std::array firstNodes{firstIds->solidNodeId, firstIds->layerOutputNodeId};
     const std::array replacementNodes{replacementIds->solidNodeId,
                                       replacementIds->layerOutputNodeId};
-    const std::array firstParameters{firstIds->colorParameterId, firstIds->positionParameterId,
-                                     firstIds->opacityParameterId};
-    const std::array replacementParameters{replacementIds->colorParameterId,
-                                           replacementIds->positionParameterId,
-                                           replacementIds->opacityParameterId};
+    const std::array firstParameters{firstIds->colorParameterId,    firstIds->positionParameterId,
+                                     firstIds->anchorParameterId,   firstIds->scaleParameterId,
+                                     firstIds->rotationParameterId, firstIds->opacityParameterId};
+    const std::array replacementParameters{
+        replacementIds->colorParameterId,    replacementIds->positionParameterId,
+        replacementIds->anchorParameterId,   replacementIds->scaleParameterId,
+        replacementIds->rotationParameterId, replacementIds->opacityParameterId};
     const std::array firstEdges{firstIds->solidToLayerEdgeId, firstIds->layerToStackEdgeId};
     const std::array replacementEdges{replacementIds->solidToLayerEdgeId,
                                       replacementIds->layerToStackEdgeId};
@@ -349,6 +517,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
+        bloom::commands::test::testAddTextLayerRejectsInvalidInputs(test);
         bloom::commands::test::testCompositionFormatCommand(test);
         bloom::commands::test::testAddSolidLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testPublishedSolidBranchIdsAreNeverReused(test);

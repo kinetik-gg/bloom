@@ -200,7 +200,7 @@ void withDocumentInput(
     bloom::document::Document document{std::move(newProject.project)};
     const auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
 }
@@ -266,7 +266,7 @@ void withBulkDocumentInput(
          .capabilityId = "vendor.bulk.cap",
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 4},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
@@ -592,7 +592,7 @@ void testFaultInjection(Expectations& expectations) {
 //
 // Instead, this is reached through ordinary public parameters: a manifest whose
 // documentSchemaVersion disagrees with the document's own embedded schema version (which
-// CanonicalDocumentV1::schemaMinor controls, defaulted to 0 here) is a legitimate, seam-free way
+// CanonicalDocumentV1::schemaMinor controls, defaulted to 1 here) is a legitimate, seam-free way
 // to make verifySaveArchive() fail its VersionAgreement check over the exact bytes that were
 // staged and read back -- the encode step happily writes self-inconsistent input; only
 // verification catches it. This is a genuine failure of stageSaveArchive()'s verification-over-
@@ -615,7 +615,7 @@ void testVerificationFailureOverStagedBytes(Expectations& expectations) {
         expectations, "Version Mismatch Project",
         [&](const CanonicalManifestV1& baseManifest, const CanonicalDocumentV1& documentInput) {
             CanonicalManifestV1 manifest = baseManifest;
-            manifest.documentSchemaVersion = {1, 1}; // documentInput still encodes {1, 0}.
+            manifest.documentSchemaVersion = {1, 5}; // documentInput still encodes {1, 4}.
 
             auto preflight = coordinator->preflight(
                 makeRequest(targetPath, ArtifactOverwritePolicy::CreateOnly));

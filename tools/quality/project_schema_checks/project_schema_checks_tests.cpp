@@ -391,6 +391,55 @@ void testDocument(const Value& document, int& failures) {
                   "malformed Base64 comment produces typed failure", failures);
 }
 
+void testNodeLayoutSchema(const std::filesystem::path& root, int& failures) {
+    using namespace bloom::quality;
+    const auto document = json::parseFile(root / "schemas/project/document-1.1.schema.json");
+    validateDocumentSchemaV1_1(document);
+    auto missingLayout = document;
+    eraseMember(path(missingLayout, {"$defs", "composition-1.0", "properties"}), "nodeLayout");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_1(missingLayout); },
+                                         "current compositions require node layout", failures);
+    auto zeroWidth = document;
+    eraseMember(path(zeroWidth, {"$defs", "nodeLayout-1.1", "properties", "width"}),
+                "exclusiveMinimum");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_1(zeroWidth); },
+                                         "layout width stays strictly positive", failures);
+    auto manifest = json::parseFile(root / "schemas/project/manifest-1.1.schema.json");
+    validateManifestSchemaV1_1(manifest);
+    path(manifest, {"$defs", "document-1.0", "properties", "schemaVersion", "$ref"}) =
+        Value{std::string{"#/$defs/fixedVersion-1.0"}};
+    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_1(manifest); },
+                                         "current manifest declares the matching document minor",
+                                         failures);
+}
+
+void testNodeGroupSchema(const std::filesystem::path& root, int& failures) {
+    using namespace bloom::quality;
+    const auto document = json::parseFile(root / "schemas/project/document-1.2.schema.json");
+    validateDocumentSchemaV1_2(document);
+    auto missingGroups = document;
+    eraseMember(path(missingGroups, {"$defs", "composition-1.0", "properties"}), "nodeGroups");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(missingGroups); },
+                                         "current compositions require node groups", failures);
+    auto negativePadding = document;
+    eraseMember(path(negativePadding,
+                     {"$defs", "nodeGroup-1.2", "properties", "padding", "properties", "x"}),
+                "minimum");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(negativePadding); },
+                                         "group padding stays nonnegative", failures);
+    auto missingNamespace = document;
+    eraseMember(path(missingNamespace, {"$defs", "highestIssued-1.2", "properties"}), "nodeGroup");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_2(missingNamespace); },
+                                         "the group allocator namespace is required", failures);
+    auto manifest = json::parseFile(root / "schemas/project/manifest-1.2.schema.json");
+    validateManifestSchemaV1_2(manifest);
+    path(manifest, {"$defs", "document-1.0", "properties", "schemaVersion", "$ref"}) =
+        Value{std::string{"#/$defs/fixedVersion-1.0"}};
+    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_2(manifest); },
+                                         "current manifest declares the matching document minor",
+                                         failures);
+}
+
 [[nodiscard]] auto parseRoot(const std::span<const char* const> arguments)
     -> std::filesystem::path {
     if (arguments.size() != 3U || std::string_view{arguments[1]} != "--root") {
@@ -413,6 +462,8 @@ auto main(const int count, const char* const* values) -> int {
         testParser(failures);
         testManifest(manifest, failures);
         testDocument(document, failures);
+        testNodeLayoutSchema(root, failures);
+        testNodeGroupSchema(root, failures);
         if (failures == 0) {
             std::cout << "Project schema checker self-tests passed\n";
         }

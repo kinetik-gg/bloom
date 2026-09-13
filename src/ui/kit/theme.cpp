@@ -79,6 +79,7 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("size.TimelineRow"), px(Size::TimelineRow)},
         {QLatin1StringView("size.ScrollBar"), px(Size::ScrollBar)},
         {QLatin1StringView("size.ScrollBarHover"), px(Size::ScrollBarHover)},
+        {QLatin1StringView("size.MenuMinWidth"), px(Size::MenuMinWidth)},
         // A scrollbar thumb is a pill: Radius::Full against the scrollbar's own extent.
         {QLatin1StringView("radius.ScrollBarThumb"), radiusPx(Radius::Full, px(Size::ScrollBar))},
         {QLatin1StringView("radius.ScrollBarThumbHover"),

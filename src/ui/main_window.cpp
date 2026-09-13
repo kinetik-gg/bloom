@@ -129,11 +129,28 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                     return;
                 }
                 if (outcome == FrameExportOutcome::Cancelled) {
-                    statusBar()->clearMessage();
+                    // A cancelled RANGE says how many frames landed, which is information the
+                    // artist needs; a cancelled single frame wrote nothing, so it stays silent as
+                    // before.
+                    if (message.isEmpty()) {
+                        statusBar()->clearMessage();
+                    } else {
+                        statusBar()->showMessage(message, 4000);
+                    }
                     return;
                 }
                 QMessageBox::warning(this, tr("Export Frame"), message);
             });
+    // Range progress reaches the artist through the status bar and keeps the cancel item's enabled
+    // state in step, using exactly the signals the controller already emits.
+    connect(&frameExportController_, &FrameExportController::rangeProgressChanged, this, [this] {
+        updateExportAction();
+        if (frameExportController_.isExportingRange()) {
+            statusBar()->showMessage(tr("Exporting frame %1 of %2…")
+                                         .arg(frameExportController_.publishedFrameCount() + 1)
+                                         .arg(frameExportController_.totalFrameCount()));
+        }
+    });
 
     updateFileActions();
     updateWindowTitle();
@@ -316,6 +333,18 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     connect(exportFrameAction_, &QAction::triggered, &frameExportController_,
             &FrameExportController::requestExport);
 
+    // "Export Frame Range…" (task S5, item 3a), beside the single-frame export it reuses stage for
+    // stage, plus the cancel that a range -- unlike one frame -- is long enough to need.
+    exportFrameRangeAction_ = fileMenu.addAction("Export Frame &Range…");
+    exportFrameRangeAction_->setObjectName("exportFrameRangeAction");
+    connect(exportFrameRangeAction_, &QAction::triggered, &frameExportController_,
+            &FrameExportController::requestRangeExport);
+
+    cancelFrameExportAction_ = fileMenu.addAction("Cancel Frame &Export");
+    cancelFrameExportAction_->setObjectName("cancelFrameExportAction");
+    connect(cancelFrameExportAction_, &QAction::triggered, &frameExportController_,
+            &FrameExportController::requestCancellation);
+
     fileMenu.addSeparator();
 
     // "Quit" (task S1): the artist had no way to quit from the menu at all -- closing the window
@@ -361,8 +390,13 @@ void MainWindow::updateFileActions() {
 }
 
 void MainWindow::updateExportAction() {
-    exportFrameAction_->setEnabled(frameExportController_.canExport() &&
-                                   !isShowingReadOnlyPlaceholder());
+    const bool canExport = frameExportController_.canExport() && !isShowingReadOnlyPlaceholder();
+    exportFrameAction_->setEnabled(canExport);
+    exportFrameRangeAction_->setEnabled(canExport);
+    // Offered only while there is actually something to cancel: a range export in flight. A
+    // disabled item is honest about that; an always-enabled one would promise a cancel with nothing
+    // to cancel.
+    cancelFrameExportAction_->setEnabled(frameExportController_.isExportingRange());
 }
 
 void MainWindow::updateWindowTitle() {

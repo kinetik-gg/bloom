@@ -24,7 +24,7 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 0};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 4};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
@@ -51,24 +51,24 @@ inline constexpr std::size_t kCanonicalDocumentNoIndex = static_cast<std::size_t
 // counting/write two-pass discipline (canonicalDocumentSize/encodeCanonicalDocument) already
 // takes one CanonicalDocumentV1 by const reference -- a parallel struct would only duplicate that
 // plumbing for no behavioral gain. `roundTrip` and `schemaMinor` both default to their plain-write
-// values (null, 0), so every existing call site compiles and behaves unchanged.
+// values (null, current minor).
 struct CanonicalDocumentV1 final {
     const bloom::document::Snapshot* snapshot = nullptr;
     const bloom::document::ColorSettings* colorSettings = nullptr;
     std::span<char> payloadScratch{};
     std::span<std::size_t> sortScratch{};
     // Optional RT2 overlay (see docs/architecture/project-format.md, "Versions, Migrations, And
-    // Preservation"). Null (the default) reproduces the plain v1.0 writer exactly: no attachment
-    // lookup is ever performed, byte-identical to every pre-RT2 golden. When non-null, every
+    // Preservation"). Null (the default) emits the current known schema without attachment
+    // lookup. When non-null, every
     // retained attachment point in *roundTrip is re-emitted after the last known member of its
     // corresponding object, and `schemaMinor` should name the exact minor this state was captured
     // against (a mismatched minor still encodes, but the result would not describe the schema
     // version it claims). The pointee must outlive the call.
     const RoundTripState* roundTrip = nullptr;
-    // The document schema minor to emit at the document root ({1, schemaMinor}). Defaults to 0
-    // (the only schema `1.0` writes before RT2). An overlay rewrite of a {1, minor > 0} document
-    // must pass that same minor back so the emitted schemaVersion matches what was opened.
-    std::uint32_t schemaMinor = 0;
+    // The document schema minor to emit at the document root. Defaults to the current minor;
+    // older requests are upgraded to it. An overlay rewrite of a newer-minor document must
+    // pass that same minor back so the emitted schemaVersion matches what was opened.
+    std::uint32_t schemaMinor = kCanonicalDocumentSchemaVersionV1.minor;
 };
 
 struct CanonicalDocumentLimits final {
@@ -94,7 +94,6 @@ enum class CanonicalDocumentError : std::uint8_t {
     InvalidProcessColorSpaceId,
     OcioPortabilityMismatch,
     InvalidOcioRevisionAlgorithm,
-    UnsupportedDriverBindingSource,
     SortBufferTooSmall,
     PayloadBufferTooSmall,
     ValueCountExceeded,
@@ -196,9 +195,10 @@ class [[nodiscard]] CanonicalDocumentWriteResult final {
 
 // Validates the complete v1 document shape against the format contract and returns the exact
 // canonical byte count. Document-owned lexical and domain rules for color settings are delegated to
-// ColorSettings::validate(); live DriverBindingSource parameters are rejected here because native
-// v1 Save is a restricted supported-subset encoder. No destination byte is touched and no memory is
-// allocated beyond the callers' provided scratch spans.
+// ColorSettings::validate(). Every parameter source is writable from document 1.4 on -- a driver
+// binding is the durable node-and-port pair it addresses -- so this writer no longer refuses one as
+// an unsupported save feature. No destination byte is touched and no memory is allocated beyond the
+// callers' provided scratch spans.
 [[nodiscard]] CanonicalDocumentSizeResult
 canonicalDocumentSize(const CanonicalDocumentV1& document,
                       CanonicalDocumentLimits limits = CanonicalDocumentLimits{}) noexcept;

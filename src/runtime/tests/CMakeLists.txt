@@ -7,6 +7,7 @@ add_executable(bloom_runtime_cpu_composition_evaluator_test cpu_composition_eval
 add_executable(bloom_runtime_animation_sampling_test animation_sampling_tests.cpp)
 add_executable(bloom_runtime_curve_compilation_test curve_compilation_tests.cpp)
 add_executable(bloom_runtime_qualified_display_preparation_test qualified_display_preparation_tests.cpp)
+add_executable(bloom_runtime_value_graph_test value_graph_tests.cpp)
 
 target_link_libraries(bloom_runtime_task_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_regression_test PRIVATE bloom_runtime)
@@ -26,6 +27,7 @@ target_link_libraries(
     bloom_runtime_qualified_display_preparation_test
     PRIVATE bloom_runtime_evaluator
 )
+target_link_libraries(bloom_runtime_value_graph_test PRIVATE bloom_runtime_evaluator)
 target_include_directories(bloom_runtime_regression_test PRIVATE ..)
 target_include_directories(bloom_runtime_gpu_task_test PRIVATE ..)
 target_include_directories(bloom_runtime_snapshot_compiler_test PRIVATE ..)
@@ -38,6 +40,8 @@ bloom_enable_warnings(bloom_runtime_cpu_composition_evaluator_test)
 bloom_enable_warnings(bloom_runtime_animation_sampling_test)
 bloom_enable_warnings(bloom_runtime_curve_compilation_test)
 bloom_enable_warnings(bloom_runtime_qualified_display_preparation_test)
+bloom_enable_warnings(bloom_runtime_value_graph_test)
+bloom_enable_strict_floating_point(bloom_runtime_value_graph_test)
 bloom_enable_strict_floating_point(bloom_runtime_cpu_composition_evaluator_test)
 bloom_enable_strict_floating_point(bloom_runtime_animation_sampling_test)
 bloom_enable_strict_floating_point(bloom_runtime_qualified_display_preparation_test)
@@ -76,6 +80,13 @@ bloom_add_test(
     NAME bloom.runtime.snapshot_compiler
     COMMAND bloom_runtime_snapshot_compiler_test
     LABELS runtime unit
+    TIMEOUT 30
+)
+
+bloom_add_test(
+    NAME bloom.runtime.value_graph
+    COMMAND bloom_runtime_value_graph_test
+    LABELS runtime unit primitives
     TIMEOUT 30
 )
 

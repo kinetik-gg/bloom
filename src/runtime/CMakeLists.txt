@@ -32,15 +32,16 @@ target_sources(
         compile_diagnostics.cpp
         compiled_plan.cpp
         curve_compilation.cpp
-        node_definition_registry.cpp
         snapshot_compiler.cpp
         snapshot_compiler_lowering.ipp
         snapshot_compiler_support.hpp
+        snapshot_compiler_value_graph.ipp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/runtime/compiled_plan.hpp
+            include/bloom/runtime/compiled_value_graph.hpp
             include/bloom/runtime/curve_compilation.hpp
             include/bloom/runtime/node_definition_registry.hpp
             include/bloom/runtime/snapshot_compiler.hpp
@@ -63,6 +64,7 @@ target_sources(
         qualified_display_preparation.cpp
         qualified_display_processor_provider.cpp
         reference_display_preparation.cpp
+        value_graph_evaluation.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -74,6 +76,7 @@ target_sources(
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp
+            include/bloom/runtime/value_graph_evaluation.hpp
 )
 
 target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)

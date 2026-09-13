@@ -426,12 +426,8 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         // fails at DocumentDecode below with DomainViolation exactly as before, and a newer minor
         // still takes decode's own RT1 PreservationRequired route below, also exactly as before.
         // decodedDocumentVersion.minor <= current.minor (with major already pinned equal) is the
-        // exact complement of "newer minor" that keeps both those paths untouched. Today current
-        // is exactly {1,0}, so the only value satisfying this guard is {1,0} itself: production
-        // wiring is real (this stage always runs for an otherwise-decodable document) but only
-        // ever exercises MigrationOutcome::Identity -- see document_migration_tests.cpp for the
-        // synthetic coverage of every other outcome this stage can produce once a real older
-        // version ever exists.
+        // exact complement of "newer minor" that keeps both those paths untouched. Document
+        // 1.0 receives the production node-layout migration; current 1.1 is an identity step.
         stage = SaveArchiveStage::DocumentMigration;
         const JsonValue* trustedDocumentRoot = &documentDom.document()->root();
         auto effectiveDocumentVersion = decodedDocumentVersion;

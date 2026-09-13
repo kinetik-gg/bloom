@@ -97,7 +97,12 @@ struct SingleLayerCompositionIds final {
     EdgeId stackEdge;
     EdgeId outputEdge;
     ParameterId positionParameter;
+    ParameterId anchorParameter;
+    ParameterId scaleParameter;
+    ParameterId rotationParameter;
     ParameterId opacityParameter;
+    // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+    ParameterId blendModeParameter;
     LayerId layer;
     LayerSlotId slot;
 };
@@ -115,7 +120,11 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         id<EdgeId>(base + 1),
         id<EdgeId>(base + 2),
         id<ParameterId>(base),
+        id<ParameterId>(base + 2),
+        id<ParameterId>(base + 3),
+        id<ParameterId>(base + 4),
         id<ParameterId>(base + 1),
+        id<ParameterId>(base + 5),
         id<LayerId>(base),
         id<LayerSlotId>(base),
     };
@@ -129,7 +138,11 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         std::string(bloom::document::kLayerOutputNodeType),
         {
             {std::string(bloom::document::kPositionParameterRole), ids.positionParameter},
+            {std::string(bloom::document::kAnchorParameterRole), ids.anchorParameter},
+            {std::string(bloom::document::kScaleParameterRole), ids.scaleParameter},
+            {std::string(bloom::document::kRotationParameterRole), ids.rotationParameter},
             {std::string(bloom::document::kOpacityParameterRole), ids.opacityParameter},
+            {std::string(bloom::document::kBlendModeParameterRole), ids.blendModeParameter},
         },
         bloom::document::kLayerOutputNodeSchemaVersion,
     };
@@ -175,9 +188,21 @@ compositionIds(const std::uint64_t composition, const std::uint64_t base) noexce
         composition.parameters().insert({ids.positionParameter,
                                          std::string(bloom::document::kPositionParameterSchemaKey),
                                          ConstantValueSource{Vec2d{0.0, 0.0}}}) &&
+        composition.parameters().insert({ids.anchorParameter,
+                                         std::string(bloom::document::kAnchorParameterSchemaKey),
+                                         ConstantValueSource{bloom::document::kDefaultAnchor}}) &&
+        composition.parameters().insert({ids.scaleParameter,
+                                         std::string(bloom::document::kScaleParameterSchemaKey),
+                                         ConstantValueSource{bloom::document::kDefaultScale}}) &&
+        composition.parameters().insert(
+            {ids.rotationParameter, std::string(bloom::document::kRotationParameterSchemaKey),
+             ConstantValueSource{bloom::document::kDefaultRotationDegrees}}) &&
         composition.parameters().insert({ids.opacityParameter,
                                          std::string(bloom::document::kOpacityParameterSchemaKey),
-                                         ConstantValueSource{1.0}});
+                                         ConstantValueSource{1.0}}) &&
+        composition.parameters().insert(
+            {ids.blendModeParameter, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{bloom::document::kDefaultBlendModeValue}});
     if (!graphBuilt || !parametersBuilt) {
         throw std::logic_error("Could not build global ID validation fixture");
     }
@@ -261,8 +286,9 @@ withCollision(SingleLayerCompositionIds second, const SingleLayerCompositionIds&
         composition->parameters().insert({id<ParameterId>(202),
                                           std::string(bloom::document::kOpacityParameterSchemaKey),
                                           AnimationCurveSource{id<AnimationCurveId>(200)}}) &&
-        composition->parameters().insert({id<ParameterId>(203), "com.example.driver-value",
-                                          DriverBindingSource{id<DriverBindingId>(204)}});
+        composition->parameters().insert(
+            {id<ParameterId>(203), "com.example.driver-value",
+             DriverBindingSource{id<NodeId>(1), std::string("value")}});
     if (!animationStateBuilt || !project.validate().ok()) {
         throw std::logic_error("Could not build persisted allocator fixture");
     }
@@ -386,7 +412,11 @@ void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
         .parameter = 203,
         .animationCurve = 200,
         .keyframe = 201,
-        .driverBinding = 204,
+        // Zero, not 204: task S7 made a driver source the node-and-port pair it addresses, so no
+        // record carries a DriverBindingId any more and there is nothing for the inventory walk to
+        // find. The namespace itself stays (decision 0018: persist its high-water so issued ids are
+        // never reused), which is what the persisted-construction assertions below now state.
+        .driverBinding = 0,
         .extensionRecord = 0,
     };
     expectations.expect(
@@ -412,7 +442,10 @@ void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
         RequiredNamespace{&IdAllocatorHighWater::parameter, "parameter"},
         RequiredNamespace{&IdAllocatorHighWater::animationCurve, "animation-curve"},
         RequiredNamespace{&IdAllocatorHighWater::keyframe, "keyframe"},
-        RequiredNamespace{&IdAllocatorHighWater::driverBinding, "driver-binding"},
+        // driverBinding is deliberately absent: with no live record carrying one there is no live
+        // declaration to be below, so a watermark of zero is correct rather than rejected. The
+        // namespace's durability is asserted instead by the restored-construction check above (a
+        // persisted 240 survives a project with no driver id at all) and by the advance below.
     };
     for (const auto& requiredNamespace : requiredNamespaces) {
         auto belowDeclaration = declarations;
@@ -544,11 +577,21 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
     auto document = makeDocument();
     const auto before = document.snapshot();
     auto draft = document.draft(before);
+    // Task S7: a driver source carries no id of its own any more, so the driverBinding namespace
+    // has no record to reconcile FROM -- and decision 0018 requires its high-water to persist
+    // anyway, so that issued ids are never reused. Reserving it explicitly is what that now looks
+    // like, and the assertion below still states the real contract: every durable namespace
+    // round-trips.
+    draft.ids().reserveExisting(id<DriverBindingId>(100));
 
     constexpr auto positionId = id<ParameterId>(44);
     constexpr auto opacityId = id<ParameterId>(45);
     constexpr auto animationParameterId = id<ParameterId>(46);
     constexpr auto driverParameterId = id<ParameterId>(47);
+    constexpr auto anchorId = id<ParameterId>(48);
+    constexpr auto scaleId = id<ParameterId>(49);
+    constexpr auto rotationId = id<ParameterId>(50);
+    constexpr auto blendModeId = id<ParameterId>(51);
     constexpr auto sourceNodeId = id<NodeId>(100);
     constexpr auto layerOutputNodeId = id<NodeId>(101);
     constexpr auto layerId = id<LayerId>(100);
@@ -564,7 +607,11 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
             std::string(bloom::document::kLayerOutputNodeType),
             {
                 {std::string(bloom::document::kPositionParameterRole), positionId},
+                {std::string(bloom::document::kAnchorParameterRole), anchorId},
+                {std::string(bloom::document::kScaleParameterRole), scaleId},
+                {std::string(bloom::document::kRotationParameterRole), rotationId},
                 {std::string(bloom::document::kOpacityParameterRole), opacityId},
+                {std::string(bloom::document::kBlendModeParameterRole), blendModeId},
             },
             bloom::document::kLayerOutputNodeSchemaVersion,
         };
@@ -577,13 +624,26 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                    {positionId, std::string(bloom::document::kPositionParameterSchemaKey),
                     ConstantValueSource{Vec2d{10.0, 20.0}}}) &&
                composition->parameters().insert(
+                   {anchorId, std::string(bloom::document::kAnchorParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultAnchor}}) &&
+               composition->parameters().insert(
+                   {scaleId, std::string(bloom::document::kScaleParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultScale}}) &&
+               composition->parameters().insert(
+                   {rotationId, std::string(bloom::document::kRotationParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultRotationDegrees}}) &&
+               composition->parameters().insert(
                    {opacityId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     ConstantValueSource{0.5}}) &&
                composition->parameters().insert(
+                   {blendModeId, std::string(bloom::document::kBlendModeParameterSchemaKey),
+                    ConstantValueSource{bloom::document::kDefaultBlendModeValue}}) &&
+               composition->parameters().insert(
                    {animationParameterId, std::string(bloom::document::kOpacityParameterSchemaKey),
                     AnimationCurveSource{id<AnimationCurveId>(100)}}) &&
-               composition->parameters().insert({driverParameterId, "com.example.driver",
-                                                 DriverBindingSource{id<DriverBindingId>(100)}}) &&
+               composition->parameters().insert(
+                   {driverParameterId, "com.example.driver",
+                    DriverBindingSource{sourceNodeId, std::string("value")}}) &&
                composition->graph().addNode(std::move(sourceNode)) &&
                composition->graph().addNode(std::move(layerOutputNode)) &&
                composition->graph().addLayerOutput(
@@ -640,7 +700,7 @@ void testPublicationReconcilesAllocatorHighWater(ExpectationContext& expectation
                             next.ids().allocateEdge() == id<EdgeId>(201) &&
                             next.ids().allocateLayer() == id<LayerId>(101) &&
                             next.ids().allocateLayerSlot() == id<LayerSlotId>(101) &&
-                            next.ids().allocateParameter() == id<ParameterId>(48) &&
+                            next.ids().allocateParameter() == id<ParameterId>(52) &&
                             next.ids().allocateAnimationCurve() == id<AnimationCurveId>(101) &&
                             next.ids().allocateKeyframe() == id<KeyframeId>(101) &&
                             next.ids().allocateDriverBinding() == id<DriverBindingId>(101),

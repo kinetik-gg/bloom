@@ -7,9 +7,14 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
+#include <algorithm>
+#include <array>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace bloom::project {
@@ -31,6 +36,87 @@ using StepResult = std::optional<ReconstructionRejected>;
 
 [[nodiscard]] ReconstructionRejected projectRejection(const ReconstructionStage stage) noexcept {
     return {.stage = stage, .compositionId = {}, .recordId = 0};
+}
+
+// One parameter the current Layer Output schema requires but an older version did not persist,
+// paired with the default an upgraded node must receive. The defaults are exactly
+// document::kDefaultAnchor, kDefaultScale, kDefaultRotationDegrees, and kDefaultBlendModeValue --
+// the identity transform and Normal blending -- so an older file evaluates after the upgrade to the
+// pixels the build that wrote it produced. They are read from the document module rather than
+// restated here, so a default can never drift between the registry, the creation command, and this
+// upgrade.
+//
+// The table spans every version below the current one at once rather than one table per version
+// step, because the injection rule is already per-ROLE: a node that binds a role keeps its own
+// binding. A version-1 node therefore receives anchor, scale, rotation, and blendMode, and a
+// version-2 node receives only blendMode, from this one list.
+struct InjectedLayerOutputParameter final {
+    std::string_view role;
+    std::string_view schemaKey;
+    document::ParameterValue defaultValue;
+};
+
+[[nodiscard]] std::array<InjectedLayerOutputParameter, 4> injectedLayerOutputParameters() {
+    return {{
+        {document::kAnchorParameterRole, document::kAnchorParameterSchemaKey,
+         document::kDefaultAnchor},
+        {document::kScaleParameterRole, document::kScaleParameterSchemaKey,
+         document::kDefaultScale},
+        {document::kRotationParameterRole, document::kRotationParameterSchemaKey,
+         document::kDefaultRotationDegrees},
+        {document::kBlendModeParameterRole, document::kBlendModeParameterSchemaKey,
+         document::kDefaultBlendModeValue},
+    }};
+}
+
+// Brings decoded nodes forward to the schema version the build registers, in memory, before any
+// record is installed. Only the Layer Output type has a version to upgrade from; every other
+// foundation type is still at version 1, so this is deliberately a per-type rule rather than a
+// generic "inject whatever the registry declares" loop -- a future type's upgrade may need to
+// derive a value rather than take a default, and that decision belongs to the type.
+//
+// Injected ids come from one counter seeded at the document's persisted parameter high water, which
+// is raised to match, so a new id can collide with nothing the file declares and the
+// inclusive-watermark rule Document's constructor enforces still holds. A node that somehow already
+// binds one of the new roles keeps its own binding.
+[[nodiscard]] StepResult upgradeDecodedNodeSchemas(DecodedDocumentEnvelope& envelope) {
+    const auto injected = injectedLayerOutputParameters();
+    auto& highWater = envelope.highWater.parameter;
+    for (auto& composition : envelope.compositions) {
+        for (auto& node : composition.graph.nodes) {
+            if (node.typeId != document::kLayerOutputNodeType ||
+                node.schemaVersion >= document::kLayerOutputNodeSchemaVersion) {
+                continue;
+            }
+            for (const auto& parameter : injected) {
+                const auto bound =
+                    std::ranges::any_of(node.parameters, [&parameter](const auto& binding) {
+                        return binding.role == parameter.role;
+                    });
+                if (bound) {
+                    continue;
+                }
+                if (highWater == std::numeric_limits<std::uint64_t>::max()) {
+                    return compositionRejection(ReconstructionStage::NodeSchemaUpgrade,
+                                                composition.id, node.id.value());
+                }
+                ++highWater;
+                const auto parameterId = document::ParameterId::fromRaw(highWater);
+                composition.parameters.push_back(
+                    {parameterId, std::string(parameter.schemaKey),
+                     document::ConstantValueSource{parameter.defaultValue}});
+                node.parameters.push_back({std::string(parameter.role), parameterId});
+            }
+            // Canonical binding order -- UTF-8 by role, then numeric id -- so an upgraded node is
+            // indistinguishable in ordering from one the canonical writer emitted.
+            std::ranges::sort(node.parameters, [](const auto& left, const auto& right) {
+                return left.role != right.role ? left.role < right.role
+                                               : left.parameterId < right.parameterId;
+            });
+            node.schemaVersion = document::kLayerOutputNodeSchemaVersion;
+        }
+    }
+    return std::nullopt;
 }
 
 // Assembles one composition's canonical graph through CanonicalGraph's own checked adders, moving
@@ -109,6 +195,10 @@ ReconstructDocumentResult ReconstructDocumentResult::failure(ReconstructionRejec
 }
 
 ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) {
+    if (const auto rejection = upgradeDecodedNodeSchemas(envelope); rejection.has_value()) {
+        return ReconstructDocumentResult::failure(*rejection);
+    }
+
     document::Project project(envelope.projectId, std::move(envelope.projectName));
 
     for (auto& decodedComposition : envelope.compositions) {
@@ -128,6 +218,9 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
             rejection.has_value()) {
             return ReconstructDocumentResult::failure(*rejection);
         }
+
+        composition.nodeLayout() = std::move(decodedComposition.nodeLayout);
+        composition.nodeGroups() = std::move(decodedComposition.nodeGroups);
 
         if (!project.addComposition(std::move(composition))) {
             return ReconstructDocumentResult::failure({.stage = ReconstructionStage::CompositionAdd,

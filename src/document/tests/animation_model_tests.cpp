@@ -1,3 +1,4 @@
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
@@ -22,11 +23,14 @@
 
 namespace {
 
+using bloom::core::Color4d;
 using bloom::core::RationalTime;
 using bloom::document::AnimationCurveId;
 using bloom::document::AnimationCurveSource;
 using bloom::document::AnimationCurveStore;
 using bloom::document::CanonicalGraph;
+using bloom::document::Color4AnimationCurve;
+using bloom::document::Color4Keyframe;
 using bloom::document::CommitStatus;
 using bloom::document::Composition;
 using bloom::document::CompositionId;
@@ -442,6 +446,125 @@ void testAnimationAllocatorAndPublication(ExpectationContext& expectations) {
                         "a rejected orphan-curve draft does not consume curve or keyframe IDs");
 }
 
+// --- Task S5: the Color4 curve kind and the EaseInOut mode ---------------------------------------
+void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
+    AnimationCurveStore store;
+    expectations.expect(
+        store.insert(Color4AnimationCurve{
+            AnimationCurveId::fromRaw(1),
+            {Color4Keyframe{KeyframeId::fromRaw(1), RationalTime::fromInteger(0),
+                            Color4d{0.0, 0.5, 1.0, 1.0}, KeyframeInterpolation::EaseInOut},
+             Color4Keyframe{KeyframeId::fromRaw(2), RationalTime::fromInteger(2),
+                            Color4d{-0.25, 2.0, 0.0, 0.0}}}}),
+        "a colour curve enters the store, HDR and negative channels included");
+    expectations.expect(store.findColor4(AnimationCurveId::fromRaw(1)) != nullptr &&
+                            store.findScalar(AnimationCurveId::fromRaw(1)) == nullptr &&
+                            store.findVec2(AnimationCurveId::fromRaw(1)) == nullptr,
+                        "and the three typed finders are mutually exclusive on it");
+    expectations.expect(store.validate().ok(), "the colour curve validates as stored");
+
+    // The authoring-colour domain IS the curve's key domain: an alpha outside the unit interval is
+    // not a representable authoring colour, so the key never enters the store.
+    expectations.expect(!store.insert(Color4AnimationCurve{
+                            AnimationCurveId::fromRaw(2),
+                            {Color4Keyframe{KeyframeId::fromRaw(3), RationalTime::fromInteger(0),
+                                            Color4d{0.0, 0.0, 0.0, 1.5}}}}),
+                        "a colour key whose alpha leaves the unit interval is refused");
+    expectations.expect(
+        !store.insert(Color4AnimationCurve{
+            AnimationCurveId::fromRaw(3),
+            {Color4Keyframe{KeyframeId::fromRaw(4), RationalTime::fromInteger(0),
+                            Color4d{std::numeric_limits<double>::infinity(), 0.0, 0.0, 1.0}}}}),
+        "and a non-finite channel is refused too");
+
+    // Keyframe IDs stay project-global across kinds: a colour key may not reuse a scalar key's ID.
+    expectations.expect(
+        store.insert(ScalarAnimationCurve{
+            AnimationCurveId::fromRaw(4),
+            {ScalarKeyframe{KeyframeId::fromRaw(9), RationalTime::fromInteger(0), 1.0}}}),
+        "a scalar curve coexists with a colour one");
+    expectations.expect(
+        !store.insertKeyframe(
+            AnimationCurveId::fromRaw(1),
+            Color4Keyframe{KeyframeId::fromRaw(9), RationalTime::fromInteger(1), Color4d{}}),
+        "a colour key may not reuse a keyframe ID a scalar curve already holds");
+
+    // Insert/update/erase behave exactly as the scalar and Vec2 overloads do, and the final key's
+    // interpolation is re-normalized to Linear on every mutation.
+    expectations.expect(
+        store.insertKeyframe(AnimationCurveId::fromRaw(1),
+                             Color4Keyframe{KeyframeId::fromRaw(5), RationalTime::fromInteger(4),
+                                            Color4d{1.0, 1.0, 1.0, 1.0},
+                                            KeyframeInterpolation::EaseInOut}),
+        "a colour key inserts at a free exact time");
+    const auto* curve = store.findColor4(AnimationCurveId::fromRaw(1));
+    expectations.expect(curve != nullptr && curve->keyframes.size() == 3 &&
+                            curve->keyframes.back().outgoingInterpolation ==
+                                KeyframeInterpolation::Linear,
+                        "and the new final key's interpolation is normalized to canonical Linear");
+    expectations.expect(curve != nullptr && curve->keyframes[0].outgoingInterpolation ==
+                                                KeyframeInterpolation::EaseInOut,
+                        "while an interior eased key keeps its own mode");
+    expectations.expect(
+        !store.insertKeyframe(
+            AnimationCurveId::fromRaw(1),
+            Color4Keyframe{KeyframeId::fromRaw(6), RationalTime::fromInteger(4), Color4d{}}),
+        "an occupied exact time refuses a colour insert, as it does every kind");
+    expectations.expect(store.eraseKeyframe(AnimationCurveId::fromRaw(1), KeyframeId::fromRaw(5)) &&
+                            store.findColor4(AnimationCurveId::fromRaw(1))->keyframes.size() == 2,
+                        "erasing a colour key leaves the curve non-empty and ordered");
+    expectations.expect(store.validate().ok(), "every colour mutation leaves the store canonical");
+}
+
+// Task S5: the animatable schema set, and which curve kind each member demands.
+void testColorAndScalarSchemaOwnership(ExpectationContext& expectations) {
+    using bloom::document::isAnimatableSchemaKey;
+    using bloom::document::isColor4AnimatableSchemaKey;
+    using bloom::document::isScalarAnimatableSchemaKey;
+    using bloom::document::isScalarWithinSchemaDomain;
+    using bloom::document::isVec2AnimatableSchemaKey;
+
+    expectations.expect(
+        isColor4AnimatableSchemaKey(bloom::document::kSolidColorParameterSchemaKey) &&
+            isColor4AnimatableSchemaKey(bloom::document::kTextColorParameterSchemaKey),
+        "both colour schemas are Color4-animatable");
+    expectations.expect(isScalarAnimatableSchemaKey(bloom::document::kTextSizeParameterSchemaKey),
+                        "text size joined the scalar-animatable set");
+    expectations.expect(!isAnimatableSchemaKey(bloom::document::kTextParameterSchemaKey),
+                        "text CONTENT stays constant-only: a string has no interpolation");
+    expectations.expect(!isAnimatableSchemaKey("bloom.not.a.real.key"),
+                        "and an unregistered key can never opt into animation");
+    // No schema may claim two kinds at once, which is what keeps curve-kind validation total.
+    for (const auto key :
+         {bloom::document::kPositionParameterSchemaKey, bloom::document::kAnchorParameterSchemaKey,
+          bloom::document::kScaleParameterSchemaKey, bloom::document::kRotationParameterSchemaKey,
+          bloom::document::kOpacityParameterSchemaKey, bloom::document::kTextSizeParameterSchemaKey,
+          bloom::document::kSolidColorParameterSchemaKey,
+          bloom::document::kTextColorParameterSchemaKey}) {
+        const int kinds = static_cast<int>(isVec2AnimatableSchemaKey(key)) +
+                          static_cast<int>(isScalarAnimatableSchemaKey(key)) +
+                          static_cast<int>(isColor4AnimatableSchemaKey(key));
+        expectations.expect(kinds == 1, "every animatable schema demands exactly one curve kind");
+    }
+
+    // The scalar DOMAIN belongs to the schema, and one predicate answers for keys and constants
+    // alike.
+    expectations.expect(
+        isScalarWithinSchemaDomain(bloom::document::kOpacityParameterSchemaKey, 1.0) &&
+            !isScalarWithinSchemaDomain(bloom::document::kOpacityParameterSchemaKey, 1.5),
+        "opacity keeps its unit domain");
+    expectations.expect(
+        isScalarWithinSchemaDomain(bloom::document::kRotationParameterSchemaKey, 450.0),
+        "rotation may wind past a full turn");
+    expectations.expect(
+        !isScalarWithinSchemaDomain(bloom::document::kTextSizeParameterSchemaKey, 0.0) &&
+            isScalarWithinSchemaDomain(bloom::document::kTextSizeParameterSchemaKey,
+                                       bloom::document::kMaximumTextSizePixels) &&
+            !isScalarWithinSchemaDomain(bloom::document::kTextSizeParameterSchemaKey,
+                                        bloom::document::kMaximumTextSizePixels + 1.0),
+        "and text size keeps its own exclusive-low, inclusive-high domain");
+}
+
 } // namespace
 
 int main() {
@@ -452,6 +575,8 @@ int main() {
         testCompositionAnimationValidation(expectations);
         testProjectGlobalAnimationIds(expectations);
         testAnimationAllocatorAndPublication(expectations);
+        testColor4CurveAndEasedInterpolation(expectations);
+        testColorAndScalarSchemaOwnership(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

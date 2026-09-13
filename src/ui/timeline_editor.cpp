@@ -12,6 +12,7 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
 
@@ -35,6 +36,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -155,34 +157,43 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
 
 // The clip bar's fill, from the data-type palette (task T1).
 //
-// BLOCKED SUB-ITEM, disclosed in this task's raw report. The task removes the Kind column and says
-// kind is expressed by the clip color instead. The data-type palette cannot express Bloom's kinds:
-// every one of its five roles names a kind of REFERENCED MEDIA (docs/ux/visual-language.md: image
-// sequences, clips, compositions, still images, audio), and Bloom has no media import pipeline and
-// no media-backed layer type at all -- its only kinds are Solid and Text, both generated
-// in-project. DataComposition is the single role whose stated meaning is in-project authored
-// content rather than a referenced asset, so it is the only honest choice for both; the others
-// would claim a kind of media this project cannot even open.
+// Task T1 shipped ONE color for both kinds and disclosed that as a blocked sub-item: with the Kind
+// column removed, kind was supposed to be expressed by the clip color, but every role in the
+// data-type palette names a kind of REFERENCED MEDIA (docs/ux/visual-language.md: image sequences,
+// clips, compositions, still images, audio), and Bloom has no media import pipeline at all -- its
+// only kinds are Solid and Text, both generated in-project. Task S3 makes text a real rendering
+// layer kind, so the two kinds now need to be distinguishable on the lane, and this is the choice:
 //
-// The one role that would have given a second distinct color to a generated raster plane,
-// DataImage, is additionally unusable on its own terms: its value (#3AA5F0) is byte-identical to
-// AccentHover and one step from Accent (#0C8CE9), so a solid's clip bar would read as an
-// accent/selected surface and would swallow the 1px Accent playhead crossing it. Adding a
-// DataSolid/DataText role is a kit edit, outside this task's fence.
+//   Solid -> DataComposition (#8B5CF6), unchanged, so no existing clip changes color.
+//   Text  -> DataClip (#3FBF6B).
 //
-// So this is ONE mapping for every kind that exists, exactly as task U7 reviewed it -- and kind is
-// NOT lost with the column: TimelineLayerStack::toolTipAt() names it on every row. An unrecognized
-// layer kind takes Muted instead, because there is no honest data-type color for "kind unknown" and
-// inventing one would be the misrepresentation this whole comment exists to refuse. A future
-// media-backed or pre-composition layer kind takes its own role here on the day it ships.
+// Why DataClip, having rejected the others on their own terms:
+//   * DataImage (#3AA5F0) is byte-identical to AccentHover and one step from Accent (#0C8CE9), so a
+//     clip bar painted with it reads as an accent/selected surface and swallows the 1px Accent
+//     playhead crossing it.
+//   * DataSequence (#E0554E) is byte-identical to Error, so a text clip would read as a failed one.
+//   * DataAudio (#7C5CFF) is a neighbouring purple to DataComposition's #8B5CF6 -- two kinds that
+//     are supposed to be told apart at a glance would not be.
+//   * DataClip is byte-identical to Ok (#3FBF6B), which is the one remaining collision, and a green
+//     clip bar reading as "ready" is a far smaller misstatement than one reading as "error",
+//     "selected", or "the same kind as a solid".
+// Adding a DataText role to the kit would be the ideal fix and remains a kit-owner decision; it is
+// not needed for the two kinds that exist.
+//
+// Kind is still named in text as well: TimelineLayerStack::toolTipAt() spells it on every row, so
+// the color is a second channel rather than the only one. An unrecognized layer kind takes Muted,
+// because there is no honest data-type color for "kind unknown". A future media-backed or
+// pre-composition layer kind takes its own role here on the day it ships.
 [[nodiscard]] kit::Color layerClipColorToken(const CompositionSession& session,
                                              const document::LayerId layerId) {
     const auto* sourceNode = directSourceNode(session, layerId);
     if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
-                      document::kSolidSourceNodeSchemaVersion) ||
-        isKnownSource(sourceNode, document::kTextSourceNodeType,
-                      document::kTextSourceNodeSchemaVersion)) {
+                      document::kSolidSourceNodeSchemaVersion)) {
         return kit::Color::DataComposition;
+    }
+    if (isKnownSource(sourceNode, document::kTextSourceNodeType,
+                      document::kTextSourceNodeSchemaVersion)) {
+        return kit::Color::DataClip;
     }
     return kit::Color::Muted;
 }
@@ -227,11 +238,13 @@ QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip
     return button;
 }
 
-// Blending/Parent: one always-disabled KDropdown per row, each carrying its single honest value
-// ("Normal" / "None"). No blend-mode vocabulary and no parenting feature exist in the document
-// model or the command vocabulary, so there is nothing else to offer, and the tooltip says so
-// rather than the control merely looking unresponsive. Compact control size so a real dropdown fits
-// the 32px row.
+// Parent: one always-disabled KDropdown carrying its single honest value ("None"). No parenting
+// feature exists in the document model or the command vocabulary, so there is nothing else to
+// offer, and the tooltip says so rather than the control merely looking unresponsive. Compact
+// control size so a real dropdown fits the 32px row.
+//
+// Blending is no longer one of these: a layer's blend mode is a real Layer Output parameter with a
+// real command behind it, so that dropdown is built by makeBlendingDropdown() below instead.
 kit::KDropdown* makeDisabledPlaceholderDropdown(const QString& value, const QString& toolTip,
                                                 const QString& objectName, QWidget* parent) {
     auto* dropdown = new kit::KDropdown(parent);
@@ -241,6 +254,34 @@ kit::KDropdown* makeDisabledPlaceholderDropdown(const QString& value, const QStr
     dropdown->setEnabled(false);
     dropdown->setToolTip(toolTip);
     return dropdown;
+}
+
+// The Blending dropdown: every implemented blend mode, in core::kBlendModes order, named by the one
+// shared vocabulary blendModeDisplayName() owns. The item DATA is the mode's stored integer rather
+// than its row index, so the control never depends on the order it happened to be filled in.
+kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
+    auto* dropdown = new kit::KDropdown(parent);
+    dropdown->setObjectName(QStringLiteral("layerBlendingDropdown"));
+    dropdown->setAccessibleName(TimelineEditor::tr("Blending"));
+    dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
+    for (const auto mode : core::kBlendModes) {
+        dropdown->addItem(blendModeDisplayName(mode),
+                          QVariant::fromValue(core::blendModeStoredValue(mode)));
+    }
+    return dropdown;
+}
+
+// Which row of a blending dropdown shows `mode`, found by stored value rather than by assuming the
+// fill order.
+[[nodiscard]] int blendingDropdownIndex(const kit::KDropdown& dropdown,
+                                        const core::BlendMode mode) {
+    const auto stored = core::blendModeStoredValue(mode);
+    for (int index = 0; index < dropdown.count(); ++index) {
+        if (dropdown.itemData(index).value<std::int64_t>() == stored) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 // The hairline that closes every row, in both halves of the grid: rows are FLAT (no striping at all
@@ -278,26 +319,58 @@ void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixel
 // the column as a whole, so there is exactly one hit-test and one tooltip table instead of one per
 // row. The attribute applies only to this widget, never to its children, so its two dropdowns still
 // receive their own events.
+//
+// It declares no Q_OBJECT: it emits nothing. It does CONNECT its blending dropdown to a lambda, but
+// as the connection's context object rather than as a sender, which needs only QObject -- which
+// QWidget already is -- so the row stays free of moc exactly as TimelineKeyframeRow does.
 class TimelineLayerRow final : public QWidget {
   public:
-    explicit TimelineLayerRow(QWidget* parent) : QWidget(parent) {
+    TimelineLayerRow(CompositionSession& session, QWidget* parent)
+        : QWidget(parent), session_(&session) {
         setObjectName(QStringLiteral("timelineLayerRow"));
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setFixedHeight(kTimelineRowHeight);
-        blending_ = makeDisabledPlaceholderDropdown(
-            TimelineEditor::tr("Normal"), TimelineEditor::tr("Blend modes are not implemented yet"),
-            QStringLiteral("layerBlendingDropdown"), this);
+        blending_ = makeBlendingDropdown(this);
         parentDropdown_ = makeDisabledPlaceholderDropdown(
             TimelineEditor::tr("None"), TimelineEditor::tr("Layer parenting does not exist yet"),
             QStringLiteral("layerParentDropdown"), this);
+        // The connection is made once, for the life of the pooled row, and reads whichever layer
+        // the row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed
+        // on every scroll step, so capturing a layer id here would author the wrong layer.
+        connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
+            if (binding_ || !layerId_.has_value() || index < 0) {
+                return;
+            }
+            const auto mode =
+                core::blendModeFromStoredValue(blending_->itemData(index).value<std::int64_t>());
+            if (!mode.has_value()) {
+                return;
+            }
+            (void)session_->setLayerBlendMode(*layerId_, *mode);
+        });
     }
 
     // Re-points this pooled row at another layer. No widget is created or destroyed and no layout
-    // is invalidated -- only the painted content and the two dropdowns' geometry, which is why a
-    // composition with hundreds of layers costs the same handful of widgets as one with three.
+    // is invalidated -- only the painted content, the bound layer, and the two dropdowns' geometry,
+    // which is why a composition with hundreds of layers costs the same handful of widgets as one
+    // with three.
     void bind(const TimelineLayerEntry& entry, const bool selected) {
         name_ = entry.name;
         selected_ = selected;
+        layerId_ = entry.layerId;
+        // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
+        // document truth, never an edit: a blocked signal would still leave the lambda armed for a
+        // nested change, and a row re-pointed during a scroll must author nothing at all.
+        binding_ = true;
+        const auto mode = session_->blendModeForLayer(entry.layerId);
+        const int row = mode.has_value() ? blendingDropdownIndex(*blending_, *mode) : -1;
+        blending_->setEnabled(mode.has_value());
+        blending_->setCurrentIndex(row >= 0 ? row : 0);
+        blending_->setToolTip(mode.has_value()
+                                  ? TimelineEditor::tr("How this layer combines with the layers "
+                                                       "beneath it")
+                                  : TimelineEditor::tr("This layer does not expose a blend mode"));
+        binding_ = false;
         update();
     }
 
@@ -340,8 +413,11 @@ class TimelineLayerRow final : public QWidget {
     }
 
   private:
+    CompositionSession* session_ = nullptr;
     QString name_;
+    std::optional<document::LayerId> layerId_;
     bool selected_ = false;
+    bool binding_ = false;
     kit::KDropdown* blending_ = nullptr;
     kit::KDropdown* parentDropdown_ = nullptr;
 };
@@ -477,7 +553,7 @@ void TimelineLayerStack::relayoutRows() {
         std::clamp(scrollOffset_ / kTimelineRowHeight, 0, std::max(0, rowCount() - 1));
     const int needed = std::clamp(rowCount() - first, 0, viewportRows);
     while (static_cast<int>(rowPool_.size()) < needed) {
-        rowPool_.push_back(new TimelineLayerRow(this));
+        rowPool_.push_back(new TimelineLayerRow(session_, this));
     }
     const auto selected = selectedLayer(session_);
     for (std::size_t slot = 0; slot < rowPool_.size(); ++slot) {

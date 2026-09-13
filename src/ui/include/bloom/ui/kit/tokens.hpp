@@ -56,6 +56,20 @@ enum class Color : std::uint8_t {
     DataComposition,
     DataImage,
     DataAudio,
+    // task S1, item 6: the socket palette. A node socket and the link leaving it identify a
+    // TRANSPORT kind, which is a different question from what an item in a project is, so they take
+    // their own roles rather than borrowing the Data* ones -- where Image had been reading in
+    // exactly AccentHover's blue and could not be told apart from a hovered accent surface. Six
+    // distinct hues, none of them Accent or AccentHover.
+    SocketImage,
+    SocketColor,
+    SocketScalar,
+    SocketInteger,
+    SocketVector,
+    SocketString,
+    // Task S7. Integer reuses the existing SocketInteger token; the two vector widths share
+    // SocketVector so they read as one family, and a Boolean needed its own.
+    SocketBoolean,
 };
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =
@@ -128,6 +142,11 @@ enum class Size : int {
     TimelineRow = 34,
     ScrollBar = 8,
     ScrollBarHover = 12,
+    // task S1, item 3: the narrowest a QMenu popup may be, roughly half again the width Bloom's
+    // shortest menus used to collapse to. Applied by kit::AltUnderlineProxyStyle to every menu ROW,
+    // because a menu's width is the widest row it holds -- forcing the popup window wider instead
+    // would leave its rows short of the frame, and a menu row's hover bar must be full width.
+    MenuMinWidth = 200,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }

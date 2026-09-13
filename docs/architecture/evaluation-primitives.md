@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-13
 
 ## Purpose And Scope
 
@@ -197,11 +197,16 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 2
+## CPU Image Primitive Vocabulary Semantics Version 5
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `2`; the evaluator and process-frame cache
-identity record that version explicitly.
+composition evaluator. Their semantics version is `5`; the evaluator and process-frame cache
+identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
+rasterizer below; version 4 replaced the translate-only layer resample with the affine one described
+under "Layer Transform Resampling"; version 5 added the per-mode blend kernel described under
+"Blending". One number covers them all, deliberately: neither the rasterizer, the resampler, nor the
+blend kernel carries a second semantics version that could drift out of the identity a published
+frame records.
 
 - Solid authoring colors are straight `Color4d` under the frozen authoring-encoding metadata
   `bloom.reference.linear-srgb`. That metadata remains distinct from the process-image identity.
@@ -210,18 +215,148 @@ identity record that version explicitly.
   instead of relabelling its numbers. The conversion validates the authored value, multiplies RGB
   by alpha in Float64, then performs one checked Float32 conversion. Alpha that is authored as zero
   or rounds to Float32 zero produces exact transparent black.
-- Translation and opacity are validated once per operation. Bilinear sampling gathers
+- The layer transform and opacity are validated once per operation. Bilinear sampling gathers
   premultiplied pixels, uses transparent taps outside the source data window, preserves exact
-  integer/zero/one endpoints, and applies opacity to all four sampled components.
+  integer/zero/one endpoints, and applies opacity to all four sampled components. See "Layer
+  Transform Resampling" below.
 - Source-over consumes separate source and in-place destination rows. The first Layer Stack entry is
   topmost, so evaluation visits stack entries in reverse order and folds bottom-to-top. Process RGB
   is never clamped.
+- Blending takes the same two rows plus the layer's own blend mode, and is what the Layer Stack stage
+  actually calls; source-over remains the kernel the `Normal` mode delegates to, unchanged. See
+  "Blending" below.
 - The temporary unqualified reference display mapper robustly unpremultiplies, clips only at the
   display boundary, applies the `lin_rec709_scene` to sRGB transfer, and produces straight packed
   RGBA8. Checked-in inverse-transfer half-code thresholds make byte quantization independent of
   platform `libm`. Its prepared display product and identity are distinct from process evaluation.
+- Text coverage is rasterized from glyph outlines into 8-bit area coverage, then composited by a row
+  kernel that scales an already-premultiplied process pixel by `coverage / 255`. **A coverage byte is
+  a linear area fraction, not a gamma-encoded intensity**, so it is used directly as linear alpha and
+  no transfer function, sRGB curve, or gamma exponent appears anywhere between the rasterizer and the
+  process pixel. Compositing coverage in a display-encoded space is the classic cause of fringed,
+  too-thin text; the process space is scene-linear, so the correct result and the simple
+  implementation coincide. Zero coverage is exactly transparent black and full coverage is exactly
+  the unmodified process pixel, with no multiply that could round either endpoint away.
+- Text authoring colors use the same straight `Color4d` values and the same
+  `bloom.reference.linear-srgb` authoring-encoding metadata Solid colors use, converted by the same
+  Solid conversion above; the coverage kernel then scales that one pixel. A text color is a solid
+  color that glyph coverage attenuates, which is why there is no separate text color conversion.
 - Every authored arithmetic boundary requires round-to-nearest with preserved subnormal inputs and
-  results. Primitive rows allocate no storage, start no threads, and expose structured failures.
+  results. Primitive rows allocate no storage, start no threads, and expose structured failures. The
+  glyph rasterizer is the one text-path exception: it allocates its coverage bitmap, so it checks the
+  bitmap's byte count against the caller's budget from the computed extent BEFORE allocating anything
+  and before drawing any glyph.
+
+### Layer Transform Resampling
+
+One inverse-mapped affine bilinear resample serves the whole Layer Output stage: translation composed
+with rotation composed with scale, all turning about the authored anchor (the authoring model is in
+[`layer-graph-model.md`](layer-graph-model.md), "Layer Transform"). There is no separate translate-only
+kernel in the stage; the translate-only case is a path inside this one.
+
+- **Inverse mapping.** Each output pixel centre maps back to one source coordinate through the
+  precomputed inverse 2x2 matrix and pivot. Nothing per-pixel computes trigonometry, divides, or
+  branches on an authored value.
+- **Quarter turns are exact.** A rotation that is an exact multiple of 90 degrees resolves to exact
+  `0` and `±1` cosine and sine instead of `std::cos`/`std::sin` of a rounded radian value, so a
+  quarter turn maps pixel centres onto pixel centres and interpolates nothing. The reduction modulo
+  360 is exact, so an authored 450 or -90 is as exact as a 90 or 270.
+- **Translate-only is bit-identical to version 3.** Unit scale on both axes together with a rotation
+  that reduces to exactly zero resolves to a path that computes the pre-version-4 arithmetic and
+  nothing else — the anchor is not added and subtracted, because doing so would perturb the last bit
+  of a subpixel translation. The former translate-only primitive is retained in `bloom_render`,
+  unchanged and uncalled by the stage, solely as the reference a test pins that path against; a copy
+  in the test tree could drift apart from the shared interpolation and sampling helpers and prove
+  nothing.
+- **Premultiplied edges.** Taps outside the source data window are exact transparent black, and the
+  process representation is premultiplied, so interpolating towards that transparent black is already
+  the correct edge falloff: no unpremultiply/repremultiply round trip is involved and no edge pixel
+  can carry colour above its own alpha.
+- **Bounds.** A layer's output data window is its transformed bounds clipped to the composition, and
+  its display window stays the composition's. The transformed bounds are the integer bounding box of
+  the forward image of the bilinear support box (the source data window grown by one pixel on every
+  side), so they may include a pixel the resample then writes as transparent but can never exclude
+  one it would write as opaque. A scaled-down, rotated, or moved layer therefore allocates and
+  resamples only the pixels it can reach. The Layer Stack composites each entry over the rows and
+  columns that entry's own data window occupies.
+- **Empty layers.** A layer whose transformed bounds miss the composition entirely, and a layer
+  collapsed by a scale factor of exactly zero, publish no image at all. The Layer Stack treats an
+  absent entry image as a layer that contributes nothing, which is exactly what compositing an empty
+  layer means — not an evaluation failure.
+- **Proxy.** A proxy frame is the same picture at a smaller extent, so the full-resolution transform
+  is conjugated by the per-axis proxy factor rather than re-authored. With equal horizontal and
+  vertical factors — every proportional proxy extent — the device transform is exactly the
+  full-resolution one. With unequal factors the conjugation keeps the proxy a faithfully squashed
+  picture of the full-resolution frame, a rotated layer included, rather than pretending device
+  pixels are square.
+
+### Blending
+
+The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output
+blend mode. The mode vocabulary, every formula, and the premultiplied compositing fold are owned by
+[`color-management.md`](color-management.md), "Blend modes"; what belongs here is the primitive's
+contract.
+
+- **Ordering and blending are separate.** The stack says which layer is above which and is still
+  visited in reverse so the first entry is topmost; the mode comes from the Layer Output the entry
+  names, so reordering two layers and re-blending one are independent edits.
+- **Alpha is source-over under every mode.** Only the colour combination varies, computed with exactly
+  the alpha expression the source-over kernel uses, so a mode never changes how much of the backdrop a
+  layer covers.
+- **`Normal` is bit-identical to version 4.** The kernel delegates to the retained source-over row for
+  that mode rather than re-deriving it, so a composition whose every layer is `Normal` produces the
+  same bits it did before blend modes existed. The semantics version still moves, because the same
+  plan value can now mean a different picture.
+- **`Add` needs no round trip.** Its separable function reduces the general fold to premultiplied
+  addition exactly; the other five non-`Normal` modes unpremultiply, apply the mode, and
+  re-premultiply, with Float64 intermediates and one Float32 rounding at the end.
+- **Alpha endpoints are exact.** An alpha-zero source is skipped and leaves the backdrop untouched; an
+  alpha-zero backdrop takes the source pixel through unchanged, which is what the fold collapses to
+  under every mode. Source-over's other shortcut -- an opaque source replacing the destination -- does
+  NOT generalise and is deliberately absent, because every mode but `Normal` still reads the
+  backdrop's colour at full source alpha.
+- **Nothing is clamped.** A negative or HDR channel survives the blend, and a non-finite or
+  finite-overflow result fails the row with a typed error rather than being clipped.
+- **The blend mode is a discrete authored value.** It carries no curve: the schema declares it
+  non-animatable, so the compiled plan holds a resolved enumerator rather than a parameter source.
+
+### Text Rasterization Version 1
+
+Text rasterization is Qt-free and deterministic. One face is available -- the DejaVu Sans Book TTF
+vendored for the interface, embedded into `bloom_render` as a build-time byte array so no evaluation
+reads a font from the filesystem -- and `bloom.text-source` therefore has no font parameter: a font
+parameter would persist a choice neither the schema nor the renderer can honor. Outline rasterization
+is the vendored `stb_truetype` header, compiled into one translation unit behind a narrow Bloom-owned
+adapter; its acquisition provenance, license review, and security review are in
+`dependencies/licenses/stb_truetype/`, and that security review qualifies the library only for font
+bytes Bloom itself pins.
+
+Layout in version 1 is deliberately minimal and explicitly not text layout: one line, left to right,
+each glyph advancing by its own horizontal advance plus the face's kern pair, no wrapping, no
+shaping, no bidirectional reordering, and no line breaks -- a newline is a glyph lookup like any other
+codepoint. Shaping, font asset identity, and layout contracts remain deferred as the roadmap states;
+this version exists so the CPU reference evaluator can produce pixels for the text source that the
+document schema has always carried.
+
+Geometry is stated once so compositing has no latitude. The text origin is the pen start on the
+ascender line: `x` is the left edge of the first glyph's advance and `y` is the font's ascent above
+the baseline, with the baseline snapped to a whole row once for the whole line so the same string at
+the same size always rasterizes identically. The evaluator places that origin at the frame's own data
+window origin, which puts the first line inside the frame with its ascender flush to the top edge;
+the Layer Output position then moves the whole layer from there, exactly as it moves a Solid. The
+coverage bitmap is the exact union of every glyph's ink, so its offset from the text origin may be
+negative, and clipping to the frame is the compositor's decision rather than the rasterizer's. Em
+size is per axis, taken from the same scale factors a proxy evaluation applies to layer translation,
+so a proxy frame holds a smaller picture of the same composition rather than full-size glyphs in a
+small frame. The authored size is bounded identically by the document schema and the rasterizer; the
+two bounds are held equal at compile time in `src/runtime`, the one module that sees both.
+
+Empty content, and content whose glyphs are all blank, rasterize to no coverage and compose a
+transparent frame. That is a success, not a failure: a text layer an artist has not typed into yet is
+a real, selectable, editable layer. A codepoint the face does not cover resolves to the face's own
+missing-glyph box, so unsupported text is visibly missing rather than silently dropped, and content
+that is not well-formed UTF-8 is refused at the document boundary rather than rendered as
+replacement boxes.
 
 The initial evaluator treats a Layer Output position as an absolute source-center coordinate in the
 full composition raster. `(width / 2, height / 2)` is identity for the current composition-sized
@@ -251,6 +386,7 @@ sequentially on one worker without nesting task submissions or exposing a combin
 | Image composition | `src/render` | fill, copy, premultiply, unpremultiply, source-over, blend | First pixels |
 | Sampling and spatial | `src/render` | nearest/bilinear sampling, affine warp, crop, resize, borders | First pixels |
 | Channels and masks | `src/render` | extract/combine/copy channels, coverage math, morphology | Essential compositor |
+| Text coverage | `src/render` | glyph outline rasterization to 8-bit area coverage, coverage-scaled solid composition | First pixels |
 | Neighborhood filters | `src/render` | blur, sharpen, convolution, halo computation | Essential compositor |
 | Reduction and analysis | `src/render` | bounds, histogram, statistics, tracking inputs | Advanced |
 | Temporal | `src/runtime` and `src/render` | time mapping, frame blending, motion, bounded history | Motion/VFX |
@@ -284,7 +420,7 @@ canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact
 operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
 The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `2`, CPU evaluator semantics version `2`, and reference display-mapper
+primitive semantics version `5`, CPU evaluator semantics version `5`, and reference display-mapper
 semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
 reference-linear naming; cache identity rejects the older semantic versions rather than treating
 the rename as metadata-only.

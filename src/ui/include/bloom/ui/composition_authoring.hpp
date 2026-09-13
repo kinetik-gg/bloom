@@ -1,6 +1,13 @@
 #pragma once
 
+#include <bloom/core/blend_mode.hpp>
+#include <bloom/ui/composition_session.hpp>
+
 #include <QString>
+#include <QWidget>
+
+#include <optional>
+#include <string>
 
 namespace bloom::core {
 struct Color4d;
@@ -41,7 +48,66 @@ class CompositionSession;
 // context menu): same default numbered name derived from the composition's own existing layers,
 // same next built-in reference-linear-sRGB proof color, same single command transaction. Returns
 // what CompositionSession::addSolidLayer()/addTextLayer() returned.
+// The artist-facing name of one blend mode -- "Normal", "Add", "Multiply", ... -- shown by the
+// timeline's Blending dropdown, the Properties Appearance row, and the Layer node card. One
+// definition, for the same reason parameterSourceDescription() is one definition: three surfaces
+// offering the same vocabulary must offer the same words, and core::kBlendModes already fixes the
+// order they appear in.
+[[nodiscard]] QString blendModeDisplayName(core::BlendMode mode);
+
 [[nodiscard]] bool addDefaultSolidLayer(CompositionSession& session);
 [[nodiscard]] bool addDefaultTextLayer(CompositionSession& session);
+
+// The AE keyframe diamond (task S5, item 0), shared by the Properties rows and the node card's
+// parameter rows for the same reason parameterSourceDescription() is shared: the gesture, the three
+// painted states, and the tooltip wording are one decision, and a second copy on the canvas would
+// be free to drift from the panel's.
+//
+// It is a real clickable control, not the indicating QLabel it replaces: clicking it calls
+// CompositionSession::toggleKeyframe() for its role and nothing else -- no command construction
+// here, no state of its own. The three states come straight from
+// CompositionSession::keyframeDiamondState() on every refresh, so the diamond can never claim a key
+// the document does not have:
+//
+//   Constant            empty     dimmed Muted outline  "Click to animate ..."
+//   AnimatedWithoutKey  outlined  gold outline          "Click to add a key here"
+//   AnimatedWithKey     filled    gold fill             "Click to remove this key"
+//   Unsupported         hidden    --                    (no diamond at all)
+//
+// The weights are the kit's own existing two (IconWeight::Regular / Fill) used exactly as
+// docs/ux/visual-language.md's iconography rule states -- "regular is the default visual weight and
+// fill for selected or toggled states" -- so this needs no kit change.
+class KeyframeDiamond final : public QWidget {
+    Q_OBJECT
+
+  public:
+    // `role` is the parameter role this diamond keys (document::kPositionParameterRole, ...). The
+    // session must outlive this widget, as it does for every other composition editor child.
+    KeyframeDiamond(CompositionSession& session, std::string role, QWidget* parent = nullptr);
+
+    // Binds this diamond to ONE exact parameter instead of "whatever the selection exposes for my
+    // role". The node canvas sets it on every card refresh, because a card shows its OWN node's
+    // parameters whether or not that node is selected; the Properties panel leaves it unset,
+    // because its rows ARE the selection's rows. An invalid id clears the binding.
+    void setParameterId(document::ParameterId parameterId);
+
+    // Re-reads the session and repaints. Called from the owning surface's own refresh pass, so a
+    // diamond is never a frame behind the row it sits in.
+    void refresh();
+    [[nodiscard]] KeyframeDiamondState state() const noexcept { return state_; }
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    CompositionSession& session_;
+    std::string role_;
+    std::optional<document::ParameterId> parameterId_;
+    KeyframeDiamondState state_ = KeyframeDiamondState::Unsupported;
+    bool hovered_ = false;
+};
 
 } // namespace bloom::ui

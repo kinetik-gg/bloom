@@ -32,6 +32,10 @@ using runtime::detail::findParameterBinding;
 using runtime::detail::hasValueKind;
 
 using FixedInputKey = std::pair<document::NodeId, std::string>;
+// Where one value node's named output landed in the plan's flat value-output table. Keyed exactly
+// like FixedInputKey above, and a std::map for the same reason: a NodeId orders, so the table is
+// deterministic without a hash of a pair.
+using ValueOutputKey = std::pair<document::NodeId, std::string>;
 using LayerSlotInputKey = std::tuple<document::NodeId, document::LayerSlotId, std::string>;
 using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
                                  std::uint64_t, std::uint64_t, std::string, int>;
@@ -39,6 +43,7 @@ using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, st
 struct CompiledCurveTables final {
     std::vector<runtime::CompiledScalarCurve> scalar;
     std::vector<runtime::CompiledVec2Curve> vec2;
+    std::vector<runtime::CompiledColor4Curve> color4;
 };
 
 [[nodiscard]] DiagnosticKey diagnosticKey(const runtime::CompileDiagnostic& diagnostic) {
@@ -207,6 +212,8 @@ class CompilePass final {
         hasUnsupported_ = true;
     }
 
+#include "snapshot_compiler_mute.ipp"
+
     [[nodiscard]] bool collectReachableGraph() {
         const auto& graph = composition_->graph();
         if (!graph.compositionOutput().has_value()) {
@@ -259,9 +266,21 @@ class CompilePass final {
                     if (cancelled()) {
                         return false;
                     }
+                    if (!consumesEdge(*node, *edge))
+                        continue;
                     reachableEdges.emplace(edge->id, edge);
                     pending.push_back(edge->source.nodeId);
                 }
+            }
+            // A driven parameter reaches its value node the same way an input port reaches its
+            // source: task S7's drivers are part of what the composition output depends on, so the
+            // reachable set has to follow them or the value graph they name would never be
+            // compiled.
+            for (const auto& reference : driverReferences(*node)) {
+                if (cancelled()) {
+                    return false;
+                }
+                pending.push_back(reference.source.nodeId);
             }
         }
 
@@ -367,7 +386,8 @@ class CompilePass final {
                 continue;
             }
             definitions_.emplace(node->id, definition);
-            if (definition->lowering == runtime::NodeLoweringKind::Unsupported) {
+            if (definition->lowering == runtime::NodeLoweringKind::Unsupported &&
+                !(isMuted(node->id) && hasImageOutput(*definition))) {
                 addUnsupported(
                     runtime::CompileDiagnosticCode::UnsupportedNode, subject(node->id, "typeId"),
                     "Node cannot be evaluated yet",
@@ -452,7 +472,7 @@ class CompilePass final {
                 addFailure(runtime::CompileDiagnosticCode::UnknownPort,
                            std::move(diagnosticSubject), "Edge destination port is unknown",
                            "The destination is not declared by its registered node definition.");
-            } else if (*inputKind != output->valueKind) {
+            } else if (!document::isAcceptedSocketConnection(output->valueKind, *inputKind)) {
                 auto diagnosticSubject =
                     subject(destinationNode(edge->destination), "destination.port");
                 diagnosticSubject.edgeId = edge->id;
@@ -469,6 +489,8 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
+            if (isMuted(node->id))
+                continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
                 continue;
@@ -497,6 +519,8 @@ class CompilePass final {
                 continue;
             }
             for (const auto& entry : graph.layerStack().entries()) {
+                if (mutedLayer(entry))
+                    continue;
                 if (cancelled()) {
                     return;
                 }
@@ -519,6 +543,8 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
+            if (isMuted(node->id))
+                continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
                 continue;
@@ -621,32 +647,39 @@ class CompilePass final {
                    "Overrides may affect only parameters on the requested output path.");
             return;
         }
-        const bool isPosition =
-            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
-            parameterDefinition->role == document::kPositionParameterRole &&
-            parameterDefinition->schemaKey == document::kPositionParameterSchemaKey;
-        const bool isOpacity =
-            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput &&
-            parameterDefinition->role == document::kOpacityParameterRole &&
-            parameterDefinition->schemaKey == document::kOpacityParameterSchemaKey;
+        // An override may target any animatable Layer Output parameter: the five transform values
+        // a scrub can move. The animatable set comes from the shared schema predicates rather than
+        // a second list here, so widening the schema widens scrubbing with it.
+        const bool isLayerOutput =
+            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput;
+        const bool isVec2Target =
+            isLayerOutput && document::isVec2AnimatableSchemaKey(parameterDefinition->schemaKey);
+        const bool isScalarTarget =
+            isLayerOutput && document::isScalarAnimatableSchemaKey(parameterDefinition->schemaKey);
         const auto* scalar = std::get_if<double>(&parameterOverride.value);
         const auto* vector = std::get_if<document::Vec2d>(&parameterOverride.value);
         const bool kindMatches =
-            (isPosition && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
+            (isVec2Target && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
              vector != nullptr) ||
-            (isOpacity && parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
+            (isScalarTarget &&
+             parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
              scalar != nullptr);
         if (parameter->schemaKey != parameterDefinition->schemaKey || !kindMatches) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override type does not match its target",
-                   "Version one accepts only typed Layer Output position and opacity overrides.");
+                   "Only typed Layer Output transform and opacity overrides are accepted.");
             return;
         }
+        // The scalar DOMAIN belongs to the schema, and the one gate is the shared
+        // document::isScalarWithinSchemaDomain() so an override and a keyframe are admitted on
+        // identical terms; a rotation override is finite and otherwise free.
         if ((vector != nullptr && (!std::isfinite(vector->x) || !std::isfinite(vector->y))) ||
-            (scalar != nullptr && (!std::isfinite(*scalar) || *scalar < 0.0 || *scalar > 1.0))) {
+            (scalar != nullptr &&
+             (!std::isfinite(*scalar) ||
+              !document::isScalarWithinSchemaDomain(parameterDefinition->schemaKey, *scalar)))) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override value is outside its schema domain",
-                   "Position must be finite and opacity must be finite within zero and one.");
+                   "Every override must be finite, and opacity must also be within zero and one.");
             return;
         }
         if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
@@ -706,7 +739,11 @@ class CompilePass final {
                 ((definition.valueKind == runtime::ParameterValueKind::Float64 &&
                   std::holds_alternative<document::ScalarAnimationCurve>(*curve)) ||
                  (definition.valueKind == runtime::ParameterValueKind::Vec2d &&
-                  std::holds_alternative<document::Vec2AnimationCurve>(*curve)));
+                  std::holds_alternative<document::Vec2AnimationCurve>(*curve)) ||
+                 // Task S5, item 1: the third curve kind. A Color4d-valued parameter demands a
+                 // colour curve, exactly as a Float64 one demands a scalar.
+                 (definition.valueKind == runtime::ParameterValueKind::Color4d &&
+                  std::holds_alternative<document::Color4AnimationCurve>(*curve)));
             if (!kindMatches) {
                 auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
                 diagnosticSubject.parameterId = parameter->id;
@@ -717,6 +754,20 @@ class CompilePass final {
             return;
         }
 
+        // Task S7: a driver binding is evaluable for the three operand kinds that have a
+        // value-graph arm on their compiled parameter -- Scalar, Vector2 and Color. The remaining
+        // kinds (the Layer Output blend mode's Integer, a Text source's String content) are
+        // linkable in the editor and durable in the document, but nothing yet carries their value
+        // into a compiled operation, so they keep the existing unsupported-source report rather
+        // than pretending to evaluate. The reference itself was already validated by the document
+        // layer; what is checked here is only whether this build can lower it.
+        if (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
+            (definition.valueKind == runtime::ParameterValueKind::Float64 ||
+             definition.valueKind == runtime::ParameterValueKind::Vec2d ||
+             definition.valueKind == runtime::ParameterValueKind::Color4d)) {
+            return;
+        }
+
         {
             auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
             diagnosticSubject.parameterId = parameter->id;
@@ -724,11 +775,12 @@ class CompilePass final {
                            std::move(diagnosticSubject), "Parameter source cannot be evaluated yet",
                            animation != nullptr
                                ? "This registered parameter does not support animation."
-                               : "Driver evaluation is not implemented in this semantics version.");
+                               : "This parameter kind cannot yet receive a driver binding.");
         }
     }
 
 #include "snapshot_compiler_lowering.ipp"
+#include "snapshot_compiler_value_graph.ipp"
 
     void addTopologyFailure(const document::NodeId nodeId, std::string detail) {
         addFailure(runtime::CompileDiagnosticCode::TopologyInvariant, subject(nodeId, "graph"),
@@ -781,7 +833,12 @@ class CompilePass final {
     std::unordered_map<document::NodeId, const runtime::NodeDefinition*> definitions_;
     std::unordered_map<document::AnimationCurveId, runtime::ScalarCurveIndex> scalarCurveIndices_;
     std::unordered_map<document::AnimationCurveId, runtime::Vec2CurveIndex> vec2CurveIndices_;
+    std::unordered_map<document::AnimationCurveId, runtime::Color4CurveIndex> color4CurveIndices_;
+    std::vector<runtime::CompiledValueOperation> valueOperations_;
+    std::map<ValueOutputKey, runtime::ValueOutputIndex> valueOutputs_;
+    std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
+    std::unordered_set<document::NodeId> emptyImages_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;
 };

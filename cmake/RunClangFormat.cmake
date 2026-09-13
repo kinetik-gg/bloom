@@ -56,6 +56,14 @@ file(
 )
 list(SORT bloom_format_sources)
 
+# Vendored third-party sources are excluded by path, not by a tool-local ignore file: their bytes
+# must stay byte-identical to the upstream digests recorded beside them (see
+# THIRD_PARTY_NOTICES.md and dependencies/licenses/<component>/provenance.md), so reformatting one
+# would void its provenance claim, and bloom-format-check must not demand a reformat it is not
+# allowed to apply. "third_party" is the same directory name the repository hygiene checker already
+# recognizes as vendored content (tools/quality/repository_checks/repository_checks.cpp).
+list(FILTER bloom_format_sources EXCLUDE REGEX "/third_party/")
+
 if(NOT bloom_format_sources)
     message(FATAL_ERROR "No Bloom C++ sources were found to format")
 endif()

@@ -1,19 +1,26 @@
 #include <bloom/ui/frame_export_controller.hpp>
 
+#include "composition_editor_support.hpp"
+
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/timeline_frame_math.hpp>
 
 #include <bloom/document/project.hpp>
 #include <bloom/render/image.hpp>
 
 #include <QDir>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <cctype>
+#include <limits>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -224,6 +231,44 @@ FrameExportController::FrameExportController(
         return std::filesystem::path(chosen.toStdString());
     };
 
+    // The range seam: one save dialog for the sequence's base name, then two spin prompts for the
+    // inclusive first/last frame. PNG-only, because a frame range is a PNG sequence (task S5, item
+    // 3a) -- and the extension, not the filter, is still what selects the preset through the one
+    // closed mapping presetForDestination() owns, so a ".png" base name behaves exactly as a
+    // single-frame PNG export does.
+    rangeProvider_ = [this]() -> std::optional<FrameExportRangeRequest> {
+        const auto chosen = QFileDialog::getSaveFileName(nullptr, tr("Export Frame Range"), {},
+                                                         tr("PNG sequence (*.png)"));
+        if (chosen.isEmpty()) {
+            return std::nullopt;
+        }
+        std::filesystem::path destination(chosen.toStdString());
+        if (presetForDestination(destination) != output::OutputPresetV1::PngRgba8SrgbV1) {
+            destination.replace_extension(".png");
+        }
+        const auto context = frameContextFor(session_);
+        if (!context.has_value()) {
+            return std::nullopt;
+        }
+        const auto maximum = static_cast<int>(
+            std::min<std::uint64_t>(context->maxFrameIndexValue,
+                                    static_cast<std::uint64_t>(std::numeric_limits<int>::max())));
+        bool accepted = false;
+        const int first = QInputDialog::getInt(nullptr, tr("Export Frame Range"), tr("First frame"),
+                                               0, 0, maximum, 1, &accepted);
+        if (!accepted) {
+            return std::nullopt;
+        }
+        const int last = QInputDialog::getInt(nullptr, tr("Export Frame Range"), tr("Last frame"),
+                                              maximum, first, maximum, 1, &accepted);
+        if (!accepted) {
+            return std::nullopt;
+        }
+        return FrameExportRangeRequest{.destination = std::move(destination),
+                                       .firstFrame = static_cast<std::uint64_t>(first),
+                                       .lastFrame = static_cast<std::uint64_t>(last)};
+    };
+
     approvalDecisionProvider_ = [](const FrameExportApprovalPrompt& prompt) {
         QMessageBox box;
         box.setWindowTitle(tr("Export Frame"));
@@ -281,9 +326,42 @@ void FrameExportController::setDestinationProvider(FrameExportDestinationProvide
     destinationProvider_ = std::move(provider);
 }
 
+void FrameExportController::setRangeProvider(FrameExportRangeProvider provider) {
+    rangeProvider_ = std::move(provider);
+}
+
 void FrameExportController::setApprovalDecisionProvider(
     FrameExportApprovalDecisionProvider provider) {
     approvalDecisionProvider_ = std::move(provider);
+}
+
+bool FrameExportController::isExportingRange() const noexcept { return sequence_.has_value(); }
+
+std::uint64_t FrameExportController::publishedFrameCount() const noexcept {
+    return sequence_.has_value() ? sequence_->publishedFrames : 0;
+}
+
+std::uint64_t FrameExportController::totalFrameCount() const noexcept {
+    return sequence_.has_value() ? sequence_->lastFrame - sequence_->firstFrame + 1 : 0;
+}
+
+std::filesystem::path
+FrameExportController::sequenceFramePath(const std::filesystem::path& destination,
+                                         const std::uint64_t index, const std::uint64_t lastIndex) {
+    // At least four digits -- the sequence convention every compositor and every shell glob already
+    // expects -- widened only when the range itself needs more, so a frame number is never
+    // truncated and the names of one range always sort lexicographically in frame order.
+    auto digits = std::string(std::to_string(lastIndex)).size();
+    digits = std::max<std::size_t>(digits, 4);
+    std::string number = std::to_string(index);
+    if (number.size() < digits) {
+        number.insert(0, digits - number.size(), '0');
+    }
+    auto stem = destination.stem().string();
+    if (stem.empty()) {
+        stem = "frame";
+    }
+    return destination.parent_path() / (stem + "." + number + destination.extension().string());
 }
 
 void FrameExportController::requestExport() {
@@ -303,6 +381,87 @@ void FrameExportController::requestExport() {
         return; // The artist cancelled the dialog; not an error.
     }
     beginExport(std::move(*chosen));
+}
+
+void FrameExportController::requestRangeExport() {
+    if (!canExport()) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("Another export is already in progress, or there is nothing to "
+                               "export."));
+        return;
+    }
+    if (!rangeProvider_) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("No frame-range dialog is configured."));
+        return;
+    }
+    auto chosen = rangeProvider_();
+    if (!chosen.has_value()) {
+        return; // The artist cancelled the dialog; not an error.
+    }
+    beginRangeExport(std::move(*chosen));
+}
+
+void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
+    if (!canExport()) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("Another export is already in progress, or there is nothing to "
+                               "export."));
+        return;
+    }
+    if (request.destination.empty()) {
+        emit exportFinished(FrameExportOutcome::Refused, tr("No destination was chosen."));
+        return;
+    }
+    const auto context = frameContextFor(session_);
+    if (!context.has_value()) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("This composition has no valid frame range to export."));
+        return;
+    }
+    // Refused, never clamped: an artist who asked for frames 0-200 of a 100-frame composition has a
+    // different intent from one who asked for 0-99, and silently exporting the shorter range would
+    // hide that.
+    if (request.lastFrame < request.firstFrame || request.lastFrame > context->maxFrameIndexValue) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("Frames %1 to %2 are outside this composition's range of 0 to %3.")
+                                .arg(request.firstFrame)
+                                .arg(request.lastFrame)
+                                .arg(context->maxFrameIndexValue));
+        return;
+    }
+
+    pendingDestination_ =
+        sequenceFramePath(request.destination, request.firstFrame, request.lastFrame);
+    pendingPreset_ = presetForDestination(request.destination);
+    sequence_.emplace(SequenceState{.destination = std::move(request.destination),
+                                    .firstFrame = request.firstFrame,
+                                    .lastFrame = request.lastFrame,
+                                    .nextFrame = request.firstFrame,
+                                    .publishedFrames = 0,
+                                    .frameRate = context->frameRate,
+                                    .duration = context->duration,
+                                    .plan = nullptr,
+                                    .approved = false,
+                                    .cancelled = false});
+    emit rangeProgressChanged();
+    // The plan compile is the SAME stage a single-frame export runs; the sequence only differs in
+    // what happens once it lands (see handleCompileResult()).
+    beginExport(pendingDestination_);
+}
+
+void FrameExportController::requestCancellation() {
+    if (sequence_.has_value()) {
+        sequence_->cancelled = true;
+    }
+    if (auto* compiling = std::get_if<CompileHandle>(&inFlight_)) {
+        compiling->handle.cancel();
+    } else if (auto* runner = std::get_if<host::OutputAnalysisAttemptRunnerV1>(&inFlight_)) {
+        runner->requestCancellation();
+    } else if (auto* job = std::get_if<ExportJobHandle>(&inFlight_)) {
+        job->handle.cancel();
+    }
+    taskUiBridge_.wake();
 }
 
 void FrameExportController::beginExport(std::filesystem::path destination) {
@@ -427,6 +586,10 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
                 : firstDiagnosticSummary(result->diagnostics(),
                                          tr("The composition could not be compiled for export."));
         inFlight_.emplace<std::monostate>();
+        if (sequence_.has_value()) {
+            finishSequence(outcome, message);
+            return;
+        }
         setActivity(FrameExportActivity::Idle);
         finish(outcome, message);
         return;
@@ -435,14 +598,36 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
     const auto plan = *result->value();
     inFlight_.emplace<std::monostate>();
 
+    // A range export compiles ONCE and then drives every frame off this same plan (a compiled plan
+    // is time-independent), so the sequence retains it here and advanceSequence() owns the
+    // per-frame stages from now on.
+    if (sequence_.has_value()) {
+        sequence_->plan = plan;
+        advanceSequence();
+        return;
+    }
+
+    if (!beginAttempt(plan, session_.currentTime())) {
+        setActivity(FrameExportActivity::Idle);
+        finish(FrameExportOutcome::Failed, tr("The export analysis could not be started."));
+    }
+}
+
+bool FrameExportController::beginAttempt(
+    const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+    const core::RationalTime time) {
     // The evaluation memory budget reuses CompositionPreviewController's own default (composition_
     // preview_controller.hpp's kDefaultPreviewPixelStorageByteLimit): the same working-set bound
     // the viewer's own full-resolution preview already runs under for this composition, not a new
     // invented number. This is distinct from (and independent of) the export job's own resource
     // ledger admission below, which governs retained/staged export bytes, not evaluator scratch.
+    //
+    // `time` is the ONLY thing a sequence varies per frame: every frame is evaluated at its own
+    // exact rational time, never at an accumulated one, which is exactly what makes an exported
+    // sequence a per-frame proof of the animation rather than of the transport.
     host::OutputAnalysisAttemptRequestV1 request{
         .plan = plan,
-        .evaluation = {.time = session_.currentTime(),
+        .evaluation = {.time = time,
                        .output = plan->output(),
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
@@ -457,13 +642,60 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
     auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, ledger_,
                                                     std::move(request));
     if (!begin) {
-        setActivity(FrameExportActivity::Idle);
-        finish(FrameExportOutcome::Failed, tr("The export analysis could not be started."));
-        return;
+        return false;
     }
     inFlight_.emplace<host::OutputAnalysisAttemptRunnerV1>(std::move(begin).takeHandle());
     setActivity(FrameExportActivity::Analyzing);
     taskUiBridge_.wake();
+    return true;
+}
+
+void FrameExportController::advanceSequence() {
+    if (!sequence_.has_value()) {
+        return;
+    }
+    if (sequence_->cancelled) {
+        finishSequence(FrameExportOutcome::Cancelled,
+                       tr("The frame-range export was cancelled after %1 of %2 frames.")
+                           .arg(sequence_->publishedFrames)
+                           .arg(totalFrameCount()));
+        return;
+    }
+    if (sequence_->nextFrame > sequence_->lastFrame) {
+        finishSequence(
+            FrameExportOutcome::Published,
+            tr("Exported %1 frames to %2.")
+                .arg(sequence_->publishedFrames)
+                .arg(QString::fromStdString(sequence_->destination.parent_path().string())));
+        return;
+    }
+    const auto time =
+        frameTimeForIndex(sequence_->frameRate, sequence_->duration, sequence_->nextFrame);
+    if (!time.has_value()) {
+        finishSequence(
+            FrameExportOutcome::Failed,
+            tr("Frame %1 has no exact time in this composition.").arg(sequence_->nextFrame));
+        return;
+    }
+    // Everything the call below needs is read into locals first: beginAttempt() is a non-const
+    // call, so nothing may assume `sequence_` is still engaged across it.
+    const auto frameIndex = sequence_->nextFrame;
+    const auto plan = sequence_->plan;
+    pendingDestination_ =
+        sequenceFramePath(sequence_->destination, frameIndex, sequence_->lastFrame);
+    if (!beginAttempt(plan, *time)) {
+        finishSequence(
+            FrameExportOutcome::Failed,
+            tr("The export analysis could not be started for frame %1.").arg(frameIndex));
+    }
+}
+
+void FrameExportController::finishSequence(const FrameExportOutcome outcome, QString message) {
+    sequence_.reset();
+    inFlight_.emplace<std::monostate>();
+    setActivity(FrameExportActivity::Idle);
+    emit rangeProgressChanged();
+    finish(outcome, std::move(message));
 }
 
 void FrameExportController::handleAttemptResult(host::OutputAnalysisAttemptRunnerV1& runner) {
@@ -474,11 +706,15 @@ void FrameExportController::handleAttemptResult(host::OutputAnalysisAttemptRunne
     inFlight_.emplace<std::monostate>();
 
     if (!*outcome) {
-        setActivity(FrameExportActivity::Idle);
         const auto* failure = outcome->failure();
         const auto exportOutcome = (failure != nullptr && failure->cancelled())
                                        ? FrameExportOutcome::Cancelled
                                        : FrameExportOutcome::Failed;
+        if (sequence_.has_value()) {
+            finishSequence(exportOutcome, describeAttemptFailure(failure));
+            return;
+        }
+        setActivity(FrameExportActivity::Idle);
         finish(exportOutcome, describeAttemptFailure(failure));
         return;
     }
@@ -487,16 +723,25 @@ void FrameExportController::handleAttemptResult(host::OutputAnalysisAttemptRunne
     // `*outcome` true above already guarantees this; the null check is defensive only.
     auto attempt = outcome->attempt();
     if (attempt == nullptr) {
+        if (sequence_.has_value()) {
+            finishSequence(FrameExportOutcome::Failed,
+                           tr("The export analysis returned no attempt."));
+            return;
+        }
         setActivity(FrameExportActivity::Idle);
         finish(FrameExportOutcome::Failed, tr("The export analysis returned no attempt."));
         return;
     }
     if (!attempt->approvable() || !attempt->digest().has_value()) {
-        setActivity(FrameExportActivity::Idle);
         const auto& report = attempt->report();
-        finish(FrameExportOutcome::NotApprovable, report != nullptr
-                                                      ? describeNonApprovable(*report)
-                                                      : tr("This frame cannot be exported."));
+        const QString message = report != nullptr ? describeNonApprovable(*report)
+                                                  : tr("This frame cannot be exported.");
+        if (sequence_.has_value()) {
+            finishSequence(FrameExportOutcome::NotApprovable, message);
+            return;
+        }
+        setActivity(FrameExportActivity::Idle);
+        finish(FrameExportOutcome::NotApprovable, message);
         return;
     }
 
@@ -537,10 +782,23 @@ void FrameExportController::presentApproval(
     const auto digestHex = digest->toLowercaseHex();
     prompt.digestShortForm = QString::fromLatin1(digestHex.data(), 16);
 
-    const auto decision = approvalDecisionProvider_ ? approvalDecisionProvider_(prompt)
-                                                    : FrameExportApprovalDecision::Cancel;
+    // The artist is asked once per export: for a single frame that is this frame, and for a range
+    // it is the FIRST frame only (sequence_->approved). Every frame still runs
+    // approveFrameExportV1() with its own attempt and its own digest below -- the byte-equality
+    // guard and the per-frame publication intent are never skipped; only the modal question is.
+    const bool alreadyApproved = sequence_.has_value() && sequence_->approved;
+    const auto decision = alreadyApproved             ? FrameExportApprovalDecision::Export
+                          : approvalDecisionProvider_ ? approvalDecisionProvider_(prompt)
+                                                      : FrameExportApprovalDecision::Cancel;
+    if (sequence_.has_value() && decision == FrameExportApprovalDecision::Export) {
+        sequence_->approved = true;
+    }
 
     if (decision == FrameExportApprovalDecision::Cancel) {
+        if (sequence_.has_value()) {
+            finishSequence(FrameExportOutcome::Cancelled, tr("The export was cancelled."));
+            return;
+        }
         setActivity(FrameExportActivity::Idle);
         // Discards cleanly: `attempt` (this function's own const& parameter) never held its own
         // strong reference; the ONLY strong reference is handleAttemptResult()'s local `attempt`
@@ -559,6 +817,10 @@ void FrameExportController::presentApproval(
     // is the guard).
     auto approval = host::approveFrameExportV1(publicationCoordinator_, attempt, *digest);
     if (!approval) {
+        if (sequence_.has_value()) {
+            finishSequence(FrameExportOutcome::Failed, tr("The export could not be approved."));
+            return;
+        }
         setActivity(FrameExportActivity::Idle);
         finish(FrameExportOutcome::Failed, tr("The export could not be approved."));
         return;
@@ -626,12 +888,21 @@ void FrameExportController::handleExportJobResult(ExportJobHandle& job) {
     setActivity(FrameExportActivity::Idle);
 
     if (!resultOpt.has_value()) {
+        if (sequence_.has_value()) {
+            finishSequence(FrameExportOutcome::Failed,
+                           tr("The export job ended without a result."));
+            return;
+        }
         finish(FrameExportOutcome::Failed, tr("The export job ended without a result."));
         return;
     }
     const auto& result = *resultOpt;
     if (!result) {
         const auto* failure = result.failure();
+        if (sequence_.has_value()) {
+            finishSequence(exportFailureOutcome(failure), describeExportFailure(failure));
+            return;
+        }
         finish(exportFailureOutcome(failure), describeExportFailure(failure));
         return;
     }
@@ -642,6 +913,32 @@ void FrameExportController::handleExportJobResult(ExportJobHandle& job) {
             ? publication->outcome
             : platform::StagedArtifactPublicationOutcome::FailedBeforePublication;
     const auto destinationText = QString::fromStdString(pendingDestination_.string());
+
+    // A range export treats each frame's publication as one step of the sequence. A published (or
+    // durability-warned) frame advances to the next; anything else ends the whole range with that
+    // frame's own outcome, leaving every frame already published exactly as it is -- a sequence is
+    // a sequence of complete publications, not one transaction that could roll back.
+    if (sequence_.has_value()) {
+        const bool landed =
+            publicationOutcome == platform::StagedArtifactPublicationOutcome::Published ||
+            publicationOutcome ==
+                platform::StagedArtifactPublicationOutcome::PublishedWithDurabilityWarning;
+        if (!landed) {
+            finishSequence(FrameExportOutcome::Failed,
+                           tr("Frame %1 could not be published to %2; %3 earlier frames are "
+                              "unaffected.")
+                               .arg(sequence_->nextFrame)
+                               .arg(destinationText)
+                               .arg(sequence_->publishedFrames));
+            return;
+        }
+        ++sequence_->publishedFrames;
+        ++sequence_->nextFrame;
+        emit rangeProgressChanged();
+        advanceSequence();
+        return;
+    }
+
     switch (publicationOutcome) {
     case platform::StagedArtifactPublicationOutcome::Published:
         finish(FrameExportOutcome::Published, tr("Frame exported to %1.").arg(destinationText));

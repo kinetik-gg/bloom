@@ -94,6 +94,10 @@ constexpr auto kStackNodeId = document::NodeId::fromRaw(0x1009);
 constexpr auto kSlotId = document::LayerSlotId::fromRaw(0x100a);
 constexpr auto kPositionParameterId = document::ParameterId::fromRaw(0x100b);
 constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(0x100c);
+constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(0x100d);
+constexpr auto kScaleParameterId = document::ParameterId::fromRaw(0x100e);
+constexpr auto kRotationParameterId = document::ParameterId::fromRaw(0x100f);
+constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
 
 // A trivial one-node (solid -> composition output) plan: a real, directly evaluable composition,
 // unlike bloom/output/tests/flat_exr_test_support.hpp's shellPlan() (which evaluates a plan only
@@ -105,15 +109,19 @@ constexpr auto kOpacityParameterId = document::ParameterId::fromRaw(0x100c);
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, kColorParameterId,
-                                                   bloom::core::Color4d{0.25, 0.5, 0.75, 1.0}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeId, {kColorParameterId, bloom::core::Color4d{0.25, 0.5, 0.75, 1.0}}});
     // CompiledCompositionOutput requires a layer-stack input, not a bare solid (mirrors
     // bloom/output/tests/flat_exr_test_support.hpp's shellPlan()): solid -> layer output -> layer
     // stack -> composition output.
     operations.emplace_back(runtime::CompiledLayerOutput{
         kLayerNodeId, kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{kPositionParameterId, document::Vec2d{0.5, 0.5}},
-        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}});
+        runtime::CompiledVec2Parameter{kAnchorParameterId, document::kDefaultAnchor},
+        runtime::CompiledVec2Parameter{kScaleParameterId, document::kDefaultScale},
+        runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
+        runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
+        bloom::core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kStackNodeId, {{kSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(

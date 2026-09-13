@@ -13,6 +13,8 @@ namespace {
 
 using bloom::document::AnimationCurveId;
 using bloom::document::AnimationCurveRecord;
+using bloom::document::Color4AnimationCurve;
+using bloom::document::Color4Keyframe;
 using bloom::document::KeyframeId;
 using bloom::document::KeyframeInterpolation;
 using bloom::document::ScalarAnimationCurve;
@@ -24,12 +26,18 @@ using bloom::document::Vec2Keyframe;
 
 [[nodiscard]] bool validInterpolation(const KeyframeInterpolation interpolation) noexcept {
     return interpolation == KeyframeInterpolation::Hold ||
-           interpolation == KeyframeInterpolation::Linear;
+           interpolation == KeyframeInterpolation::Linear ||
+           interpolation == KeyframeInterpolation::EaseInOut;
 }
 
+// "Value is representable" per curve kind. A color key reuses core::Color4d::isValid() rather than
+// a fourth hand-written finiteness test, so an animated authoring color is admitted on exactly the
+// terms a constant one is.
 template <typename Keyframe> [[nodiscard]] bool finiteValue(const Keyframe& keyframe) noexcept {
     if constexpr (std::is_same_v<Keyframe, ScalarKeyframe>) {
         return std::isfinite(keyframe.value);
+    } else if constexpr (std::is_same_v<Keyframe, Color4Keyframe>) {
+        return keyframe.value.isValid();
     } else {
         return std::isfinite(keyframe.value.x) && std::isfinite(keyframe.value.y);
     }
@@ -168,6 +176,14 @@ template <typename Curve>
     return std::holds_alternative<ScalarAnimationCurve>(record);
 }
 
+[[nodiscard]] bool isVec2(const AnimationCurveRecord& record) noexcept {
+    return std::holds_alternative<Vec2AnimationCurve>(record);
+}
+
+[[nodiscard]] bool isColor4(const AnimationCurveRecord& record) noexcept {
+    return std::holds_alternative<Color4AnimationCurve>(record);
+}
+
 } // namespace
 
 namespace bloom::document {
@@ -178,6 +194,9 @@ AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept {
     }
     if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
         return vector->id;
+    }
+    if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+        return color->id;
     }
     return {};
 }
@@ -209,6 +228,12 @@ const Vec2AnimationCurve* AnimationCurveStore::findVec2(const AnimationCurveId i
     return record == nullptr ? nullptr : std::get_if<Vec2AnimationCurve>(record);
 }
 
+const Color4AnimationCurve*
+AnimationCurveStore::findColor4(const AnimationCurveId id) const noexcept {
+    const auto* record = find(id);
+    return record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
+}
+
 bool AnimationCurveStore::insert(AnimationCurveRecord record) {
     const bool valid =
         std::visit([](const auto& curve) { return curveCanEnterStore(curve); }, record);
@@ -223,6 +248,7 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
             });
         },
         record);
+
     if (hasDuplicateKeyframe) {
         return false;
     }
@@ -256,8 +282,11 @@ bool AnimationCurveStore::containsKeyframe(const KeyframeId id) const noexcept {
         if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
             return contains(*scalar);
         }
-        const auto* vector = std::get_if<Vec2AnimationCurve>(&record);
-        return vector != nullptr && contains(*vector);
+        if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
+            return contains(*vector);
+        }
+        const auto* color = std::get_if<Color4AnimationCurve>(&record);
+        return color != nullptr && contains(*color);
     });
 }
 
@@ -275,6 +304,13 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, Vec2Key
     return curve != nullptr && ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframeId));
 }
 
+bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, Color4Keyframe keyframe) {
+    const auto keyframeId = keyframe.id;
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
+    return curve != nullptr && ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframeId));
+}
+
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, ScalarKeyframe keyframe) {
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<ScalarAnimationCurve>(record);
@@ -284,6 +320,12 @@ bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, ScalarK
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, Vec2Keyframe keyframe) {
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<Vec2AnimationCurve>(record);
+    return curve != nullptr && ::updateKeyframe(*curve, keyframe);
+}
+
+bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, Color4Keyframe keyframe) {
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
     return curve != nullptr && ::updateKeyframe(*curve, keyframe);
 }
 
@@ -352,31 +394,40 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                        "Animation curve may be owned by only one parameter");
         }
 
-        if (parameter.schemaKey == kPositionParameterSchemaKey) {
-            if (isScalar(*curve)) {
+        // Animatability and curve kind both come from the shared schema predicates in
+        // bloom/document/parameter.hpp, so this validation and the animation commands cannot
+        // disagree about which parameters may be animated.
+        if (isVec2AnimatableSchemaKey(parameter.schemaKey)) {
+            if (!isVec2(*curve)) {
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "Position parameter requires a Vec2 animation curve");
+                           "This transform parameter requires a Vec2 animation curve");
             }
-        } else if (parameter.schemaKey == kOpacityParameterSchemaKey) {
+        } else if (isScalarAnimatableSchemaKey(parameter.schemaKey)) {
             if (!isScalar(*curve)) {
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
-                           "Opacity parameter requires a scalar animation curve");
+                           "This scalar parameter requires a scalar animation curve");
+            }
+        } else if (isColor4AnimatableSchemaKey(parameter.schemaKey)) {
+            if (!isColor4(*curve)) {
+                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                           "This color parameter requires a Color4 animation curve");
             }
         } else {
             result.add(ValidationCode::InvalidValue, parameterPath + ".source",
-                       "This parameter schema does not support animation in schema version 1");
+                       "This parameter schema does not support animation");
         }
 
-        if (parameter.schemaKey == kOpacityParameterSchemaKey) {
-            if (const auto* scalar = std::get_if<ScalarAnimationCurve>(curve)) {
-                for (const auto& keyframe : scalar->keyframes) {
-                    if (keyframe.value < 0.0 || keyframe.value > 1.0) {
-                        result.add(ValidationCode::InvalidValue,
-                                   "animationCurves[" + std::to_string(scalar->id.value()) +
-                                       "].keyframes[" + std::to_string(keyframe.id.value()) +
-                                       "].value",
-                                   "Opacity keyframe value must be between zero and one");
-                    }
+        // A scalar DOMAIN belongs to the schema, not to scalar curves in general: opacity is
+        // confined to [0, 1] and text size to (0, kMaximumTextSizePixels], while a rotation curve
+        // measures degrees and must be free to wind past a full turn in either direction. The one
+        // gate is isScalarWithinSchemaDomain() so a key and a constant are admitted identically.
+        if (const auto* scalar = std::get_if<ScalarAnimationCurve>(curve)) {
+            for (const auto& keyframe : scalar->keyframes) {
+                if (!isScalarWithinSchemaDomain(parameter.schemaKey, keyframe.value)) {
+                    result.add(ValidationCode::InvalidValue,
+                               "animationCurves[" + std::to_string(scalar->id.value()) +
+                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                               "Keyframe value is outside the domain its schema declares");
                 }
             }
         }
