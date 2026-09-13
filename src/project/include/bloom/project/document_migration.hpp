@@ -39,17 +39,17 @@
 // follow that capture work, not precede it, since a manifest step would need the same DOM-in/
 // bytes-out shape this module already establishes.
 //
-// Registry: kProductionDocumentMigrationSteps below is the real production table -- currently
-// empty, because schema {1,0} is the only version Bloom has ever shipped. document_decode.hpp's
-// own gates (UnsupportedMajorVersion via DomainViolation for an unrecognized major; the
-// newer-minor RT1 capture/PreservationRequired route for a same-major newer minor) already reject
-// or redirect everything that is not exactly {1,0}, without this module ever being consulted for
-// either case -- see save_archive.cpp's runReopenChain(), the one production call site, for the
-// exact routing condition that keeps this module out of both paths. migrateDocumentDom() itself is
-// fully generic and injectable over both the step table and the "current" version it migrates to,
-// which is what lets document_migration_tests.cpp prove the chaining/failure/determinism machinery
-// end-to-end with a synthetic version pair no production schema uses, without needing a production
-// seam of its own.
+// Registry: kProductionDocumentMigrationSteps upgrades document 1.0 to 1.1 by assigning the
+// original four-column node layout, then 1.1 to 1.2 by giving every composition an empty node
+// group collection and the allocator its nodeGroup high water, then 1.2 to 1.3 by changing nothing
+// but the version, then 1.3 to 1.4 by changing nothing but the version again. Both of those last
+// two are purely additive in the VALUE space rather than the member space -- 1.3 adds a third
+// animation-curve kind and a third keyframe interpolation token, 1.4 adds a "vec3" constant kind
+// and a "driver" parameter-source kind -- and an older file contains none of them, so there is
+// nothing to add or infer. Each step exists so the chain has no hole, not because the file before
+// it is missing anything. Same-major newer minors bypass migration and retain their additive
+// members; unknown majors follow the existing rejection/preservation route. The generic runner
+// remains injectable for deterministic chain, failure, and resource-budget tests.
 //
 // Version detection is not this module's job: the caller already lexically reads the document
 // root's schemaVersion before trusted decode, as part of its own existing version-agreement check
@@ -132,11 +132,27 @@ struct MigrationStepDescriptor final {
     MigrationStepTransform transform = nullptr;
 };
 
-// v1 ships no real migration steps -- see this file's own top comment. Kept as the fixed
-// production table so the registration mechanism (a std::span<const MigrationStepDescriptor>
-// parameter on migrateDocumentDom(), never a compiled-in global) has exactly one production
-// caller, matching its real future shape once a schema bump adds the first real step.
-inline constexpr std::array<MigrationStepDescriptor, 0> kProductionDocumentMigrationSteps{};
+// The production chain, one entry per shipped minor. The table stays a
+// std::span<const MigrationStepDescriptor> parameter on migrateDocumentDom() rather than a
+// compiled-in global, so the runner has exactly one production caller and remains testable with a
+// synthetic chain.
+[[nodiscard]] MigrationStepOutcome migrateNodeLayoutV1_0(const JsonValue& root,
+                                                         std::pmr::memory_resource* resource,
+                                                         std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateNodeGroupsV1_1(const JsonValue& root,
+                                                         std::pmr::memory_resource* resource,
+                                                         std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateAnimationBreadthV1_2(const JsonValue& root,
+                                                               std::pmr::memory_resource* resource,
+                                                               std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateValueGraphV1_3(const JsonValue& root,
+                                                         std::pmr::memory_resource* resource,
+                                                         std::pmr::vector<char>& output);
+inline constexpr std::array kProductionDocumentMigrationSteps{
+    MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
+    MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
+    MigrationStepDescriptor{{1, 2}, {1, 3}, migrateAnimationBreadthV1_2},
+    MigrationStepDescriptor{{1, 3}, {1, 4}, migrateValueGraphV1_3}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

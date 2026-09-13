@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Purpose
 
@@ -146,6 +146,12 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `EditorHeader` | `48` | An editor panel's header row |
 | `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
+| `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
+
+`MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
+and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
+applied to the row rather than to the popup window because a row that stopped short of the frame
+could not carry the full-width accent hover bar the State table requires.
 
 An editor panel's footer strip (task C1, item C5) is not a distinct token: it reuses `Control`
 (`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
@@ -326,3 +332,106 @@ silently replace Bloom's global visual language.
 Project documents never store an interface font or icon choice as render-affecting state. Fonts
 selected by artists for composition content are project assets and follow a separate media,
 licensing, substitution, and missing-dependency workflow.
+
+
+### Timeline layer row controls
+
+The layer-stack column's row carries two Compact `KDropdown`s, and they are deliberately not the same
+kind of thing:
+
+| Row control | Object name | State |
+| --- | --- | --- |
+| Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
+| Parent | `layerParentDropdown` | Disabled, carrying its single honest value "None", with a tooltip saying why: no parenting exists in the document model or the command vocabulary |
+
+A disabled placeholder always states its reason in its tooltip rather than merely looking
+unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
+the same order, as does a layer node card's (`nodeBlendModeDropdown`): one set of words, one order,
+one write path.
+
+### Timeline layer kinds
+
+The timeline's clip bar carries its layer's kind as a data-type color. Kind is also named in text by
+the row's own tooltip, so the color is a second channel rather than the only one.
+
+| Layer kind | Palette token |
+| --- | --- |
+| Solid | `DataComposition` |
+| Text | `DataClip` |
+| Unrecognized | `Muted` |
+
+Neither kind references media, and the data-type palette's five roles all name kinds of referenced
+media, so these two are the least-wrong available choices rather than literal matches. The rejections
+are on record: `DataImage` (`#3AA5F0`) is byte-identical to `AccentHover` and would make a clip read
+as a selected surface while swallowing the 1px `Accent` playhead crossing it; `DataSequence`
+(`#E0554E`) is byte-identical to `Error` and would make a clip read as failed; `DataAudio`
+(`#7C5CFF`) is a neighbouring purple to `DataComposition` and would not be told apart from a solid.
+`DataClip` is byte-identical to `Ok`, which is the remaining collision and the mildest one. Kit-owner
+gap: a `DataText` role would remove that collision. A future media-backed or pre-composition layer
+kind takes its own role here on the day it ships.
+
+### Node socket kinds
+
+Sockets and the links leaving them identify a *transport* kind, which is a different question from
+what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
+Seven separated hues for eight kinds, none of them `Accent` or `AccentHover`:
+
+| Socket kind | Palette token | Value | Hue |
+| --- | --- | --- | --- |
+| Image | `SocketImage` | `#2FC8A0` | teal |
+| Color | `SocketColor` | `#F2713C` | vermilion |
+| Scalar | `SocketScalar` | `#8FD44A` | yellow-green |
+| Integer | `SocketInteger` | `#4AC8D4` | cyan |
+| Vector2 | `SocketVector` | `#C87AF0` | violet |
+| Vector3 | `SocketVector` | `#C87AF0` | violet |
+| Boolean | `SocketBoolean` | `#E0567B` | rose |
+| String | `SocketString` | `#F0C93C` | gold |
+
+The two vector widths share one token deliberately: they are one family, and giving them adjacent
+violets would have said "these connect" when a cross-width link is refused. What distinguishes them is
+the socket's own name and tooltip -- which is the rule below, not an exception to it.
+
+The same token inks the socket and every link leaving it. Socket labels must still identify the kind:
+color is never the only carrier.
+
+This retires the collision the previous mapping carried -- `DataImage` and `AccentHover` are both
+`#3AA5F0`, so an Image socket was indistinguishable from a hovered accent surface. `DataImage` and
+`AccentHover` still share that value; nothing in the node editor reads it any more.
+
+While a link drag is in flight every socket states whether the link could land on it: a compatible
+socket brightens toward `Foreground` by the filled-hover blend, an incompatible one fades to the
+disabled ink, and the socket the drag started from keeps its resting ink because it is the thing in
+the artist's hand rather than a target. Releasing ends the drag and restores every resting ink.
+
+### Node editor interaction states
+
+These use design pixels in graph space at 100% zoom. They scale with the canvas transform.
+
+| Surface/state | Rendering or interaction contract |
+| --- | --- |
+| Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
+| Ordered multi-input | Merge's one stack port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, while the pill stays dimmed |
+| Card eyebrow | A layer card's `UiSmall`/`Faint` "Layer" line above its own name, because the name is the layer's |
+| In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Today's one instance is a layer's Blending. It carries no keyframe indicator, because the value is not animatable |
+| Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
+| Selected node | 2px inset Accent outline, painted above the card/header surfaces |
+| Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |
+| Muted node | Body and in-node controls at 50% opacity; normal header and existing Phosphor `Hidden`/eye-slash badge, without strikethrough |
+| Collapsed node | Header-only `Radius::Full` pill; sockets distributed along the header edges; parameter controls hidden |
+| Link | Schema kind ink, widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink and 2px stroke |
+| Incompatible drag | Error link ink; release publishes nothing. Compatible sockets brighten and incompatible ones dim for the duration of the drag |
+| Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
+| Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
+| Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field. Results are grouped under `UiSmall`/`Faint` section headings that are neither selectable nor choosable; the list is exactly as tall as its rows and headings. A refused result is a disabled row carrying its reason in its tooltip alone -- never in its label. The popup rounds once, at the shared dropdown surface: the list's own mask rounds only the edges it shares with that surface, so the edge beneath the filter field stays square |
+| Unavailable command adapter | Cards have an arrow cursor and sockets a forbidden cursor with explanation; application offers only its existing working authoring paths |
+
+`KSearchPopup` object names are `kSearchPopup` and `kSearchFilter`; its reused dropdown subtree
+retains `kDropdownPopup`, `kDropdownSurface` and `kDropdownList`. Node interaction additions are
+`nodeContextMenu`, `nodeAddSearchAction`, `nodeAddLayerOutputAction`, `nodeAddLayerStackAction`,
+`nodeAddCompositionOutputAction`, `nodeSelectAllAction`, `nodeDuplicateAction`, `nodeDissolveAction`,
+`nodeMuteAction`, `nodeCollapseAction`, `nodeRenameAction`, `nodeDeleteAction`, `nodeRenameEditor` and
+`nodeBlendModeDropdown`.
+Existing scene/view/editor, canvas/Add menu, Add Solid/Text, navigation action, color-chip and
+position-field object names are unchanged. The legacy named Add actions remain routable contracts
+when Add… replaces the visible submenu. The architecture's application-integration limit determines
+which authoring affordances can currently be offered.

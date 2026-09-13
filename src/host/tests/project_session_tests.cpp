@@ -1180,6 +1180,8 @@ void testMoveAndLifetimeSafety(Expectations& expectations,
                         "the moved command stack remains bound to its heap-owned document");
 }
 
+#include "node_command_dirty_tests.ipp"
+
 } // namespace
 
 int main() {
@@ -1191,6 +1193,7 @@ int main() {
         testOpenIntentBindsExactContent(expectations);
         testGenerationExhaustionBoundaries(expectations);
         testNewProjectBaselineAndSnapshots(expectations, identitySource);
+        testNodeCommandDirtyParity(expectations, identitySource);
         testDirtySavepointBranching(expectations, identitySource);
         testSavepointPathAuthority(expectations);
         testPublicationCallbackOrdering(expectations);

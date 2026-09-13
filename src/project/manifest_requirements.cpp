@@ -2,10 +2,10 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
-#include <array>
 #include <compare>
 #include <cstddef>
 #include <functional>
@@ -67,17 +67,11 @@ void sortAndDeduplicate(std::vector<std::string_view>& values) {
 namespace bloom::project {
 
 bool isFoundationNodeType(const std::string_view typeId) noexcept {
-    constexpr std::array foundationTypes{
-        document::kCompositionOutputNodeType, document::kLayerOutputNodeType,
-        document::kLayerStackNodeType,        document::kSolidSourceNodeType,
-        document::kTextSourceNodeType,
-    };
-    for (const auto foundationType : foundationTypes) {
-        if (typeId == foundationType) {
-            return true;
-        }
-    }
-    return false;
+    // The built-in registry IS the foundation set. Every type registerBuiltInNodeDefinitions() adds
+    // ships inside Bloom, so no manifest requirement can or should claim to provide one -- and
+    // deriving the answer rather than restating it is what keeps task S7's forty value-library
+    // types, and every later built-in, from drifting out of step with a second copy of the list.
+    return document::builtInNodeDefinitions().containsType(typeId);
 }
 
 document::ValidationResult

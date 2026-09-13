@@ -189,7 +189,7 @@ makeCoordinator(Expectations& expectations, const StagedArtifactConfig config = 
     bloom::document::Document document{std::move(newProject.project)};
     const auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 3}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     auto built = buildSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     if (!built) {

@@ -218,6 +218,15 @@ decodeCompositionInterior(const JsonValue& parametersNode, const JsonValue& anim
                           std::vector<document::ParameterRecord>& parameters,
                           std::vector<document::AnimationCurveRecord>& curves, DecodedGraph& graph);
 
+[[nodiscard]] bool decodeNodeLayout(const JsonValue& node, DecodeState& state,
+                                    const std::string& path, document::NodeLayout& out);
+
+// A composition's `nodeGroups` array (document 1.2): ascending by numeric groupId, each record's
+// members ascending by numeric NodeId, both duplicate-free. Membership disjointness across groups
+// and member existence are the document model's own validation, not this module's wire check.
+[[nodiscard]] bool decodeNodeGroups(const JsonValue& node, DecodeState& state,
+                                    const std::string& path, document::NodeGroups& out);
+
 } // namespace bloom::project::detail
 
 #endif // BLOOM_PROJECT_DOCUMENT_DECODE_INTERNAL_HPP

@@ -2,6 +2,7 @@
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -64,6 +65,16 @@ enum class FrameExportApprovalDecision : std::uint8_t {
     Cancel,
 };
 
+// One "Export Frame Range..." request (task S5, item 3a). `firstFrame`/`lastFrame` are inclusive
+// composition frame INDICES, and every frame between them is evaluated at its own exact rational
+// time (ui::frameTimeForIndex(), the same exact mapping the timeline ruler and the transport use)
+// -- never at an accumulated or approximated one.
+struct FrameExportRangeRequest final {
+    std::filesystem::path destination;
+    std::uint64_t firstFrame = 0;
+    std::uint64_t lastFrame = 0;
+};
+
 // Terminal, artist-facing outcomes. Mirrors ProjectHostOperationOutcome's honesty contract: never
 // collapse a non-published, non-approvable, or failed outcome into success.
 enum class FrameExportOutcome : std::uint8_t {
@@ -84,6 +95,7 @@ enum class FrameExportActivity : std::uint8_t {
 };
 
 using FrameExportDestinationProvider = std::function<std::optional<std::filesystem::path>()>;
+using FrameExportRangeProvider = std::function<std::optional<FrameExportRangeRequest>()>;
 using FrameExportApprovalDecisionProvider =
     std::function<FrameExportApprovalDecision(const FrameExportApprovalPrompt&)>;
 
@@ -136,6 +148,14 @@ class FrameExportController final : public QObject {
     // additionally folds in its own read-only-placeholder check -- see main_window.cpp).
     [[nodiscard]] bool canExport() const noexcept;
     [[nodiscard]] bool isBusy() const noexcept;
+    // True while a FRAME RANGE export is in flight, which is the only export long enough for a
+    // cancel affordance to mean anything (a single frame is one attempt plus one publish).
+    [[nodiscard]] bool isExportingRange() const noexcept;
+    // How many frames of the in-flight range have published so far, and how many it will publish in
+    // total. Both zero when no range export is running. Exposed for a progress readout and for
+    // tests.
+    [[nodiscard]] std::uint64_t publishedFrameCount() const noexcept;
+    [[nodiscard]] std::uint64_t totalFrameCount() const noexcept;
     [[nodiscard]] FrameExportActivity activity() const noexcept;
     [[nodiscard]] const std::filesystem::path& scratchDirectory() const noexcept;
     // Test observability seam: bloom::output::ExportResourceLedgerV1::chargedBytes() for the ledger
@@ -149,7 +169,16 @@ class FrameExportController final : public QObject {
     // QMessageBox Export/Cancel prompt naming the selected preset), so
     // offscreen tests can drive the whole flow without a real dialog appearing.
     void setDestinationProvider(FrameExportDestinationProvider provider);
+    void setRangeProvider(FrameExportRangeProvider provider);
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
+
+    // The artist-facing name of frame `index` under `destination`: the destination's stem, a dot,
+    // the index zero-padded to at least four digits (widened when the range needs more), then the
+    // destination's own extension -- "title.0007.png". Static and pure so a test can state the
+    // naming contract without running an export.
+    [[nodiscard]] static std::filesystem::path
+    sequenceFramePath(const std::filesystem::path& destination, std::uint64_t index,
+                      std::uint64_t lastIndex);
 
     // The typed preset a destination path selects: the closed extension->preset mapping the export
     // command uses (design decision 3: "the chosen extension selects the preset"). Exactly ".png"
@@ -167,9 +196,23 @@ class FrameExportController final : public QObject {
     // already-known destination, bypassing the destination dialog seam. Public so tests can drive
     // it directly.
     void beginExport(std::filesystem::path destination);
+    // "File -> Export Frame Range..." entry point: refuses while busy or without a composition,
+    // else invokes the range-dialog seam, then beginRangeExport().
+    void requestRangeExport();
+    // The dialog-free primitive, mirroring beginExport(). A range whose frames are not all inside
+    // the composition's own valid index range is refused outright rather than silently clamped.
+    void beginRangeExport(FrameExportRangeRequest request);
+    // Cancels whatever stage is in flight and abandons the rest of a range. Frames already
+    // published stay published -- a sequence export is a sequence of complete publications, not one
+    // transaction -- and the terminal outcome says how many landed. A no-op when nothing is
+    // running.
+    void requestCancellation();
 
   signals:
     void busyChanged();
+    // Emitted whenever publishedFrameCount() changes during a range export, so a progress readout
+    // never has to poll.
+    void rangeProgressChanged();
     // Typed outcome + a display-ready message, exactly like ProjectHost's saveFinished()/
     // openFinished() (never collapses a non-published or failed outcome into success).
     void exportFinished(bloom::ui::FrameExportOutcome outcome, QString message);
@@ -183,12 +226,43 @@ class FrameExportController final : public QObject {
         std::shared_ptr<std::optional<host::FrameExportPublicationResultV1>> result;
     };
 
+    // The in-flight frame range (task S5, item 3a). Absent for a single-frame export, which is what
+    // keeps every existing path byte-for-byte unchanged: the sequence is a driver that REUSES the
+    // single-frame stages rather than a second copy of them.
+    struct SequenceState final {
+        std::filesystem::path destination;
+        std::uint64_t firstFrame = 0;
+        std::uint64_t lastFrame = 0;
+        std::uint64_t nextFrame = 0;
+        std::uint64_t publishedFrames = 0;
+        document::FrameRate frameRate;
+        core::RationalTime duration;
+        // The plan is compiled ONCE for the whole range: a compiled plan is time-independent (every
+        // animated parameter is a curve index the evaluator samples at the request time), so
+        // recompiling per frame would be pure waste and could not change a pixel.
+        std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
+        // The artist approves ONCE, from the first frame's own completed attempt. Every subsequent
+        // frame still goes through approveFrameExportV1() with ITS OWN attempt and ITS OWN digest
+        // -- the byte-equality guard and the per-frame publication intent are never bypassed -- but
+        // the artist is not asked again. Asking per frame would make a hundred-frame range a
+        // hundred modal dialogs, which is not an approval, it is an obstacle.
+        bool approved = false;
+        bool cancelled = false;
+    };
+
     void pollOnce();
     void handleCompileResult(CompileHandle& compiling);
     void handleAttemptResult(host::OutputAnalysisAttemptRunnerV1& runner);
     void handleExportJobResult(ExportJobHandle& job);
     void presentApproval(const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt);
     void beginExportJob(std::unique_ptr<host::FrameExportRequestV1> request);
+    // Starts the attempt for `sequence_`'s next frame, or finishes the range when none is left.
+    void advanceSequence();
+    // Builds and submits one frame's attempt against an already-compiled plan at an exact time.
+    [[nodiscard]] bool
+    beginAttempt(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+                 core::RationalTime time);
+    void finishSequence(FrameExportOutcome outcome, QString message);
     void setActivity(FrameExportActivity activity);
     void finish(FrameExportOutcome outcome, QString message);
     [[nodiscard]] QString
@@ -208,7 +282,9 @@ class FrameExportController final : public QObject {
     std::filesystem::path scratchDirectory_;
 
     FrameExportDestinationProvider destinationProvider_;
+    FrameExportRangeProvider rangeProvider_;
     FrameExportApprovalDecisionProvider approvalDecisionProvider_;
+    std::optional<SequenceState> sequence_;
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;

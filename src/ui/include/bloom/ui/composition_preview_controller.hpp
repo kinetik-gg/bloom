@@ -96,6 +96,32 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
 
+    // --- Dropped-frame accounting (task S5, item 3b) -------------------------------------------
+    //
+    // How many preview frames this controller was ASKED for and never delivered, while counting is
+    // armed. A frame is counted dropped at exactly the three places this controller discards work
+    // it was asked to do:
+    //
+    //   * a newer request supersedes a pending one that had not been submitted yet (both the
+    //     active-task gate and the Interactive trailing-cadence window);
+    //   * a Visible request bypasses the cadence and discards an Interactive request still waiting
+    //     it out;
+    //   * an active task reaches terminal while a newer pending request exists, so its finished
+    //     result is thrown away unpublished.
+    //
+    // This is deliberately NOT a frame rate and makes no real-time claim: it counts requests the
+    // coalescing path dropped, which is the only honest number this layer actually knows. The
+    // transport's own decision to SKIP frame indices (PlaybackController recomputes its target from
+    // total elapsed time) never reaches this controller as a request at all and is therefore not
+    // counted here.
+    [[nodiscard]] std::uint64_t droppedFrameCount() const noexcept;
+    [[nodiscard]] bool isCountingDroppedFrames() const noexcept;
+    // Arms counting and RESETS the count to zero (the transport calls this from play()); disarms it
+    // (from pause()). While disarmed nothing is counted and the last run's total is kept at zero,
+    // so a surface showing it cannot display a stale figure from a previous playback run.
+    void beginDroppedFrameCounting();
+    void endDroppedFrameCounting();
+
   public slots:
     void requestRefresh();
     void beginShutdown();
@@ -111,6 +137,10 @@ class CompositionPreviewController final : public QObject {
 
   signals:
     void stateChanged();
+    // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
+    // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
+    // update()).
+    void droppedFrameCountChanged();
 
   private:
     struct ActiveRequest final {
@@ -140,6 +170,9 @@ class CompositionPreviewController final : public QObject {
     void cancelAndDetachActive() noexcept;
     void publish(CompositionPreviewState state);
     void flushCadence();
+    // One place increments the counter, so the three drop sites cannot disagree about whether a
+    // discard counts.
+    void noteDroppedFrame();
     [[nodiscard]] bool isCurrent(const ActiveRequest& request) const;
     [[nodiscard]] bool
     liveSessionMatches(const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept;
@@ -154,6 +187,8 @@ class CompositionPreviewController final : public QObject {
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;
     bool interactiveTimeChangeArmed_ = false;
+    bool countingDroppedFrames_ = false;
+    std::uint64_t droppedFrameCount_ = 0;
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
 };

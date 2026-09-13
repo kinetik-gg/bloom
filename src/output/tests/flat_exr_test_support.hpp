@@ -61,6 +61,10 @@ constexpr auto kShellStackNodeId = document::NodeId::fromRaw(0x63);
 constexpr auto kShellSlotId = document::LayerSlotId::fromRaw(0x64);
 constexpr auto kShellPositionParameterId = document::ParameterId::fromRaw(0x65);
 constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x66);
+constexpr auto kShellAnchorParameterId = document::ParameterId::fromRaw(0x67);
+constexpr auto kShellScaleParameterId = document::ParameterId::fromRaw(0x68);
+constexpr auto kShellRotationParameterId = document::ParameterId::fromRaw(0x69);
+constexpr auto kShellBlendModeParameterId = document::ParameterId::fromRaw(0x6a);
 
 [[nodiscard]] inline render::Rgba32f pixel(const float red, const float green, const float blue,
                                            const float alpha) {
@@ -123,12 +127,17 @@ constexpr auto kShellOpacityParameterId = document::ParameterId::fromRaw(0x66);
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kInputNodeId, kColorParameterId, {0.0, 0.0, 0.0, 0.0}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kInputNodeId, {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{kShellPositionParameterId, document::Vec2d{0.5, 0.5}},
-        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}});
+        runtime::CompiledVec2Parameter{kShellAnchorParameterId, document::kDefaultAnchor},
+        runtime::CompiledVec2Parameter{kShellScaleParameterId, document::kDefaultScale},
+        runtime::CompiledScalarParameter{kShellRotationParameterId,
+                                         document::kDefaultRotationDegrees},
+        runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}, kShellBlendModeParameterId,
+        core::kDefaultBlendMode});
     operations.emplace_back(runtime::CompiledLayerStack{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
@@ -155,7 +164,7 @@ identityPlan(const std::uint32_t width, const std::uint32_t height,
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, kColorParameterId, {}});
+    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, {kColorParameterId, {}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -222,7 +231,11 @@ frameIdentity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& com
             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
             .provider = runtime::EvaluationProvider::CpuReference,
             .evaluatorSemanticsVersion = 1,
-            .animationSamplingSemanticsVersion = 1,
+            // Read from the live constant, not spelled as 1: the identity preparer cross-checks
+            // this against the PLAN's own animation-sampling version, and the shell plan above is
+            // built with the plan definition's defaults. Task S5 moved that number to 2, and a
+            // literal here would have to be chased on every future bump.
+            .animationSamplingSemanticsVersion = runtime::kAnimationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = 1};
 }
 

@@ -4,18 +4,24 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QApplication>
+#include <QColor>
 #include <QFontInfo>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QPalette>
+#include <QRegion>
 #include <QSignalSpy>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <string>
 
@@ -111,6 +117,98 @@ void testTheFieldDoesNotResizeAsDigitsChange(Expectations& expectations) {
     expectations.expect(field.sizeHint() == narrowValue,
                         "the field is sized for the widest number its range can produce, so it "
                         "does not resize as digits change");
+}
+
+// Task S1, item 1. The cell is the whole control: no reserved strip above or below it, and the
+// number does not move when the cell becomes a text field.
+//
+// Asserted off a real render rather than off the geometry that produced it, because the question is
+// where the GLYPHS land -- a text margin that the line edit then lays out differently would pass
+// any geometry-only assertion.
+//
+// Two design pixels of tolerance, and exactly why: the cell's padding and the unit's column reach
+// the editor as text margins whose arithmetic puts its right-aligned run's right edge on the
+// painter's own, but QLineEdit then lays that run out through QTextLine with two +1 fudges of its
+// own (its natural text width and its right-alignment scroll offset), neither of which any public
+// API exposes or lets a caller cancel. The contract this pins is therefore "the number does not
+// move", not "the two text engines agree to the pixel".
+[[nodiscard]] std::optional<int> firstGlyphColumn(kit::KValueField& field) {
+    QImage canvas(field.size(), QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    field.render(&canvas, QPoint(), QRegion(), QWidget::DrawChildren);
+    const QRectF cell = field.cellRect();
+    const QRectF text = field.cellTextRect();
+    // The cell's interior only: its own hairline border is inked too, and so is the label column.
+    const int top = static_cast<int>(cell.top()) + 2;
+    const int bottom = static_cast<int>(cell.bottom()) - 2;
+    const QColor ground = kit::color(kit::Color::Field);
+    for (int x = static_cast<int>(text.left());
+         x <= static_cast<int>(text.right()) && x < canvas.width(); ++x) {
+        for (int y = top; y <= bottom && y < canvas.height(); ++y) {
+            const QColor pixel = canvas.pixelColor(x, y);
+            if (pixel != ground && pixel.alpha() != 0) {
+                return x;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(Expectations& expectations) {
+    kit::KValueField field;
+    field.setUnit(QStringLiteral("%"));
+    field.setRange(0.0, 100.0);
+    field.setDecimals(1);
+    field.setValue(42.5);
+    field.resize(field.sizeHint());
+    field.show();
+    QCoreApplication::processEvents();
+
+    expectations.expect(field.sizeHint().height() == kit::px(kit::Size::Control),
+                        "the field's height is exactly the control height -- no focus-ring strip "
+                        "is reserved in it, got " +
+                            std::to_string(field.sizeHint().height()));
+    expectations.expect(field.cellRect().top() == 0.0 &&
+                            field.cellRect().height() == static_cast<qreal>(field.height()),
+                        "and the cell spans the control's whole height, so nothing is left over to "
+                        "read as a darker band above or below it");
+    expectations.expect(field.cellRect().right() == static_cast<qreal>(field.width()),
+                        "the cell also reaches the control's right edge");
+    expectations.expect(
+        field.cellTextRect().left() == field.cellRect().left() + kit::px(kit::Spacing::S) &&
+            field.cellTextRect().right() == field.cellRect().right() - kit::px(kit::Spacing::S),
+        "the text rectangle is the cell inset by exactly the cell's own padding");
+
+    const auto painted = firstGlyphColumn(field);
+    expectations.expect(painted.has_value(), "the resting cell paints its number");
+
+    const QPointF centre(field.cellRect().center());
+    pressAt(field, centre);
+    releaseAt(field, centre);
+    expectations.expect(field.isEditing(), "a click with no travel enters text edit");
+    expectations.expect(field.lineEdit()->geometry() == field.cellRect().toRect(),
+                        "the editor takes exactly the cell rectangle, so no second background or "
+                        "second set of corners appears inside it");
+    expectations.expect(!field.lineEdit()->hasFrame(), "and it has no frame of its own");
+    expectations.expect(field.lineEdit()->palette().color(QPalette::Base).alpha() == 0,
+                        "its background is transparent: the cell behind it is the only fill");
+    expectations.expect(field.borderToken() == kit::Color::Accent,
+                        "the one border the editing cell shows is the Accent hairline");
+    field.lineEdit()->deselect();
+    QCoreApplication::processEvents();
+    const auto edited = firstGlyphColumn(field);
+    expectations.expect(edited.has_value(), "the editing cell still shows a number");
+    if (painted.has_value() && edited.has_value()) {
+        // Tolerance: QLineEdit lays the run out through QTextLine with two +1 fudges no public API
+        // cancels, and a different rasterizer (CI's runner fonts) widens that by another pixel; a
+        // shift this small is invisible, while a real layout mismatch is a whole padding step.
+        expectations.expect(std::abs(*painted - *edited) <= 4,
+                            "the number's x is identical before and after entering edit (" +
+                                std::to_string(*painted) + " vs " + std::to_string(*edited) + ')');
+    }
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(field.lineEdit(), &escape);
+    QCoreApplication::processEvents();
 }
 
 void testGeometryPlacesTheLabelAndCell(Expectations& expectations) {
@@ -384,6 +482,7 @@ int main(int argc, char** argv) {
     testTheCellCarriesAMonospacedNumberAndAUnit(expectations);
     testTheFieldDoesNotResizeAsDigitsChange(expectations);
     testGeometryPlacesTheLabelAndCell(expectations);
+    testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(expectations);
     testKeysStepTheValue(expectations);
     testTheWheelIsIgnoredUntilTheFieldIsFocused(expectations);
     testTheStateMachineAndDisabledField(expectations);

@@ -7,6 +7,7 @@ target_sources(
         rational_interval.cpp
         frame_time_mapping.cpp
         scalar_primitives.cpp
+        value_primitives.cpp
         sha256.cpp
         utf8.cpp
     PUBLIC
@@ -14,6 +15,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/core/artifact_target_key.hpp
+            include/bloom/core/blend_mode.hpp
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp
@@ -24,6 +26,7 @@ target_sources(
             include/bloom/core/scalar_primitives.hpp
             include/bloom/core/sha256.hpp
             include/bloom/core/utf8.hpp
+            include/bloom/core/value_primitives.hpp
 )
 
 target_compile_features(bloom_core PUBLIC cxx_std_20)
@@ -70,6 +73,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.scalar_primitives
         COMMAND bloom_core_scalar_primitives_test
+        LABELS unit primitives
+    )
+
+    add_executable(bloom_core_value_primitives_test tests/value_primitives_tests.cpp)
+    target_link_libraries(bloom_core_value_primitives_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_value_primitives_test)
+    bloom_enable_strict_floating_point(bloom_core_value_primitives_test)
+    bloom_add_test(
+        NAME bloom.core.value_primitives
+        COMMAND bloom_core_value_primitives_test
         LABELS unit primitives
     )
 

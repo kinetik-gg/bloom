@@ -23,5 +23,7 @@ namespace bloom::runtime {
 [[nodiscard]] CompiledScalarCurve
 compileAnimationCurve(const document::ScalarAnimationCurve& curve);
 [[nodiscard]] CompiledVec2Curve compileAnimationCurve(const document::Vec2AnimationCurve& curve);
+[[nodiscard]] CompiledColor4Curve
+compileAnimationCurve(const document::Color4AnimationCurve& curve);
 
 } // namespace bloom::runtime

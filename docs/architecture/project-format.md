@@ -4,16 +4,18 @@ Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
 Base64, UTF-8 string, and shared count/write JSON-layout primitives, canonical manifest encoding
-and schema checks, the normative document `1.0` schema artifact and checks, manifest requirement
+and schema checks, the normative document `1.4` schema artifact and checks, manifest requirement
 validation, durable allocator high-water state, opaque extension envelopes, the Linux
 staged-artifact close/reopen verification foundation, the version 1 canonical document writer
 over immutable snapshots with explicitly supplied color settings, strict bounded JSON parsing
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
-container reader and writer are implemented. Migration, format-specific semantic verification of
+container reader and writer, and the document `1.0` → `1.1` node-layout, `1.1` → `1.2` node-group,
+`1.2` → `1.3` animation-breadth, and `1.3` → `1.4` value-graph migrations are implemented.
+Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-08-29
+Updated: 2026-09-13
 
 ## Purpose And Ownership
 
@@ -35,24 +37,38 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The initial container version and document schema are both `1.0`. Version objects always contain
-JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
+The container version remains `1.0`; the current document schema is `1.4`.
+The earlier document `1.0`, `1.1`, `1.2`, and `1.3` artifacts are retained for migration fixtures.
+Version objects
+always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.0.schema.json` and `schemas/project/document-1.0.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.0` and
-`urn:kinetik:bloom:schema:project-document:1.0`. They declare the 2020-12 `$schema` and use only
-repository-local `$ref` targets during validation. A generic schema validator is useful for
-fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
+`schemas/project/manifest-1.4.schema.json` and `schemas/project/document-1.4.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.4` and
+`urn:kinetik:bloom:schema:project-document:1.4`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.4`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
+`1.3`, manifest and
+document -- remains checked, and each version's checker validates what its own minor adds and then
+reduces the artifact to its predecessor so the older checks run unchanged.
+
+Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
+value -- the third authoring vector width, with its own kind token rather than a third component on
+`vec2`, because the discriminators name TYPES -- and a `driver` parameter source carrying
+`sourceNodeId` and `outputPort`, structurally an edge source that lands in parameter-address space. A
+`1.3` document can contain neither, so the `1.3` → `1.4` migration rewrites only the version, exactly
+as the `1.2` → `1.3` step does. A live driver source is no longer an unsupported save feature: the
+writer can describe every parameter source the document layer holds. They declare the 2020-12
+`$schema` and use only repository-local `$ref` targets during validation. A generic schema validator
+is useful for fixtures, but it does not replace Bloom's duplicate-key, resource, canonical-decimal,
 cross-reference, allocator, graph, and preservation validation.
 
-`document-1.0.schema.json` contains required `$defs` named `colorSettings-1.0`,
+`document-1.4.schema.json` retains required `$defs` named `colorSettings-1.0`,
 `ocioConfigReference-1.0`, `ocioConfigLocator-1.0`, and `ocioContextVariable-1.0`. The project
 definition requires `colorSettings`; the OCIO reference definition requires every member specified
 below and selects one closed locator shape with `oneOf`. These definitions validate structure and
 lexical bounds. Project I/O additionally validates locator normalization, digest spelling, sorted
 context variables, locator/portability agreement, and the fixed v1 process Color Interop ID.
-`manifest-1.0.schema.json` contains a required `requirement-1.0` definition with the exact provider,
+`manifest-1.2.schema.json` retains a required `requirement-1.0` definition with the exact provider,
 capability, schema-version, and node-type-coverage members specified below.
 
 Known versioned object definitions permit additional members through
@@ -472,14 +488,15 @@ driver source encountered through a newer compatible container is unknown core s
 preserves the bounded archive as `PreservedReadOnly` rather than constructing a lossy placeholder
 or rewriting the source.
 
-The live document model may contain `DriverBindingSource` while driver authoring is being developed,
-but native v1 Save is intentionally a restricted supported-subset encoder. Its admission pass walks
-every parameter before creating a stage. If any live source is `DriverBindingSource`, Save returns
-`FailedBeforePublication` with typed `ProjectIoCode::UnsupportedDocumentFeature` and the exact
-composition/parameter path. It does not discard the driver, sample it into a constant, serialize an
-undeclared discriminator, or fall back to a degraded rewrite. This is an unsupported save feature,
-not invalid live document truth. Constant and animation-curve sources remain the complete writable
-v1 subset.
+Every parameter source the document layer can hold is writable from document `1.4` on. A
+`DriverBindingSource` is the durable `{sourceNodeId, outputPort}` pair it addresses, so the writer
+describes it the way it describes an edge source, and there is no parameter-source admission pass left
+to fail: a driver's own well-formedness -- a valid node id and valid structural port text -- is already
+refused by `ParameterStore` on insert, so a second check here could only ever be unreachable.
+
+Earlier minors had no shape for a driver at all, which is why a `1.3`-or-older archive carrying an
+on-disk `driver` source is a preserved-read-only result rather than a decode: the kind is gated on the
+minor that declares it, exactly as the `color4` animation-curve kind is.
 
 Constant values have one of these shapes and member orders:
 
@@ -517,8 +534,20 @@ Animation curve records are sorted by numeric `AnimationCurveId` and have one of
 }
 ```
 
+```json
+{
+  "id": "3",
+  "kind": "color4",
+  "keyframes": []
+}
+```
+
 A scalar key has `id`, `time`, `value`, then `outgoingInterpolation`; a `vec2` key replaces `value`
-with an object containing `x`, then `y`. Interpolation is exactly `hold` or `linear`.
+with an object containing `x`, then `y`; a `color4` key replaces it with an object containing `red`,
+`green`, `blue`, then `alpha` -- the same authoring order and straight-alpha meaning a constant
+`color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is exactly
+`hold`, `linear`, or `ease-in-out`. The `color4` curve kind and the `ease-in-out` token both arrive in
+document `1.3`; see **Animation Breadth In Document 1.3**.
 
 Keys are written in strictly increasing exact rational time. Equal normalized times are invalid, so
 `KeyframeId` never breaks a tie. Curves are non-empty; the final key's interpolation is canonical
@@ -577,18 +606,19 @@ Each value is inclusive:
 - a value below `uint64` maximum makes the next allocation `highestIssued + 1`
 - `18446744073709551615` means that maximum was issued and the namespace is permanently exhausted
 
-The exact allocator namespaces in schema `1.0` are `composition`, `node`, `edge`, `layer`,
-`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, and `extensionRecord`; no
-other member is accepted as a known v1 namespace. Every high-water value is an unsigned decimal
-string in `0..18446744073709551615`. Every declared object ID is an unsigned decimal string in
-`1..18446744073709551615`. The document's sole `ProjectId` has the same nonzero typed-ID domain but
-is not allocator-backed.
+The allocator namespaces in schema `1.0` are exactly `composition`, `node`, `edge`, `layer`,
+`layerSlot`, `parameter`, `animationCurve`, `keyframe`, `driverBinding`, and `extensionRecord`.
+Schema `1.2` appends one more, `nodeGroup`, after `extensionRecord`; see **Node Groups In Document
+1.2**. No other member is accepted as a known namespace at the version that declares it. Every
+high-water value is an unsigned decimal string in `0..18446744073709551615`. Every declared object
+ID is an unsigned decimal string in `1..18446744073709551615`. The document's sole `ProjectId` has
+the same nonzero typed-ID domain but is not allocator-backed.
 
-`driverBinding` remains required even though `DriverBindingSource` is outside the v1 writable
-parameter-source subset and no driver declaration table is serialized. The live allocator may have
-issued driver IDs before every driver source was removed; Save preserves that inclusive high-water
-so reopen can never reuse one. A nonzero `driverBinding` high-water with no live driver source is
-valid. A live driver source still fails Save with `UnsupportedDocumentFeature` as specified above.
+`driverBinding` remains required even though no driver declaration table is serialized and, from
+document `1.4` on, no record carries a `DriverBindingId` at all -- a driver source is the node-and-port
+pair it addresses. The live allocator may have issued driver IDs before that model; Save preserves
+that inclusive high-water so reopen can never reuse one, and a nonzero `driverBinding` high-water with
+nothing referencing it is valid and expected.
 
 Every serialized typed ID in a namespace must be nonzero and at most its high-water value. The
 high-water may exceed all surviving declarations because deleted and undone allocations remain
@@ -744,6 +774,47 @@ Open editability is explicit:
 - `PreservedReadOnly` cannot construct trusted complete core truth; it retains the original archive
   and permits inspection or byte-preserving Save Copy only.
 
+### Node Schema Upgrades
+
+A node's own `schemaVersion` is independent of the document's. A document may therefore declare a node
+at an older registered schema version than this build knows, and that is an expected, non-exceptional
+state: it is what every file written before a node type gained a parameter contains.
+
+Such a node is upgraded in memory between trusted decode and reconstruction, never refused and never
+routed to preservation. The rule:
+
+- The upgrade runs before any record is installed, so the live document model only ever sees current
+  truth and every existing checked adder and validation applies unchanged.
+- Parameters the newer schema added are injected at their registered defaults, and those defaults are
+  chosen so the upgraded document evaluates to the pixels the older build produced. Opening an older
+  file is therefore a silent, lossless upgrade, not a visible change.
+- Injected parameters take ids strictly above the document's persisted `idAllocation.highestIssued`
+  parameter value, and that value is raised to match, so a new id can collide with nothing the file
+  declares and the inclusive-watermark rule still holds.
+- A node that already binds an added role keeps its own binding; only missing roles are injected.
+- Upgraded bindings are put into canonical order, so an upgraded node is indistinguishable in ordering
+  from one the canonical writer emitted.
+- The upgrade is in-memory only. Nothing is written back until the document is saved, at which point
+  it is saved as current truth with the current node `schemaVersion`.
+- The upgrade is per node TYPE, not a generic "inject whatever the registry declares" loop: a future
+  type's upgrade may need to derive a value rather than take a default, and that decision belongs to
+  the type.
+- The only failure mode is a persisted parameter high water with no room left for the required ids,
+  which is reported as a typed `ReconstructionStage::NodeSchemaUpgrade` rejection naming the node.
+
+The upgrades that exist today both belong to `bloom.layer-output`, and one per-role table covers both
+steps because the injection rule is already per role rather than per version step:
+
+| From | Injected | Default |
+| --- | --- | --- |
+| version 1 | `bloom.transform.anchor`, `bloom.transform.scale`, `bloom.transform.rotation` | the identity transform |
+| version 1 or 2 | `bloom.layer.blend-mode` | `Normal`, the integer `0` |
+
+A version-1 node therefore receives all four and a version-2 node only the blend mode, from the same
+table, and either way the upgraded document evaluates to the pixels the build that wrote the file
+produced. See [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform" and "Blending", and
+[`color-management.md`](color-management.md), "Blend modes".
+
 ## Project I/O Boundary
 
 The public surface remains concrete rather than becoming a generic serializer. The conceptual
@@ -887,10 +958,12 @@ Acquisition, lock, offline build, provenance, and release evidence follow
   zeros, exponent boundaries, and invalid overflow
 - Unicode scalar, combining/non-normalized, astral, control, escaped-key collision, malformed UTF-8,
   and lone-surrogate fixtures
-- scalar/Vec2 animation, curve/key ownership, final-key normalization, graph connectivity, Layer
-  Stack order, future on-disk driver sources producing preserved-read-only results, live
-  `DriverBindingSource` producing typed `UnsupportedDocumentFeature` before staging, retained
-  `driverBinding` high-water after source removal, and source/schema mismatches
+- scalar/Vec2/Color4 animation, the `ease-in-out` token, the `1.2` → `1.3` version-only migration and
+  its minor gating, curve/key ownership, final-key normalization, graph connectivity, Layer
+  Stack order, the `1.3` → `1.4` version-only migration, the `vec3` constant and `driver`
+  parameter-source kinds and their minor gating, a live driver source encoding as the node-and-port
+  pair it addresses, retained `driverBinding` high-water with no record referencing it, and
+  source/schema mismatches
 - exact composition-domain boundaries for dimensions, pixel-count product, positive normalized
   frame rate and pixel aspect, and signed-64 positive duration rationals
 - exact, sorted, unique `providedNodeTypeIds` coverage for unavailable node types, including
@@ -923,3 +996,72 @@ Acquisition, lock, offline build, provenance, and release evidence follow
 [libzip 1.11.4]: https://libzip.org/documentation/
 [zlib 1.3.2]: https://github.com/madler/zlib/releases/tag/v1.3.2
 [yyjson 0.12.0]: https://github.com/ibireme/yyjson/releases/tag/0.12.0
+
+
+## Node Layout In Document 1.1
+
+`document-1.1.schema.json` adds a required `nodeLayout` member after `graph` in each composition.
+It is an array sorted by numeric `nodeId`; each record has exactly `nodeId`, `position` (`x`, `y`),
+`width`, `collapsed`, and `muted`, in that order. Position and width are finite Float64 values;
+width is positive. The booleans default to false. Unknown-node records survive with document
+warning diagnostics. Layout identity never advances node allocation watermarks. Future-minor
+additive members on layout records and their positions use normal round-trip preservation.
+
+The production `1.0` → `1.1` DOM migration preserves all existing fields and numeric spellings,
+changes only the document schema version, and appends the original four-column default layout
+in stored node order. It charges the operation budget and reparses before trusted decode. Old files
+are never rewritten by Open. Color-setting, OCIO, node,
+container, and extension schema versions remain independent and unchanged.
+
+## Node Groups In Document 1.2
+
+`document-1.2.schema.json` adds a required `nodeGroups` member after `nodeLayout` in each
+composition. It is an array sorted by numeric `groupId`; each record has exactly `groupId`, `name`,
+`members`, and `padding` (`x`, `y`), in that order. `members` is an array of node object ids sorted
+ascending and duplicate-free, `name` is a human-facing name, and both padding components are finite
+and nonnegative. Membership disjointness across groups and member existence are document-model
+validation rather than wire shape: a member naming an unknown node survives with a warning
+diagnostic, and a node claimed by two groups is a document error. Group identity never advances node
+allocation watermarks. Future-minor additive members on group records and their padding use normal
+round-trip preservation.
+
+`1.2` also adds the `nodeGroup` allocator namespace as the eleventh member of `highestIssued`, after
+`extensionRecord`. That member was previously unknown additive data, and giving it allocator meaning
+is exactly what an additive minor is for: a reader that does not know it preserves it as unknown
+singleton data, and a `1.2` reader understands it. The eleven-member shape is therefore its own
+`highestIssued-1.2` definition, and the historical ten-member `highestIssued-1.0` definition is left
+exactly as it shipped.
+
+The production `1.1` → `1.2` DOM migration preserves all existing fields and numeric spellings,
+changes only the document schema version, appends an empty `nodeGroups` array to every composition,
+and appends a zero `nodeGroup` high water: groups did not exist in `1.1`, so there is nothing to
+infer from an older file. It charges the operation budget and reparses before trusted decode, and
+each step refuses any document that is not its own source version, so the chain cannot be entered
+twice or out of order.
+
+## Animation Breadth In Document 1.3
+
+`document-1.3.schema.json` adds nothing to the MEMBER space and everything to the animation VALUE
+space. Its whole delta is two additions inside `animationCurves`:
+
+- a third curve kind, `color4`, whose keys carry a `value` object of `red`, `green`, `blue`, then
+  `alpha` in that order -- the authoring order and straight-alpha meaning the constant `color4`
+  parameter value already uses. `red`, `green`, and `blue` are any finite number, so negative and HDR
+  channels survive exactly; `alpha` is confined to `[0, 1]`, which is the authoring-color contract a
+  constant color already satisfies.
+- a third `outgoingInterpolation` token, `ease-in-out`, accepted on every curve kind's keys.
+
+Because the historical `animationCurve-1.0`, `scalarKeyframe-1.0`, and `vec2Keyframe-1.0` definitions
+are frozen, `1.3` mints its own `animationCurve-1.3`, `scalarKeyframe-1.3`, `vec2Keyframe-1.3`,
+`color4Keyframe-1.3`, `color4Value-1.3`, and `keyframeInterpolation-1.3`, and leaves the older ones
+exactly as they shipped -- the same precedent `highestIssued-1.2` set. Both additions are gated on the
+minor that DECLARES them: a file claiming `1.2` while carrying a `color4` curve or an `ease-in-out`
+token is a malformed `1.2` file and is refused, naming the exact member, while a file claiming a later
+minor carries them normally.
+
+The production `1.2` → `1.3` DOM migration is version-only: it preserves all existing fields and
+numeric spellings and changes nothing but the document schema version. A `1.2` file can contain
+neither of `1.3`'s additions, so there is nothing to add or infer -- the step exists so the chain has
+no hole, not because a `1.2` file is missing anything. It charges the operation budget and reparses
+before trusted decode, and each step refuses any document that is not its own source version, so the
+chain cannot be entered twice or out of order. Current writes emit at least minor 3.

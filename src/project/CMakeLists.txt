@@ -17,6 +17,8 @@ target_sources(
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_migration.cpp
+        document_layout_migration.cpp
+        document_decode_layout.cpp
         document_reconstruct.cpp
         manifest_decode.cpp
         manifest_requirements.cpp
@@ -317,6 +319,38 @@ if(BUILD_TESTING)
         NAME bloom.project.save_archive
         COMMAND bloom_project_save_archive_test
         LABELS unit project persistence security
+    )
+
+    add_executable(bloom_project_node_layout_test tests/node_layout_persistence_tests.cpp)
+    target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_node_layout_test)
+    bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
+
+    add_executable(bloom_project_node_group_test tests/node_group_persistence_tests.cpp)
+    target_link_libraries(bloom_project_node_group_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_node_group_test)
+    bloom_add_test(NAME bloom.project.node-groups COMMAND bloom_project_node_group_test LABELS unit persistence)
+
+    add_executable(bloom_project_animation_breadth_test tests/animation_breadth_persistence_tests.cpp)
+    target_link_libraries(bloom_project_animation_breadth_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_animation_breadth_test)
+    bloom_add_test(
+        NAME bloom.project.animation-breadth
+        COMMAND bloom_project_animation_breadth_test
+        LABELS unit persistence
+    )
+
+    add_executable(bloom_project_value_graph_test tests/value_graph_persistence_tests.cpp)
+    target_include_directories(
+        bloom_project_value_graph_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_value_graph_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_value_graph_test)
+    bloom_add_test(
+        NAME bloom.project.value-graph
+        COMMAND bloom_project_value_graph_test
+        LABELS unit persistence
     )
 
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)

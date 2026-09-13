@@ -58,6 +58,8 @@ using detail::matchOrderedMembers;
 
 using document::AnimationCurveId;
 using document::AnimationCurveRecord;
+using document::Color4AnimationCurve;
+using document::Color4Keyframe;
 using document::EdgeId;
 using document::EdgeRecord;
 using document::InputPortRef;
@@ -80,6 +82,7 @@ using document::ScalarKeyframe;
 using document::Vec2AnimationCurve;
 using document::Vec2d;
 using document::Vec2Keyframe;
+using document::Vec3d;
 
 // Not noexcept: DecodeState::fail() takes its path argument by value, so a failing call here copies
 // `path` into that by-value parameter -- an allocation that can throw std::bad_alloc. Marking this
@@ -197,6 +200,28 @@ using document::Vec2Keyframe;
         out = value;
         return true;
     }
+    if (kindText == "vec3" && state.documentMinor >= 4) {
+        // Gated on the minor exactly as the Color4 curve kind is: a 1.3 or older document cannot
+        // contain this kind, so accepting it there would accept a file no 1.3 writer could have
+        // produced.
+        static constexpr std::array<std::string_view, 4> keys{"kind", "x", "y", "z"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        Vec3d value;
+        if (!decodeFloat64Member(*members[1], state, joinPath(path, "x"), value.x)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*members[2], state, joinPath(path, "y"), value.y)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*members[3], state, joinPath(path, "z"), value.z)) {
+            return false;
+        }
+        out = value;
+        return true;
+    }
     if (kindText == "color4") {
         static constexpr std::array<std::string_view, 5> keys{"kind", "red", "green", "blue",
                                                               "alpha"};
@@ -297,6 +322,28 @@ using document::Vec2Keyframe;
         out = document::AnimationCurveSource{curveId};
         return true;
     }
+    if (kindText == "driver" && state.documentMinor >= 4) {
+        // Document 1.4. Decoded on exactly an edge source's terms -- an object id and a port name,
+        // with no more checking than decodeOutputPortRef() does. Whether the name is valid
+        // structural text, whether the node EXISTS, and whether its kind fits are all the graph's
+        // own validation to answer once every node is decoded, which is the same order an edge's
+        // endpoints follow.
+        static constexpr std::array<std::string_view, 3> keys{"kind", "sourceNodeId", "outputPort"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        NodeId sourceNodeId;
+        if (!decodeObjectId(*members[1], state, joinPath(path, "sourceNodeId"), sourceNodeId)) {
+            return false;
+        }
+        std::string_view port;
+        if (!decodeStringMember(*members[2], state, joinPath(path, "outputPort"), port)) {
+            return false;
+        }
+        out = document::DriverBindingSource{sourceNodeId, std::string(port)};
+        return true;
+    }
 
     return failUnknownDiscriminator(state, joinPath(path, "kind"),
                                     DocumentDecodeError::UnsupportedParameterSource);
@@ -394,6 +441,16 @@ using document::Vec2Keyframe;
     }
     if (text == "linear") {
         out = KeyframeInterpolation::Linear;
+        return true;
+    }
+    // Gated on the minor that DECLARES it, exactly as the composition's own member count is
+    // (document_decode.cpp's decodeComposition): a file claiming 1.2 carrying a 1.3 token is a
+    // malformed 1.2 file, not data to accept silently. A real older file never reaches here with
+    // this token -- the migration ladder rewrites the version before trusted decode -- and an
+    // OLDER build reading a 1.3 file preserves the unknown token read-only through
+    // failUnknownDiscriminator()'s own route.
+    if (text == "ease-in-out" && state.documentMinor >= 3) {
+        out = KeyframeInterpolation::EaseInOut;
         return true;
     }
     state.fail(DocumentDecodeError::InvalidInterpolation, path);
@@ -507,6 +564,68 @@ using document::Vec2Keyframe;
     return true;
 }
 
+[[nodiscard]] bool decodeColor4Keyframe(const JsonValue& node, DecodeState& state,
+                                        const std::string& path, Color4Keyframe& out) {
+    static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
+                                                          "outgoingInterpolation"};
+    std::vector<const JsonValue*> members;
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
+        return false;
+    }
+
+    document::KeyframeId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
+        return false;
+    }
+
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr) {
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    }
+
+    core::RationalTime time;
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
+            return false;
+        }
+    }
+
+    const auto valuePath = joinPath(path, "value");
+    static constexpr std::array<std::string_view, 4> valueKeys{"red", "green", "blue", "alpha"};
+    std::vector<const JsonValue*> valueMembers;
+    core::Color4d value;
+    {
+        const AttachmentScope valueScope(state, "value");
+        if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
+            return false;
+        }
+        if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "red"), value.red) ||
+            !decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "green"),
+                                 value.green) ||
+            !decodeFloat64Member(*valueMembers[2], state, joinPath(valuePath, "blue"),
+                                 value.blue) ||
+            !decodeFloat64Member(*valueMembers[3], state, joinPath(valuePath, "alpha"),
+                                 value.alpha)) {
+            return false;
+        }
+    }
+
+    KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
+    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
+                             interpolation)) {
+        return false;
+    }
+
+    out.id = id;
+    out.time = time;
+    out.value = value;
+    out.outgoingInterpolation = interpolation;
+    return true;
+}
+
 // Shared keyframe-array shape: non-empty, strictly increasing exact rational time, and a
 // canonical Linear final interpolation (docs/architecture/project-format.md, "Animation").
 template <typename Keyframe, typename DecodeOne>
@@ -594,6 +713,22 @@ template <typename Keyframe, typename DecodeOne>
         curve.id = id;
         if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
                                  decodeVec2Keyframe)) {
+            return false;
+        }
+        out = std::move(curve);
+        return true;
+    }
+    // Same minor gate as the ease-in-out token above: the colour curve kind arrives in 1.3.
+    if (kindText == "color4" && state.documentMinor >= 3) {
+        static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+            return false;
+        }
+        Color4AnimationCurve curve;
+        curve.id = id;
+        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
+                                 decodeColor4Keyframe)) {
             return false;
         }
         out = std::move(curve);

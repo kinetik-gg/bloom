@@ -7,6 +7,7 @@
 #include <QEvent>
 #include <QFrame>
 #include <QKeyEvent>
+#include <QLayout>
 #include <QListView>
 #include <QMouseEvent>
 #include <QPainterPath>
@@ -127,8 +128,20 @@ void KDropdownPopup::applyRoundedListMask() {
     // the frame's own corner rather than a second, differently-curved one.
     const auto corner =
         static_cast<qreal>(std::max(0, radiusPx(Radius::Small, extent) - frameBorderWidth()));
+    // Only the edges the list actually shares with the frame are rounded (task S1, item 4). A
+    // search popup puts its filter field above the list, so the list's top edge is in the MIDDLE of
+    // the surface; rounding it there carved two notches under the field -- a second rounding with
+    // nothing behind it to curve around. An edge that must stay square is handled by extending the
+    // rounded rectangle past it, so its corners fall outside the widget and only straight sides
+    // remain inside.
+    const auto* surfaceLayout = surface_->layout();
+    const int index = surfaceLayout == nullptr ? 0 : surfaceLayout->indexOf(view_);
+    const int last = surfaceLayout == nullptr ? 0 : surfaceLayout->count() - 1;
+    const qreal top = index <= 0 ? 0.0 : -corner;
+    const qreal bottom = index >= last ? 0.0 : corner;
     QPainterPath path;
-    path.addRoundedRect(QRectF(QPointF(0.0, 0.0), QSizeF(size)), corner, corner);
+    path.addRoundedRect(QRectF(QPointF(0.0, 0.0), QSizeF(size)).adjusted(0.0, top, 0.0, bottom),
+                        corner, corner);
     view_->setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 

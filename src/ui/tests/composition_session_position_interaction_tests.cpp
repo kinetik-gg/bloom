@@ -224,10 +224,21 @@ void testDrivenAndAnimatedParameterRejections() {
 
     // Driven.
     {
+        // ADAPTED (task S7): a driver names the value-graph output it reads, and the kinds have to
+        // connect -- so the fixture adds the Vector2 value node a position can be driven from.
+        commands::Transaction addValue("Add value node", document.snapshot().revision());
+        addValue.emplace<commands::AddNode>(
+            compositionId, std::string(document::kVector2ValueNodeType), document::Vec2d{9.0, 9.0});
+        const auto valueResult = stack.execute(std::move(addValue));
+        const auto valueNode = valueResult.outputId<document::NodeId>(commands::kAddNodeOutput);
+        if (!valueNode.has_value()) {
+            require(false, "the driven fixture adds its Vector2 value node");
+            return;
+        }
         commands::Transaction drive("Drive position", document.snapshot().revision());
         drive.emplace<commands::SetParameterSource>(
             compositionId, ids.position,
-            document::DriverBindingSource{document::DriverBindingId::fromRaw(1)});
+            document::DriverBindingSource{*valueNode, std::string(document::kValuePortName)});
         require(stack.execute(std::move(drive)).changed(), "test position becomes driver-backed");
     }
     ui::CompositionSession drivenSession(document, stack, compositionId);
@@ -506,7 +517,7 @@ void testInvalidationOnCompositionSwitchAndStaleRevision() {
     require(session.setComposition(firstCompositionId), "session switches back");
     session.selectLayer(ids.layer);
     require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds again");
-    require(session.addTextLayer(QStringLiteral("Unrelated"), QStringLiteral("Unrelated")),
+    require(session.addSolidLayer(QStringLiteral("Unrelated"), {1, 1, 1, 1}),
             "an unrelated edit advances the document revision");
     require(!session.positionInteractionActive(),
             "a snapshot change that breaks the frozen base revision cancels the interaction");

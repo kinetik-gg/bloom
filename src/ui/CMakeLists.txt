@@ -23,6 +23,7 @@ target_sources(
         kit/color_sampler.cpp
         kit/color_swatches.cpp
         kit/dropdown.cpp
+        kit/search_popup.cpp
         kit/dropdown_popup.cpp
         kit/fonts.cpp
         kit/icons.cpp
@@ -48,6 +49,7 @@ target_sources(
             include/bloom/ui/kit/color_sampler.hpp
             include/bloom/ui/kit/color_swatches.hpp
             include/bloom/ui/kit/dropdown.hpp
+            include/bloom/ui/kit/search_popup.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
@@ -222,6 +224,11 @@ target_sources(
         main_window.cpp
         media_editor.cpp
         node_editor.cpp
+        node_editor_canvas.cpp
+        node_editor_items.cpp
+        node_editor_interactions.cpp
+        node_editor_add.cpp
+        node_editor_menus.cpp
         playback_controller.cpp
         project_host.cpp
         properties_editor.cpp

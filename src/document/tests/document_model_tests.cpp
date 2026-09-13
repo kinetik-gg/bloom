@@ -48,6 +48,10 @@ using bloom::document::DriverBindingSource;
 using bloom::document::EdgeId;
 using bloom::document::EdgeRecord;
 using bloom::document::FrameRate;
+using bloom::document::kDefaultAnchor;
+using bloom::document::kDefaultBlendModeValue;
+using bloom::document::kDefaultRotationDegrees;
+using bloom::document::kDefaultScale;
 using bloom::document::LayerId;
 using bloom::document::LayerOutputBoundary;
 using bloom::document::LayerSlotId;
@@ -121,6 +125,16 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
     constexpr auto opacityB = id<ParameterId>(41);
     constexpr auto positionA = id<ParameterId>(42);
     constexpr auto positionB = id<ParameterId>(43);
+    constexpr auto anchorA = id<ParameterId>(44);
+    constexpr auto anchorB = id<ParameterId>(45);
+    constexpr auto scaleA = id<ParameterId>(46);
+    constexpr auto scaleB = id<ParameterId>(47);
+    constexpr auto rotationA = id<ParameterId>(48);
+    constexpr auto rotationB = id<ParameterId>(49);
+    // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding, so the
+    // fixture declares one per layer at the schema default.
+    constexpr auto blendModeA = id<ParameterId>(50);
+    constexpr auto blendModeB = id<ParameterId>(51);
 
     CanonicalGraph graph(stackNode);
     NodeRecord sourceNodeA{sourceA, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
@@ -129,7 +143,11 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
         std::string(bloom::document::kLayerOutputNodeType),
         {
             {std::string(bloom::document::kPositionParameterRole), positionA},
+            {std::string(bloom::document::kAnchorParameterRole), anchorA},
+            {std::string(bloom::document::kScaleParameterRole), scaleA},
+            {std::string(bloom::document::kRotationParameterRole), rotationA},
             {std::string(bloom::document::kOpacityParameterRole), opacityA},
+            {std::string(bloom::document::kBlendModeParameterRole), blendModeA},
         },
         bloom::document::kLayerOutputNodeSchemaVersion};
     NodeRecord sourceNodeB{sourceB, "bloom.test.source", {}, kTestSourceNodeSchemaVersion};
@@ -138,7 +156,11 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
         std::string(bloom::document::kLayerOutputNodeType),
         {
             {std::string(bloom::document::kPositionParameterRole), positionB},
+            {std::string(bloom::document::kAnchorParameterRole), anchorB},
+            {std::string(bloom::document::kScaleParameterRole), scaleB},
+            {std::string(bloom::document::kRotationParameterRole), rotationB},
             {std::string(bloom::document::kOpacityParameterRole), opacityB},
+            {std::string(bloom::document::kBlendModeParameterRole), blendModeB},
         },
         bloom::document::kLayerOutputNodeSchemaVersion};
     NodeRecord stackRecord{stackNode,
@@ -193,7 +215,31 @@ template <typename Id> [[nodiscard]] constexpr Id id(const std::uint64_t value) 
                                           ConstantValueSource{Vec2d{0.0, 0.0}}}) ||
         !composition.parameters().insert({positionB,
                                           std::string(bloom::document::kPositionParameterSchemaKey),
-                                          ConstantValueSource{Vec2d{0.0, 0.0}}})) {
+                                          ConstantValueSource{Vec2d{0.0, 0.0}}}) ||
+        !composition.parameters().insert({anchorA,
+                                          std::string(bloom::document::kAnchorParameterSchemaKey),
+                                          ConstantValueSource{kDefaultAnchor}}) ||
+        !composition.parameters().insert({anchorB,
+                                          std::string(bloom::document::kAnchorParameterSchemaKey),
+                                          ConstantValueSource{kDefaultAnchor}}) ||
+        !composition.parameters().insert({scaleA,
+                                          std::string(bloom::document::kScaleParameterSchemaKey),
+                                          ConstantValueSource{kDefaultScale}}) ||
+        !composition.parameters().insert({scaleB,
+                                          std::string(bloom::document::kScaleParameterSchemaKey),
+                                          ConstantValueSource{kDefaultScale}}) ||
+        !composition.parameters().insert({rotationA,
+                                          std::string(bloom::document::kRotationParameterSchemaKey),
+                                          ConstantValueSource{kDefaultRotationDegrees}}) ||
+        !composition.parameters().insert({rotationB,
+                                          std::string(bloom::document::kRotationParameterSchemaKey),
+                                          ConstantValueSource{kDefaultRotationDegrees}}) ||
+        !composition.parameters().insert(
+            {blendModeA, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{kDefaultBlendModeValue}}) ||
+        !composition.parameters().insert(
+            {blendModeB, std::string(bloom::document::kBlendModeParameterSchemaKey),
+             ConstantValueSource{kDefaultBlendModeValue}})) {
         throw std::logic_error("Could not create parameters");
     }
 
@@ -279,11 +325,18 @@ void testIdsAndParameters(ExpectationContext& expectations) {
                             std::string(bloom::document::kOpacityParameterSchemaKey),
                             ConstantValueSource{std::string("opaque")}}),
         "known schemas reject a wrong-type constant during insertion");
-    expectations.expect(!parameters.setSource(parameterId, DriverBindingSource{DriverBindingId{}}),
-                        "invalid driver source is rejected");
+    // Task S7 made a driver source the durable node-and-port pair it addresses, so "invalid" is now
+    // a malformed reference rather than a zero id: an unset node, or a port name that is not valid
+    // structural text.
     expectations.expect(
-        parameters.setSource(parameterId, DriverBindingSource{id<DriverBindingId>(7)}),
-        "source changes are explicit and mutually exclusive");
+        !parameters.setSource(parameterId, DriverBindingSource{NodeId{}, std::string("result")}),
+        "a driver source naming no node is rejected");
+    expectations.expect(
+        !parameters.setSource(parameterId, DriverBindingSource{id<NodeId>(7), std::string()}),
+        "a driver source naming no output port is rejected");
+    expectations.expect(parameters.setSource(
+                            parameterId, DriverBindingSource{id<NodeId>(7), std::string("result")}),
+                        "source changes are explicit and mutually exclusive");
     expectations.expect(
         std::holds_alternative<DriverBindingSource>(parameters.find(parameterId)->source),
         "driver source replaces the prior constant source");

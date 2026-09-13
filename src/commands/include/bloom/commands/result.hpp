@@ -26,6 +26,8 @@ enum class OperationIssueCode {
     MissingReference,
     InvalidOrder,
     Unsupported,
+    GraphCycle,
+    SocketKindMismatch,
 };
 
 struct OperationIssue {
@@ -38,7 +40,7 @@ struct OperationIssue {
 using DurableObjectId =
     std::variant<document::CompositionId, document::NodeId, document::EdgeId, document::LayerId,
                  document::LayerSlotId, document::ParameterId, document::AnimationCurveId,
-                 document::KeyframeId, document::DriverBindingId>;
+                 document::KeyframeId, document::DriverBindingId, document::NodeGroupId>;
 
 struct OperationOutput {
     std::string name;

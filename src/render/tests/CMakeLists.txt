@@ -15,3 +15,13 @@ bloom_add_test(
     COMMAND bloom_render_cpu_image_primitives_test
     LABELS unit primitives
 )
+
+add_executable(bloom_render_text_raster_test text_raster_test.cpp)
+target_link_libraries(bloom_render_text_raster_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_text_raster_test)
+bloom_enable_strict_floating_point(bloom_render_text_raster_test)
+bloom_add_test(
+    NAME bloom.render.text_raster
+    COMMAND bloom_render_text_raster_test
+    LABELS unit primitives text
+)

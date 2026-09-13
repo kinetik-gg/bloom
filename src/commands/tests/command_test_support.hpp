@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -57,6 +58,15 @@ inline constexpr ParameterId kOpacityId = ParameterId::fromRaw(60);
 inline constexpr ParameterId kSecondOpacityId = ParameterId::fromRaw(61);
 inline constexpr ParameterId kFirstPositionId = ParameterId::fromRaw(62);
 inline constexpr ParameterId kSecondPositionId = ParameterId::fromRaw(63);
+inline constexpr ParameterId kFirstAnchorId = ParameterId::fromRaw(64);
+inline constexpr ParameterId kSecondAnchorId = ParameterId::fromRaw(65);
+inline constexpr ParameterId kFirstScaleId = ParameterId::fromRaw(66);
+inline constexpr ParameterId kSecondScaleId = ParameterId::fromRaw(67);
+inline constexpr ParameterId kFirstRotationId = ParameterId::fromRaw(68);
+inline constexpr ParameterId kSecondRotationId = ParameterId::fromRaw(69);
+// ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
+inline constexpr ParameterId kFirstBlendModeId = ParameterId::fromRaw(70);
+inline constexpr ParameterId kSecondBlendModeId = ParameterId::fromRaw(71);
 
 class TestContext final {
   public:
@@ -98,7 +108,11 @@ inline void requireFixture(const bool condition, const std::string_view message)
                        std::string(document::kLayerOutputNodeType),
                        {
                            {std::string(document::kPositionParameterRole), kFirstPositionId},
+                           {std::string(document::kAnchorParameterRole), kFirstAnchorId},
+                           {std::string(document::kScaleParameterRole), kFirstScaleId},
+                           {std::string(document::kRotationParameterRole), kFirstRotationId},
                            {std::string(document::kOpacityParameterRole), kOpacityId},
+                           {std::string(document::kBlendModeParameterRole), kFirstBlendModeId},
                        },
                        document::kLayerOutputNodeSchemaVersion}),
         "fixture first Layer Output node must be accepted");
@@ -107,7 +121,11 @@ inline void requireFixture(const bool condition, const std::string_view message)
                        std::string(document::kLayerOutputNodeType),
                        {
                            {std::string(document::kPositionParameterRole), kSecondPositionId},
+                           {std::string(document::kAnchorParameterRole), kSecondAnchorId},
+                           {std::string(document::kScaleParameterRole), kSecondScaleId},
+                           {std::string(document::kRotationParameterRole), kSecondRotationId},
                            {std::string(document::kOpacityParameterRole), kSecondOpacityId},
+                           {std::string(document::kBlendModeParameterRole), kSecondBlendModeId},
                        },
                        document::kLayerOutputNodeSchemaVersion}),
         "fixture second Layer Output node must be accepted");
@@ -151,6 +169,29 @@ inline void requireFixture(const bool condition, const std::string_view message)
                        {kSecondPositionId, std::string(document::kPositionParameterSchemaKey),
                         ConstantValueSource{Vec2d{0.0, 0.0}}}),
                    "fixture second position parameter must be accepted");
+    // The three transform breadth parameters and the blend mode every Layer Output now binds. Both
+    // layers carry them at their schema defaults -- the identity transform and Normal blending --
+    // so a fixture that says nothing about either behaves exactly as it did before task S4.
+    for (const auto& [anchorId, scaleId, rotationId, blendModeId] :
+         {std::tuple{kFirstAnchorId, kFirstScaleId, kFirstRotationId, kFirstBlendModeId},
+          std::tuple{kSecondAnchorId, kSecondScaleId, kSecondRotationId, kSecondBlendModeId}}) {
+        requireFixture(composition.parameters().insert(
+                           {anchorId, std::string(document::kAnchorParameterSchemaKey),
+                            ConstantValueSource{document::kDefaultAnchor}}),
+                       "fixture anchor parameter must be accepted");
+        requireFixture(composition.parameters().insert(
+                           {scaleId, std::string(document::kScaleParameterSchemaKey),
+                            ConstantValueSource{document::kDefaultScale}}),
+                       "fixture scale parameter must be accepted");
+        requireFixture(composition.parameters().insert(
+                           {rotationId, std::string(document::kRotationParameterSchemaKey),
+                            ConstantValueSource{document::kDefaultRotationDegrees}}),
+                       "fixture rotation parameter must be accepted");
+        requireFixture(composition.parameters().insert(
+                           {blendModeId, std::string(document::kBlendModeParameterSchemaKey),
+                            ConstantValueSource{document::kDefaultBlendModeValue}}),
+                       "fixture blend mode parameter must be accepted");
+    }
 
     Project project(kProjectId, "Original Project");
     requireFixture(project.addComposition(std::move(composition)),

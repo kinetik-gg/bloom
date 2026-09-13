@@ -6,7 +6,10 @@ bytes are checked in here and shipped inside the Bloom binary or its resources.
 
 Third-party libraries Bloom builds from pinned upstream source archives rather than vendoring are
 inventoried separately in `dependencies/dependencies.lock.json`, with their license texts,
-provenance, review, and security records under `dependencies/licenses/`.
+provenance, review, and security records under `dependencies/licenses/`. One vendored component --
+`stb_truetype` -- keeps its records in that same shape without a lock entry, because its bytes are
+checked in here rather than acquired by the superbuild; it is listed below like every other vendored
+component, and its own records explain why the lock cannot represent it.
 
 ## Vendored interface assets
 
@@ -51,3 +54,25 @@ the SIL Open Font License, Version 1.1. The complete license text is at
 Bloom vendors the Geist Mono Regular and Medium static TTFs, unmodified, from the pinned `v1.7.2`
 release. The Geist sans family, the Geist Pixel family, the variable fonts, and the italic faces
 are not vendored.
+
+## Vendored source libraries
+
+| Component | Version | License | Files | Records |
+| --- | --- | --- | --- | --- |
+| stb_truetype | 1.26 (commit `6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760`) | MIT OR Unlicense | `src/render/third_party/stb_truetype/` | `dependencies/licenses/stb_truetype/` |
+
+### stb_truetype
+
+Copyright (c) 2017 Sean Barrett (<https://github.com/nothings/stb>). Dual-licensed at the
+recipient's choice under the MIT License or released into the public domain (Unlicense); Bloom
+distributes under the MIT alternative and ships the notice it requires. The complete license text is
+at `src/render/third_party/stb_truetype/LICENSE`, byte-identical to the upstream `LICENSE` at the
+pinned commit, and again at `dependencies/licenses/stb_truetype/LICENSE`.
+
+Bloom vendors the single `stb_truetype.h` header, unmodified, and compiles it into `bloom_render`
+for Qt-free CPU glyph rasterization on the reference evaluation path. It is not a superbuild
+dependency and has no entry in `dependencies/dependencies.lock.json`: nothing is downloaded by a
+build and nothing is installed into a qualified prefix. Its acquisition provenance, license review,
+and security review live under `dependencies/licenses/stb_truetype/`; the security review records
+that this library is qualified only for the font bytes Bloom itself pins, never for an untrusted
+font file.

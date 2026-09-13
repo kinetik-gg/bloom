@@ -55,6 +55,8 @@ ValidationResult Composition::validate() const {
     result.append("animationCurves", animationCurves_.validate());
     result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));
     result.append("graph", graph_.validate(parameters_));
+    result.append("", validateNodeLayout(nodeLayout_, graph_));
+    result.append("", validateNodeGroups(nodeGroups_, graph_));
     return result;
 }
 
@@ -135,6 +137,7 @@ ValidationResult Project::validate() const {
     std::unordered_map<KeyframeId, std::size_t> keyframeDeclarations;
     std::unordered_map<LayerId, std::size_t> layerDeclarations;
     std::unordered_map<LayerSlotId, std::size_t> layerSlotDeclarations;
+    std::unordered_map<NodeGroupId, std::size_t> nodeGroupDeclarations;
 
     for (std::size_t compositionOrdinal = 0; compositionOrdinal < compositions_.size();
          ++compositionOrdinal) {
@@ -189,6 +192,12 @@ ValidationResult Project::validate() const {
                                                  std::to_string(boundary.layerId.value()) +
                                                  "].layerId",
                                              "Layer", layerDeclarations, result);
+        }
+        for (const auto& [groupId, group] : composition.nodeGroups()) {
+            validateProjectUniqueDeclaration(groupId, compositionOrdinal,
+                                             path + ".nodeGroups[" +
+                                                 std::to_string(groupId.value()) + "].id",
+                                             "Node group", nodeGroupDeclarations, result);
         }
         for (const auto& entry : composition.graph().layerStack().entries()) {
             validateProjectUniqueDeclaration(entry.slotId, compositionOrdinal,

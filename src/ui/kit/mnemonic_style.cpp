@@ -213,7 +213,7 @@ QSize AltUnderlineProxyStyle::sizeFromContents(const ContentsType type, const QS
         return QProxyStyle::sizeFromContents(type, option, size, widget);
     }
     if (item->menuItemType == QStyleOptionMenuItem::Separator) {
-        return {size.width(), px(Spacing::MenuItemY) * 2};
+        return {std::max(size.width(), px(Size::MenuMinWidth)), px(Spacing::MenuItemY) * 2};
     }
 
     const QFontMetrics metrics(item->font);
@@ -228,7 +228,11 @@ QSize AltUnderlineProxyStyle::sizeFromContents(const ContentsType type, const QS
     }
     const int height =
         std::max(metrics.height(), menuIconColumnWidth()) + px(Spacing::MenuItemY) * 2;
-    return {std::max(width, size.width()), height};
+    // Every row claims at least Size::MenuMinWidth (task S1, item 3). A menu's width is the widest
+    // row it holds, so this is what stops a short menu -- "Fit", "100%", "Cut" -- from collapsing
+    // to a sliver the pointer has to aim at; it is applied to the row rather than to the popup so
+    // the rows still run edge to edge inside the frame and their hover bars stay full width.
+    return {std::max({width, size.width(), px(Size::MenuMinWidth)}), height};
 }
 
 } // namespace bloom::ui::kit
