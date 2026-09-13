@@ -1215,7 +1215,7 @@ template <typename Keyframe, typename DecodeOne>
         std::array<std::uint8_t, 3> rgb{};
         for (std::size_t i = 0; i < rgb.size(); ++i) {
             std::uint32_t channel = 0;
-            if (!decodeUInt32Member(values[i], state, joinPathIndex(joinPath(path, "labelColor"), i), channel)) return false;
+            if (!decodeUInt32Member(values[i], state, joinPathIndex(joinPath(path, "labelColor"), i), 255, channel)) return false;
             if (channel > 255) { state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "labelColor")); return false; }
             rgb[i] = static_cast<std::uint8_t>(channel);
         }

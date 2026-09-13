@@ -52,17 +52,6 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
             copyId = std::get<document::LayerId>(output.id);
     auto* copy = composition->graph().findLayer(copyId);
     if (!copy) return detail::invalidTarget();
-    // Duplicate the boundary and its own parameters, retaining shared upstream graph inputs.
-    const auto edges = std::vector(composition->graph().edges().begin(), composition->graph().edges().end());
-    for (auto edge : edges) {
-        auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
-        if (!input || input->nodeId != original.nodeId) continue;
-        const auto id = draft.ids().allocateEdge();
-        if (!id) return detail::exhaustedIds();
-        edge.id = *id;
-        input->nodeId = copy->nodeId;
-        if (!composition->graph().addEdge(std::move(edge))) return detail::invalidTarget();
-    }
     composition->graph().findLayer(layer_)->outPoint = *time;
     copy->inPoint = *time;
     copy->outPoint = original.outPoint;

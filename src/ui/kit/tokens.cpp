@@ -129,6 +129,8 @@ Shadow shadow(const Elevation token) {
     switch (token) {
     case Elevation::Flat:
         return {};
+    case Elevation::TimelineBar:
+        return {0, 1, 2, QColor(0, 0, 0, 64)};
     case Elevation::Popup:
         return {0, 4, 16, QColor(0, 0, 0, 128)};
     case Elevation::Dialog:

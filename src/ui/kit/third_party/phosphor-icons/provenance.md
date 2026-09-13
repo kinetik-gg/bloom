@@ -167,3 +167,15 @@ Reproduce with:
 Pinned and reviewed. A change to the icon set -- adding an icon, changing a weight, or moving to
 a new upstream release -- replaces this record wholesale: new release row, new archive digest, new
 file table, new manifest digest.
+
+### Bold timeline controls (2026-09-14)
+
+Five unmodified Bold glyphs supply the 16 px timeline toggles. Source: `https://registry.npmjs.org/@phosphor-icons/core/-/core-2.0.8.tgz`, SHA-256 `c4d7eca2a776229c2e33c6749e09dbea32f5f3a83171c7502b3bc52f887a3551`. The same five regular assets in this package were byte-compared with the pinned v2.0.8 assets above. No build or runtime network dependency.
+
+| Path | SHA-256 |
+| --- | --- |
+| `bold/check-bold.svg` | `d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf` |
+| `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
+| `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
+| `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
+| `bold/lock-simple-open-bold.svg` | `0fe1aa4fa99db2a2fe0827626eeb779a5a398763ba2492a0cf9429f9cdeca6c3` |

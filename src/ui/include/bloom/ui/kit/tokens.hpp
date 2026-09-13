@@ -177,6 +177,7 @@ inline constexpr qreal kWindowBorderWidth = 1.0;
 // Elevation shadows. Flat casts nothing.
 enum class Elevation : std::uint8_t {
     Flat,
+    TimelineBar,
     Popup,
     Dialog,
     Drag,

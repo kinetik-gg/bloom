@@ -173,6 +173,8 @@ QString iconResourcePath(const IconId id, const IconWeight weight) {
     if (asset == iconAssets().end()) {
         return {};
     }
+    if (weight == IconWeight::Bold && (id == IconId::Visible || id == IconId::Hidden || id == IconId::Locked || id == IconId::Unlocked || id == IconId::Check))
+        return QStringLiteral(":/bloom/kit/phosphor-icons/bold/%1-bold.svg").arg(asset->upstreamName);
     if (weight == IconWeight::Fill) {
         return QStringLiteral(":/bloom/kit/phosphor-icons/fill/%1-fill.svg")
             .arg(asset->upstreamName);

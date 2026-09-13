@@ -99,6 +99,11 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
+        kit/third_party/phosphor-icons/bold/eye-bold.svg
+        kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-open-bold.svg
+        kit/third_party/phosphor-icons/bold/check-bold.svg
         kit/third_party/phosphor-icons/regular/eye.svg
         kit/third_party/phosphor-icons/regular/film-slate.svg
         kit/third_party/phosphor-icons/regular/film-strip.svg

@@ -51,7 +51,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             const auto* parameter = original.parameters().find(binding.parameterId);
             if (!parameter)
                 return detail::invalidTarget();
-            if (std::holds_alternative<document::DriverBindingSource>(parameter->source))
+            if (std::holds_alternative<document::DriverBindingSource>(parameter->source) && node->typeId != document::kLayerOutputNodeType)
                 return OperationResult::rejected(OperationIssueCode::Unsupported,
                                                  "Driven parameters cannot be deeply duplicated "
                                                  "until driver records are implemented");
@@ -159,13 +159,15 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
     }
     for (auto edge : original.graph().edges()) {
         const auto destination = detail::destinationNode(edge.destination);
-        if (!nodes_.contains(edge.source.nodeId) || !nodes_.contains(destination))
-            continue;
+        if (!nodes_.contains(destination)) continue;
+        const bool internal = nodes_.contains(edge.source.nodeId);
+        const auto* destinationRecord = original.graph().findNode(destination);
+        if (!internal && (!destinationRecord || destinationRecord->typeId != document::kLayerOutputNodeType)) continue;
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
             return detail::exhaustedIds();
         edge.id = *edgeId;
-        edge.source.nodeId = nodeIds.at(edge.source.nodeId);
+        if (internal) edge.source.nodeId = nodeIds.at(edge.source.nodeId);
         std::visit(
             [&](auto& input) {
                 if constexpr (std::is_same_v<std::decay_t<decltype(input)>, document::NodeInputRef>)
