@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFrame>
+#include <QSize>
 #include <QString>
 #include <QStringView>
 
@@ -83,6 +84,12 @@ class EditorArea final : public QFrame {
     void setCloseEnabled(bool enabled);
     void setMaximizedAppearance(bool maximized);
 
+    // task WIDTH-1: a fixed, content-independent floor (kit::Size::PanelMinWidth by this panel's
+    // own header+footer height) -- overridden so a selection change inside the hosted editor can
+    // never nudge what a QSplitter reads as this panel's minimum, regardless of the hosted
+    // editor's own hints. See editor_area.cpp for the full reasoning.
+    [[nodiscard]] QSize minimumSizeHint() const override;
+
   signals:
     void activationRequested(EditorArea* area);
     void splitRequested(EditorArea* area, Qt::Orientation orientation);
@@ -103,6 +110,13 @@ class EditorArea final : public QFrame {
     QString areaId_;
     kit::KPanelSwitcher* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
+    // task WIDTH-1: the widget actually parented into contentLayout_ -- editorWidget_ itself for
+    // every canvas editor (node graph, timeline, viewer; they already scale their own content down
+    // to whatever room they get), or a QScrollArea wrapping editorWidget_ for Properties, the one
+    // editor that is a form rather than a canvas. Tracked separately from editorWidget_ so the
+    // EditorFooterProvider/EditorHeaderMenuProvider dynamic_casts below keep testing the real
+    // editor widget regardless of whether it is wrapped.
+    QWidget* editorHost_ = nullptr;
     // The outer header/content/footer column (task C1, FORMAL AMENDMENT 1): stored so
     // rebuildEditor() can add/remove the OPTIONAL footer widget from it every time the editor
     // changes, not just at construction.

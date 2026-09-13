@@ -27,6 +27,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPalette>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -99,15 +100,55 @@ int propertyLabelColumnWidth() {
     return widest;
 }
 
+// task WIDTH-1 (owner: "let it have min width of ... 300px ... so inner sections ... can
+// compromise"): the row's outer label used to claim a hard setFixedWidth(columnWidth) -- exactly
+// the widest label this panel can ever show -- which is precisely the width that does NOT
+// compromise when the panel itself is narrower than that. This subclass keeps columnWidth as its
+// PREFERRED width (so a roomy panel still lines every row's value column up at the same x, decision
+// 1's whole point) but lets the layout shrink it, eliding the live text with Qt::ElideRight down to
+// whatever width it actually gets and always carrying the untruncated name in the tooltip -- a
+// narrow panel degrades "Pixel Aspect" to "Pixel A…" rather than silently forcing the row wider (or
+// cutting the label off with no way to recover it) the way a plain fixed-width QLabel would.
+class PropertyRowLabel final : public QLabel {
+  public:
+    PropertyRowLabel(QString fullText, const int preferredWidth, QWidget* parent)
+        : QLabel(parent), fullText_(std::move(fullText)), preferredWidth_(preferredWidth) {
+        setText(fullText_);
+        setToolTip(fullText_);
+    }
+
+    [[nodiscard]] QSize sizeHint() const override {
+        return {preferredWidth_, QLabel::sizeHint().height()};
+    }
+
+    [[nodiscard]] QSize minimumSizeHint() const override {
+        // Enough for an ellipsis plus a couple of characters -- never zero, or "Rotation" could
+        // shrink to a blank column with nothing for the tooltip to explain.
+        const QFontMetrics metrics(font());
+        const int ellipsisFloor = metrics.horizontalAdvance(QStringLiteral("A…"));
+        return {ellipsisFloor, QLabel::minimumSizeHint().height()};
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QLabel::resizeEvent(event);
+        const QFontMetrics metrics(font());
+        setText(metrics.elidedText(fullText_, Qt::ElideRight, width()));
+    }
+
+  private:
+    QString fullText_;
+    int preferredWidth_;
+};
+
 QLabel* makePropertyRowLabel(const QString& text, const int columnWidth, QWidget* parent) {
-    auto* label = new QLabel(text, parent);
+    auto* label = new PropertyRowLabel(text, columnWidth, parent);
     label->setObjectName(QStringLiteral("propertiesRowLabel"));
     label->setFont(kit::font(kit::TypeRole::Ui));
     QPalette palette = label->palette();
     palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
     label->setPalette(palette);
     label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    label->setFixedWidth(columnWidth);
     return label;
 }
 

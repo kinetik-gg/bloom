@@ -147,6 +147,16 @@ enum class Size : int {
     // because a menu's width is the widest row it holds -- forcing the popup window wider instead
     // would leave its rows short of the frame, and a menu row's hover bar must be full width.
     MenuMinWidth = 200,
+    // task WIDTH-1 (owner: "min width of something like 300px in figma pixel, so ... users can
+    // compromise to also have that strict min width instead of kicking borders around"). Every
+    // EditorArea reports exactly this as its own minimumSizeHint() width, independent of whatever
+    // the hosted editor's own content demands -- see editor_area.cpp. Figma design px, through
+    // kit::px() like every other Size token.
+    PanelMinWidth = 300,
+    // task WIDTH-1: the floor a Properties value cell (kit::KValueField) may shrink its own width
+    // to before the row it lives in falls back to the panel's own horizontal scrollbar as a last
+    // resort. See kit::KValueField::minimumSizeHint().
+    ValueCellMin = 72,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }
