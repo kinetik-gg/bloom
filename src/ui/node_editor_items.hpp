@@ -120,7 +120,10 @@ NodeItem* nodeItemAncestor(QGraphicsItem* item);
 NodeItem* firstNodeItem(const QList<QGraphicsItem*>& items);
 NodeGroupItem* groupItemAncestor(QGraphicsItem* item);
 QString socketKindName(document::SocketValueKind kind);
-QPainterPath linkPath(QPointF start, QPointF end);
+// Task NODES-1, deliverable 2: `style` picks the geometry (Spline's cubic bezier, Straight's direct
+// line, or Angled's horizontal-vertical-horizontal path); hit-testing follows whichever path comes
+// back, since NodeEdgeItem::shape() strokes path() itself rather than assuming any one geometry.
+QPainterPath linkPath(QPointF start, QPointF end, LinkStyle style);
 
 class SocketItem final : public QGraphicsItem {
   public:
@@ -1626,7 +1629,7 @@ class NodeGroupItem final : public QGraphicsObject {
 class NodeEdgeItem final : public QGraphicsPathItem {
   public:
     NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output, SocketItem& input,
-                 document::EdgeRecord edge, bool structural);
+                 document::EdgeRecord edge, bool structural, LinkStyle style);
     void updatePath();
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
     [[nodiscard]] QPainterPath shape() const override;
@@ -1635,6 +1638,15 @@ class NodeEdgeItem final : public QGraphicsPathItem {
         hovered_ = enabled;
         update();
     }
+    // Task NODES-1: called by NodeGraphicsScene::setLinkStyle() on every edge already in the scene,
+    // so a style change repaints what is already drawn rather than only affecting edges created
+    // afterward.
+    void setLinkStyle(LinkStyle style) {
+        style_ = style;
+        updatePath();
+        update();
+    }
+    [[nodiscard]] LinkStyle linkStyle() const noexcept { return style_; }
     document::EdgeRecord edge;
     bool structural;
 
@@ -1648,6 +1660,7 @@ class NodeEdgeItem final : public QGraphicsPathItem {
     SocketItem& output_;
     SocketItem& input_;
     bool hovered_ = false;
+    LinkStyle style_;
 };
 
 } // namespace bloom::ui::node_editor

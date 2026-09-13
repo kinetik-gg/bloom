@@ -35,6 +35,7 @@
 #include <QPen>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QSettings>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyleOptionGraphicsItem>
@@ -58,7 +59,10 @@
 namespace bloom::ui {
 using namespace node_editor;
 namespace {
-constexpr qreal kGridSpacing = kit::px(kit::Spacing::XXL);
+// Task NODES-1, deliverable 3: the grid's own pitch is now the artist's setting
+// (NodeGraphicsScene::gridSize(), QSettings "nodes/grid-size", default 16 design px) rather than a
+// fixed token; kGridMinimumDeviceSpacing is still the floor below which the dots are hidden rather
+// than painted as a solid smear.
 constexpr qreal kGridMinimumDeviceSpacing = kit::px(kit::Spacing::M);
 constexpr qreal kGridDotRadius = kit::kHairlineWidth;
 } // namespace
@@ -80,28 +84,49 @@ void NodeGraphicsScene::drawBackground(QPainter* painter, const QRectF& rect) {
     QGraphicsScene::drawBackground(painter, rect);
 
     const qreal scale = painter->worldTransform().m11();
-    if (!(scale > 0.0) || kGridSpacing * scale < kGridMinimumDeviceSpacing) {
+    if (!(scale > 0.0) || gridSize_ * scale < kGridMinimumDeviceSpacing) {
         return;
     }
     // Integer step counts, not a floating-point loop variable: repeatedly adding a pitch to a
     // double accumulates error across a wide exposed rectangle, and the dots would slowly drift off
     // the lattice the far side of the canvas is drawn on.
-    const qreal first = std::floor(rect.left() / kGridSpacing) * kGridSpacing;
-    const qreal top = std::floor(rect.top() / kGridSpacing) * kGridSpacing;
-    const auto columns = static_cast<int>(std::floor((rect.right() - first) / kGridSpacing)) + 1;
-    const auto lines = static_cast<int>(std::floor((rect.bottom() - top) / kGridSpacing)) + 1;
+    const qreal first = std::floor(rect.left() / gridSize_) * gridSize_;
+    const qreal top = std::floor(rect.top() / gridSize_) * gridSize_;
+    const auto columns = static_cast<int>(std::floor((rect.right() - first) / gridSize_)) + 1;
+    const auto lines = static_cast<int>(std::floor((rect.bottom() - top) / gridSize_)) + 1;
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     painter->setPen(Qt::NoPen);
     painter->setBrush(kit::color(kit::surfaceStep(kit::Color::Background, 2)));
     for (int column = 0; column < columns; ++column) {
-        const qreal x = first + static_cast<qreal>(column) * kGridSpacing;
+        const qreal x = first + static_cast<qreal>(column) * gridSize_;
         for (int line = 0; line < lines; ++line) {
-            const qreal y = top + static_cast<qreal>(line) * kGridSpacing;
+            const qreal y = top + static_cast<qreal>(line) * gridSize_;
             painter->drawEllipse(QPointF(x, y), kGridDotRadius, kGridDotRadius);
         }
     }
     painter->restore();
+}
+
+void NodeGraphicsScene::setLinkStyle(const LinkStyle style) {
+    if (linkStyle_ == style) {
+        return;
+    }
+    linkStyle_ = style;
+    for (auto* item : items()) {
+        if (auto* edge = dynamic_cast<NodeEdgeItem*>(item)) {
+            edge->setLinkStyle(style);
+        }
+    }
+}
+
+void NodeGraphicsScene::setGridSize(const qreal size) {
+    const qreal clamped = std::max(1.0, size);
+    if (qFuzzyCompare(gridSize_ + 1.0, clamped + 1.0)) {
+        return;
+    }
+    gridSize_ = clamped;
+    update();
 }
 
 void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
@@ -309,7 +334,11 @@ void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
                 // picked up, cut, or disconnected from its own context menu, because the two that
                 // could not be -- a Layer's boundary output and Merge's stack slot -- are now
                 // created and removed by connecting and disconnecting them.
-                addItem(new NodeEdgeItem(*source, *destination, *output, *input, edge, false));
+                // Task NODES-1: constructed with THIS scene's own current link style, so a fresh
+                // projection can never draw an edge that disagrees with setLinkStyle()'s own live
+                // repaint of every edge already in the scene.
+                addItem(new NodeEdgeItem(*source, *destination, *output, *input, edge, false,
+                                         linkStyle_));
         }
     }
 }
@@ -350,6 +379,22 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     connect(view_, &NodeGraphicsView::canvasFocusLost, scene_, &NodeGraphicsScene::cancelGesture);
     connect(scene_, &NodeGraphicsScene::addSearchRequested, this, &NodeGraphEditor::openAddSearch);
     connect(scene_, &NodeGraphicsScene::rerouteRequested, this, &NodeGraphEditor::insertReroute);
+
+    // Task NODES-1: persisted chrome settings, read once here -- before buildHeaderMenus() and
+    // buildFooter() below, so every control they build already reflects the artist's own last
+    // choice instead of flashing the defaults for one frame. A short-lived QSettings, matching
+    // apps/bloom/main.cpp's own ramPreviewByteBudget precedent for a leaf widget that has no reason
+    // to carry a QSettings reference of its own.
+    {
+        const QSettings settings;
+        scene_->setLinkStyle(NodeGraphEditor::linkStyleFromSettingsValue(
+            settings.value(QStringLiteral("nodes/link-style")).toString()));
+        scene_->setGridSnapEnabled(settings.value(QStringLiteral("nodes/snap"), false).toBool());
+        scene_->setGridSize(settings.value(QStringLiteral("nodes/grid-size"), 16.0).toDouble());
+    }
+    buildHeaderMenus();
+    buildFooter();
+
     rebuild();
 }
 
