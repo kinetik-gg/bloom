@@ -233,6 +233,7 @@ target_sources(
         playback_controller.cpp
         preview_frame_cache.cpp
         project_host.cpp
+        ram_preview_controller.cpp
         properties_editor.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
@@ -266,6 +267,7 @@ target_sources(
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
+            include/bloom/ui/ram_preview_controller.hpp
             include/bloom/ui/properties_editor.hpp
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp

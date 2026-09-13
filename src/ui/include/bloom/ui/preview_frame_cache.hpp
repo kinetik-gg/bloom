@@ -8,6 +8,8 @@
 #include <optional>
 #include <vector>
 
+class QSettings;
+
 namespace bloom::ui {
 
 // 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A composition-resolution
@@ -120,5 +122,13 @@ class PreviewFrameCache final {
 };
 
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
+
+// "playback/ram-preview-memory-bytes" = the RAM preview cache's byte budget. Missing, unparseable, or
+// zero reads as kDefaultPreviewFrameCacheByteBudget; any other value is taken at face value, because
+// how much of their own memory an artist wants to spend on cached frames is their decision, not
+// Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
+// precedent -- nothing in src/ui constructs a QSettings of its own.
+[[nodiscard]] std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings);
+void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

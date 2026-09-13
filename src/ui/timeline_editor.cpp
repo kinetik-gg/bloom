@@ -4,6 +4,7 @@
 
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
@@ -826,8 +827,9 @@ void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
-                               CompositionPreviewController& previewController, QWidget* parent)
-    : QWidget(parent), session_(session) {
+                               CompositionPreviewController& previewController,
+                               RamPreviewController* const ramPreview, QWidget* parent)
+    : QWidget(parent), session_(session), ramPreview_(ramPreview) {
     setObjectName("timelineEditor");
     setAccessibleName(tr("Layers timeline"));
 
@@ -891,6 +893,15 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     stepForwardButton_ = makeIconToolButton(
         kit::IconId::StepForward, tr("Step forward one frame (Right)"),
         tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), controls);
+    // RAM Preview (task PERF1, item 3). IconId::Sequence is the nearest honest glyph in the kit's
+    // existing vocabulary -- a run of frames -- rather than a new vendored asset for one button; the
+    // tooltip and accessible name carry the meaning, as iconography rules require of an icon-only
+    // control.
+    ramPreviewButton_ = makeIconToolButton(
+        kit::IconId::Sequence, tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"),
+        tr("RAM preview"), QStringLiteral("timelineRamPreviewButton"), controls);
+    ramPreviewButton_->setCheckable(true);
+    ramPreviewButton_->setEnabled(ramPreview_ != nullptr);
     // Loop indicator: non-interactive status glyph, not a button -- playback always loops
     // (PlaybackController::tick()'s exact modulo wrap) and there is no command to disable it, so a
     // clickable control here would dishonestly imply a toggle that does not exist.
@@ -916,6 +927,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     controlsLayout->addWidget(stepBackButton_);
     controlsLayout->addWidget(playPauseButton_);
     controlsLayout->addWidget(stepForwardButton_);
+    controlsLayout->addWidget(ramPreviewButton_);
     controlsLayout->addWidget(loopIndicator_);
     controlsLayout->addWidget(timeReadout_);
     controlsLayout->addWidget(undoButton_);
@@ -1030,6 +1042,27 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playPauseAction->setShortcutContext(Qt::WindowShortcut);
     addAction(playPauseAction);
     connect(playPauseAction, &QAction::triggered, playback_, &PlaybackController::toggle);
+
+    // RAM Preview's KEYS are not declared here. Ctrl+Shift+Space and the Escape that cancels a run
+    // are application-wide commands owned by the Composition menu (main_window.cpp): one
+    // Qt::WindowShortcut owner per sequence, or Qt reports an ambiguous overload and fires neither.
+    // This button is the transport's own affordance for that same command, and it calls the same
+    // RamPreviewController::toggle() the menu item calls -- never a synthesized key press.
+    if (ramPreview_ != nullptr) {
+        connect(ramPreviewButton_, &QToolButton::clicked, ramPreview_,
+                &RamPreviewController::toggle);
+        connect(ramPreview_, &RamPreviewController::stateChanged, this,
+                &TimelineEditor::updateRamPreviewButton);
+        // The cached range plays on THIS panel's transport: the RAM preview controller caches frames
+        // and says so, and the transport is what plays them (one owner per job).
+        connect(ramPreview_, &RamPreviewController::cachingFinished, this,
+                [this](const bool completed) {
+                    if (completed) {
+                        playback_->play();
+                    }
+                });
+        updateRamPreviewButton();
+    }
 
     // Frame-stepping shortcuts (issue #108, decisions 1/2), mirroring playPauseAction's own
     // WindowShortcut idiom exactly. Issue #120 (task U5) replaced PropertiesEditor's Position X/Y
@@ -1181,6 +1214,17 @@ void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
         QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
     playPauseButton_->setToolTip(playing ? tr("Pause playback (Space)")
                                          : tr("Play from the current time (Space)"));
+}
+
+void TimelineEditor::updateRamPreviewButton() {
+    if (ramPreview_ == nullptr) {
+        return;
+    }
+    const bool caching = ramPreview_->isCaching();
+    ramPreviewButton_->setChecked(caching);
+    ramPreviewButton_->setToolTip(
+        caching ? tr("Cancel the RAM preview being cached (Esc)")
+                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
 }
 
 void TimelineEditor::stepFrame(const int delta) {

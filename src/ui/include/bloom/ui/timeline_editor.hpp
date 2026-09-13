@@ -23,6 +23,7 @@ class QToolButton;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+class RamPreviewController;
 class CompositionSession;
 class TimelineColumnHeaders;
 class TimelineKeyframePanel;
@@ -55,8 +56,12 @@ class TimelineEditor final : public QWidget {
     Q_OBJECT
 
   public:
+    // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition menu
+    // so both entry points call one method. Null leaves the transport's RAM Preview button and
+    // shortcut present but disabled -- an affordance that is visibly unavailable rather than one that
+    // silently does nothing.
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
-                   QWidget* parent = nullptr);
+                   RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
     // Exists only to drop the application-wide focusChanged subscription BEFORE Qt starts deleting
     // this panel's children. QWidget's own destructor clears focus from each child as it goes, and
     // a child losing focus re-enters that subscription -- which reads sibling widgets that
@@ -76,6 +81,7 @@ class TimelineEditor final : public QWidget {
     [[nodiscard]] TimelineLaneRegion* laneRegionForTest() const noexcept { return lanes_; }
     [[nodiscard]] TimelineRuler* rulerForTest() const noexcept { return ruler_; }
     [[nodiscard]] QScrollBar* verticalScrollBarForTest() const noexcept { return scrollBar_; }
+    [[nodiscard]] QToolButton* ramPreviewButtonForTest() const noexcept { return ramPreviewButton_; }
 
   private:
     void rebuild();
@@ -85,6 +91,7 @@ class TimelineEditor final : public QWidget {
     // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
     // state (design decision 4: "button/icon state reflects transport state via a signal").
     void updatePlaybackButton(PlaybackState state);
+    void updateRamPreviewButton();
     // Frame stepping (issue #108, decisions 1/2): Left/Right step one frame back/forward from
     // nearestFrameIndex(currentTime()), clamped to [0, maxFrameIndex]; delta is -1 or +1. Home/End
     // (stepToStart()/stepToEnd()) jump to frame 0 / the last frame. Every landing goes through the
@@ -116,6 +123,9 @@ class TimelineEditor final : public QWidget {
     // per-panel affordance in this class is already independently driven off the shared
     // CompositionSession/CompositionPreviewController rather than a single cross-panel singleton.
     PlaybackController* playback_ = nullptr;
+    // Borrowed: the RAM Preview command is application-wide (the Composition menu reaches the same
+    // one), so this panel never owns it. Null when none was attached.
+    RamPreviewController* ramPreview_ = nullptr;
     // Task U7 (issue #122), decision 5: clickable mouse affordances for the SAME
     // stepBackwardAction_/stepForwardAction_ QActions the Left/Right shortcuts already trigger --
     // wired by connecting the button's clicked() straight to the action's trigger() rather than
@@ -126,6 +136,9 @@ class TimelineEditor final : public QWidget {
     QToolButton* stepBackButton_ = nullptr;
     QToolButton* stepForwardButton_ = nullptr;
     QToolButton* playPauseButton_ = nullptr;
+    // RAM Preview (task PERF1, item 3): caches the composition range, then plays it from the cache.
+    // Checked while a run is caching, so the one button is also the cancel affordance.
+    QToolButton* ramPreviewButton_ = nullptr;
     // Non-interactive (decision 5: "non-interactive if loop isn't toggleable"): playback always
     // loops (PlaybackController::tick()'s exact modulo wrap) with no command to disable it, so this
     // is a status glyph, never a button that would falsely imply a click could turn looping off.

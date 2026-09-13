@@ -1,10 +1,16 @@
 #include <bloom/ui/preview_frame_cache.hpp>
 
+#include <QLatin1StringView>
+#include <QSettings>
+#include <QVariant>
+
 #include <algorithm>
 #include <utility>
 
 namespace bloom::ui {
 namespace {
+
+constexpr auto ramPreviewByteBudgetKey = "playback/ram-preview-memory-bytes";
 
 [[nodiscard]] PreparedPreviewFrameHandle
 restamp(const runtime::PreparedPreviewFrame& frame, const std::uint64_t requestGeneration) {
@@ -140,6 +146,24 @@ void PreviewFrameCache::evictToBudget() {
 void PreviewFrameCache::removeAt(const std::size_t index) {
     residentBytes_ -= entries_[index].bytes;
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {
+    const auto value = settings.value(QLatin1StringView(ramPreviewByteBudgetKey));
+    if (!value.isValid()) {
+        return kDefaultPreviewFrameCacheByteBudget;
+    }
+    bool parsed = false;
+    const auto bytes = value.toString().toULongLong(&parsed);
+    if (!parsed || bytes == 0) {
+        return kDefaultPreviewFrameCacheByteBudget;
+    }
+    return static_cast<std::size_t>(bytes);
+}
+
+void setRamPreviewByteBudgetInSettings(QSettings& settings, const std::size_t bytes) {
+    settings.setValue(QLatin1StringView(ramPreviewByteBudgetKey),
+                      QString::number(static_cast<qulonglong>(bytes)));
 }
 
 } // namespace bloom::ui

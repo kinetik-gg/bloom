@@ -119,7 +119,8 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
-        requestPreview(false, PreviewRequestKind::Visible);
+        // Deliberately NOT from the cache: see requestPreview()'s `allowCachedFrame`.
+        requestPreview(false, PreviewRequestKind::Visible, false);
     }
 }
 
@@ -207,6 +208,39 @@ void CompositionPreviewController::endDroppedFrameCounting() {
     emit droppedFrameCountChanged();
 }
 
+const std::optional<RamPreviewProgress>&
+CompositionPreviewController::ramPreviewProgress() const noexcept {
+    return ramPreviewProgress_;
+}
+
+void CompositionPreviewController::beginRamPreviewProgress(const std::uint64_t totalFrames) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    ramPreviewProgress_ = RamPreviewProgress{.cachedFrames = 0, .totalFrames = totalFrames};
+    emit ramPreviewProgressChanged();
+}
+
+void CompositionPreviewController::setRamPreviewProgress(const std::uint64_t cachedFrames) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!ramPreviewProgress_.has_value() || ramPreviewProgress_->cachedFrames == cachedFrames) {
+        return;
+    }
+    ramPreviewProgress_->cachedFrames = cachedFrames;
+    emit ramPreviewProgressChanged();
+}
+
+void CompositionPreviewController::endRamPreviewProgress() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!ramPreviewProgress_.has_value()) {
+        return;
+    }
+    ramPreviewProgress_.reset();
+    emit ramPreviewProgressChanged();
+}
+
+const CompositionPreviewSettings& CompositionPreviewController::settings() const noexcept {
+    return settings_;
+}
+
 void CompositionPreviewController::noteDroppedFrame() {
     if (!countingDroppedFrames_ ||
         droppedFrameCount_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -249,7 +283,8 @@ void CompositionPreviewController::beginShutdown() {
 }
 
 void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
-                                                  const PreviewRequestKind kind) {
+                                                  const PreviewRequestKind kind,
+                                                  const bool allowCachedFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
 
     const document::Snapshot snapshot = session_.snapshot();
@@ -340,7 +375,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     // key is cached is answered right here: no task, no coalescing, no cadence -- which is what makes
     // cached playback frame-accurate rather than best-effort. An overridden request is never served
     // from the cache, because its pixels are the gesture's, not the revision's.
-    if (!interactionOverride.has_value()) {
+    if (allowCachedFrame && !interactionOverride.has_value()) {
         if (auto cached = frameCache_->take(desiredIdentity); cached != nullptr) {
             interactiveCadenceTimer_.stop();
             if (pending_.has_value()) {
@@ -463,8 +498,9 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     }
 
     const runtime::TaskId taskId = submission.handle.id();
-    active_.emplace(
-        ActiveRequest{.handle = std::move(submission.handle), .desiredIdentity = desiredIdentity});
+    active_.emplace(ActiveRequest{.handle = std::move(submission.handle),
+                                  .desiredIdentity = desiredIdentity,
+                                  .carriedInteractionOverride = interactionOverride.has_value()});
     publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
     taskUiBridge_.wake();
 }
@@ -580,8 +616,12 @@ void CompositionPreviewController::consumeReadyResult() {
             next.frame = frame;
             next.message = tr("The current composition frame is ready");
             // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
-            // second pass over the same range is a sequence of lookups (task PERF1, item 3).
-            frameCache_->insert(frame);
+            // second pass over the same range is a sequence of lookups (task PERF1, item 3). A frame
+            // rendered under an interactive override is the exception: its pixels belong to a gesture,
+            // and its identity cannot say so.
+            if (!completed.carriedInteractionOverride) {
+                frameCache_->insert(frame);
+            }
             break;
         }
         case runtime::PreviewPreparationStatus::Unsupported:

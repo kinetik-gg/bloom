@@ -76,6 +76,16 @@ enum class FrameFreshness : std::uint8_t {
     Stale,
 };
 
+// How far a RAM preview run has got, published here rather than on the RAM preview controller because
+// the Viewer footer's one dependency is this controller -- the same reason the dropped-frame counter
+// lives here (task S5, item 3b).
+struct RamPreviewProgress final {
+    std::uint64_t cachedFrames = 0;
+    std::uint64_t totalFrames = 0;
+
+    friend bool operator==(const RamPreviewProgress&, const RamPreviewProgress&) = default;
+};
+
 struct CompositionPreviewState final {
     PreviewActivity activity = PreviewActivity::Rendering;
     FrameFreshness freshness = FrameFreshness::None;
@@ -138,6 +148,18 @@ class CompositionPreviewController final : public QObject {
     void beginDroppedFrameCounting();
     void endDroppedFrameCounting();
 
+    // --- RAM preview progress (task PERF1, item 3) ---------------------------------------------
+    //
+    // Engaged exactly while a RAM preview run is caching, so a surface reading it says nothing at all
+    // outside a run rather than "0/0". Driven by RamPreviewController; this controller neither starts
+    // nor interprets a run.
+    [[nodiscard]] const std::optional<RamPreviewProgress>& ramPreviewProgress() const noexcept;
+    void beginRamPreviewProgress(std::uint64_t totalFrames);
+    void setRamPreviewProgress(std::uint64_t cachedFrames);
+    void endRamPreviewProgress();
+
+    [[nodiscard]] const CompositionPreviewSettings& settings() const noexcept;
+
   public slots:
     void requestRefresh();
     void beginShutdown();
@@ -157,11 +179,16 @@ class CompositionPreviewController final : public QObject {
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
     // update()).
     void droppedFrameCountChanged();
+    // Emitted whenever ramPreviewProgress() changes, so the footer reading it never polls.
+    void ramPreviewProgressChanged();
 
   private:
     struct ActiveRequest final {
         runtime::TaskHandle<PreviewPreparationResultHandle> handle;
         runtime::PreviewRequestIdentity desiredIdentity;
+        // An overridden request's pixels are the gesture's, not the revision's, and nothing in
+        // PreviewRequestIdentity distinguishes the two -- so its frame must never reach the cache.
+        bool carriedInteractionOverride = false;
     };
 
     struct PendingRequest final {
@@ -174,7 +201,12 @@ class CompositionPreviewController final : public QObject {
         std::optional<runtime::SnapshotParameterOverride> interactionOverride;
     };
 
-    void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind);
+    // `allowCachedFrame` is false for an explicit refresh: a refresh asks for the frame to be
+    // re-derived because something the cache key does not cover may have changed -- the qualified
+    // display transform becoming available, or failing, is the live example -- so answering it from the
+    // cache would be answering a question nobody asked.
+    void requestPreview(bool clearLastGoodFrame, PreviewRequestKind kind,
+                        bool allowCachedFrame = true);
     void submitPreview(PendingRequest request, PreparedPreviewFrameHandle retainedFrame);
     void publishRendering(runtime::PreviewRequestIdentity desiredIdentity,
                           std::optional<runtime::TaskId> taskId,
@@ -208,6 +240,7 @@ class CompositionPreviewController final : public QObject {
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;
     bool interactiveTimeChangeArmed_ = false;
+    std::optional<RamPreviewProgress> ramPreviewProgress_;
     bool countingDroppedFrames_ = false;
     std::uint64_t droppedFrameCount_ = 0;
     std::uint64_t generation_ = 0;

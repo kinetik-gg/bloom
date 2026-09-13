@@ -15,6 +15,7 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -23,6 +24,8 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QSettings>
+
+#include <memory>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -100,12 +103,30 @@ int main(int argc, char* argv[]) {
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
     bloom::ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
         taskScheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
-    bloom::ui::CompositionPreviewController previewController(
-        compositionSession, taskScheduler, taskUiBridge,
-        bloom::ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator,
-                                                  referenceDisplayPreparer,
-                                                  qualifiedDisplayProcessorProvider));
+    // The RAM preview cache and the preview pipeline are built HERE, once, because two surfaces share
+    // each of them: the preview controller and the RAM preview controller both render through the one
+    // pipeline (and so through the one compiled-plan cache inside it), and both put frames into the one
+    // frame cache. The cache's budget is the artist's setting (task PERF1, item 2); `settings` is
+    // declared below for window state, so this read opens its own short-lived QSettings over the same
+    // organization/application keys rather than moving that declaration up here.
+    const auto ramPreviewByteBudget = [] {
+        const QSettings playbackSettings;
+        return bloom::ui::ramPreviewByteBudgetFromSettings(playbackSettings);
+    }();
+    auto previewFrameCache =
+        std::make_shared<bloom::ui::PreviewFrameCache>(ramPreviewByteBudget);
+    const auto previewPipeline = bloom::ui::makeCompositionPreviewPipeline(
+        snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider);
+    bloom::ui::CompositionPreviewController previewController(compositionSession, taskScheduler,
+                                                              taskUiBridge, previewPipeline, {},
+                                                              previewFrameCache);
+    bloom::ui::RamPreviewController ramPreviewController(compositionSession, previewController,
+                                                         taskScheduler, taskUiBridge,
+                                                         previewPipeline);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
     application.installEventFilter(&shutdownCoordinator);
     // Kept live even though no editor shows it (task F1, item F6 removed Jobs from the registry
     // below): this is the model a JobsEditor takes, and it is the bridge's own consumer. Dropping
@@ -130,7 +151,8 @@ int main(int argc, char* argv[]) {
     // all it takes to offer the panel again -- so Jobs is reachable programmatically and simply
     // not on offer in the interface.
     const bool editorsRegistered =
-        bloom::ui::registerFoundationEditors(editorRegistry, compositionSession, previewController);
+        bloom::ui::registerFoundationEditors(editorRegistry, compositionSession, previewController,
+                                             &ramPreviewController);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
@@ -148,7 +170,7 @@ int main(int argc, char* argv[]) {
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController);
+                                 frameExportController, &ramPreviewController);
     (void)window.restoreApplicationState(settings);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,

@@ -617,7 +617,7 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("playbackTestProbeLineEdit");
     layout->addWidget(editor);
@@ -851,7 +851,7 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("frameStepTestProbeLineEdit");
     layout->addWidget(editor);
@@ -926,7 +926,7 @@ void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& exp
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
     layout->addWidget(editor);
     host.show();
     host.activateWindow();
