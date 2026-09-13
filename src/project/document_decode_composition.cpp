@@ -1173,7 +1173,7 @@ template <typename Keyframe, typename DecodeOne>
                                              const std::string& path, LayerOutputBoundary& out) {
     std::vector<std::string_view> keys{"nodeId", "layerId", "name", "outputPort"};
     if (state.documentMinor >= 5) {
-        for (const auto* key : {"inPoint", "outPoint"})
+        for (const auto* key : {"inPoint", "outPoint", "enabled", "solo", "locked"})
             if (node.findMember(key)) keys.push_back(key);
     }
     std::vector<const JsonValue*> members;
@@ -1207,6 +1207,13 @@ template <typename Keyframe, typename DecodeOne>
     out.layerId = layerId;
     out.name = std::string(nameText);
     out.outputPort = std::string(outputPortText);
+    for (const auto& [key, target] : {std::pair{"enabled", &out.enabled}, std::pair{"solo", &out.solo}, std::pair{"locked", &out.locked}}) {
+        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+            const auto flag = value->asBoolean();
+            if (!flag) { state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, key)); return false; }
+            *target = *flag;
+        }
+    }
     for (const auto* key : {"inPoint", "outPoint"}) {
         if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
             const AttachmentScope rangeScope(state, key);

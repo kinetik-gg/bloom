@@ -63,6 +63,9 @@ void migrationAndReopen() {
     auto* editing = draft.project().findComposition(composition.id());
     for (const auto& boundary : composition.graph().layerOutputs()) {
         auto* layer = editing->graph().findLayer(boundary.layerId);
+        layer->enabled = false;
+        layer->solo = true;
+        layer->locked = true;
         layer->inPoint = *core::RationalTime::create(1, 24);
         layer->outPoint = core::RationalTime::fromInteger(1);
     }

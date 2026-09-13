@@ -110,6 +110,7 @@ struct PositionInteractionMapping final {
 enum class PositionInteractionRejection : std::uint8_t {
     // No layer is the session's primary selection.
     NoLayerSelected,
+    LockedLayer,
     // The selected layer exposes no position parameter, its constant value does not match the
     // Vec2d schema, or its animated curve fails to resolve/sample at the current session time.
     NoResolvablePosition,

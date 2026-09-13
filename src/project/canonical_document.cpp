@@ -1171,6 +1171,9 @@ emitInterpolation(EmitState& state,
             const PathScope timeScope(state, key);
             if (!state.ok(writer.memberName(key)) || !emitRational(state, time.numerator(), time.denominator())) return false;
         }
+        if (!boundary.enabled && (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false)))) return false;
+        if (boundary.solo && (!state.ok(writer.memberName("solo")) || !state.ok(writer.booleanValue(true)))) return false;
+        if (boundary.locked && (!state.ok(writer.memberName("locked")) || !state.ok(writer.booleanValue(true)))) return false;
         if (!emitRetainedTrailing(state)) {
             return false;
         }

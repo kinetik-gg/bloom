@@ -1346,6 +1346,9 @@ class NodeItem final : public QGraphicsObject {
             ++readOnlyIndex;
         }
         refreshOperandRows(composition);
+        for (auto* child : childItems())
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child))
+                proxy->setEnabled(!composition.nodeLocked(id_));
         refreshing_ = false;
     }
 

@@ -106,6 +106,20 @@ NodeId addSource(Fixture& fixture) {
     return *id;
 }
 
+void testLayerToggles(TestContext& test) {
+    Fixture fixture;
+    (void)exercise<SetLayerEnabled>(test, fixture, kFirstLayerId, false);
+    auto snapshot = fixture.document.snapshot();
+    test.expect(snapshot.project().findComposition(kCompositionId)->nodeLayout().at(kFirstLayerNodeId).muted,
+        "visibility synchronizes Layer node mute");
+    (void)exercise<SetLayerSolo>(test, fixture, kFirstLayerId, true);
+    (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, true);
+    refuse<SetLayerRange>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId, core::RationalTime{}, core::RationalTime::fromInteger(2));
+    refuse<MoveLayerBefore>(test, fixture, OperationIssueCode::InvalidValue, kFirstSlotId, std::optional<LayerSlotId>{});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, kFirstPositionId, ConstantValueSource{Vec2d{9, 9}});
+    (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, false);
+}
+
 void testLayerRanges(TestContext& test) {
     Fixture fixture;
     const auto in = core::RationalTime::fromInteger(1), out = core::RationalTime::fromInteger(4);
@@ -736,6 +750,7 @@ void testNodeGroups(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testLayerToggles(test);
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);

@@ -73,6 +73,8 @@ OperationResult SetNodeMuted::apply(document::Draft& draft) const {
     auto record = detail::layoutFor(*composition, nodeId_);
     if (record.muted == muted_)
         return OperationResult::noChange();
+    for (const auto& boundary : composition->graph().layerOutputs())
+        if (boundary.nodeId == nodeId_) composition->graph().findLayer(boundary.layerId)->enabled = !muted_;
     record.muted = muted_;
     composition->nodeLayout()[nodeId_] = record;
     return OperationResult::applied();

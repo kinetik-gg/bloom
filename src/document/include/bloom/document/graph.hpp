@@ -108,6 +108,9 @@ struct LayerOutputBoundary {
     std::string name;
     std::string outputPort;
 
+    bool enabled = true;
+    bool solo = false;
+    bool locked = false;
     core::RationalTime inPoint{};
     // Zero means the composition duration, including for boundaries created before insertion.
     core::RationalTime outPoint{};

@@ -45,6 +45,8 @@ class Composition final {
     [[nodiscard]] const NodeGroups& nodeGroups() const noexcept { return nodeGroups_; }
     [[nodiscard]] NodeGroups& nodeGroups() noexcept { return nodeGroups_; }
 
+    [[nodiscard]] bool nodeLocked(NodeId node) const;
+    [[nodiscard]] bool parameterLocked(ParameterId parameter) const;
     void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] bool setDuration(core::RationalTime duration) noexcept;
     void setFormat(CompositionFormat format) noexcept { format_ = format; }

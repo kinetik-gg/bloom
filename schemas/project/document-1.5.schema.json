@@ -1256,6 +1256,15 @@
         },
         "outPoint": {
           "$ref": "#/$defs/rationalTime"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "solo": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
         }
       },
       "unevaluatedProperties": true

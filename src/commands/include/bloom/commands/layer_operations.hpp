@@ -27,4 +27,37 @@ class SplitLayerAtTime final : public Operation {
     document::LayerId layer_;
     core::RationalTime time_;
 };
+class SetLayerEnabled final : public Operation {
+ public:
+    SetLayerEnabled(document::CompositionId composition, document::LayerId layer, bool value)
+        : composition_(composition), layer_(layer), value_(value) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    bool value_;
+};
+class SetLayerSolo final : public Operation {
+ public:
+    SetLayerSolo(document::CompositionId composition, document::LayerId layer, bool value)
+        : composition_(composition), layer_(layer), value_(value) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    bool value_;
+};
+class SetLayerLocked final : public Operation {
+ public:
+    SetLayerLocked(document::CompositionId composition, document::LayerId layer, bool value)
+        : composition_(composition), layer_(layer), value_(value) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    bool value_;
+};
 } // namespace bloom::commands
