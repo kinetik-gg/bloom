@@ -205,6 +205,20 @@ QString exactFrameAndTimecodeText(const CompositionSession& session) {
     return ViewerEditor::tr("Frame %1 · %2").arg(frameText, formatExactSecondsForViewer(time));
 }
 
+QString viewerReadoutText(const CompositionSession& session,
+                          const CompositionPreviewController& controller) {
+    const auto policy = controller.settings().resolutionPolicy;
+    const auto divisor = controller.resolutionDivisor();
+    const QString factor = divisor == 4   ? QStringLiteral("¼")
+                           : divisor == 2 ? QStringLiteral("½")
+                                          : QStringLiteral("1");
+    const QString resolutionText =
+        policy == runtime::PreviewResolutionPolicy::Auto
+            ? ViewerEditor::tr("Auto · %1").arg(factor)
+            : ViewerEditor::tr(kResolutionNames[static_cast<std::size_t>(policy)]);
+    return resolutionText + QStringLiteral(" · ") + exactFrameAndTimecodeText(session);
+}
+
 // The footer's dropped-frame text, or an empty string when nothing honest can be said: counting is
 // armed only between play() and pause(), so outside a playback run this reports nothing rather than
 // a stale or invented figure.
@@ -406,7 +420,7 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 
     const QRectF centerRect(chipLeftBound, bar.top(),
                             std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
-    painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session));
+    painter.drawText(centerRect, Qt::AlignCenter, viewerReadoutText(session, previewController));
 
     painter.restore();
 }
@@ -692,7 +706,7 @@ QWidget* ViewerEditor::takeFooterWidget() {
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {
-    return exactFrameAndTimecodeText(session_);
+    return viewerReadoutText(session_, previewController_);
 }
 
 QString ViewerEditor::statusBarDroppedFrameTextForTest() const {
@@ -832,9 +846,8 @@ std::optional<ViewerEditor::DisplayGeometry> ViewerEditor::currentDisplayGeometr
         return std::nullopt;
     }
     const auto format = composition->format();
-    return DisplayGeometry{
-        .extent = *render::ImageExtent::create(format.width(), format.height()).value(),
-        .pixelAspect = format.pixelAspect()};
+    const auto extent = render::ImageExtent::create(format.width(), format.height());
+    return DisplayGeometry{.extent = *extent.value(), .pixelAspect = format.pixelAspect()};
 }
 
 void ViewerEditor::paintEvent(QPaintEvent* event) {

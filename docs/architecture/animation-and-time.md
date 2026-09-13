@@ -291,7 +291,10 @@ another frame only when its resolved resolution changes.
 
 The Viewer footer places a Resolution dropdown beside Zoom, with Auto, Full, Half, and Quarter.
 It defaults to Auto and persists the policy name in QSettings `viewer/resolution`; an unknown saved
-value falls back to Auto. The control moves with the editor footer.
+value falls back to Auto. The control moves with the editor footer. The footer readout includes
+`Auto · ¼`, `Auto · ½`, or `Auto · 1` (or the fixed policy name), followed by exact frame/time.
+This reports the requested factor; retained older pixels remain identified by the existing stale
+frame status. Proxy painting uses the existing smooth image transform into the composition rectangle.
 
 Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
 The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
