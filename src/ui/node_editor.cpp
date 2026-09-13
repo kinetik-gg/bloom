@@ -305,8 +305,11 @@ void NodeGraphicsScene::rebuildEdges(const document::Composition& composition) {
                 if (socket->accepts(edge.destination))
                     input = socket;
             if (output && input)
-                addItem(new NodeEdgeItem(*source, *destination, *output, *input, edge,
-                                         !output->draggable() || !input->draggable()));
+                // Task FIX1, item C: no link is structural any more. Every one of them can be
+                // picked up, cut, or disconnected from its own context menu, because the two that
+                // could not be -- a Layer's boundary output and Merge's stack slot -- are now
+                // created and removed by connecting and disconnecting them.
+                addItem(new NodeEdgeItem(*source, *destination, *output, *input, edge, false));
         }
     }
 }

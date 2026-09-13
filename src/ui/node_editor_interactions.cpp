@@ -138,7 +138,7 @@ std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
     SocketItem* input = nullptr;
     SocketItem* output = nullptr;
     for (auto* socket : card.sockets()) {
-        if (socket->kind != document::SocketValueKind::Image)
+        if (socket->kind != document::SocketValueKind::Image || socket->multiInput())
             continue;
         if (socket->input && !input)
             input = socket;
@@ -350,16 +350,26 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.mode = NodeInteraction::Mode::Link;
         gesture.revision = session_->snapshot().revision();
         gesture.origin = socket->scenePos();
-        gesture.input = socket->input;
         gesture.output = socket->output;
-        if (socket->input) {
-            if (const auto existing = incomingSource(*session_->composition(), *socket->input)) {
+        // Merge's pill stands for every stack slot, so a press on it is a press on the slot under
+        // the pointer (task FIX1, items B and C). With no slot there -- an empty stack, or the
+        // pointer past the last one -- the gesture starts from the "new slot" sentinel the socket
+        // carries, and a release on a Layer output creates the slot.
+        std::optional<document::InputPortRef> pressedInput = socket->input;
+        if (socket->multiInput()) {
+            if (const auto index = socket->slotIndexAt(socket->mapFromScene(event->scenePos()));
+                index.has_value() && *index < socket->orderedInputs().size())
+                pressedInput = socket->orderedInputs()[*index];
+        }
+        gesture.input = pressedInput;
+        if (pressedInput) {
+            if (const auto existing = incomingSource(*session_->composition(), *pressedInput)) {
                 auto* source = findOutput(*this, *existing);
                 if (!source) {
                     cancelGesture();
                     return;
                 }
-                gesture.pickedInput = socket->input;
+                gesture.pickedInput = pressedInput;
                 gesture.input.reset();
                 gesture.output = *existing;
                 gesture.origin = source->scenePos();
@@ -367,7 +377,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
                 // no id, and one input has exactly one incoming link either way.
                 for (auto* item : items())
                     if (auto* link = dynamic_cast<NodeEdgeItem*>(item);
-                        link && link->edge.destination == *socket->input)
+                        link && link->edge.destination == *pressedInput)
                         link->hide();
             }
         }
@@ -614,9 +624,15 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
                 gesture.input.value_or(target->input.value_or(document::NodeInputRef{}));
             const auto output =
                 gesture.output.value_or(target->output.value_or(document::OutputPortRef{}));
+            // Where in the stack order a drop on Merge's pill lands. Read off the same caret the
+            // artist watched during the drag, so the order they saw is the order written.
+            std::optional<document::LayerSlotId> insertBefore;
+            if (gesture.output && target->multiInput())
+                insertBefore = target->slotInsertionAt(target->mapFromScene(event->scenePos()));
             if (gesture.pickedInput && *gesture.pickedInput != input)
                 transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);
-            transaction.emplace<commands::ConnectPorts>(compositionId, output, input);
+            transaction.emplace<commands::ConnectPorts>(
+                compositionId, output, input, document::builtInNodeDefinitions(), insertBefore);
         } else if (!target && !cardAt(*this, event->scenePos())) {
             if (gesture.pickedInput)
                 transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);

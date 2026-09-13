@@ -47,6 +47,12 @@ A `Layer Output` is an explicit graph node or equivalent first-class boundary th
 `LayerId`. It declares that one image-producing graph result participates as a layer and exposes the
 standard layer-facing property bindings that apply at that boundary.
 
+Its content input is OPTIONAL, and so is its stack slot. An artist wires a Layer node up by hand, so
+"added but not yet fed" and "fed but not yet in the stack" are ordinary intermediate states, not
+compositions the compiler refuses to compile: an unfed Layer Output is classified as an empty image and
+draws nothing, and a Layer Output with no slot is simply unreachable from the composition output. The
+compile reports no diagnostic for either -- there is nothing wrong with a half-built graph.
+
 Deleting or bypassing the boundary may remove the corresponding timeline row and therefore requires
 a clear topology preview or warning. An explicit future `Create Layer from Selection` command may
 insert a boundary around an existing output, but it must reference the existing graph rather than
@@ -416,9 +422,18 @@ inside the field. `docs/ux/interaction-model.md` remains the binding key list.
 ## Node Authoring Commands
 
 `AddNode(typeId, layoutPosition)` creates one node at a finite position and independent parameter
-records from the frozen registry's latest definition defaults. Even source and Layer Output types
-stay graph-only: this command never creates a layer boundary or slot. `AddSolidLayer` and
-`AddTextLayer` are the structured layer constructors, and both build the same topology.
+records from the frozen registry's latest definition defaults. A source type stays graph-only: no
+boundary, no slot, no edges. A **Layer Output** type also gets its layer IDENTITY here -- a `LayerId`,
+a boundary record, and the name `Layer N` -- but still no stack slot. That split is deliberate: a card
+on the canvas has to have a name to rename and a `LayerId` for Properties and the Timeline to address
+the moment it exists, while the thing that makes a layer DRAW is its stack slot, and the Timeline
+therefore lists a layer only once it has one. `AddSolidLayer` and `AddTextLayer` remain the structured
+layer constructors the TIMELINE's Add menu uses, and both build the same topology.
+
+The NODE CANVAS's own Add (Tab search, context menu) creates exactly the node asked for, through
+`AddNode`, for every type including Solid and Text. An artist wiring a source into a Layer and a Layer
+into Merge is making two decisions, and a canvas Add that made them for them was the substance of the
+owner's second report.
 
 `RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
 layout records, and parameters that no surviving node references. Orphaned owned animation curves
@@ -437,20 +452,32 @@ that topology is rejected by graph validation.
 `RenameLayer(LayerId, name)` changes the boundary's valid, nonempty UTF-8 human-facing name while
 preserving every graph and stack identity. An identical name is a no-op.
 
-`ConnectPorts(OutputPortRef, InputPortRef)` requires existing registered sockets of equal kind.
-It replaces the existing edge at that input, retaining its EdgeId, or allocates one new edge.
-The entire proposed graph is validated before publication; same-time cycles are refused with
-`GraphCycle`. A slot's content must still come from its matching Layer Output boundary.
+`ConnectPorts(OutputPortRef, InputPortRef, registry, insertBefore)` requires existing registered
+sockets of connectable kind. It replaces the existing edge at that input, retaining its EdgeId, or
+allocates one new edge. A link into an OPERAND socket is written as the parameter's driver binding
+rather than as an edge. The entire proposed graph is validated before publication; same-time cycles
+are refused with `GraphCycle`. A slot's content must still come from its matching Layer Output
+boundary.
 
-`DisconnectInput(InputPortRef)` removes the edge at an existing input; an unconnected input is a
-no-op. Disconnecting a mandatory stack-slot boundary edge is refused because it would violate the
-canonical stack invariant; removing the boundary uses `RemoveNodes` instead.
+A `LayerStackInputRef` destination whose `slotId` is the INVALID sentinel means "a new slot here":
+`ConnectPorts` allocates the slot, appends it, moves it before `insertBefore` when one is given, and
+connects the Layer Output's image output to it -- one transaction, one undo. The source must be a Layer
+Output boundary that does not already hold a slot. **Connecting a Layer to Merge is what creates its
+stack slot**, which is why the editor needs no separate command for it and why the Merge card carries
+its ordered multi-input even when the stack is empty.
+
+`DisconnectInput(InputPortRef)` removes the edge at an existing input, or restores an operand's
+registered default when the input is driven; an unconnected input is a no-op. On a **stack slot** it
+removes the slot along with the edge into it: a slot with nothing in it is not a shape the canonical
+graph admits, so the slot and the link into it are one thing to the artist and one thing here. The
+Layer node keeps its boundary and `LayerId`, so reconnecting it is one gesture rather than a rebuild.
 
 `DissolveNode(NodeId)` requires a registered first Image input/output pair and a connected input.
 It removes the node and reconnects the input source to every consumer of the first Image output,
-keeping those consumer edge IDs. Other incident edges, layout, and orphaned parameters are removed.
-Protected stack/output nodes and participating Layer Outputs cannot be dissolved while preserving
-the required boundary/slot topology; those requests are refused explicitly.
+keeping those consumer edge IDs. A consumer that is a stack SLOT is not reconnected: the slot belongs
+to the layer, and the layer goes with its boundary node -- so dissolving a participating Layer Output
+takes that layer out of the stack, which is what the gesture means. Protected stack/output nodes are
+still refused.
 
 `MoveNodes(map<NodeId, Vec2d>)` validates every node and finite position before changing the layout
 map. `SetNodeCollapsed`, `SetNodeMuted`, and `SetNodeWidth` change one layout field; width must be
@@ -510,9 +537,11 @@ accepts that reference, so every slot edge is still projected as its own wire. N
 ordering record changes shape.
 
 While a link drag is in flight over the pill, a caret marks which position in the order the pointer is
-at. Stack slots remain structural, so the pill is dimmed as incompatible at the same moment and a
-release publishes nothing: the caret reports a position, never a landing. A gesture that could
-actually reorder or reconnect a slot needs a command that does not exist yet.
+at -- and the pill now ACCEPTS the drop, because a drop there is what creates the slot. A Layer
+output released on the pill lands a new slot at the caret's position (upper half of a slot means above
+it, lower half below it, past the last one appends). A press ON the pill picks up the link of the slot
+under the pointer, so a slot's content can be detached, transferred, or re-dropped at another position
+in the order; a press where there is no slot starts from the "new slot" sentinel instead.
 
 ### Node Categories
 
@@ -719,15 +748,25 @@ With that adapter supplied, the following behavior is implemented and covered by
   Linking an Image transport input never hides a value control, because an Image port backs no
   parameter.
 
-### Structural Edges
+### Detachable Links
 
-Stack-slot content edges and participating Layer Output boundary outputs are structural. They are
-projected with explanatory tooltips but cannot start or receive a drag, be cut, or be auto-insertion
-targets. Removing a layer uses `RemoveNodes`, which can remove its boundary and slot together.
-Disconnecting a mandatory slot or dissolving its participating Layer Output would violate the
-canonical graph. Duplicating a node whose parameter is driven still refuses: a copy would need a second driver
-nothing asked for. Duplication of incompatible canonical-stack topology still refuses through command
-validation.
+No link is structural. Stack-slot content edges and participating Layer Output boundary outputs used
+to be: they were projected with explanatory tooltips and could not start or receive a drag, be cut, or
+be auto-insertion targets, because nothing could repair the topology a detach would break. Creating
+and removing a slot by connecting and disconnecting it is what removes that asymmetry, so every link
+now answers to the same three gestures:
+
+* drag an input's link end off and drop it on empty canvas -- `DisconnectInput` on that destination;
+* Ctrl+right-drag a cut stroke across it -- the same command, once per crossed link;
+* right-click it -- a menu offering **Disconnect** and **Delete Link**, which are one command under the
+  two names an artist might look for it by.
+
+Which durable record a destination is addressed through -- an edge, a driver binding, or a stack slot
+-- is `DisconnectInput`'s business, not the gesture's, which is why one gesture serves every kind.
+Every link also carries a tooltip naming both of its ends. Removing a layer outright still uses
+`RemoveNodes`, which removes its boundary and slot together. Duplicating a node whose parameter is
+driven still refuses: a copy would need a second driver nothing asked for. Duplication of incompatible
+canonical-stack topology still refuses through command validation.
 
 These are Qt scene/widget interactions without platform-specific input code. The same implementation
 and offscreen event tests apply to Linux, macOS and Windows; this change's executed gates are Linux.

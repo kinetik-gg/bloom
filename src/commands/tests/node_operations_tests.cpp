@@ -238,9 +238,38 @@ void testWiringAndRename(TestContext& test) {
     refuse<DisconnectInput>(test, fixture, OperationIssueCode::InvalidTarget,
                             InputPortRef{NodeInputRef{source, "image"}});
     const InputPortRef slotInput = LayerStackInputRef{kLayerStackNodeId, kFirstSlotId, "content"};
-    refuse<DisconnectInput>(test, fixture, OperationIssueCode::InvalidValue, slotInput);
     refuse<ConnectPorts>(test, fixture, OperationIssueCode::InvalidValue,
                          OutputPortRef{source, "image"}, slotInput);
+    // ADAPTED (task FIX1, item B): detaching a stack slot's content REMOVES the slot, and
+    // connecting a Layer output to the sentinel slot creates one. The slot and the link into it are
+    // one thing to the artist, so they are one thing here -- which is what makes a stack slot
+    // detachable at all.
+    exercise<DisconnectInput>(test, fixture, slotInput);
+    test.expect(fixture.document.snapshot()
+                        .project()
+                        .findComposition(kCompositionId)
+                        ->graph()
+                        .layerStack()
+                        .find(kFirstSlotId) == nullptr,
+                "disconnecting a stack slot removes the slot");
+    const auto before = fixture.document.snapshot()
+                            .project()
+                            .findComposition(kCompositionId)
+                            ->graph()
+                            .layerStack()
+                            .entries()
+                            .size() +
+                        1;
+    const InputPortRef newSlot = LayerStackInputRef{kLayerStackNodeId, LayerSlotId{}, "content"};
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{kFirstLayerNodeId, "image"}, newSlot);
+    test.expect(fixture.document.snapshot()
+                        .project()
+                        .findComposition(kCompositionId)
+                        ->graph()
+                        .layerStack()
+                        .entries()
+                        .size() == before,
+                "connecting a Layer output to Merge creates its stack slot");
     exercise<ConnectPorts>(test, fixture, OutputPortRef{kFirstLayerNodeId, "image"},
                            InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}});
     refuse<ConnectPorts>(test, fixture, OperationIssueCode::GraphCycle,
@@ -276,6 +305,28 @@ void testWiringAndRename(TestContext& test) {
                         "Missing");
 }
 
+// ADAPTED (task FIX1, item B): dissolving a PARTICIPATING Layer Output used to be refused, because
+// the stack slot it fed could not be repaired. A slot is created by connecting a Layer output to
+// Merge and removed by disconnecting it, so dissolve now simply takes the layer out of the stack --
+// which is what the gesture means -- and its own fixture says so rather than one line buried in the
+// refusals.
+void testDissolveParticipatingLayer(TestContext& test) {
+    Fixture fixture;
+    const auto source = addSource(fixture);
+    if (!(apply<ConnectPorts>(fixture, OutputPortRef{source, "image"},
+                              InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}})
+              .changed()))
+        throw std::logic_error("connect participating layer input");
+    const auto slotsBefore =
+        composition(fixture.document.snapshot()).graph().layerStack().entries().size();
+    exercise<DissolveNode>(test, fixture, kFirstLayerNodeId);
+    const auto& after = composition(fixture.document.snapshot());
+    test.expect(after.graph().findNode(kFirstLayerNodeId) == nullptr &&
+                    after.graph().layerStack().entries().size() == slotsBefore - 1 &&
+                    after.graph().layerOutputs().size() == 1,
+                "dissolving a participating Layer Output takes its layer out of the stack");
+}
+
 void testRemoveAndDissolve(TestContext& test) {
     Fixture fixture;
     const auto source = addSource(fixture);
@@ -304,7 +355,6 @@ void testRemoveAndDissolve(TestContext& test) {
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,
                 "dissolve removes orphan parameters/layout and reconnects every consumer");
     refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, source);
-    refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, kFirstLayerNodeId);
     refuse<DissolveNode>(test, fixture, OperationIssueCode::Unsupported, kLayerStackNodeId);
     refuse<DissolveNode>(test, fixture, OperationIssueCode::InvalidTarget, NodeId::fromRaw(999));
     refuse<RemoveNodes>(test, fixture, OperationIssueCode::Unsupported,
@@ -675,6 +725,7 @@ int main() {
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);
+        bloom::commands::test::testDissolveParticipatingLayer(test);
         bloom::commands::test::testDeepDuplication(test);
         bloom::commands::test::testDuplicationOwnershipEdges(test);
         bloom::commands::test::testParameterSocketDrivers(test);

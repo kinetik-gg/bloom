@@ -122,8 +122,7 @@ class SocketItem final : public QGraphicsItem {
   public:
     SocketItem(document::NodeId node, QString name, document::SocketValueKind kind,
                std::optional<document::InputPortRef> input,
-               std::optional<document::OutputPortRef> output, bool structural,
-               QGraphicsItem* parent);
+               std::optional<document::OutputPortRef> output, QGraphicsItem* parent);
     [[nodiscard]] QRectF boundingRect() const override;
     [[nodiscard]] QPainterPath shape() const override;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
@@ -135,20 +134,26 @@ class SocketItem final : public QGraphicsItem {
     [[nodiscard]] const std::vector<document::InputPortRef>& orderedInputs() const noexcept {
         return orderedInputs_;
     }
-    [[nodiscard]] bool multiInput() const noexcept { return !orderedInputs_.empty(); }
+    // True for Merge's ONE ordered multi-input, whether the stack is empty or not: an empty stack
+    // still has a port to drop the first layer on (task FIX1, item B), so this is a property of the
+    // socket rather than a count of what it currently carries.
+    [[nodiscard]] bool multiInput() const noexcept { return stackPill_; }
     // True when `ref` is this socket's own input, or -- for the ordered multi-input -- any of the
     // slots it stands for. This is how an edge finds the socket that terminates it.
     [[nodiscard]] bool accepts(const document::InputPortRef& ref) const;
-    // The slot position the pointer is over during a drag, drawn as a caret across the pill. The
-    // pill is dimmed as incompatible at the same time (stack slots are structural and accept no
-    // drop), so the caret says "this is the position you are at", never "release here and it will
-    // land".
+    // The slot position the pointer is over during a drag, drawn as a caret across the pill. A drop
+    // on the pill lands a new slot at that position (task FIX1, item B), so the caret now says
+    // exactly where the layer will go.
     void setDropIndicator(std::optional<std::size_t> slotIndex);
     [[nodiscard]] std::optional<std::size_t> dropIndicator() const noexcept {
         return dropIndicator_;
     }
     // Which ordered slot a point in this socket's own coordinates falls on.
     [[nodiscard]] std::optional<std::size_t> slotIndexAt(QPointF localPoint) const;
+    // The existing slot a drop at `localPoint` should land BEFORE, or nothing to append at the
+    // bottom. This is what ConnectPorts takes as its `insertBefore`, so the caret the artist saw
+    // and the order the command writes are the same decision.
+    [[nodiscard]] std::optional<document::LayerSlotId> slotInsertionAt(QPointF localPoint) const;
     // The pill's painted extent along the card's edge; kSocketDiameter for an ordinary round
     // socket.
     [[nodiscard]] qreal pillLength() const;
@@ -156,10 +161,12 @@ class SocketItem final : public QGraphicsItem {
     // kSocketRowHeight row; the card sums these rather than multiplying by the socket count, so a
     // socket that is taller than a row can exist without the card's body landing on top of it.
     [[nodiscard]] qreal rowHeight() const;
-    // Task S7: every kind is linkable now, not Image alone. The only non-draggable sockets left are
-    // the structural Layer Output / stack-slot boundary, which a link gesture must not break --
-    // removing the layer is how that connection goes.
-    [[nodiscard]] bool draggable() const { return !structural_; }
+    // Task FIX1, item C: EVERY socket is draggable. The formerly structural pair -- a participating
+    // Layer Output's image output and Merge's stack-slot pill -- are now ordinary link ends,
+    // because connecting a Layer to Merge is what CREATES its stack slot and disconnecting it is
+    // what removes it. `structural_` survives only as the flag that says a socket carries no
+    // authored widget of its own.
+    [[nodiscard]] bool draggable() const { return true; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -187,10 +194,10 @@ class SocketItem final : public QGraphicsItem {
 
   private:
     QString description_;
-    bool structural_;
     bool hovered_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
+    bool stackPill_ = false;
     std::optional<std::size_t> dropIndicator_;
 };
 

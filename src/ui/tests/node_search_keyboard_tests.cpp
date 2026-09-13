@@ -257,26 +257,34 @@ void testSearchKeyboardAndMenus() {
                f.session.composition()->graph().layerOutputs().size() == 1,
            "armed search adds a structured solid layer and connects its compatible port in one "
            "transaction");
-    // Task S3: the same armed-search path creates a real text layer, in one transaction.
+    // ADAPTED (task FIX1, item B): adding a source from the CANVAS creates that source and nothing
+    // else. No Layer Output, no stack slot, no edges -- the artist wires it up, which is the whole
+    // point of the report. The timeline's Add menu still builds a whole layer.
     f.editor.openAddSearch({560, 460}, global);
     popup = search(f);
     field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     field->setText(QStringLiteral("text"));
     history = f.stack.size();
     const auto boundariesBeforeText = f.session.composition()->graph().layerOutputs().size();
+    const auto slotsBeforeText = f.session.composition()->graph().layerStack().entries().size();
+    const auto edgesBeforeText = f.session.composition()->graph().edges().size();
     QTest::keyClick(field, Qt::Key_Return);
     selected = f.session.selectedNode();
     expect(f.stack.size() == history + 1 && selected != nullptr &&
                selected->typeId == document::kTextSourceNodeType &&
-               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText + 1,
-           "Enter on the text result adds a structured text layer in one transaction");
+               f.session.composition()->graph().layerOutputs().size() == boundariesBeforeText &&
+               f.session.composition()->graph().layerStack().entries().size() == slotsBeforeText &&
+               f.session.composition()->graph().edges().size() == edgesBeforeText,
+           "Enter on the text result adds ONLY the text source node");
 
     const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
     f.session.selectLayer(layerId);
     const auto boundary = f.session.selectedNode()->id;
     menu = f.editor.contextMenuForTest(true);
-    expect(named(menu, "nodeRenameAction") && !named(menu, "nodeDissolveAction"),
-           "participating Layer Output offers rename and refuses dissolve");
+    // ADAPTED (task FIX1, item B): a Layer Output's stack slot is created and removed by connecting
+    // and disconnecting it, so dissolving one no longer breaks a boundary it cannot repair -- it
+    // takes the layer out of the stack, which is what the gesture means. Rename is unchanged.
+    expect(named(menu, "nodeRenameAction") != nullptr, "a Layer Output offers rename");
     if (auto* rename = named(menu, "nodeRenameAction"))
         rename->trigger();
     auto* renameField = qobject_cast<QLineEdit*>(

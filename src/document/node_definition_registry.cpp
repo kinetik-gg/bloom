@@ -66,10 +66,11 @@ template <typename Definition>
 // one operand socket per transform value. The image port's position is what the dissolve gesture,
 // the mute bypass and the empty-image propagation all read, so it stays pinned at the front.
 [[nodiscard]] bool hasLeadingImageInput(const NodeDefinition& definition,
-                                        const std::string_view name) noexcept {
+                                        const std::string_view name,
+                                        const bool required = true) noexcept {
     return !definition.inputs.empty() && definition.inputs.front().name == name &&
            definition.inputs.front().valueKind == SocketValueKind::Image &&
-           definition.inputs.front().required;
+           definition.inputs.front().required == required;
 }
 
 // Task S7, item 3: every parameter role of a node is ALSO a linkable input socket of its kind.
@@ -149,7 +150,7 @@ template <typename Definition>
         // beneath it. The two appearance values come after the four geometric ones, and the blend
         // mode comes last because it is the only one that is not a continuous value at all.
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
-               hasLeadingImageInput(definition, kLayerOutputContentInputPort) &&
+               hasLeadingImageInput(definition, kLayerOutputContentInputPort, false) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
                definition.parameters.size() == 6 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
@@ -247,7 +248,12 @@ template <typename Definition>
             // authoring order (task S7, item 3). The blend mode's socket is Integer, and Integer
             // only: there is no meaningful value between Multiply and Screen, so no other kind
             // promotes into it.
-            {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, true},
+            // The content image is OPTIONAL (task FIX1, item B): an artist wires a Layer node up by
+            // hand now, so a Layer that has been added but not yet fed is a real, selectable node
+            // that simply draws nothing -- not a composition the compiler refuses to compile. The
+            // port is still the FIRST one, which is what the dissolve gesture, the mute bypass and
+            // the empty-image propagation all read.
+            {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, false},
              {std::string(kPositionParameterRole), SocketValueKind::Vector2, false},
              {std::string(kAnchorParameterRole), SocketValueKind::Vector2, false},
              {std::string(kScaleParameterRole), SocketValueKind::Vector2, false},

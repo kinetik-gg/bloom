@@ -173,7 +173,12 @@ lower(const std::vector<document::NodeId>& order) {
                                                            return candidate->destination == *input;
                                                        })
                                 : reachableEdges_.end();
-        if ((edge == reachableEdges_.end() && isMuted(id)) ||
+        // A Layer Output with nothing feeding its content port is empty whether it is muted or not
+        // (task FIX1, item B). The artist wires a Layer node up by hand, so "added but not yet fed"
+        // is an ordinary intermediate state; it draws nothing and says nothing, rather than failing
+        // the whole compile on a required input.
+        if ((edge == reachableEdges_.end() &&
+             (isMuted(id) || definition->lowering == runtime::NodeLoweringKind::LayerOutput)) ||
             (edge != reachableEdges_.end() && emptyImages_.contains((*edge)->source.nodeId))) {
             emptyImages_.insert(id);
         }

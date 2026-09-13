@@ -6,206 +6,30 @@
 // input socket". The failing step was the FIRST one: Tab -> "Scalar" -> Enter added a TEXT layer,
 // because the add search listed its entries in category order and matched name and socket-kind
 // keywords alike, so the Sources section's Text node (which carries a Scalar size socket) came
-// before the node actually called Scalar. Everything downstream of that already worked, which is
-// why this file pins the whole chain rather than only the search.
-#include "node_editor_add.hpp"
-#include "node_editor_items.hpp"
+// before the node actually called Scalar. Two more things then made a driver link unusable once it
+// existed: nothing DREW it, and the pick-up gesture only knew how to find an edge.
+#include "node_production_harness.hpp"
 
-#include <bloom/commands/command_stack.hpp>
-#include <bloom/commands/node_operations.hpp>
-#include <bloom/document/graph.hpp>
-#include <bloom/document/new_project.hpp>
-#include <bloom/document/value_nodes.hpp>
-#include <bloom/render/image.hpp>
-#include <bloom/render/image_types.hpp>
-#include <bloom/runtime/cpu_composition_evaluator.hpp>
-#include <bloom/runtime/snapshot_compiler.hpp>
-#include <bloom/ui/composition_authoring.hpp>
-#include <bloom/ui/composition_session.hpp>
-#include <bloom/ui/kit/search_popup.hpp>
 #include <bloom/ui/kit/value_field.hpp>
-#include <bloom/ui/node_editor.hpp>
 
-#include <QApplication>
-#include <QLineEdit>
-#include <QMouseEvent>
 #include <QSignalSpy>
-#include <QTest>
 
-#include <array>
-#include <cmath>
-#include <iostream>
-#include <optional>
-
-namespace {
 using namespace bloom;
-int failures = 0;
-void expect(const bool condition, const char* message) {
-    if (!condition) {
-        ++failures;
-        std::cerr << "FAIL: " << message << '\n';
-    }
-}
-
-struct App final {
-    document::NewProject initial =
-        document::makeNewProject("FIX1", "Main", core::RationalTime::fromInteger(10));
-    document::Document document{std::move(initial.project)};
-    commands::CommandStack stack{document};
-    ui::CompositionSession session{document, stack, initial.initialCompositionId};
-    ui::NodeGraphEditor editor{session};
-
-    App() {
-        editor.resize(1400, 900);
-        editor.show();
-        QCoreApplication::processEvents();
-        editor.graphView()->zoomToActualSize();
-        editor.graphView()->setTransform(QTransform::fromTranslate(40, 40));
-        editor.graphView()->setFocus();
-    }
-    [[nodiscard]] document::NodeId nodeOfType(std::string_view typeId) const {
-        for (const auto& node : session.composition()->graph().nodes())
-            if (node.typeId == typeId)
-                return node.id;
-        throw std::runtime_error("node type not present");
-    }
-    [[nodiscard]] ui::node_editor::NodeItem* card(document::NodeId id) {
-        return dynamic_cast<ui::node_editor::NodeItem*>(editor.graphScene()->findNodeItem(id));
-    }
-    [[nodiscard]] ui::node_editor::SocketItem* namedSocket(document::NodeId id, const QString& name,
-                                                           bool input) {
-        for (auto* socket : card(id)->sockets())
-            if (socket->input.has_value() == input && socket->name == name)
-                return socket;
-        return nullptr;
-    }
-    [[nodiscard]] ui::node_editor::SocketItem* outputSocket(document::NodeId id) {
-        for (auto* socket : card(id)->sockets())
-            if (socket->output.has_value())
-                return socket;
-        return nullptr;
-    }
-    void mouse(QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
-        auto* view = editor.graphView();
-        const QPoint viewport = view->mapFromScene(point);
-        QMouseEvent event(type, viewport, view->viewport()->mapToGlobal(viewport), button, buttons,
-                          Qt::NoModifier);
-        QCoreApplication::sendEvent(view->viewport(), &event);
-    }
-    void press(QPointF point) {
-        mouse(QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
-    }
-    void move(QPointF point) { mouse(QEvent::MouseMove, point, Qt::NoButton, Qt::LeftButton); }
-    void release(QPointF point) {
-        mouse(QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
-    }
-    void drag(QPointF start, QPointF end) {
-        press(start);
-        move(end);
-        release(end);
-    }
-    document::NodeId addByType(std::string_view typeId, document::Vec2d position) {
-        commands::Transaction transaction("Add Node", session.snapshot().revision());
-        transaction.emplace<ui::node_editor::AddEditorNode>(session.compositionId(),
-                                                            std::string(typeId), position);
-        const auto result = session.executeNodeTransaction(std::move(transaction));
-        const auto id = result.outputId<document::NodeId>("editorNode");
-        if (!id)
-            throw std::runtime_error("addByType failed");
-        QCoreApplication::processEvents();
-        return *id;
-    }
-    // Tab -> type -> Enter, the owner's own add gesture.
-    std::optional<document::NodeId> addThroughSearch(const QString& query) {
-        const auto before = session.composition()->graph().nodes().size();
-        QTest::keyClick(editor.graphView(), Qt::Key_Tab);
-        QCoreApplication::processEvents();
-        auto* popup = editor.findChild<ui::kit::KSearchPopup*>();
-        if (popup == nullptr || !popup->isVisible())
-            return std::nullopt;
-        auto* field = popup->findChild<QLineEdit*>();
-        field->setText(query);
-        QTest::keyClick(field, Qt::Key_Return);
-        QCoreApplication::processEvents();
-        if (session.composition()->graph().nodes().size() == before)
-            return std::nullopt;
-        const auto* selected = session.selectedNode();
-        return selected == nullptr ? std::nullopt : std::optional(selected->id);
-    }
-};
-
-const document::ParameterRecord* parameterFor(const App& app, document::NodeId node,
-                                              std::string_view role) {
-    const auto* record = app.session.composition()->graph().findNode(node);
-    if (record == nullptr)
-        return nullptr;
-    for (const auto& binding : record->parameters)
-        if (binding.role == role)
-            return app.session.composition()->parameters().find(binding.parameterId);
-    return nullptr;
-}
-
-[[nodiscard]] const document::DriverBindingSource* driverFor(const App& app, document::NodeId node,
-                                                             std::string_view role) {
-    const auto* parameter = parameterFor(app, node, role);
-    return parameter == nullptr ? nullptr
-                                : std::get_if<document::DriverBindingSource>(&parameter->source);
-}
-
-// The composited frame, straight through the production compiler and CPU evaluator.
-struct Composited final {
-    bool ok = false;
-    std::array<float, 4> centerPixel{};
-};
-Composited composite(const App& app) {
-    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-    const runtime::SnapshotCompileRequest request{app.session.snapshot(),
-                                                  app.session.compositionId()};
-    const runtime::CancellationToken cancellation;
-    const auto compiled = compiler.compile(request, cancellation);
-    if (compiled.status != runtime::SnapshotCompileStatus::Compiled || !compiled.plan) {
-        for (const auto& diagnostic : compiled.diagnostics)
-            std::cerr << "DIAG: compile " << diagnostic.summary << " | " << diagnostic.detail
-                      << '\n';
-        return {};
-    }
-    const runtime::CpuCompositionEvaluator evaluator;
-    const runtime::EvaluationRequest evaluation{
-        .time = core::RationalTime::fromInteger(0),
-        .output = compiled.plan->output(),
-        .resolution = runtime::CompositionFormatResolution{},
-        .quality = runtime::EvaluationQuality::Reference,
-        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-        .pixelStorageByteLimit = std::size_t{1} << 28U};
-    const auto result = evaluator.evaluate(compiled.plan, evaluation, cancellation);
-    if (result.status() != runtime::EvaluationStatus::Evaluated || !result.frame()) {
-        for (const auto& diagnostic : result.diagnostics())
-            std::cerr << "DIAG: evaluate " << diagnostic.summary << '\n';
-        return {};
-    }
-    const auto read = result.frame()->processImage().read(0, 0);
-    if (!read)
-        return {};
-    Composited out;
-    out.ok = true;
-    out.centerPixel = {read.value()->red(), read.value()->green(), read.value()->blue(),
-                       read.value()->alpha()};
-    return out;
-}
-
-[[nodiscard]] bool close(const float value, const double expected) {
-    return std::abs(static_cast<double>(value) - expected) < 1e-4;
-}
-} // namespace
+using namespace bloom::ui;
+using namespace bloom::ui::production_test;
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
         App a;
-        expect(ui::addDefaultSolidLayer(a.session), "a solid layer exists to drive");
+        expect(addDefaultSolidLayer(a.session), "a solid layer exists to drive");
         QCoreApplication::processEvents();
-        const auto layer = a.nodeOfType(document::kLayerOutputNodeType);
-        const auto solid = a.nodeOfType(document::kSolidSourceNodeType);
+        const auto layerNode = a.nodeOfType(document::kLayerOutputNodeType);
+        const auto solidNode = a.nodeOfType(document::kSolidSourceNodeType);
+        if (!layerNode.has_value() || !solidNode.has_value())
+            return 1;
+        const auto layer = *layerNode;
+        const auto solid = *solidNode;
 
         // --- Step 1: the owner's add gesture. THE failing step before this task. ---------------
         const auto searched = a.addThroughSearch(QStringLiteral("Scalar"));
@@ -224,7 +48,7 @@ int main(int argc, char** argv) {
                "an exact name still wins its own query");
 
         // --- Step 2: the value node's own inline editor is editable on the card. ----------------
-        auto* valueField = qobject_cast<ui::kit::KValueField*>(
+        auto* valueField = qobject_cast<kit::KValueField*>(
             a.editor.graphScene()->nodeFieldForTest(scalar, QStringLiteral("nodeOperandEditor")));
         expect(valueField != nullptr, "the Scalar card carries an inline editable value field");
         if (valueField == nullptr)
@@ -268,17 +92,17 @@ int main(int argc, char** argv) {
         a.move(toOpacity->scenePos());
         const auto previewPen = [&a]() -> QPen {
             for (auto* item : a.editor.graphScene()->items())
-                if (item->data(ui::kNodeItemKindRole) == QStringLiteral("link-preview"))
+                if (item->data(kNodeItemKindRole) == QStringLiteral("link-preview"))
                     return dynamic_cast<QGraphicsPathItem*>(item)->pen();
             return {};
         };
         expect(previewPen().color() ==
-                   ui::kit::color(ui::socketColorToken(document::SocketValueKind::Scalar)),
+                   kit::color(socketColorToken(document::SocketValueKind::Scalar)),
                "a compatible hover keeps the link's own kind colour");
-        expect(toOpacity->dragAffinity() == ui::node_editor::SocketItem::DragAffinity::Compatible,
+        expect(toOpacity->dragAffinity() == node_editor::SocketItem::DragAffinity::Compatible,
                "a compatible operand socket brightens during the drag");
         a.move(toColor->scenePos());
-        expect(previewPen().color() == ui::kit::color(ui::kit::Color::Error),
+        expect(previewPen().color() == kit::color(kit::Color::Error),
                "an incompatible hover paints the preview Error red");
         expect(toColor->toolTip().contains(QStringLiteral("does not connect to")),
                "an incompatible socket says why it refuses while the drag is in flight");
@@ -299,7 +123,7 @@ int main(int argc, char** argv) {
                 document::NodeInputRef{layer, std::string(document::kOpacityParameterRole)};
             bool wired = false;
             for (auto* item : a.editor.graphScene()->items())
-                if (const auto* link = dynamic_cast<ui::node_editor::NodeEdgeItem*>(item);
+                if (const auto* link = dynamic_cast<node_editor::NodeEdgeItem*>(item);
                     link != nullptr && link->edge.destination == opacityRef &&
                     link->edge.source.nodeId == scalar)
                     wired = true;
@@ -315,13 +139,13 @@ int main(int argc, char** argv) {
 
         // --- Step 5: the viewer. ---------------------------------------------------------------
         const auto driven = composite(a);
-        expect(driven.ok && close(driven.centerPixel[3], 0.25) &&
-                   close(driven.centerPixel[0], 0.62 * 0.25),
+        expect(driven.ok && closeTo(driven.centerPixel[3], 0.25) &&
+                   closeTo(driven.centerPixel[0], 0.62 * 0.25),
                "the driven opacity reaches the composited frame");
         valueField->setValue(0.75);
         QCoreApplication::processEvents();
         const auto rebound = composite(a);
-        expect(rebound.ok && close(rebound.centerPixel[3], 0.75),
+        expect(rebound.ok && closeTo(rebound.centerPixel[3], 0.75),
                "changing the value node's own number re-evaluates the driven frame");
 
         // --- Scalar -> Vector2: the documented splat promotion. --------------------------------
