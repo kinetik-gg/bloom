@@ -1,5 +1,6 @@
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
+#include <memory>
 #include <utility>
 
 namespace bloom::runtime {
@@ -64,6 +65,71 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createQualified(
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
 
+PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(PreviewRequestIdentity desiredIdentity,
+                                                 ProcessFrameIdentity processIdentity,
+                                                 render::PreparedReferenceDisplayBuffer buffer,
+                                                 const bool isOcioQualified) noexcept
+    : desiredIdentity_(desiredIdentity), processIdentity_(std::move(processIdentity)),
+      buffer_(std::move(buffer)), isOcioQualified_(isOcioQualified) {}
+
+std::optional<PreviewDisplayOnlyFrame>
+PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
+                                const std::size_t pixelStorageByteLimit) noexcept {
+    const auto view = source.displayBufferView();
+    if (!view.has_value()) {
+        return std::nullopt;
+    }
+    const auto descriptor =
+        render::ReferenceDisplayBufferDescriptor::create(view->displayWindow, view->pixelAspect);
+    if (!descriptor) {
+        return std::nullopt;
+    }
+    // The two display products are both packed straight RGBA8 over the same window, so one storage
+    // type holds either -- but that is an invariant worth checking rather than assuming, because a
+    // mismatch here would mean copying pixels into a shape that does not describe them.
+    if (descriptor.value()->layout() != view->layout) {
+        return std::nullopt;
+    }
+    auto buffer = render::PreparedReferenceDisplayBuffer::create(*descriptor.value(), view->pixels,
+                                                                 pixelStorageByteLimit);
+    if (!buffer) {
+        return std::nullopt;
+    }
+    return PreviewDisplayOnlyFrame(source.desiredIdentity(), source.processIdentity(),
+                                   std::move(*buffer.value()), view->isOcioQualified);
+}
+
+std::optional<PreviewDisplayBufferView>
+PreviewDisplayOnlyFrame::displayBufferView() const noexcept {
+    const auto* descriptor = buffer_.descriptor();
+    if (descriptor == nullptr) {
+        return std::nullopt;
+    }
+    return PreviewDisplayBufferView{
+        .displayWindow = descriptor->displayWindow(),
+        .pixelAspect = descriptor->pixelAspect(),
+        .layout = descriptor->layout(),
+        .pixels = buffer_.pixels(),
+        .isOcioQualified = isOcioQualified_,
+    };
+}
+
+std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
+    return buffer_.pixels().size_bytes();
+}
+
+std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
+    const std::uint64_t requestGeneration,
+    std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame) noexcept {
+    if (requestGeneration == 0 || displayFrame == nullptr ||
+        !displayFrame->displayBufferView().has_value()) {
+        return std::nullopt;
+    }
+    PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
+    desiredIdentity.requestGeneration = requestGeneration;
+    return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+}
+
 PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentity,
                                            DisplayFrameVariant displayFrame) noexcept
     : desiredIdentity_(desiredIdentity), displayFrame_(std::move(displayFrame)) {}
@@ -77,10 +143,25 @@ PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentit
 // than a thrown bad_variant_access -- still a loud failure, never silent misbehavior).
 using ReferencePtr = std::shared_ptr<const ReferenceDisplayFrame>;
 using QualifiedPtr = std::shared_ptr<const QualifiedDisplayFrame>;
+using DisplayOnlyPtr = std::shared_ptr<const PreviewDisplayOnlyFrame>;
+
+bool PreparedPreviewFrame::isOcioQualified() const noexcept {
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
+        return (*displayOnly)->isOcioQualified();
+    }
+    return std::holds_alternative<QualifiedPtr>(displayFrame_);
+}
+
+bool PreparedPreviewFrame::hasProcessFrame() const noexcept {
+    return !std::holds_alternative<DisplayOnlyPtr>(displayFrame_);
+}
 
 const ProcessFrameIdentity& PreparedPreviewFrame::processIdentity() const& noexcept {
     if (const auto* reference = std::get_if<ReferencePtr>(&displayFrame_)) {
         return (*reference)->identity().processFrame;
+    }
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
+        return (*displayOnly)->processIdentity();
     }
     return std::get_if<QualifiedPtr>(&displayFrame_)->get()->identity().processFrame;
 }
@@ -89,10 +170,20 @@ const std::shared_ptr<const ProcessFrame>& PreparedPreviewFrame::processFrame() 
     if (const auto* reference = std::get_if<ReferencePtr>(&displayFrame_)) {
         return (*reference)->processFrame();
     }
+    if (std::holds_alternative<DisplayOnlyPtr>(displayFrame_)) {
+        // A display-only frame answers this honestly rather than refusing: it kept no process
+        // frame, and hasProcessFrame() says so in advance. The handle is a function-local static so
+        // a reference to it stays valid, and it is const so nothing can ever fill it in.
+        static const std::shared_ptr<const ProcessFrame> none;
+        return none;
+    }
     return std::get_if<QualifiedPtr>(&displayFrame_)->get()->processFrame();
 }
 
 std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView() const noexcept {
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
+        return (*displayOnly)->displayBufferView();
+    }
     if (const auto* reference = std::get_if<ReferencePtr>(&displayFrame_)) {
         const auto viewResult = (*reference)->buffer().view();
         if (!viewResult) {
@@ -146,6 +237,11 @@ PreparedPreviewFrame::qualifiedDisplayFrame() const& noexcept {
 const QualifiedDisplayFrameIdentity&
 PreparedPreviewFrame::qualifiedDisplayIdentity() const& noexcept {
     return std::get_if<QualifiedPtr>(&displayFrame_)->get()->identity();
+}
+
+const std::shared_ptr<const PreviewDisplayOnlyFrame>&
+PreparedPreviewFrame::displayOnlyFrame() const& noexcept {
+    return *std::get_if<DisplayOnlyPtr>(&displayFrame_);
 }
 
 std::optional<PreviewPreparationResult>

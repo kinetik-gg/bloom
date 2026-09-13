@@ -200,6 +200,16 @@ QString exactFrameAndTimecodeText(const CompositionSession& session) {
     return ViewerEditor::tr("%1 dropped").arg(previewController.droppedFrameCount());
 }
 
+// The footer's RAM preview progress, or an empty string when no run is caching -- the same honesty
+// rule droppedFrameText() follows: outside a run the footer says nothing rather than "0/0".
+[[nodiscard]] QString ramPreviewText(const CompositionPreviewController& previewController) {
+    const auto& progress = previewController.ramPreviewProgress();
+    if (!progress.has_value()) {
+        return {};
+    }
+    return ViewerEditor::tr("Caching %1/%2").arg(progress->cachedFrames).arg(progress->totalFrames);
+}
+
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
     // 22px pattern from the SurfaceRaised/Surface pair (decision 1): this is now the WHOLE canvas
     // surround, not just an under-image alpha indicator -- the image is drawn on top of it with its
@@ -351,6 +361,10 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
     // CompositionPreviewController::droppedFrameCount() for exactly what it counts and what it
     // does not claim. Zero dropped frames still shows "0 dropped" during playback: silence would
     // read as "not measured", which is a different statement.
+    // RAM preview progress sits furthest left of the right-anchored readouts, so the chip and the
+    // dropped-frame count keep the positions they already had while a run is caching.
+    const QString cachingText = ramPreviewText(previewController);
+
     const QString droppedText = droppedFrameText(previewController);
     if (!droppedText.isEmpty()) {
         const qreal droppedWidth = painter.fontMetrics().horizontalAdvance(droppedText);
@@ -361,6 +375,17 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
                                 std::max<qreal>(0.0, centerRight - droppedLeft), bar.height()),
                          Qt::AlignVCenter | Qt::AlignRight, droppedText);
         centerRight = droppedLeft - kit::px(kit::Spacing::S);
+        painter.setPen(kit::color(kit::Color::Foreground));
+    }
+
+    if (!cachingText.isEmpty()) {
+        const qreal cachingWidth = painter.fontMetrics().horizontalAdvance(cachingText);
+        const qreal cachingLeft = std::max<qreal>(chipLeftBound, centerRight - cachingWidth);
+        painter.setPen(kit::color(kit::Color::Accent));
+        painter.drawText(QRectF(cachingLeft, bar.top(),
+                                std::max<qreal>(0.0, centerRight - cachingLeft), bar.height()),
+                         Qt::AlignVCenter | Qt::AlignRight, cachingText);
+        centerRight = cachingLeft - kit::px(kit::Spacing::S);
         painter.setPen(kit::color(kit::Color::Foreground));
     }
 
@@ -562,6 +587,14 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
                     statusBarFooter_->update();
                 }
             });
+    // Task PERF1, item 3: the RAM preview progress readout, through that same idiom.
+    connect(&previewController_, &CompositionPreviewController::ramPreviewProgressChanged, this,
+            [this] {
+                update();
+                if (statusBarFooter_ != nullptr) {
+                    statusBarFooter_->update();
+                }
+            });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
         updatePreviewAccessibility();
         // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
@@ -610,6 +643,10 @@ QString ViewerEditor::statusBarReadoutTextForTest() const {
 
 QString ViewerEditor::statusBarDroppedFrameTextForTest() const {
     return droppedFrameText(previewController_);
+}
+
+QString ViewerEditor::statusBarRamPreviewTextForTest() const {
+    return ramPreviewText(previewController_);
 }
 
 QString ViewerEditor::statusBarColorChipTextForTest() const {

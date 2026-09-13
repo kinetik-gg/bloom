@@ -5,6 +5,7 @@ add_library(bloom_runtime STATIC)
 target_sources(
     bloom_runtime
     PRIVATE
+        row_band_execution.cpp
         task_primitives.cpp
         task_gpu_executor.cpp
         task_gpu_executor_lease.cpp
@@ -15,6 +16,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/cancellation.hpp
+            include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
             include/bloom/runtime/task_scheduler.hpp
             include/bloom/runtime/task_types.hpp

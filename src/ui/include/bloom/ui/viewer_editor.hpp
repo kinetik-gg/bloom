@@ -125,6 +125,9 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // Task S5, item 3b: the footer's dropped-frame text, empty whenever counting is disarmed (so
     // outside a playback run the footer claims nothing at all). Same seam shape as the two above.
     [[nodiscard]] QString statusBarDroppedFrameTextForTest() const;
+    // Task PERF1, item 3: the footer's "Caching 42/240" text, empty whenever no RAM preview run is
+    // caching.
+    [[nodiscard]] QString statusBarRamPreviewTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
 
   protected:

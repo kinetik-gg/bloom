@@ -643,3 +643,19 @@ target_include_directories(bloom_node_production_wiring_test PRIVATE ..)
 target_link_libraries(bloom_node_production_wiring_test PRIVATE bloom_ui bloom_project Qt6::Test)
 bloom_enable_warnings(bloom_node_production_wiring_test)
 bloom_add_test(NAME bloom.ui.node-production-wiring COMMAND bloom_node_production_wiring_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Task PERF1: the RAM preview cache, the compiled-plan cache, and the RAM Preview command. Its own
+# executable rather than more cases inside composition_preview_controller_tests.cpp or
+# playback_controller_tests.cpp, each of which owns a contract this task had to leave intact -- and
+# this one needs its own counting/pausable preparation function to prove that a cache hit evaluates
+# nothing.
+add_executable(bloom_ram_preview_test ram_preview_tests.cpp)
+target_link_libraries(bloom_ram_preview_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ram_preview_test)
+bloom_add_test(
+    NAME bloom.ui.ram-preview
+    COMMAND bloom_ram_preview_test
+    LABELS ui integration animation
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

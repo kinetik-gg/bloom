@@ -86,6 +86,12 @@ namespace detail {
 SchedulerState::SchedulerState(TaskSchedulerConfig schedulerConfig,
                                std::function<void(std::size_t)> startHook)
     : config(schedulerConfig), workerStartHook(std::move(startHook)) {
+    // One row-band pool per scheduler (docs/architecture/task-system.md, "Row bands"): the pixel
+    // work of one frame is split across it, which is a different question from how many independent
+    // tasks may run at once, so it gets its own bounded width rather than borrowing cpu.workers.
+    if (config.rowBandWorkerCount != kSerialRowBandWorkers) {
+        rowBands.emplace(config.rowBandWorkerCount);
+    }
     cpu.capacity = config.cpuQueueCapacity;
     blockingIo.capacity = config.blockingIoQueueCapacity;
     gpu.capacity = config.gpuPendingQueueCapacity;
@@ -249,6 +255,7 @@ void SchedulerState::workerLoop(const TaskExecutor kind) noexcept {
 std::shared_ptr<TaskContextState>
 SchedulerState::makeContextState(const std::shared_ptr<TaskRecord>& record) {
     auto context = std::make_shared<TaskContextState>();
+    context->rowBands = rowBandExecutor();
     context->taskCancellation = record->cancellation;
     context->groupCancellation = record->groupCancellation;
     context->reportProgress = [record](TaskProgress progress) {

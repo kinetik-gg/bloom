@@ -1,6 +1,7 @@
 #ifndef BLOOM_RUNTIME_TASK_SCHEDULER_INTERNAL_HPP
 #define BLOOM_RUNTIME_TASK_SCHEDULER_INTERNAL_HPP
 
+#include <bloom/runtime/row_band_execution.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <condition_variable>
@@ -37,6 +38,10 @@ struct TaskContextState {
     std::shared_ptr<CancellationState> groupCancellation;
     std::function<void(TaskProgress)> reportProgress;
     std::function<void(TaskDiagnostic)> addDiagnostic;
+    // Borrowed, never owned: the pool lives in SchedulerState, which outlives every context it
+    // makes (a task cannot still be running once the scheduler state is gone -- ~SchedulerState
+    // joins its workers). Null exactly when this configuration asked for serial row evaluation.
+    CpuRowBandExecutor* rowBands = nullptr;
 };
 
 struct TaskRecord {
@@ -86,6 +91,11 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     SchedulerState& operator=(const SchedulerState&) = delete;
 
     void startWorkers();
+    // The row-band pool this scheduler hands to every task context it makes; null when the
+    // configuration asked for serial row evaluation.
+    [[nodiscard]] CpuRowBandExecutor* rowBandExecutor() noexcept {
+        return rowBands.has_value() ? &*rowBands : nullptr;
+    }
     [[nodiscard]] Admission admit(TaskRequest request,
                                   std::shared_ptr<CancellationState> cancellation,
                                   std::shared_ptr<TaskWork> work);
@@ -170,6 +180,10 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void advanceTaskIdLocked() noexcept;
 
     TaskSchedulerConfig config;
+    // Engaged unless the configuration asked for kSerialRowBandWorkers. Declared before `mutex` so
+    // it is destroyed after everything below it: its own destructor joins band workers, and no band
+    // may outlive a task that is still holding a reference into this state.
+    std::optional<CpuRowBandExecutor> rowBands;
     mutable std::mutex mutex;
     ExecutorState cpu;
     ExecutorState blockingIo;

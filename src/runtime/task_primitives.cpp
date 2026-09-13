@@ -156,17 +156,26 @@ TaskSchedulerConfig TaskSchedulerConfig::defaults() noexcept {
     const unsigned int available = std::thread::hardware_concurrency();
     const auto useful = available > 1 ? static_cast<std::size_t>(available - 1U) : std::size_t{1};
     config.cpuWorkerCount = std::clamp<std::size_t>(useful, 1, 16);
+    // Left at its own zero default, which CpuRowBandExecutor derives from hardware_concurrency()
+    // itself: the row-band pool's width is a property of the machine, not of how many task lanes
+    // this configuration wants.
     config.blockingIoWorkerCount = 2;
     return config;
 }
 
 bool TaskSchedulerConfig::isValid() const noexcept {
-    return cpuWorkerCount > 0 && cpuWorkerCount <= kMaxCpuWorkers && blockingIoWorkerCount > 0 &&
-           blockingIoWorkerCount <= kMaxBlockingIoWorkers && cpuQueueCapacity > 0 &&
-           cpuQueueCapacity <= kMaxQueueCapacity && blockingIoQueueCapacity > 0 &&
-           blockingIoQueueCapacity <= kMaxQueueCapacity && gpuPendingQueueCapacity > 0 &&
-           gpuPendingQueueCapacity <= kMaxGpuPendingQueue && gpuAdmittedStateCapacity > 0 &&
-           gpuAdmittedStateCapacity <= kMaxGpuAdmittedStates &&
+    // rowBandWorkerCount accepts 0 (derive from the machine), kSerialRowBandWorkers (no pool at
+    // all), and any explicit width up to the CPU worker bound. An explicit width above that bound
+    // is refused for the same reason cpuWorkerCount is: a thread count nobody can service honestly.
+    const bool rowBandWorkersValid = rowBandWorkerCount == 0 ||
+                                     rowBandWorkerCount == kSerialRowBandWorkers ||
+                                     rowBandWorkerCount <= kMaxCpuWorkers;
+    return rowBandWorkersValid && cpuWorkerCount > 0 && cpuWorkerCount <= kMaxCpuWorkers &&
+           blockingIoWorkerCount > 0 && blockingIoWorkerCount <= kMaxBlockingIoWorkers &&
+           cpuQueueCapacity > 0 && cpuQueueCapacity <= kMaxQueueCapacity &&
+           blockingIoQueueCapacity > 0 && blockingIoQueueCapacity <= kMaxQueueCapacity &&
+           gpuPendingQueueCapacity > 0 && gpuPendingQueueCapacity <= kMaxGpuPendingQueue &&
+           gpuAdmittedStateCapacity > 0 && gpuAdmittedStateCapacity <= kMaxGpuAdmittedStates &&
            gpuPendingQueueCapacity <= gpuAdmittedStateCapacity && gpuLiveContinuationCapacity > 0 &&
            gpuLiveContinuationCapacity <= kMaxGpuLiveContinuations &&
            gpuLiveContinuationCapacity <= gpuAdmittedStateCapacity &&
@@ -202,6 +211,8 @@ TaskContext::TaskContext(std::shared_ptr<detail::TaskContextState> state) noexce
 }
 
 const CancellationToken& TaskContext::cancellation() const noexcept { return cancellation_; }
+
+CpuRowBandExecutor* TaskContext::rowBandExecutor() const noexcept { return state_->rowBands; }
 
 bool TaskContext::isCancellationRequested() const noexcept {
     return cancellation_.isCancellationRequested();

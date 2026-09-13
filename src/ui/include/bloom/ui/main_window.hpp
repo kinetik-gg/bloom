@@ -18,6 +18,7 @@ class CompositionSession;
 class EditorRegistry;
 class FrameExportController;
 class ProjectHost;
+class RamPreviewController;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
@@ -44,9 +45,12 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
   public:
+    // `ramPreview` is the Composition menu's RAM Preview command (task PERF1, item 3), the same
+    // controller the Timeline's transport button reaches. Null leaves the menu item present and
+    // disabled, which is what a window built without one should show.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
-               QWidget* parent = nullptr);
+               RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -68,6 +72,7 @@ class MainWindow final : public QMainWindow {
     void createChrome();
     void createMenus(QMenuBar& menuBar);
     void createFileMenu(QMenu& fileMenu);
+    void createCompositionMenu(QMenu& compositionMenu);
     void createViewMenu(QMenu& viewMenu);
     void createHelpMenu(QMenu& helpMenu);
     void createEditorLayout(const EditorRegistry& editorRegistry);
@@ -86,9 +91,12 @@ class MainWindow final : public QMainWindow {
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
     FrameExportController& frameExportController_;
+    // Borrowed, may be null; the command itself is owned by the application composition root.
+    RamPreviewController* ramPreview_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
+    QMenu* compositionMenu_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
@@ -111,6 +119,8 @@ class MainWindow final : public QMainWindow {
     QAction* splitTopBottomAction_ = nullptr;
     QAction* closeAreaAction_ = nullptr;
     QAction* maximizeAreaAction_ = nullptr;
+    QAction* ramPreviewAction_ = nullptr;
+    QAction* cancelRamPreviewAction_ = nullptr;
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;

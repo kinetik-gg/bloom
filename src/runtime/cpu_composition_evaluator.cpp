@@ -63,6 +63,22 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
     return subject;
 }
 
+// What one banded row returns: nothing, or the structured failure that ends the pass. Named because
+// every row lambda below spells it as its own return type.
+using RowFailure = std::optional<EvaluationDiagnostic>;
+
+// The two Operation-stage progress events a BANDED row pass reports, both from the thread that owns
+// the frame. Rows are no longer reported one at a time: a band runs on another thread, and the
+// progress callback belongs to the task that owns the frame rather than to the pool. `completed ==
+// 0` is the event an observer uses to rendezvous with the start of an operation's pixel work, and
+// `completed == total` the one that says the pass finished.
+void reportRowPassStarted(const EvaluationProgressCallback& callback,
+                          const OperationIndex operation, const std::uint64_t total) noexcept;
+void reportRowPassFinished(const EvaluationProgressCallback& callback,
+                           const OperationIndex operation, const std::uint64_t total) noexcept;
+[[nodiscard]] RowFailure rowPassFailure(const RowBandPassOutcome<RowFailure>& outcome,
+                                        const EvaluationSubject& subject);
+
 void reportProgress(const EvaluationProgressCallback& callback,
                     const EvaluationProgress& progress) noexcept {
     if (!callback) {
@@ -74,6 +90,35 @@ void reportProgress(const EvaluationProgressCallback& callback,
         // Monitoring is best effort. A presentation-side allocation failure must not change pixels.
         return;
     }
+}
+
+// One banded row pass's failure in the evaluator's own vocabulary. `incomplete` means a band
+// escaped by throwing -- unreachable for a noexcept row kernel, and reported as the allocation
+// failure it can only have been rather than published as a half-written image.
+RowFailure rowPassFailure(const RowBandPassOutcome<RowFailure>& outcome,
+                          const EvaluationSubject& subject) {
+    if (outcome.failure.has_value()) {
+        return outcome.failure;
+    }
+    return diagnostic(
+        EvaluationDiagnosticCode::AllocationFailure, "An evaluation row band could not complete",
+        "A parallel row band ended in an exception; the frame was not published.", subject);
+}
+
+void reportRowPassStarted(const EvaluationProgressCallback& callback,
+                          const OperationIndex operation, const std::uint64_t total) noexcept {
+    reportProgress(callback, {.stage = EvaluationProgressStage::Operation,
+                              .operation = operation,
+                              .completed = 0,
+                              .total = total});
+}
+
+void reportRowPassFinished(const EvaluationProgressCallback& callback,
+                           const OperationIndex operation, const std::uint64_t total) noexcept {
+    reportProgress(callback, {.stage = EvaluationProgressStage::Operation,
+                              .operation = operation,
+                              .completed = total,
+                              .total = total});
 }
 
 [[nodiscard]] std::optional<core::PixelAspectRatio>
@@ -1125,12 +1170,17 @@ using detail::imageDiagnostic;
 using detail::Overloaded;
 using detail::preflight;
 using detail::reportProgress;
+using detail::reportRowPassFinished;
+using detail::reportRowPassStarted;
+using detail::RowFailure;
+using detail::rowPassFailure;
 using detail::subjectFor;
 using detail::unexpectedAllocationFailure;
 
 EvaluationResult CpuCompositionEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, EvaluationProgressCallback progress) const {
+    const CancellationToken& cancellation, EvaluationProgressCallback progress,
+    CpuRowBandExecutor* const rowBands) const {
     try {
         auto checked = preflight(plan, request, cancellation, progress);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -1185,27 +1235,33 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                 "Solid process image could not be allocated");
                             return;
                         }
-                        const auto height = resolved.imageDescriptor.dataWindow().extent().height();
-                        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-                            if (cancellation.isCancellationRequested()) {
-                                operationCancelled = true;
-                                return;
-                            }
-                            const auto y = resolved.imageDescriptor.dataWindow().originY() +
-                                           static_cast<std::int64_t>(rowIndex);
-                            auto row = builder.value()->row(y);
-                            if (!row) {
-                                operationFailure =
-                                    imageDiagnostic(*row.error(), operationSubject,
-                                                    "Solid output row could not be addressed");
-                                return;
-                            }
-                            render::fillSolidRow(*row.value(), *pixel.value());
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = rowIndex + 1,
-                                                      .total = height});
+                        const auto window = resolved.imageDescriptor.dataWindow();
+                        const auto height = window.extent().height();
+                        reportRowPassStarted(progress, operationIndex, height);
+                        auto& image = *builder.value();
+                        const auto solidPixel = *pixel.value();
+                        const auto outcome =
+                            runRowBandPass(rowBands, cancellation, height, window.originY(),
+                                           [&image, solidPixel,
+                                            &operationSubject](const std::int64_t y) -> RowFailure {
+                                               auto row = image.row(y);
+                                               if (!row) {
+                                                   return imageDiagnostic(
+                                                       *row.error(), operationSubject,
+                                                       "Solid output row could not be addressed");
+                                               }
+                                               render::fillSolidRow(*row.value(), solidPixel);
+                                               return std::nullopt;
+                                           });
+                        if (outcome.cancelled) {
+                            operationCancelled = true;
+                            return;
                         }
+                        if (outcome.failure.has_value() || outcome.incomplete) {
+                            operationFailure = rowPassFailure(outcome, operationSubject);
+                            return;
+                        }
+                        reportRowPassFinished(progress, operationIndex, height);
                         auto frozen = std::move(*builder.value()).freeze();
                         if (!frozen) {
                             operationFailure =
@@ -1279,42 +1335,41 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         const auto window = resolved.imageDescriptor.dataWindow();
                         const auto height = window.extent().height();
                         const auto& bitmap = *coverage.value();
-                        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-                            if (cancellation.isCancellationRequested()) {
-                                operationCancelled = true;
-                                return;
-                            }
-                            const auto y = window.originY() + static_cast<std::int64_t>(rowIndex);
-                            const auto clipped = detail::clipCoverageRow(bitmap, window, y);
-                            if (clipped.coverage.empty()) {
-                                reportProgress(progress,
-                                               {.stage = EvaluationProgressStage::Operation,
-                                                .operation = operationIndex,
-                                                .completed = rowIndex + 1,
-                                                .total = height});
-                                continue;
-                            }
-                            auto outputRow = builder.value()->row(y);
-                            if (!outputRow) {
-                                operationFailure =
-                                    imageDiagnostic(*outputRow.error(), operationSubject,
-                                                    "Text output row could not be addressed");
-                                return;
-                            }
-                            if (const auto rowStatus = render::coverageSolidRow(
-                                    clipped.coverage, *pixel.value(),
-                                    outputRow.value()->subspan(clipped.outputOffset,
-                                                               clipped.coverage.size()))) {
-                                operationFailure =
-                                    imageDiagnostic(*rowStatus, operationSubject,
-                                                    "Text coverage could not be composited");
-                                return;
-                            }
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = rowIndex + 1,
-                                                      .total = height});
+                        reportRowPassStarted(progress, operationIndex, height);
+                        auto& image = *builder.value();
+                        const auto textPixel = *pixel.value();
+                        const auto outcome = runRowBandPass(
+                            rowBands, cancellation, height, window.originY(),
+                            [&image, &bitmap, window, textPixel,
+                             &operationSubject](const std::int64_t y) -> RowFailure {
+                                const auto clipped = detail::clipCoverageRow(bitmap, window, y);
+                                if (clipped.coverage.empty()) {
+                                    return std::nullopt;
+                                }
+                                auto outputRow = image.row(y);
+                                if (!outputRow) {
+                                    return imageDiagnostic(
+                                        *outputRow.error(), operationSubject,
+                                        "Text output row could not be addressed");
+                                }
+                                if (const auto rowStatus = render::coverageSolidRow(
+                                        clipped.coverage, textPixel,
+                                        outputRow.value()->subspan(clipped.outputOffset,
+                                                                   clipped.coverage.size()))) {
+                                    return imageDiagnostic(*rowStatus, operationSubject,
+                                                           "Text coverage could not be composited");
+                                }
+                                return std::nullopt;
+                            });
+                        if (outcome.cancelled) {
+                            operationCancelled = true;
+                            return;
                         }
+                        if (outcome.failure.has_value() || outcome.incomplete) {
+                            operationFailure = rowPassFailure(outcome, operationSubject);
+                            return;
+                        }
+                        reportRowPassFinished(progress, operationIndex, height);
                         auto frozen = std::move(*builder.value()).freeze();
                         if (!frozen) {
                             operationFailure =
@@ -1436,33 +1491,39 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             return;
                         }
                         const auto height = layerWindow->extent().height();
-                        for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-                            if (cancellation.isCancellationRequested()) {
-                                operationCancelled = true;
-                                return;
-                            }
-                            const auto y =
-                                layerWindow->originY() + static_cast<std::int64_t>(rowIndex);
-                            auto outputRow = builder.value()->row(y);
-                            if (!outputRow) {
-                                operationFailure =
-                                    imageDiagnostic(*outputRow.error(), operationSubject,
-                                                    "Layer output row could not be addressed");
-                                return;
-                            }
-                            if (const auto rowStatus = render::layerTransformBilinearRow(
-                                    *sourceView.value(), *layerWindow, y, *transform.value(),
-                                    *outputRow.value())) {
-                                operationFailure =
-                                    imageDiagnostic(*rowStatus, operationSubject,
-                                                    "Layer transform could not be evaluated");
-                                return;
-                            }
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = rowIndex + 1,
-                                                      .total = height});
+                        reportRowPassStarted(progress, operationIndex, height);
+                        auto& image = *builder.value();
+                        const auto& source = *sourceView.value();
+                        const auto& layerTransform = *transform.value();
+                        const auto outputWindow = *layerWindow;
+                        const auto outcome = runRowBandPass(
+                            rowBands, cancellation, height, outputWindow.originY(),
+                            [&image, &source, &layerTransform, outputWindow,
+                             &operationSubject](const std::int64_t y) -> RowFailure {
+                                auto outputRow = image.row(y);
+                                if (!outputRow) {
+                                    return imageDiagnostic(
+                                        *outputRow.error(), operationSubject,
+                                        "Layer output row could not be addressed");
+                                }
+                                if (const auto rowStatus = render::layerTransformBilinearRow(
+                                        source, outputWindow, y, layerTransform,
+                                        *outputRow.value())) {
+                                    return imageDiagnostic(
+                                        *rowStatus, operationSubject,
+                                        "Layer transform could not be evaluated");
+                                }
+                                return std::nullopt;
+                            });
+                        if (outcome.cancelled) {
+                            operationCancelled = true;
+                            return;
                         }
+                        if (outcome.failure.has_value() || outcome.incomplete) {
+                            operationFailure = rowPassFailure(outcome, operationSubject);
+                            return;
+                        }
+                        reportRowPassFinished(progress, operationIndex, height);
                         auto frozen = std::move(*builder.value()).freeze();
                         if (!frozen) {
                             operationFailure =
@@ -1487,6 +1548,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         const std::uint64_t totalRows =
                             static_cast<std::uint64_t>(height) * stack.entries.size();
                         std::uint64_t completedRows = 0;
+                        reportRowPassStarted(progress, operationIndex, totalRows);
                         for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend();
                              ++entry) {
                             // A Layer Output that published no image is a layer with no reachable
@@ -1547,52 +1609,56 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Layer Stack source exceeds the composition window");
                                 return;
                             }
-                            for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
-                                if (cancellation.isCancellationRequested()) {
-                                    operationCancelled = true;
-                                    return;
-                                }
-                                const auto y =
-                                    window.originY() + static_cast<std::int64_t>(rowIndex);
-                                ++completedRows;
-                                const auto reportRow = [&] {
-                                    reportProgress(progress,
-                                                   {.stage = EvaluationProgressStage::Operation,
-                                                    .operation = operationIndex,
-                                                    .completed = completedRows,
-                                                    .total = totalRows});
-                                };
-                                if (y < sourceWindow.originY() ||
-                                    y >= sourceWindow.maxYExclusive()) {
-                                    reportRow();
-                                    continue;
-                                }
-                                auto sourceRow = sourceView.value()->row(y);
-                                if (!sourceRow) {
-                                    operationFailure = imageDiagnostic(
-                                        *sourceRow.error(), operationSubject,
-                                        "Layer Stack source row could not be addressed");
-                                    return;
-                                }
-                                auto destinationRow = builder.value()->row(y);
-                                if (!destinationRow) {
-                                    operationFailure = imageDiagnostic(
-                                        *destinationRow.error(), operationSubject,
-                                        "Layer Stack destination row could not be addressed");
-                                    return;
-                                }
-                                if (const auto rowStatus = render::blendLinearRec709SceneRow(
-                                        blendMode, *sourceRow.value(),
-                                        destinationRow.value()->subspan(
-                                            static_cast<std::size_t>(columnOffset),
-                                            sourceWindow.extent().width()))) {
-                                    operationFailure =
-                                        imageDiagnostic(*rowStatus, operationSubject,
-                                                        "Layer Stack blend could not be evaluated");
-                                    return;
-                                }
-                                reportRow();
+                            // Entries fold in order, bottom to top, because each one composites
+                            // over what the ones beneath it left behind. The ROWS of one entry are
+                            // independent of each other, so they band; the entries themselves never
+                            // can.
+                            auto& image = *builder.value();
+                            const auto& source = *sourceView.value();
+                            const auto outcome = runRowBandPass(
+                                rowBands, cancellation, height, window.originY(),
+                                [&image, &source, sourceWindow, columnOffset, blendMode,
+                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                    if (y < sourceWindow.originY() ||
+                                        y >= sourceWindow.maxYExclusive()) {
+                                        return std::nullopt;
+                                    }
+                                    auto sourceRow = source.row(y);
+                                    if (!sourceRow) {
+                                        return imageDiagnostic(
+                                            *sourceRow.error(), operationSubject,
+                                            "Layer Stack source row could not be addressed");
+                                    }
+                                    auto destinationRow = image.row(y);
+                                    if (!destinationRow) {
+                                        return imageDiagnostic(
+                                            *destinationRow.error(), operationSubject,
+                                            "Layer Stack destination row could not be addressed");
+                                    }
+                                    if (const auto rowStatus = render::blendLinearRec709SceneRow(
+                                            blendMode, *sourceRow.value(),
+                                            destinationRow.value()->subspan(
+                                                static_cast<std::size_t>(columnOffset),
+                                                sourceWindow.extent().width()))) {
+                                        return imageDiagnostic(
+                                            *rowStatus, operationSubject,
+                                            "Layer Stack blend could not be evaluated");
+                                    }
+                                    return std::nullopt;
+                                });
+                            if (outcome.cancelled) {
+                                operationCancelled = true;
+                                return;
                             }
+                            if (outcome.failure.has_value() || outcome.incomplete) {
+                                operationFailure = rowPassFailure(outcome, operationSubject);
+                                return;
+                            }
+                            completedRows += height;
+                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                                      .operation = operationIndex,
+                                                      .completed = completedRows,
+                                                      .total = totalRows});
                         }
                         if (stack.entries.empty()) {
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,

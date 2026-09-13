@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -1246,25 +1247,153 @@ void testRepeatability(Expectations& expectations) {
                         "process evaluation and display preparation are independently repeatable");
 }
 
-class CancellationGate final {
-  public:
-    void pauseAtFirstRow(const runtime::EvaluationProgress& progress) {
-        if (progress.stage != runtime::EvaluationProgressStage::Operation ||
-            progress.completed != 1) {
-            return;
-        }
-        std::unique_lock lock(mutex_);
-        if (entered_) {
-            return;
-        }
-        entered_ = true;
-        condition_.notify_all();
-        condition_.wait(lock, [this] { return released_; });
+// ---------------------------------------------------------------------------------------------
+// Row bands (task PERF1).
+//
+// A plan tall enough to divide into many bands and varied enough that every banded kernel runs over
+// it: a full-frame solid, a rotated and scaled text layer above it, and a Layer Stack that folds
+// both. The text layer's transform is the one the task package names -- rotation 15 degrees, scale
+// 0.8 -- so the resample interpolates on every row rather than taking the translate-only path.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> bandedPlan() {
+    const auto bandedFormat = format(160, 120);
+    std::vector<runtime::CompiledOperation> operations;
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{0.2, 0.35, 0.6, 1.0}}});
+    operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
+                                        kLayerParametersA,
+                                        {.position = {80.0, 60.0}, .opacity = 1.0}));
+    operations.emplace_back(runtime::CompiledText{kTextNode,
+                                                  kTextContent,
+                                                  std::string("Bloom RAM preview"),
+                                                  {kTextSize, 24.0},
+                                                  {kTextColor, core::Color4d{1.0, 0.9, 0.8, 1.0}}});
+    operations.emplace_back(layerOutput(
+        kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2), kLayerParametersB,
+        {.position = {80.0, 60.0}, .scale = {0.8, 0.8}, .rotation = 15.0, .opacity = 0.75}));
+    operations.emplace_back(
+        runtime::CompiledLayerStack{kStackNode,
+                                    {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)},
+                                     {kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
+    return publishPlan(runtime::CompiledCompositionPlanDefinition{
+        document::Revision::fromRaw(7), kProjectId, kCompositionId, bandedFormat,
+        std::move(operations), runtime::OperationIndex::fromRaw(5)});
+}
+
+void testRowBandPlanIsDeterministicAndBounded(Expectations& expectations) {
+    expectations.expect(runtime::planRowBands(0, 8).empty(), "no rows plans no bands");
+    expectations.expect(runtime::planRowBands(1080, 0).empty(), "no band budget plans no bands");
+
+    const auto single = runtime::planRowBands(runtime::kMinimumRowsPerBand - 1, 64);
+    expectations.expect(single.size() == 1 && single.front().beginRow == 0 &&
+                            single.front().rowCount == runtime::kMinimumRowsPerBand - 1,
+                        "an image shorter than one band's floor is exactly one band");
+
+    const auto bands = runtime::planRowBands(1080, 6);
+    std::uint32_t covered = 0;
+    bool contiguous = true;
+    bool aboveFloor = true;
+    for (const auto band : bands) {
+        contiguous = contiguous && band.beginRow == covered;
+        aboveFloor = aboveFloor && band.rowCount >= runtime::kMinimumRowsPerBand;
+        covered += band.rowCount;
+    }
+    expectations.expect(bands.size() == 6 && contiguous && aboveFloor && covered == 1080,
+                        "1080 rows over six bands partition the image exactly, in order");
+    expectations.expect(bands == runtime::planRowBands(1080, 6),
+                        "the same row count and band budget always plan the same split");
+
+    const auto narrow = runtime::planRowBands(20, 64);
+    expectations.expect(narrow.size() == 2 && narrow[0].rowCount == 10 && narrow[1].rowCount == 10,
+                        "the band budget never splits an image below the rows-per-band floor");
+    const auto remainder = runtime::planRowBands(25, 3);
+    expectations.expect(remainder.size() == 3 && remainder[0].rowCount == 9 &&
+                            remainder[1].rowCount == 8 && remainder[2].rowCount == 8,
+                        "a remainder is spread one row at a time across the leading bands");
+}
+
+void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = bandedPlan();
+    const auto request = requestFor(*plan, 1U << 24U);
+
+    const auto serial = evaluator.evaluate(plan, request, {}, {}, nullptr);
+    runtime::CpuRowBandExecutor executor(5);
+    const auto parallel = evaluator.evaluate(plan, request, {}, {}, &executor);
+    expectations.expect(executor.bandLimit() == 6,
+                        "an explicitly sized pool reports its workers plus the calling thread");
+    expectations.expect(serial.status() == runtime::EvaluationStatus::Evaluated &&
+                            parallel.status() == runtime::EvaluationStatus::Evaluated &&
+                            serial.frame() != nullptr && parallel.frame() != nullptr,
+                        "the banded fixture evaluates both serially and in parallel");
+    if (serial.frame() == nullptr || parallel.frame() == nullptr) {
+        return;
     }
 
+    const auto serialPixels = serial.frame()->processImage().pixels();
+    const auto parallelPixels = parallel.frame()->processImage().pixels();
+    const bool sameStorage = serialPixels.size() == parallelPixels.size();
+    const bool bitIdentical =
+        sameStorage && serialPixels.size_bytes() > 0 &&
+        std::memcmp(serialPixels.data(), parallelPixels.data(), serialPixels.size_bytes()) == 0;
+    expectations.expect(bitIdentical,
+                        "row-parallel evaluation produces byte-for-byte the serial process frame");
+    expectations.expect(serial.frame()->identity() == parallel.frame()->identity(),
+                        "the row-band pool is not part of frame identity");
+
+    // The band split must not change the published picture at any band count either: a pool one
+    // worker wide, and one wider than the image has bands, both have to land on the same bytes.
+    runtime::CpuRowBandExecutor narrow(1);
+    const auto narrowResult = evaluator.evaluate(plan, request, {}, {}, &narrow);
+    runtime::CpuRowBandExecutor wide(32);
+    const auto wideResult = evaluator.evaluate(plan, request, {}, {}, &wide);
+    const bool everyWidthAgrees =
+        narrowResult.frame() != nullptr && wideResult.frame() != nullptr &&
+        std::memcmp(serialPixels.data(), narrowResult.frame()->processImage().pixels().data(),
+                    serialPixels.size_bytes()) == 0 &&
+        std::memcmp(serialPixels.data(), wideResult.frame()->processImage().pixels().data(),
+                    serialPixels.size_bytes()) == 0;
+    expectations.expect(everyWidthAgrees, "every band width publishes the same pixels");
+
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    const auto serialDisplay =
+        displayPreparer.prepare(serial.frame(), displayRequest(1U << 24U), {}, {}, nullptr);
+    const auto parallelDisplay =
+        displayPreparer.prepare(parallel.frame(), displayRequest(1U << 24U), {}, {}, &executor);
+    const bool displayIdentical =
+        serialDisplay.frame() != nullptr && parallelDisplay.frame() != nullptr &&
+        serialDisplay.frame()->buffer().pixels().size() ==
+            parallelDisplay.frame()->buffer().pixels().size() &&
+        std::memcmp(serialDisplay.frame()->buffer().pixels().data(),
+                    parallelDisplay.frame()->buffer().pixels().data(),
+                    serialDisplay.frame()->buffer().pixels().size_bytes()) == 0;
+    expectations.expect(
+        displayIdentical,
+        "row-parallel display preparation produces byte-for-byte the serial buffer");
+}
+
+class CancellationGate final {
+  public:
+    // ADAPTED (row bands): an operation's rows are now evaluated in BANDS, so the evaluator no
+    // longer reports one progress event per row -- it reports the start of a row pass
+    // (`completed == 0`) and its end, both from the thread that owns the frame. Pausing on the
+    // start event is a stricter rendezvous than the old `completed == 1` one: it stops the worker
+    // before the first band has touched a pixel, so the cancellation this test requests has to be
+    // observed by a band's own per-row check rather than by the next operation.
+    void pauseAtFirstRowPass(const runtime::EvaluationProgress& progress) {
+        if (progress.stage != runtime::EvaluationProgressStage::Operation ||
+            progress.completed != 0) {
+            return;
+        }
+        pause();
+    }
+
+    // ADAPTED (row bands): the display mapping is banded too, so it reports the start of its row
+    // pass rather than one event per row -- same rendezvous change as pauseAtFirstRowPass() above.
     void pauseAtFirstDisplayRow(const runtime::ReferenceDisplayProgress& progress) {
         if (progress.stage != runtime::ReferenceDisplayProgressStage::Mapping ||
-            progress.completed != 1) {
+            progress.completed != 0) {
             return;
         }
         pause();
@@ -1315,7 +1444,7 @@ void testDeterministicScanlineCancellation(Expectations& expectations) {
             const auto result =
                 evaluator.evaluate(plan, requestFor(*plan, 1U << 20U), context.cancellation(),
                                    [&gate](const runtime::EvaluationProgress& update) {
-                                       gate.pauseAtFirstRow(update);
+                                       gate.pauseAtFirstRowPass(update);
                                    });
             evaluatorCancelled.store(result.status() == runtime::EvaluationStatus::Cancelled,
                                      std::memory_order_release);
@@ -1343,6 +1472,65 @@ void testDeterministicScanlineCancellation(Expectations& expectations) {
         std::this_thread::yield();
     }
     expectations.expect(scheduler.isQuiescent(), "cancellation test shuts the scheduler down");
+}
+
+// The same rendezvous as the test above, but with the SCHEDULER's own row-band pool driving the
+// rows: cancellation has to be observed inside a band, by the per-row check every band makes, and
+// no band may go on to finish the frame after the token was cancelled.
+void testBandedEvaluationCancelsInsideABand(Expectations& expectations) {
+    const auto plan = bandedPlan();
+    runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    config.rowBandWorkerCount = 4;
+    runtime::TaskScheduler scheduler(config);
+    expectations.expect(scheduler.rowBandExecutor() != nullptr &&
+                            scheduler.rowBandExecutor()->bandLimit() == 5,
+                        "a configured scheduler owns a row-band pool of the requested width");
+    CancellationGate gate;
+    std::atomic_bool evaluatorCancelled = false;
+    std::atomic_bool framePublished = false;
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest(
+            "Banded cancellation fixture",
+            {.kind = runtime::TaskOwnerKind::Composition, .id = runtime::TaskOwnerId::fromRaw(3)}),
+        [plan, &evaluator, &gate, &evaluatorCancelled,
+         &framePublished](runtime::TaskContext& context) {
+            const auto result = evaluator.evaluate(
+                plan, requestFor(*plan, 1U << 24U), context.cancellation(),
+                [&gate](const runtime::EvaluationProgress& update) {
+                    gate.pauseAtFirstRowPass(update);
+                },
+                context.rowBandExecutor());
+            evaluatorCancelled.store(result.status() == runtime::EvaluationStatus::Cancelled,
+                                     std::memory_order_release);
+            framePublished.store(result.frame() != nullptr, std::memory_order_release);
+            return result.status() == runtime::EvaluationStatus::Cancelled
+                       ? runtime::TaskResult<void>::cancelled()
+                       : runtime::TaskResult<void>::succeeded();
+        });
+    expectations.expect(submission.accepted() && gate.waitUntilEntered(),
+                        "the banded fixture pauses before its first band touches a pixel");
+    submission.handle.cancel();
+    gate.release();
+
+    const auto deadline = std::chrono::steady_clock::now() + 4s;
+    std::optional<runtime::TaskResult<void>> taskResult;
+    while (!taskResult.has_value() && std::chrono::steady_clock::now() < deadline) {
+        taskResult = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    expectations.expect(taskResult.has_value() &&
+                            taskResult->state() == runtime::TaskState::Cancelled &&
+                            evaluatorCancelled.load(std::memory_order_acquire) &&
+                            !framePublished.load(std::memory_order_acquire),
+                        "every band observes cancellation and the frame is never published");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    expectations.expect(scheduler.isQuiescent(), "the banded cancellation test shuts down cleanly");
 }
 
 void testDisplayPreparationCancellationPublishesNothing(Expectations& expectations) {
@@ -1540,7 +1728,10 @@ int main() {
         testPublishedPlanOwnsItsImmutableDefinition(expectations);
         testStructuredFailuresAndProgress(expectations);
         testRepeatability(expectations);
+        testRowBandPlanIsDeterministicAndBounded(expectations);
+        testParallelRowBandsAreBitIdenticalToSerial(expectations);
         testDeterministicScanlineCancellation(expectations);
+        testBandedEvaluationCancelsInsideABand(expectations);
         testDisplayPreparationCancellationPublishesNothing(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

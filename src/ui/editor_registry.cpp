@@ -27,7 +27,8 @@ bool EditorRegistry::registerEditor(EditorDescriptor descriptor) {
 const std::vector<EditorDescriptor>& EditorRegistry::editors() const noexcept { return editors_; }
 
 bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
-                               CompositionPreviewController& previewController) {
+                               CompositionPreviewController& previewController,
+                               RamPreviewController* const ramPreview) {
     const auto addEditor = [&registry](std::string id, QString name, EditorFactory factory) {
         return registry.registerEditor(
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
@@ -41,8 +42,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                "bloom.nodes", "Nodes",
                [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&
            addEditor("bloom.timeline", "Timeline",
-                     [&session, &previewController](QWidget* parent) {
-                         return new TimelineEditor(session, previewController, parent);
+                     [&session, &previewController, ramPreview](QWidget* parent) {
+                         return new TimelineEditor(session, previewController, ramPreview, parent);
                      }) &&
            addEditor("bloom.media", "Media",
                      [&session](QWidget* parent) { return new MediaEditor(session, parent); }) &&
