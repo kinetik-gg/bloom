@@ -9,6 +9,7 @@
 #include <string_view>
 
 class QEvent;
+class QHBoxLayout;
 class QMenu;
 class QObject;
 class QResizeEvent;
@@ -41,6 +42,27 @@ class EditorFooterProvider {
     // its own footer slot, or nullptr for an editor with no footer to offer. A provider that has
     // already given its footer away (or never has one) returns nullptr on every subsequent call.
     [[nodiscard]] virtual QWidget* takeFooterWidget() = 0;
+};
+
+// Task NODES-1: the header's counterpart to EditorFooterProvider, same idempotent "take it once"
+// contract and same reasoning for why it is a seam rather than a new EditorRegistry ABI. An editor
+// widget that also implements this interface -- the node editor is the first -- gets whatever
+// widget it hands back hosted in its own header row, right after the panel switcher and before the
+// stretch that pushes the maximize button to the far right; one that does not implement it (or
+// returns nullptr) gets nothing extra there, exactly as today. What that widget actually shows --
+// how many menus, their contents, and any "too narrow, collapse to one overflow menu" policy -- is
+// entirely the provider's own business: EditorArea only reparents it into the header and gives it
+// room, the same hands-off relationship it already has with a footer widget.
+class EditorHeaderMenuProvider {
+  public:
+    virtual ~EditorHeaderMenuProvider() = default;
+
+    // Called once, immediately after EditorArea creates the editor widget in rebuildEditor().
+    // Returns the header menu widget for EditorArea to host (and take ownership of, by
+    // reparenting) in its header row, or nullptr for an editor with no header menus to offer. A
+    // provider that has already given its widget away (or never has one) returns nullptr on every
+    // subsequent call.
+    [[nodiscard]] virtual QWidget* takeHeaderMenuWidget() = 0;
 };
 
 class EditorArea final : public QFrame {
@@ -86,6 +108,9 @@ class EditorArea final : public QFrame {
     // changes, not just at construction.
     QVBoxLayout* layout_ = nullptr;
     QVBoxLayout* contentLayout_ = nullptr;
+    // Task NODES-1: stored so rebuildEditor() can insert/remove the OPTIONAL header menu widget
+    // between the panel switcher and the stretch every time the editor changes.
+    QHBoxLayout* headerLayout_ = nullptr;
     // task U8, issue #131, fix 4: the header itself opens panelOptionsMenu_ on right-click
     // (contextMenuEvent, routed through EditorArea's own eventFilter -- see watchForActivation());
     // there is no longer a dedicated button that owns the menu.
@@ -97,6 +122,11 @@ class EditorArea final : public QFrame {
     // Owned by EditorArea from the moment it is taken (reparented here in rebuildEditor()),
     // rebuilt every time the editor changes.
     QWidget* footer_ = nullptr;
+    // Task NODES-1: the header's own OPTIONAL extra, on the same terms as footer_ above -- non-null
+    // only while the current editor widget implements EditorHeaderMenuProvider and offered a real
+    // widget (the node editor is the only one today). Lives in headerLayout_, between the panel
+    // switcher and the stretch; rebuilt every time the editor changes.
+    QWidget* headerMenus_ = nullptr;
     // The real clip this container needs (task C1, item C5; owner: "cut rounded corners because
     // the background is not clipped by the panel"): four small overlay widgets, one per corner,
     // stacked on top of the header/content/footer children and painted last. Each one fills the
