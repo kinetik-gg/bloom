@@ -1,4 +1,6 @@
 #include <bloom/ui/timeline_ruler.hpp>
+#include <bloom/ui/timeline_editor.hpp>
+#include <QRegion>
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -979,7 +981,45 @@ void TimelineKeyframePanel::keyPressEvent(QKeyEvent* event) {
     QWidget::keyPressEvent(event);
 }
 
+void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>& entries, int scrollOffset) {
+    gridMode_ = true;
+    std::vector<document::AnimationCurveId> curves;
+    std::vector<int> indices;
+    const auto* composition = session_.composition();
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].rowKind != TimelineLayerEntry::Kind::Parameter) continue;
+        document::AnimationCurveId curveId{};
+        const auto* parameter = composition ? composition->parameters().find(entries[i].parameterId) : nullptr;
+        if (parameter) if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) curveId = source->curveId;
+        curves.push_back(curveId);
+        indices.push_back(static_cast<int>(i));
+    }
+    if (curves != lastCurveIds_) {
+        delete rowsLayout_; rowsLayout_ = nullptr;
+        for (auto* row : rows_) { row->hide(); row->setParent(nullptr); row->deleteLater(); }
+        rows_.clear();
+        lastCurveIds_ = curves;
+        for (auto curve : curves) {
+            auto* row = new TimelineKeyframeRow(session_, {}, curve, this);
+            if (ruler_) row->setRuler(*ruler_);
+            rows_.push_back(row);
+        }
+    }
+    QRegion mask;
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        const QRect geometry(0, indices[i] * kTimelineRowHeight - scrollOffset, width(), kTimelineRowHeight);
+        rows_[i]->setGeometry(geometry);
+        rows_[i]->show();
+        mask += geometry;
+    }
+    // An empty Qt mask means unmasked; hide instead so collapsed layer bars retain input.
+    setMask(mask);
+    if (parentWidget()) { parentWidget()->setMask(mask); parentWidget()->setVisible(!rows_.empty()); }
+    setVisible(!rows_.empty());
+}
+
 void TimelineKeyframePanel::rebuild() {
+    if (gridMode_) return;
     const auto specs = collectAnimatedParameters(session_);
     std::vector<document::AnimationCurveId> currentCurveIds;
     currentCurveIds.reserve(specs.size());

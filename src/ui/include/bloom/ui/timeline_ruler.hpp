@@ -26,6 +26,7 @@ namespace bloom::ui {
 
 class CompositionPreviewController;
 class CompositionSession;
+struct TimelineLayerEntry;
 
 // Shared presentation mapping. The half-open visible range is in seconds and belongs to the
 // editor viewport, never the document. Scrub results always land on exact rational frame times.
@@ -238,6 +239,7 @@ class TimelineKeyframePanel final : public QWidget {
 
   public:
     explicit TimelineKeyframePanel(CompositionSession& session, QWidget* parent = nullptr);
+    void setGridEntries(const std::vector<TimelineLayerEntry>& entries, int scrollOffset);
     void setRuler(TimelineRuler& ruler);
 
   protected:
@@ -245,6 +247,7 @@ class TimelineKeyframePanel final : public QWidget {
 
   private:
     void rebuild();
+    bool gridMode_ = false;
 
     CompositionSession& session_;
     QVBoxLayout* rowsLayout_ = nullptr;

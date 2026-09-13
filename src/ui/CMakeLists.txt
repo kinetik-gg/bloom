@@ -247,6 +247,7 @@ target_sources(
         task_monitor_model.cpp
         task_ui_bridge.cpp
         timeline_editor.cpp
+        timeline_property_rows.cpp
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp

@@ -15,6 +15,7 @@
 #include <QWidget>
 
 #include <optional>
+#include <set>
 #include <vector>
 
 class QAction;
@@ -51,6 +52,11 @@ struct TimelineLayerEntry final {
     // The clip bar's fill, from the data-type palette -- the one thing that now carries kind.
     kit::Color clipColor = kit::Color::Muted;
     QColor labelColor{};
+    enum class Kind { Layer, Group, Parameter };
+    Kind rowKind = Kind::Layer;
+    document::ParameterId parameterId{};
+    std::string role{};
+    bool expanded = false;
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
@@ -120,6 +126,7 @@ class TimelineEditor final : public QWidget,
     // wired to currentTimeChanged() and compositionChanged().
     void updateTimeReadout();
 
+    std::set<document::LayerId> expandedLayers_;
     CompositionSession& session_;
     QWidget* headerFallback_ = nullptr;
     QWidget* headerMenus_ = nullptr;
@@ -218,6 +225,7 @@ class TimelineLayerStack final : public QWidget {
     // Emitted whenever this column's own viewport height changes, so the editor can re-derive the
     // shared scrollbar's range from the new viewport rather than polling it.
     void viewportResized();
+    void expansionRequested(document::LayerId layer);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -248,6 +256,7 @@ class TimelineLayerStack final : public QWidget {
     QScrollBar& scrollBar_;
     std::vector<TimelineLayerEntry> entries_;
     std::vector<class TimelineLayerRow*> rowPool_;
+    std::vector<class TimelinePropertyRow*> propertyPool_;
     int scrollOffset_ = 0;
     int currentRow_ = -1;
 };
@@ -273,6 +282,7 @@ class TimelineLaneRegion final : public QWidget {
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
 
   protected:
+    void resizeEvent(QResizeEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -281,6 +291,8 @@ class TimelineLaneRegion final : public QWidget {
     void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    QWidget* keyframeArea_ = nullptr;
+    TimelineKeyframePanel* keyframePanel_ = nullptr;
     struct RangeDrag {
         document::LayerId layer;
         document::Revision revision;

@@ -343,6 +343,8 @@ void testTimeViewportGestures(Expectations& expectations) {
     auto* lanes = editor.laneRegionForTest();
     (void)fixture.session.setCurrentTime(time(3));
     expectations.expect(fixture.session.toggleKeyframe("opacity"), "seed an animated key lane");
+    editor.layerStackForTest()->expansionRequested(editor.layerStackForTest()->entries().front().layerId);
+    QCoreApplication::processEvents();
     const auto originalTime = fixture.session.currentTime();
     const auto revision = fixture.session.snapshot().revision();
     const auto getAxis = [ruler](int width = -1) {
@@ -379,7 +381,7 @@ void testTimeViewportGestures(Expectations& expectations) {
     const auto keyRows = keys->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
     expectations.expect(!keyRows.isEmpty(), "an animated key row is present");
     if (!keyRows.isEmpty()) {
-        auto* keyRow = keyRows.front();
+        auto* keyRow = keyRows.at(4);
         const auto keyAxis = getAxis(keyRow->width());
         sendMouse(*keyRow, QEvent::MouseButtonPress, keyAxis.pixelForTime(time(3)),
                   keyRow->height() / 2.0);
@@ -1513,6 +1515,35 @@ void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectatio
     finishFixture(fixture);
 }
 
+void testPropertyRows(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Property rows"));
+    (void)fixture.session.addSolidLayer("Solid", {0.2, 0.3, 0.4, 1});
+    (void)fixture.session.addTextLayer("Text", "Bloom");
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    editor.resize(1200, 700); editor.show(); QCoreApplication::processEvents();
+    auto* stack = editor.layerStackForTest();
+    const auto layer = stack->entries().front().layerId;
+    const auto revision = fixture.session.snapshot().revision();
+    const int collapsedCount = stack->rowCount();
+    stack->expansionRequested(layer); QCoreApplication::processEvents();
+    expectations.expect(stack->rowCount() > collapsedCount, "chevron expands child rows");
+    expectations.expect(fixture.session.snapshot().revision() == revision, "expansion is UI state");
+    int positions = 0;
+    for (std::size_t i = 0; i < stack->entries().size(); ++i) {
+        const auto& entry = stack->entries()[i];
+        if (entry.role == document::kPositionParameterRole) ++positions;
+        expectations.expect(stack->rowTop(static_cast<int>(i)) == editor.laneRegionForTest()->rowTop(static_cast<int>(i)), "every child shares its lane y");
+    }
+    expectations.expect(positions == 1, "Position is one parameter row");
+    auto* panel = editor.findChild<QWidget*>("timelineKeyframePanel");
+    auto* area = editor.findChild<QWidget*>("timelineKeyframeArea");
+    expectations.expect(panel && area && editor.laneRegionForTest()->isAncestorOf(area), "legacy names resolve inside the integrated lanes");
+    stack->expansionRequested(layer);
+    expectations.expect(stack->rowCount() == collapsedCount, "collapse restores layer rows");
+    finishFixture(fixture);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1528,6 +1559,7 @@ int main(int argc, char** argv) {
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);
+        testPropertyRows(expectations);
         testTimelineHeaderMenus(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);
         testRowsAreFlatThirtyTwoPixelRows(expectations);
