@@ -144,7 +144,7 @@ QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
 // group) plus its hairline divider (decision 1: "section dividers as hairlines"), appended to
 // `section`.
 void addSectionHeader(QVBoxLayout* section, QWidget* parent, const QString& title) {
-    // "editorSectionTitle" already names TimelineEditor's "Layers" title and MediaEditor's
+    // "editorSectionTitle" already names TimelineEditor's "Layers" title and AssetsEditor's
     // "Project" title (unchanged by this task): reused here rather than a new name so every group
     // header in the workspace -- Transform/Appearance/Solid Source included -- is the same logical
     // widget kind, per decision 4's "existing objectNames preserved."

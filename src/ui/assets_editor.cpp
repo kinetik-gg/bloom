@@ -1,4 +1,4 @@
-#include <bloom/ui/media_editor.hpp>
+#include <bloom/ui/assets_editor.hpp>
 
 #include <bloom/ui/composition_session.hpp>
 
@@ -18,10 +18,10 @@ constexpr int kCompositionIdRole = Qt::UserRole + 1;
 
 } // namespace
 
-MediaEditor::MediaEditor(CompositionSession& session, QWidget* parent)
+AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
-    setObjectName("mediaEditor");
-    setAccessibleName(tr("Project media editor"));
+    setObjectName("assetsEditor");
+    setAccessibleName(tr("Project assets editor"));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 8);
@@ -42,14 +42,14 @@ MediaEditor::MediaEditor(CompositionSession& session, QWidget* parent)
                         current->data(kCompositionIdRole).toULongLong()));
                 }
             });
-    connect(&session_, &CompositionSession::snapshotChanged, this, &MediaEditor::rebuild);
+    connect(&session_, &CompositionSession::snapshotChanged, this, &AssetsEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this,
-            &MediaEditor::updateSelection);
+            &AssetsEditor::updateSelection);
 
     rebuild();
 }
 
-void MediaEditor::rebuild() {
+void AssetsEditor::rebuild() {
     rebuilding_ = true;
     compositions_->clear();
     for (const auto& composition : session_.snapshot().project().compositions()) {
@@ -62,7 +62,7 @@ void MediaEditor::rebuild() {
     rebuilding_ = false;
 }
 
-void MediaEditor::updateSelection() {
+void AssetsEditor::updateSelection() {
     const QSignalBlocker blocker(compositions_);
     for (int index = 0; index < compositions_->count(); ++index) {
         auto* item = compositions_->item(index);

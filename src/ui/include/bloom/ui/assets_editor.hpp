@@ -8,11 +8,11 @@ namespace bloom::ui {
 
 class CompositionSession;
 
-class MediaEditor final : public QWidget {
+class AssetsEditor final : public QWidget {
     Q_OBJECT
 
   public:
-    explicit MediaEditor(CompositionSession& session, QWidget* parent = nullptr);
+    explicit AssetsEditor(CompositionSession& session, QWidget* parent = nullptr);
 
   private:
     void rebuild();

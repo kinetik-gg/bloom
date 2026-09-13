@@ -33,7 +33,7 @@ Bloom currently has:
   cancellation, progress, duration, terminal history, and complete plain-text diagnostics
 - staged application shutdown that intercepts window and application quit paths, keeps processing
   Qt events, publishes final terminal task snapshots, and exits only after runtime quiescence
-- a shared composition session projected through Viewer, Timeline, Nodes, Media, and Properties
+- a shared composition session projected through Viewer, Timeline, Nodes, Assets, and Properties
 - atomic text-layer authoring with stable node, layer, slot, edge, and parameter IDs
 - strict warnings, formatting, repository hygiene, architecture-boundary checks, and focused local
   tests

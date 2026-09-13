@@ -74,7 +74,7 @@ enum class IconId : std::uint8_t {
     Composition,
     Text,
     // Panel identity (task U8, issue 131, formal amendment 1, A5): the panel-switcher glyph for
-    // each editor kind. Media's own glyph is Folder above, reused rather than duplicated.
+    // each editor kind. Assets' own glyph is Folder above, reused rather than duplicated.
     Stack,
     Clock,
     SlidersHorizontal,

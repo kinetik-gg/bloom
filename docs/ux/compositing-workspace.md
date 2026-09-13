@@ -19,7 +19,7 @@ The initial sketch contains:
 - Compositing, Editing, Grading, Scripting, and Rendering workspaces
 - a compositor viewer with direct manipulation tools and playback controls
 - a node editor showing source data and transforms
-- a media/project browser
+- an Assets browser
 - a selection-driven properties editor
 - a layer and animation timeline
 - contextual editor headers with editor type and target selectors
@@ -44,7 +44,7 @@ temporary drags remain session state.
 
 ## Selection Behavior
 
-- Selecting a compatible object in viewer, timeline, graph, or media browser updates the shared
+- Selecting a compatible object in viewer, timeline, graph, or Assets browser updates the shared
   selection.
 - Properties displays the selected object's schema-backed parameters.
 - A panel may eventually pin its context instead of following global selection.
@@ -109,8 +109,8 @@ before it is treated as final. See
 
 ## Terminology To Resolve
 
-- The sketch's `Source` panel behaves like a combined Media or Project browser. Its final name is
-  open because `Source` may be confused with a source monitor.
+- The sketch's `Source` panel behaves like an Assets browser. Its final name is `Assets` because
+  `Media` sounds like imported media and `Source` may be confused with a source monitor.
 - The sketch uses `Object` as node-editor context. Bloom needs a more precise term if the context is
   actually a layer, graph region, composition, or asset.
 - `Compositor` currently names the viewer editor. `Viewer` may be clearer once compositing also names

@@ -107,7 +107,7 @@ void testTheClosedFieldCarriesTheCurrentValueAndIcon(Expectations& expectations)
 void testFindDataLocatesAnItemByItsPayload(Expectations& expectations) {
     Fixture fixture;
     auto& switcher = *fixture.switcher;
-    (void)switcher.addItem(QIcon{}, QStringLiteral("Media"), QStringLiteral("bloom.media"));
+    (void)switcher.addItem(QIcon{}, QStringLiteral("Assets"), QStringLiteral("bloom.assets"));
     const int viewer =
         switcher.addItem(QIcon{}, QStringLiteral("Viewer"), QStringLiteral("bloom.viewer"));
 
@@ -120,19 +120,19 @@ void testFindDataLocatesAnItemByItsPayload(Expectations& expectations) {
 void testTheClosedFieldsTooltipTracksTheCurrentItem(Expectations& expectations) {
     Fixture fixture;
     auto& switcher = *fixture.switcher;
-    const int media =
-        switcher.addItem(QIcon{}, QStringLiteral("Media"), QStringLiteral("bloom.media"));
+    const int assets =
+        switcher.addItem(QIcon{}, QStringLiteral("Assets"), QStringLiteral("bloom.assets"));
     const int missing = switcher.addItem(QIcon{}, QStringLiteral("Editor unavailable"),
                                          QStringLiteral("bloom.missing"));
     switcher.setItemToolTip(missing, QStringLiteral("Unavailable editor: bloom.missing"));
 
     expectations.expect(switcher.toolTip().isEmpty(),
-                        "the resting current item (Media) carries no tooltip");
+                        "the resting current item (Assets) carries no tooltip");
     switcher.setCurrentIndex(missing);
     expectations.expect(switcher.toolTip() == QStringLiteral("Unavailable editor: bloom.missing"),
                         "switching to the unavailable item surfaces its ported tooltip, mirroring "
                         "QComboBox's own Qt::ToolTipRole forwarding");
-    switcher.setCurrentIndex(media);
+    switcher.setCurrentIndex(assets);
     expectations.expect(switcher.toolTip().isEmpty(),
                         "switching away clears the tooltip back to that item's own (empty) one");
 }
@@ -161,7 +161,7 @@ void testTheFieldHugsItsContentRatherThanStretching(Expectations& expectations) 
     Fixture fixture;
     auto& switcher = *fixture.switcher;
     (void)switcher.addItem(kit::icon(kit::IconId::Folder, kit::Size::IconMedium),
-                           QStringLiteral("Media"), QStringLiteral("bloom.media"));
+                           QStringLiteral("Assets"), QStringLiteral("bloom.assets"));
 
     // formal amendment 2, A7: the field is content-hugging, not the QComboBox-era stretched
     // field the owner rejected. A short label with one icon comes in well under a typical

@@ -60,7 +60,7 @@ feature is not complete if “Cancel” leaves the artist waiting indefinitely.
 
 ### Be Predictable Across Editors
 
-- Viewer, timeline, node graph, media browser, and Properties observe the same project and session
+- Viewer, timeline, node graph, Assets browser, and Properties observe the same project and session
   context; they do not maintain competing authoring truths.
 - Selection and current time synchronize where meaningful. A pinned editor makes that divergence
   explicit.
