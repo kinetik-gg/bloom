@@ -159,6 +159,22 @@ the header's own `Border` hairline, just on its top edge, and is empty by defaul
 task's report for why an editor's own existing bottom bar (the viewer's status readout, the
 timeline's transport) is not moved into it yet.
 
+### Viewer footer readouts
+
+Right-anchored, in this order from the right edge, each one silent when it has nothing true to say.
+The exact frame and timecode readout takes whatever width is left, centered.
+
+| Readout | Shown when | Token |
+| --- | --- | --- |
+| Color-state chip | Always | Chip color follows the preview's qualification state |
+| `N dropped` | While a playback run is counting | `Muted` at zero, `Warn` above it |
+| `Caching N/M` | While a RAM preview run is caching | `Accent` |
+
+All three use `TypeRole::Value`, the monospaced numeric role, so a count never reflows the readouts
+beside it as it changes. "Silent when it has nothing to say" is the rule they share: outside a
+playback run there is no dropped-frame figure, and outside a RAM preview run there is no progress --
+a zero shown out of context reads as a measurement, which would be a different claim.
+
 ### Elevation
 
 | Token | Shadow |
