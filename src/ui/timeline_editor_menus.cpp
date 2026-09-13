@@ -235,12 +235,16 @@ void TimelineEditor::createHeaderMenus() {
     deleteLayerAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     headerMenus_->addAction(deleteLayerAction_);
     connect(deleteLayerAction_, &QAction::triggered, this, &TimelineEditor::deleteSelectedLayers);
-    splitLayerAction_ = localAction(editMenu_, tr("Split at Playhead"), QStringLiteral("timelineSplitLayerAction"), QKeySequence(Qt::CTRL | Qt::Key_K), [this] {
-        commands::Transaction transaction("Split at Playhead", session_.snapshot().revision());
-        for (const auto node : selectedLayerNodes(session_))
-            if (const auto layer = session_.layerForNode(node)) transaction.emplace<commands::SplitLayerAtTime>(session_.compositionId(), *layer, session_.currentTime());
-        (void)session_.executeTransaction(std::move(transaction));
-    });
+    splitLayerAction_ = localAction(
+        editMenu_, tr("Split at Playhead"), QStringLiteral("timelineSplitLayerAction"),
+        QKeySequence(Qt::CTRL | Qt::Key_K), [this] {
+            commands::Transaction transaction("Split at Playhead", session_.snapshot().revision());
+            for (const auto node : selectedLayerNodes(session_))
+                if (const auto layer = session_.layerForNode(node))
+                    transaction.emplace<commands::SplitLayerAtTime>(session_.compositionId(),
+                                                                    *layer, session_.currentTime());
+            (void)session_.executeTransaction(std::move(transaction));
+        });
     bar->addMenu(editMenu_, QStringLiteral("timelineEditButton"));
 
     auto* select = menu(tr("Select"), QStringLiteral("timelineSelectMenu"));

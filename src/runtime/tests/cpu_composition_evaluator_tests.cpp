@@ -947,8 +947,14 @@ void testLayerRangeIsHalfOpen(Expectations& expectations) {
         auto request = requestFor(*plan);
         request.time = core::RationalTime::fromInteger(second);
         const auto result = evaluator.evaluate(plan, request, {});
-        expectations.expect(result.frame() && std::ranges::all_of(result.frame()->processImage().pixels(),
-            [second](const auto& value) { return second == 1 ? value != render::Rgba32f::transparent() : value == render::Rgba32f::transparent(); }),
+        expectations.expect(
+            result.frame() &&
+                std::ranges::all_of(result.frame()->processImage().pixels(),
+                                    [second](const auto& value) {
+                                        return second == 1
+                                                   ? value != render::Rgba32f::transparent()
+                                                   : value == render::Rgba32f::transparent();
+                                    }),
             "one reused plan omits a layer before in and at out, and includes it at in");
     }
 }

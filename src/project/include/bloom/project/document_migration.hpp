@@ -149,7 +149,8 @@ struct MigrationStepDescriptor final {
                                                          std::pmr::memory_resource* resource,
                                                          std::pmr::vector<char>& output);
 [[nodiscard]] MigrationStepOutcome migrateLayerTimelineV1_4(const JsonValue& root,
-    std::pmr::memory_resource* resource, std::pmr::vector<char>& output);
+                                                            std::pmr::memory_resource* resource,
+                                                            std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},

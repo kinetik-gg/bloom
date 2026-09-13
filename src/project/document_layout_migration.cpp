@@ -158,7 +158,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             append(output, step == Step::NodeLayout         ? "{\"major\":1,\"minor\":1}"
                            : step == Step::NodeGroups       ? "{\"major\":1,\"minor\":2}"
                            : step == Step::AnimationBreadth ? "{\"major\":1,\"minor\":3}"
-                           : step == Step::ValueGraph ? "{\"major\":1,\"minor\":4}"
+                           : step == Step::ValueGraph       ? "{\"major\":1,\"minor\":4}"
                                                             : "{\"major\":1,\"minor\":5}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -250,8 +250,8 @@ MigrationStepOutcome migrateValueGraphV1_3(const JsonValue& root,
         return MigrationStepOutcome::failure("/project/compositions");
     return MigrationStepOutcome::success();
 }
-MigrationStepOutcome migrateLayerTimelineV1_4(const JsonValue& root,
-    std::pmr::memory_resource*, Buffer& output) {
+MigrationStepOutcome migrateLayerTimelineV1_4(const JsonValue& root, std::pmr::memory_resource*,
+                                              Buffer& output) {
     if (!sourceVersionIs(root, "4") || !transform(root, Scope::Root, Step::LayerTimeline, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();

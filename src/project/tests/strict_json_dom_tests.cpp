@@ -350,7 +350,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         }
         if (const auto* minor =
                 expectChild(expectations, *schemaVersion, "minor", "minor exists")) {
-            expectNumber(expectations, *minor, "4", "the document schema minor is preserved");
+            expectNumber(expectations, *minor, "5", "the document schema minor is preserved");
         }
     }
 

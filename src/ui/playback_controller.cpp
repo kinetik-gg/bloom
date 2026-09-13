@@ -101,12 +101,17 @@ void PlaybackController::play() {
     startClock_ = clock_();
     const auto range = session_.workArea();
     const auto first = mapping->nearestFrameIndex(range.start);
-    const auto endMapping = core::FrameTimeMapping::create(range.end, composition->format().frameRate().numerator(), composition->format().frameRate().denominator());
-    if (!endMapping) return;
-    const auto last = endMapping.value()->maximumFrameIndex();
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, composition->format().frameRate().numerator(),
+                                       composition->format().frameRate().denominator());
+    if (!endMapping)
+        return;
     startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
-    if (startFrameIndex_ < first || startFrameIndex_ > last) startFrameIndex_ = first;
-    if (const auto time = mapping->timeForFrame(startFrameIndex_); time) session_.setCurrentTime(*time.value());
+    if (session_.currentTime() < range.start || session_.currentTime() >= range.end) {
+        startFrameIndex_ = first;
+        if (const auto time = mapping->timeForFrame(first); time)
+            (void)session_.setCurrentTime(*time.value());
+    }
     appliedOffset_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
 
@@ -177,8 +182,10 @@ void PlaybackController::tick() {
     const auto range = session_.workArea();
     const auto first = mapping->nearestFrameIndex(range.start);
     const auto rate = composition->format().frameRate();
-    const auto endMapping = core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
-    if (!endMapping) return;
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping)
+        return;
     const auto frameCount = endMapping.value()->maximumFrameIndex() - first + 1;
     if (*frameOffset <= appliedOffset_) {
         // The frame this run is already showing is still the one elapsed time asks for.

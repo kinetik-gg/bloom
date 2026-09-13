@@ -173,6 +173,7 @@ class TimelineWorkAreaStrip final : public QWidget {
   public:
     explicit TimelineWorkAreaStrip(CompositionSession& session, QWidget* parent = nullptr);
     void setRuler(TimelineRuler& ruler);
+
   protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -180,6 +181,7 @@ class TimelineWorkAreaStrip final : public QWidget {
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+
   private:
     [[nodiscard]] std::optional<TimelineAxis> axis() const;
     CompositionSession& session_;

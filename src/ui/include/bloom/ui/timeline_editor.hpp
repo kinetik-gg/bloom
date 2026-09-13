@@ -3,8 +3,8 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 
-#include <bloom/document/ids.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/ids.hpp>
 
 #include <bloom/ui/kit/tokens.hpp>
 

@@ -706,8 +706,15 @@ void PropertiesEditor::rebuild() {
     configureDocumentProperties();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
-    if (composition && selected && composition->nodeLocked(selected->id)) {
-        for (auto* field : {positionX_, positionY_, anchorX_, anchorY_, scaleX_, scaleY_, rotation_, opacity_, solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_, textSize_}) field->setEnabled(false);
+    const auto context = session_.selection().contextualLayer;
+    const auto* boundary =
+        composition && context ? composition->graph().findLayer(*context) : nullptr;
+    if (composition &&
+        ((selected && composition->nodeLocked(selected->id)) || (boundary && boundary->locked))) {
+        for (auto* field :
+             {positionX_, positionY_, anchorX_, anchorY_, scaleX_, scaleY_, rotation_, opacity_,
+              solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_, textSize_})
+            field->setEnabled(false);
         blendMode_->setEnabled(false);
         textContent_->setEnabled(false);
         textColor_->setEnabled(false);

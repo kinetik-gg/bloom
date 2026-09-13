@@ -9,8 +9,8 @@
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/zip_container.hpp>
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -60,6 +60,9 @@ void migrationAndReopen() {
     expect(opened.schemaMinor == 5 && !opened.roundTrip,
            "migration produces current editable schema");
     auto draft = opened.document->draft(snapshot);
+    const auto frameTime = core::RationalTime::create(1, 24);
+    if (!frameTime)
+        throw std::logic_error("frame time fixture");
     auto* editing = draft.project().findComposition(composition.id());
     for (const auto& boundary : composition.graph().layerOutputs()) {
         auto* layer = editing->graph().findLayer(boundary.layerId);
@@ -67,10 +70,10 @@ void migrationAndReopen() {
         layer->enabled = false;
         layer->solo = true;
         layer->locked = true;
-        layer->inPoint = *core::RationalTime::create(1, 24);
+        layer->inPoint = *frameTime;
         layer->outPoint = core::RationalTime::fromInteger(1);
     }
-    editing->setWorkArea(document::WorkArea{*core::RationalTime::create(1, 24), core::RationalTime::fromInteger(1)});
+    editing->setWorkArea(document::WorkArea{*frameTime, core::RationalTime::fromInteger(1)});
     auto& layout = editing->nodeLayout();
     const auto first = composition.graph().nodes().front().id;
     layout[first] = {{-123.5, 89.25}, 276.5, true, true};
@@ -95,9 +98,13 @@ void migrationAndReopen() {
     expect(reopenedSnapshot.project().compositions().front().nodeLayout() ==
                snapshot.project().compositions().front().nodeLayout(),
            "all layout fields and unknown-node records round-trip exactly");
-    expect(reopenedSnapshot.project().compositions().front().workArea() == snapshot.project().compositions().front().workArea(), "work area survives verified reopen");
-    expect(std::ranges::equal(reopenedSnapshot.project().compositions().front().graph().layerOutputs(),
-        snapshot.project().compositions().front().graph().layerOutputs()), "layer ranges survive verified archive reopen");
+    expect(reopenedSnapshot.project().compositions().front().workArea() ==
+               snapshot.project().compositions().front().workArea(),
+           "work area survives verified reopen");
+    expect(
+        std::ranges::equal(reopenedSnapshot.project().compositions().front().graph().layerOutputs(),
+                           snapshot.project().compositions().front().graph().layerOutputs()),
+        "layer ranges survive verified archive reopen");
     expect(reopenedSnapshot.ids().highWater() == snapshot.ids().highWater(),
            "layout references never allocate semantic IDs");
 }

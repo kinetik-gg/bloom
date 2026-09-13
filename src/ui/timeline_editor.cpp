@@ -13,17 +13,16 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
-#include <bloom/core/blend_mode.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QAction>
-#include <QLineEdit>
-#include <QContextMenuEvent>
-#include <QColorDialog>
 #include <QApplication>
+#include <QColorDialog>
+#include <QContextMenuEvent>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -32,6 +31,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -69,12 +69,10 @@ constexpr int kToggleCellWidth = kit::px(kit::Size::IconMedium) + kit::px(kit::S
 constexpr int kToggleCellCount = 3;
 constexpr int kNameCellWidth = kit::px(kit::Size::ControlRoomy) * 6;
 constexpr int kBlendingCellWidth = kit::px(kit::Size::ControlRoomy) * 3;
-constexpr int kParentCellWidth = kit::px(kit::Size::ControlRoomy) * 3;
 
 constexpr int kToggleStripX = kColumnPadding;
 constexpr int kNameCellX = kToggleStripX + kToggleCellCount * kToggleCellWidth + kCellGap;
 constexpr int kBlendingCellX = kNameCellX + kNameCellWidth + kCellGap;
-constexpr int kParentCellX = kBlendingCellX + kBlendingCellWidth + kCellGap;
 constexpr int kLayerColumnWidthPx = kBlendingCellX + kBlendingCellWidth + kColumnPadding;
 
 // The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent,
@@ -91,17 +89,23 @@ constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
 enum class ToggleCell : int { Visibility = 0, Solo = 1, Lock = 2 };
 kit::IconId toggleIcon(const int index) {
     switch (static_cast<ToggleCell>(index)) {
-    case ToggleCell::Visibility: return kit::IconId::Visible;
-    case ToggleCell::Solo: return kit::IconId::Check;
-    case ToggleCell::Lock: return kit::IconId::Locked;
+    case ToggleCell::Visibility:
+        return kit::IconId::Visible;
+    case ToggleCell::Solo:
+        return kit::IconId::Check;
+    case ToggleCell::Lock:
+        return kit::IconId::Locked;
     }
     return kit::IconId::Visible;
 }
 QString toggleToolTip(const int index) {
     switch (static_cast<ToggleCell>(index)) {
-    case ToggleCell::Visibility: return TimelineEditor::tr("Toggle layer visibility");
-    case ToggleCell::Solo: return TimelineEditor::tr("Solo: render only soloed layers");
-    case ToggleCell::Lock: return TimelineEditor::tr("Lock layer editing");
+    case ToggleCell::Visibility:
+        return TimelineEditor::tr("Toggle layer visibility");
+    case ToggleCell::Solo:
+        return TimelineEditor::tr("Solo: render only soloed layers");
+    case ToggleCell::Lock:
+        return TimelineEditor::tr("Lock layer editing");
     }
     return {};
 }
@@ -352,6 +356,11 @@ class TimelineLayerRow final : public QWidget {
         const auto* composition = session_->composition();
         const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
         enabled_ = layer && layer->enabled;
+        if (layer) {
+            const auto layout = composition->nodeLayout().find(layer->nodeId);
+            enabled_ =
+                enabled_ && (layout == composition->nodeLayout().end() || !layout->second.muted);
+        }
         solo_ = layer && layer->solo;
         locked_ = layer && layer->locked;
         blending_->setEnabled(mode.has_value() && !locked_);
@@ -371,11 +380,14 @@ class TimelineLayerRow final : public QWidget {
     void mouseReleaseEvent(QMouseEvent* event) override { forwardMouse(event); }
     void mouseDoubleClickEvent(QMouseEvent* event) override { forwardMouse(event); }
     void contextMenuEvent(QContextMenuEvent* event) override {
-        QContextMenuEvent mapped(event->reason(), mapToParent(event->pos()), event->globalPos(), event->modifiers());
+        QContextMenuEvent mapped(event->reason(), mapToParent(event->pos()), event->globalPos(),
+                                 event->modifiers());
         QApplication::sendEvent(parentWidget(), &mapped);
     }
     void forwardMouse(QMouseEvent* event) {
-        QMouseEvent mapped(event->type(), mapToParent(event->position().toPoint()), event->globalPosition(), event->button(), event->buttons(), event->modifiers());
+        QMouseEvent mapped(event->type(), mapToParent(event->position().toPoint()),
+                           event->globalPosition(), event->button(), event->buttons(),
+                           event->modifiers());
         QApplication::sendEvent(parentWidget(), &mapped);
         event->accept();
     }
@@ -400,17 +412,24 @@ class TimelineLayerRow final : public QWidget {
 
         for (int index = 0; index < kToggleCellCount; ++index) {
             const bool active = index == 0 ? enabled_ : index == 1 ? solo_ : locked_;
-            const auto id = index == 0 ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden) : index == 1 ? kit::IconId::Check : (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked);
-            const auto glyph = kit::iconPixmap(id, kit::Size::IconMedium, active ? kit::Color::Foreground : kit::Color::Faint, kit::State::Normal, kit::IconWeight::Bold);
+            const auto id = index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
+                            : index == 1 ? kit::IconId::Check
+                                         : (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked);
+            const auto glyph = kit::iconPixmap(id, kit::Size::IconMedium,
+                                               active ? kit::Color::Foreground : kit::Color::Faint,
+                                               kit::State::Normal, kit::IconWeight::Bold);
             const int extent = kit::px(kit::Size::IconMedium);
-            painter.drawPixmap(QRect(toggleCellX(index) + (kToggleCellWidth - extent) / 2, (height() - extent) / 2, extent, extent), glyph);
+            painter.drawPixmap(QRect(toggleCellX(index) + (kToggleCellWidth - extent) / 2,
+                                     (height() - extent) / 2, extent, extent),
+                               glyph);
         }
 
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Foreground));
         const int swatch = kit::px(kit::Spacing::S);
         painter.fillRect(QRect(kNameCellX, (height() - swatch) / 2, swatch, swatch), color_);
-        const QRect nameRect(kNameCellX + swatch + kCellGap, 0, kNameCellWidth - swatch - kCellGap, height());
+        const QRect nameRect(kNameCellX + swatch + kCellGap, 0, kNameCellWidth - swatch - kCellGap,
+                             height());
         const QFontMetrics metrics = painter.fontMetrics();
         painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                          metrics.elidedText(name_, Qt::ElideRight, nameRect.width()));
@@ -446,8 +465,9 @@ void TimelineColumnHeaders::paintEvent(QPaintEvent* event) {
                      QPointF(static_cast<qreal>(width()), static_cast<qreal>(height()) - 0.5));
 
     for (int index = 0; index < kToggleCellCount; ++index) {
-        const auto glyph = kit::iconPixmap(toggleIcon(index), kit::Size::IconMedium,
-                                           kit::Color::Muted, kit::State::Normal, kit::IconWeight::Bold);
+        const auto glyph =
+            kit::iconPixmap(toggleIcon(index), kit::Size::IconMedium, kit::Color::Muted,
+                            kit::State::Normal, kit::IconWeight::Bold);
         const int glyphExtent = kit::px(kit::Size::IconMedium);
         const int x = toggleCellX(index) + (kToggleCellWidth - glyphExtent) / 2;
         const int y = (height() - glyphExtent) / 2;
@@ -460,7 +480,6 @@ void TimelineColumnHeaders::paintEvent(QPaintEvent* event) {
                      Qt::AlignLeft | Qt::AlignVCenter, tr("Name"));
     painter.drawText(QRect(kBlendingCellX, 0, kBlendingCellWidth, height()),
                      Qt::AlignLeft | Qt::AlignVCenter, tr("Blending"));
-
 }
 
 QString TimelineColumnHeaders::toolTipAtX(const int x) { return cellToolTipAt(x); }
@@ -527,8 +546,10 @@ int TimelineLayerStack::rowTop(const int row) const noexcept {
 }
 
 void TimelineLayerStack::setEntries(std::vector<TimelineLayerEntry> entries) {
-    dragRow_ = -1; insertionRow_ = -1;
-    if (insertion_) insertion_->hide();
+    dragRow_ = -1;
+    insertionRow_ = -1;
+    if (insertion_)
+        insertion_->hide();
     entries_ = std::move(entries);
     syncCurrentRowFromSelection();
 }
@@ -594,151 +615,241 @@ void TimelineLayerStack::resizeEvent(QResizeEvent* event) {
 }
 
 void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) { QWidget::mousePressEvent(event); return; }
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
     setFocus(Qt::MouseFocusReason);
-    const int index = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
-    if (index < 0 || index >= rowCount()) { session_.clearSelection(); return; }
+    const int index =
+        (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
+    if (index < 0 || index >= rowCount()) {
+        session_.clearSelection();
+        return;
+    }
     const auto id = entries_[static_cast<std::size_t>(index)].layerId;
     const auto* composition = session_.composition();
     const auto* layer = composition ? composition->graph().findLayer(id) : nullptr;
-    if (!layer) return;
+    if (!layer)
+        return;
     const int toggle = (static_cast<int>(event->position().x()) - kToggleStripX) / kToggleCellWidth;
-    if (event->position().x() >= kToggleStripX && event->position().x() < kToggleStripX + kToggleCellCount * kToggleCellWidth) {
+    if (event->position().x() >= kToggleStripX &&
+        event->position().x() < kToggleStripX + kToggleCellCount * kToggleCellWidth) {
         commands::Transaction transaction("Toggle Layer", session_.snapshot().revision());
-        if (toggle == 0) transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id, !layer->enabled);
-        if (toggle == 1) transaction.emplace<commands::SetLayerSolo>(session_.compositionId(), id, !layer->solo);
-        if (toggle == 2) transaction.emplace<commands::SetLayerLocked>(session_.compositionId(), id, !layer->locked);
-        (void)session_.executeTransaction(std::move(transaction)); return;
+        if (toggle == 0) {
+            const auto layout = composition->nodeLayout().find(layer->nodeId);
+            const bool visible = layer->enabled && (layout == composition->nodeLayout().end() ||
+                                                    !layout->second.muted);
+            transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id, !visible);
+        }
+        if (toggle == 1)
+            transaction.emplace<commands::SetLayerSolo>(session_.compositionId(), id, !layer->solo);
+        if (toggle == 2)
+            transaction.emplace<commands::SetLayerLocked>(session_.compositionId(), id,
+                                                          !layer->locked);
+        (void)session_.executeTransaction(std::move(transaction));
+        return;
     }
     const auto node = layer->nodeId;
     auto nodes = session_.selectedNodes();
     if (event->modifiers().testFlag(Qt::ShiftModifier) && anchorRow_ >= 0) {
-        for (int row = std::min(anchorRow_, index); row <= std::max(anchorRow_, index) && row < rowCount(); ++row)
-            if (const auto boundary = session_.boundaryNodeForLayer(entries_[static_cast<std::size_t>(row)].layerId)) nodes.insert(*boundary);
+        for (int row = std::min(anchorRow_, index);
+             row <= std::max(anchorRow_, index) && row < rowCount(); ++row)
+            if (const auto boundary =
+                    session_.boundaryNodeForLayer(entries_[static_cast<std::size_t>(row)].layerId))
+                nodes.insert(*boundary);
         session_.selectNodes(nodes, node);
     } else if (event->modifiers().testFlag(Qt::ControlModifier)) {
-        if (nodes.contains(node)) nodes.erase(node); else nodes.insert(node);
-        if (nodes.empty()) session_.clearSelection(); else session_.selectNodes(nodes, nodes.contains(node) ? node : *nodes.begin());
+        if (nodes.contains(node))
+            nodes.erase(node);
+        else
+            nodes.insert(node);
+        if (nodes.empty())
+            session_.clearSelection();
+        else
+            session_.selectNodes(nodes, nodes.contains(node) ? node : *nodes.begin());
         anchorRow_ = index;
     } else {
-        session_.selectLayer(id); anchorRow_ = index;
+        session_.selectLayer(id);
+        anchorRow_ = index;
     }
-    dragRow_ = index; dragStart_ = event->position().toPoint();
+    dragRow_ = index;
+    dragStart_ = event->position().toPoint();
     dragRevision_ = session_.snapshot().revision();
     event->accept();
 }
 
 void TimelineLayerStack::mouseMoveEvent(QMouseEvent* event) {
     if (dragRow_ < 0 || !event->buttons().testFlag(Qt::LeftButton) ||
-        (event->position().toPoint() - dragStart_).manhattanLength() < QApplication::startDragDistance()) return;
-    insertionRow_ = std::clamp((static_cast<int>(event->position().y()) + scrollOffset_ + kTimelineRowHeight / 2) / kTimelineRowHeight, 0, rowCount());
+        (event->position().toPoint() - dragStart_).manhattanLength() <
+            QApplication::startDragDistance())
+        return;
+    insertionRow_ = std::clamp(
+        (static_cast<int>(event->position().y()) + scrollOffset_ + kTimelineRowHeight / 2) /
+            kTimelineRowHeight,
+        0, rowCount());
     if (!insertion_) {
         insertion_ = new QWidget(this);
         insertion_->setObjectName("timelineLayerInsertionIndicator");
         insertion_->setAttribute(Qt::WA_TransparentForMouseEvents);
         insertion_->setAutoFillBackground(true);
-        auto palette = insertion_->palette(); palette.setColor(QPalette::Window, kit::color(kit::Color::Accent)); insertion_->setPalette(palette);
+        auto palette = insertion_->palette();
+        palette.setColor(QPalette::Window, kit::color(kit::Color::Accent));
+        insertion_->setPalette(palette);
     }
     insertion_->setGeometry(0, rowTop(insertionRow_), width(), kit::px(kit::Spacing::XXS));
-    insertion_->show(); insertion_->raise();
+    insertion_->show();
+    insertion_->raise();
     event->accept();
 }
 void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) return;
+    if (event->button() != Qt::LeftButton)
+        return;
     const int from = std::exchange(dragRow_, -1), to = std::exchange(insertionRow_, -1);
-    if (insertion_) insertion_->hide();
-    if (from < 0 || from >= rowCount() || to < 0 || to > rowCount()) return;
+    if (insertion_)
+        insertion_->hide();
+    if (from < 0 || from >= rowCount() || to < 0 || to > rowCount())
+        return;
     commands::Transaction transaction("Reorder Layer", dragRevision_);
-    transaction.emplace<commands::MoveLayerBefore>(session_.compositionId(), entries_[static_cast<std::size_t>(from)].slotId,
-        to == rowCount() ? std::nullopt : std::optional(entries_[static_cast<std::size_t>(to)].slotId));
+    transaction.emplace<commands::MoveLayerBefore>(
+        session_.compositionId(), entries_[static_cast<std::size_t>(from)].slotId,
+        to == rowCount() ? std::nullopt
+                         : std::optional(entries_[static_cast<std::size_t>(to)].slotId));
     (void)session_.executeTransaction(std::move(transaction));
 }
 void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
     const auto* composition = session_.composition();
     const auto* layer = composition ? composition->graph().findLayer(layerId) : nullptr;
-    if (!layer) return;
+    if (!layer)
+        return;
     const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
-    if (found == entries_.end()) return;
+    if (found == entries_.end())
+        return;
     auto* field = new QLineEdit(QString::fromStdString(layer->name), this);
     field->setObjectName("timelineLayerRenameEditor");
-    field->setGeometry(kNameCellX, rowTop(static_cast<int>(found - entries_.begin())), kNameCellWidth, kTimelineRowHeight);
+    field->setGeometry(kNameCellX, rowTop(static_cast<int>(found - entries_.begin())),
+                       kNameCellWidth, kTimelineRowHeight);
     const auto revision = session_.snapshot().revision();
     const auto compositionId = session_.compositionId();
-    connect(field, &QLineEdit::returnPressed, this, [this, field, layerId, revision, compositionId] {
-        commands::Transaction transaction("Rename Layer", revision);
-        transaction.emplace<commands::RenameLayer>(compositionId, layerId, field->text().toStdString());
-        field->hide(); field->deleteLater();
-        (void)session_.executeTransaction(std::move(transaction));
-        setFocus();
-    });
+    connect(field, &QLineEdit::returnPressed, this,
+            [this, field, layerId, revision, compositionId] {
+                commands::Transaction transaction("Rename Layer", revision);
+                transaction.emplace<commands::RenameLayer>(compositionId, layerId,
+                                                           field->text().toStdString());
+                field->hide();
+                field->deleteLater();
+                (void)session_.executeTransaction(std::move(transaction));
+                setFocus();
+            });
     connect(field, &QLineEdit::editingFinished, field, &QObject::deleteLater);
-    auto* cancel = new QAction(field); cancel->setShortcut(QKeySequence(Qt::Key_Escape)); cancel->setShortcutContext(Qt::WidgetWithChildrenShortcut); field->addAction(cancel);
+    auto* cancel = new QAction(field);
+    cancel->setShortcut(QKeySequence(Qt::Key_Escape));
+    cancel->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    field->addAction(cancel);
     connect(cancel, &QAction::triggered, field, &QObject::deleteLater);
-    field->show(); field->raise(); field->setFocus(); field->selectAll();
+    field->show();
+    field->raise();
+    field->setFocus();
+    field->selectAll();
 }
 void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
     const int row = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
-    if (event->button() == Qt::LeftButton && row >= 0 && row < rowCount() && event->position().x() >= kNameCellX && event->position().x() < kNameCellX + kNameCellWidth)
+    if (event->button() == Qt::LeftButton && row >= 0 && row < rowCount() &&
+        event->position().x() >= kNameCellX && event->position().x() < kNameCellX + kNameCellWidth)
         renameLayer(entries_[static_cast<std::size_t>(row)].layerId);
 }
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
     const int row = (event->pos().y() + scrollOffset_) / kTimelineRowHeight;
-    if (row < 0 || row >= rowCount()) return;
+    if (row < 0 || row >= rowCount())
+        return;
     const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
-    if (!isLayerSelected(session_, layerId)) session_.selectLayer(layerId);
+    if (!isLayerSelected(session_, layerId))
+        session_.selectLayer(layerId);
     const auto compositionId = session_.compositionId();
     const auto revision = session_.snapshot().revision();
     std::set<document::NodeId> nodes;
     for (const auto& entry : entries_)
         if (isLayerSelected(session_, entry.layerId))
-            if (const auto node = session_.boundaryNodeForLayer(entry.layerId)) nodes.insert(*node);
-    auto* menu = new QMenu(this); menu->setObjectName("timelineLayerContextMenu"); menu->setAttribute(Qt::WA_DeleteOnClose);
-    connect(menu->addAction(tr("Duplicate")), &QAction::triggered, this, [this, compositionId, revision, nodes] {
-        commands::Transaction transaction("Duplicate Layers", revision);
-        transaction.emplace<commands::DuplicateNodes>(compositionId, nodes, document::Vec2d{0, 0});
-        (void)session_.executeTransaction(std::move(transaction));
-    });
-    connect(menu->addAction(tr("Delete")), &QAction::triggered, this, [this, compositionId, revision, nodes] {
-        commands::Transaction transaction("Delete Layers", revision);
-        transaction.emplace<commands::RemoveNodes>(compositionId, nodes);
-        (void)session_.executeTransaction(std::move(transaction));
-    });
-    connect(menu->addAction(tr("Rename")), &QAction::triggered, this, [this, layerId] { renameLayer(layerId); });
+            if (const auto node = session_.boundaryNodeForLayer(entry.layerId))
+                nodes.insert(*node);
+    auto* menu = new QMenu(this);
+    menu->setObjectName("timelineLayerContextMenu");
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    connect(menu->addAction(tr("Duplicate")), &QAction::triggered, this,
+            [this, compositionId, revision, nodes] {
+                commands::Transaction transaction("Duplicate Layers", revision);
+                transaction.emplace<commands::DuplicateNodes>(compositionId, nodes,
+                                                              document::Vec2d{0, 0});
+                (void)session_.executeTransaction(std::move(transaction));
+            });
+    connect(menu->addAction(tr("Delete")), &QAction::triggered, this,
+            [this, compositionId, revision, nodes] {
+                commands::Transaction transaction("Delete Layers", revision);
+                transaction.emplace<commands::RemoveNodes>(compositionId, nodes);
+                (void)session_.executeTransaction(std::move(transaction));
+            });
+    connect(menu->addAction(tr("Rename")), &QAction::triggered, this,
+            [this, layerId] { renameLayer(layerId); });
     auto* blending = menu->addMenu(tr("Blending"));
     for (const auto mode : core::kBlendModes) {
         auto* action = blending->addAction(blendModeDisplayName(mode));
-        action->setCheckable(true); action->setChecked(session_.blendModeForLayer(layerId) == mode);
-        connect(action, &QAction::triggered, this, [this, layerId, mode] { (void)session_.setLayerBlendMode(layerId, mode); });
+        action->setCheckable(true);
+        action->setChecked(session_.blendModeForLayer(layerId) == mode);
+        connect(action, &QAction::triggered, this,
+                [this, layerId, mode] { (void)session_.setLayerBlendMode(layerId, mode); });
     }
     auto* colors = menu->addMenu(tr("Label Color"));
-    const auto setColor = [this, compositionId, revision, layerId](std::optional<std::array<std::uint8_t, 3>> color) {
+    const auto setColor = [this, compositionId, revision,
+                           layerId](std::optional<std::array<std::uint8_t, 3>> color) {
         commands::Transaction transaction("Set Layer Label Color", revision);
         transaction.emplace<commands::SetLayerLabelColor>(compositionId, layerId, color);
         (void)session_.executeTransaction(std::move(transaction));
     };
-    connect(colors->addAction(tr("Kind Default")), &QAction::triggered, this, [setColor] { setColor(std::nullopt); });
+    connect(colors->addAction(tr("Kind Default")), &QAction::triggered, this,
+            [setColor] { setColor(std::nullopt); });
     int number = 0;
-    for (const auto token : {kit::Color::Label1, kit::Color::Label2, kit::Color::Label3, kit::Color::Label4, kit::Color::Label5, kit::Color::Label6, kit::Color::Label7, kit::Color::Label8}) {
+    for (const auto token :
+         {kit::Color::Label1, kit::Color::Label2, kit::Color::Label3, kit::Color::Label4,
+          kit::Color::Label5, kit::Color::Label6, kit::Color::Label7, kit::Color::Label8}) {
         const auto color = kit::color(token);
-        QPixmap swatch(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)); swatch.fill(color);
+        QPixmap swatch(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
+        swatch.fill(color);
         auto* action = colors->addAction(QIcon(swatch), tr("Label %1").arg(++number));
-        connect(action, &QAction::triggered, this, [setColor, color] { setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()), static_cast<std::uint8_t>(color.green()), static_cast<std::uint8_t>(color.blue())}); });
+        connect(action, &QAction::triggered, this, [setColor, color] {
+            setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()),
+                                                 static_cast<std::uint8_t>(color.green()),
+                                                 static_cast<std::uint8_t>(color.blue())});
+        });
     }
     connect(colors->addAction(tr("Custom...")), &QAction::triggered, this, [this, setColor] {
-        auto* picker = new QColorDialog(this); picker->setObjectName("timelineLayerLabelColorDialog"); picker->setAttribute(Qt::WA_DeleteOnClose);
-        connect(picker, &QColorDialog::colorSelected, this, [setColor](const QColor& color) { setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()), static_cast<std::uint8_t>(color.green()), static_cast<std::uint8_t>(color.blue())}); });
+        auto* picker = new QColorDialog(this);
+        picker->setObjectName("timelineLayerLabelColorDialog");
+        picker->setAttribute(Qt::WA_DeleteOnClose);
+        connect(picker, &QColorDialog::colorSelected, this, [setColor](const QColor& color) {
+            setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()),
+                                                 static_cast<std::uint8_t>(color.green()),
+                                                 static_cast<std::uint8_t>(color.blue())});
+        });
         picker->open();
     });
-    connect(menu->addAction(tr("Split at Playhead")), &QAction::triggered, this, [this, compositionId, layerId, revision] {
-        commands::Transaction transaction("Split Layer at Playhead", revision);
-        transaction.emplace<commands::SplitLayerAtTime>(compositionId, layerId, session_.currentTime());
-        (void)session_.executeTransaction(std::move(transaction));
-    });
+    connect(menu->addAction(tr("Split at Playhead")), &QAction::triggered, this,
+            [this, compositionId, layerId, revision] {
+                commands::Transaction transaction("Split Layer at Playhead", revision);
+                transaction.emplace<commands::SplitLayerAtTime>(compositionId, layerId,
+                                                                session_.currentTime());
+                (void)session_.executeTransaction(std::move(transaction));
+            });
     menu->popup(event->globalPos());
 }
 
 void TimelineLayerStack::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape) { dragRow_ = -1; insertionRow_ = -1; if (insertion_) insertion_->hide(); event->accept(); return; }
+    if (event->key() == Qt::Key_Escape) {
+        dragRow_ = -1;
+        insertionRow_ = -1;
+        if (insertion_)
+            insertion_->hide();
+        event->accept();
+        return;
+    }
     if (rowCount() == 0) {
         QWidget::keyPressEvent(event);
         return;
@@ -845,7 +956,8 @@ int TimelineLaneRegion::rowTop(const int row) const noexcept {
 }
 
 void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
-    drag_.reset(); guide_.reset();
+    drag_.reset();
+    guide_.reset();
     entries_ = std::move(entries);
     update();
 }
@@ -870,12 +982,21 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     if (!axis.has_value()) {
         return std::nullopt;
     }
-    const auto* layer = composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
-    if (!layer) return std::nullopt;
-    const auto range = drag_ && drag_->layer == layer->layerId ? drag_->preview : document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
-    const qreal left = axis->pixelForTime(range.start);
-    const qreal right = axis->pixelForTime(range.end);
-    if (right < 0 || left >= width()) return std::nullopt;
+    const auto* layer =
+        composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
+    if (!layer)
+        return std::nullopt;
+    const auto range =
+        drag_ && drag_->layer == layer->layerId
+            ? drag_->preview
+            : document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
+    const qreal mappedLeft = axis->pixelForTime(range.start);
+    const qreal mappedRight = axis->pixelForTime(range.end);
+    if (mappedRight < 0 || mappedLeft >= width())
+        return std::nullopt;
+    const qreal clipMargin = kit::px(kit::Spacing::M);
+    const qreal left = std::max(-clipMargin, mappedLeft);
+    const qreal right = std::min(static_cast<qreal>(width()) + clipMargin, mappedRight);
     const int inset = kit::px(kit::Spacing::XS);
     const int top = rowTop(row) + inset;
     const int barWidth = std::max(1, static_cast<int>(std::lround(right - left)) + 1);
@@ -901,13 +1022,21 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         paintRowSeparator(painter, top, width());
         if (const auto bar = clipBarRect(row)) {
             painter.setRenderHint(QPainter::Antialiasing, true);
-            const auto fill = entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
+            const auto fill =
+                entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
             const auto shadow = kit::shadow(kit::Elevation::TimelineBar);
-            kit::fillRoundedSurface(painter, QRectF(*bar).translated(shadow.offsetX, shadow.offsetY), shadow.color, QColor(), kit::Radius::Small);
-            kit::fillRoundedSurface(painter, QRectF(*bar).adjusted(0.5, 0.5, -0.5, -0.5), fill, kit::hoverFillFor(fill), kit::Radius::Small);
+            kit::fillRoundedSurface(painter,
+                                    QRectF(*bar).translated(shadow.offsetX, shadow.offsetY),
+                                    shadow.color, QColor(), kit::Radius::Small);
+            kit::fillRoundedSurface(painter, QRectF(*bar).adjusted(0.5, 0.5, -0.5, -0.5), fill,
+                                    kit::hoverFillFor(fill), kit::Radius::Small);
             const int grip = kit::px(kit::Spacing::XXS);
-            painter.fillRect(QRect(bar->left() + grip, bar->top() + grip, 1, bar->height() - 2 * grip), kit::hoverFillFor(fill));
-            painter.fillRect(QRect(bar->right() - grip, bar->top() + grip, 1, bar->height() - 2 * grip), kit::hoverFillFor(fill));
+            painter.fillRect(
+                QRect(bar->left() + grip, bar->top() + grip, 1, bar->height() - 2 * grip),
+                kit::hoverFillFor(fill));
+            painter.fillRect(
+                QRect(bar->right() - grip, bar->top() + grip, 1, bar->height() - 2 * grip),
+                kit::hoverFillFor(fill));
         }
     }
 
@@ -932,7 +1061,10 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
 }
 
 void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) { QWidget::mousePressEvent(event); return; }
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
     setFocus(Qt::MouseFocusReason);
     const int row = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
     const auto bar = clipBarRect(row);
@@ -941,73 +1073,134 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     if (bar && bar->contains(event->position().toPoint()) && composition && mapping) {
         const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
         const auto* layer = composition->graph().findLayer(layerId);
-        if (!layer) return;
-        const auto range = document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
+        if (!layer)
+            return;
+        const auto range =
+            document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
         const bool locked = layer->locked;
         const int hit = kit::px(kit::Spacing::S);
         const auto x = event->position().x();
-        const int handle = std::abs(x - bar->left()) <= hit ? -1 : std::abs(x - bar->right()) <= hit ? 1 : 0;
+        const int handle = std::abs(x - bar->left()) <= hit    ? -1
+                           : std::abs(x - bar->right()) <= hit ? 1
+                                                               : 0;
         session_.selectLayer(layerId);
-        if (!locked) drag_ = RangeDrag{layerId, session_.snapshot().revision(), range, range, mapping->secondsForPixel(x), handle};
-        update(); event->accept(); return;
+        if (!locked)
+            drag_ = RangeDrag{layerId, session_.snapshot().revision(), range,
+                              range,   mapping->secondsForPixel(x),    handle};
+        update();
+        event->accept();
+        return;
     }
     ruler_.beginScrub(static_cast<int>(event->position().x()));
     event->accept();
 }
 void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
-    if (!drag_) { ruler_.updateScrub(static_cast<int>(event->position().x())); event->accept(); return; }
+    if (!drag_) {
+        ruler_.updateScrub(static_cast<int>(event->position().x()));
+        event->accept();
+        return;
+    }
     const auto mapping = ruler_.axisForWidth(width());
     const auto* composition = session_.composition();
-    if (!mapping || !composition || session_.snapshot().revision() != drag_->revision) { drag_.reset(); guide_.reset(); update(); return; }
+    if (!mapping || !composition || session_.snapshot().revision() != drag_->revision) {
+        drag_.reset();
+        guide_.reset();
+        update();
+        return;
+    }
     const double duration = composition->duration().toSeconds();
-    const double frame = static_cast<double>(mapping->frameRate.denominator()) / mapping->frameRate.numerator();
+    const double frame =
+        static_cast<double>(mapping->frameRate.denominator()) / mapping->frameRate.numerator();
     const double delta = mapping->secondsForPixel(event->position().x()) - drag_->pressSeconds;
     double start = drag_->original.start.toSeconds(), end = drag_->original.end.toSeconds();
-    if (drag_->handle < 0) start = std::clamp(start + delta, 0.0, end - frame);
-    else if (drag_->handle > 0) end = std::clamp(end + delta, start + frame, duration);
-    else { const auto shift = std::clamp(delta, -start, duration - end); start += shift; end += shift; }
+    const auto minimumSpan = std::min(frame, end - start);
+    if (drag_->handle < 0)
+        start = std::clamp(start + delta, 0.0, end - minimumSpan);
+    else if (drag_->handle > 0)
+        end = std::clamp(end + delta, start + minimumSpan, duration);
+    else {
+        const auto shift = std::clamp(delta, -start, duration - end);
+        start += shift;
+        end += shift;
+    }
     guide_.reset();
     if (!event->modifiers().testFlag(Qt::ShiftModifier)) {
-        std::vector<core::RationalTime> targets{session_.currentTime(), session_.workArea().start, session_.workArea().end};
+        std::vector<core::RationalTime> targets{session_.currentTime(), session_.workArea().start,
+                                                session_.workArea().end};
         for (const auto& layer : composition->graph().layerOutputs())
-            if (layer.layerId != drag_->layer) { targets.push_back(layer.inPoint); targets.push_back(layer.endPoint(composition->duration())); }
+            if (layer.layerId != drag_->layer) {
+                targets.push_back(layer.inPoint);
+                targets.push_back(layer.endPoint(composition->duration()));
+            }
         double best = kit::px(kit::Spacing::S), adjustment = 0;
         for (const auto target : targets) {
             for (const int edge : {-1, 1}) {
-                if (drag_->handle != 0 && drag_->handle != edge) continue;
+                if (drag_->handle != 0 && drag_->handle != edge)
+                    continue;
                 const auto seconds = edge < 0 ? start : end;
-                const auto distance = std::abs(mapping->pixelForTime(target) - mapping->pixelForSeconds(seconds));
-                if (distance < best) { best = distance; adjustment = target.toSeconds() - seconds; guide_ = target; }
+                const auto distance =
+                    std::abs(mapping->pixelForTime(target) - mapping->pixelForSeconds(seconds));
+                if (distance < best) {
+                    best = distance;
+                    adjustment = target.toSeconds() - seconds;
+                    guide_ = target;
+                }
             }
         }
-        if (guide_) { if (drag_->handle <= 0) start += adjustment; if (drag_->handle >= 0) end += adjustment; }
+        if (guide_) {
+            if (drag_->handle <= 0)
+                start += adjustment;
+            if (drag_->handle >= 0)
+                end += adjustment;
+        }
     }
     const auto snap = [&](const double seconds) -> std::optional<core::RationalTime> {
-        if (seconds >= duration) return composition->duration();
-        if (seconds < 0) return std::nullopt;
+        if (seconds >= duration)
+            return composition->duration();
+        if (seconds < 0)
+            return std::nullopt;
         const auto index = static_cast<std::uint64_t>(std::llround(seconds / frame));
-        return frameTimeForIndex(mapping->frameRate, mapping->duration, std::min(index, mapping->maxIndex));
+        return frameTimeForIndex(mapping->frameRate, mapping->duration,
+                                 std::min(index, mapping->maxIndex));
     };
     const auto in = snap(start), out = snap(end);
-    if (in && out && *in < *out) drag_->preview = {*in, *out};
-    update(); event->accept();
+    if (in && out && *in < *out && start >= 0 && end <= duration)
+        drag_->preview = {*in, *out};
+    update();
+    event->accept();
 }
 void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) { QWidget::mouseReleaseEvent(event); return; }
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
     if (drag_) {
         mouseMoveEvent(event);
-        if (!drag_) return;
+        if (!drag_)
+            return;
         const auto completed = *drag_;
-        drag_.reset(); guide_.reset();
+        drag_.reset();
+        guide_.reset();
         commands::Transaction transaction("Set Layer Range", completed.revision);
-        transaction.emplace<commands::SetLayerRange>(session_.compositionId(), completed.layer, completed.preview.start, completed.preview.end);
+        transaction.emplace<commands::SetLayerRange>(session_.compositionId(), completed.layer,
+                                                     completed.preview.start,
+                                                     completed.preview.end);
         (void)session_.executeTransaction(std::move(transaction));
-        update(); event->accept(); return;
+        update();
+        event->accept();
+        return;
     }
-    ruler_.endScrub(static_cast<int>(event->position().x())); event->accept();
+    ruler_.endScrub(static_cast<int>(event->position().x()));
+    event->accept();
 }
 void TimelineLaneRegion::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape) { drag_.reset(); guide_.reset(); update(); event->accept(); return; }
+    if (event->key() == Qt::Key_Escape) {
+        drag_.reset();
+        guide_.reset();
+        update();
+        event->accept();
+        return;
+    }
     QWidget::keyPressEvent(event);
 }
 
@@ -1128,18 +1321,25 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     rulerLayout->setSpacing(0);
     for (const auto& [key, start] : {std::pair{Qt::Key_B, true}, std::pair{Qt::Key_N, false}}) {
         auto* action = new QAction(this);
-        action->setObjectName(start ? "timelineSetWorkAreaStartAction" : "timelineSetWorkAreaEndAction");
+        action->setObjectName(start ? "timelineSetWorkAreaStartAction"
+                                    : "timelineSetWorkAreaEndAction");
         action->setShortcut(QKeySequence(key));
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         addAction(action);
+        headerRight_->addAction(action);
         connect(action, &QAction::triggered, this, [this, start] {
             auto area = session_.workArea();
-            if (start) area.start = session_.currentTime(); else area.end = session_.currentTime();
+            if (start)
+                area.start = session_.currentTime();
+            else
+                area.end = session_.currentTime();
             commands::Transaction transaction("Set Work Area", session_.snapshot().revision());
-            transaction.emplace<commands::SetWorkArea>(session_.compositionId(), area.start, area.end);
+            transaction.emplace<commands::SetWorkArea>(session_.compositionId(), area.start,
+                                                       area.end);
             (void)session_.executeTransaction(std::move(transaction));
         });
     }
+    headerRight_->addAction(splitLayerAction_);
     workArea_ = new TimelineWorkAreaRow(session_, rulerColumn);
     workArea_->setFixedHeight(kit::px(kit::Spacing::M));
     ruler_ = new TimelineRuler(session_, previewController, rulerColumn);
@@ -1364,7 +1564,8 @@ void TimelineEditor::rebuild() {
                                .name = layerName(*composition, entry.layerId),
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
-            if (const auto* layer = composition->graph().findLayer(entry.layerId); layer && layer->labelColor) {
+            if (const auto* layer = composition->graph().findLayer(entry.layerId);
+                layer && layer->labelColor) {
                 const auto rgb = *layer->labelColor;
                 entries.back().labelColor = QColor(rgb[0], rgb[1], rgb[2]);
             }

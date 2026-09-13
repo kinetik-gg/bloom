@@ -1,5 +1,5 @@
-#include <bloom/commands/command_stack.hpp>
 #include "layer_lock.hpp"
+#include <bloom/commands/command_stack.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -90,8 +90,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     std::size_t operationIndex = 0;
     for (const auto& operation : transaction.operations()) {
         OperationResult operationResult = operation->apply(draft);
-        if (operationResult.status != OperationStatus::Rejected && detail::changesLockedLayers(before.project(), draft.project()))
-            operationResult = OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked; unlock it before editing");
+        if (operationResult.status != OperationStatus::Rejected &&
+            detail::changesLockedLayers(before.project(), draft.project()))
+            operationResult = OperationResult::rejected(
+                OperationIssueCode::InvalidValue, "Layer is locked; unlock it before editing");
         if (operationResult.status == OperationStatus::Rejected) {
             auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
                                      std::string(transaction.label()));

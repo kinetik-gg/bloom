@@ -121,10 +121,14 @@ void BackgroundPreviewController::fillNextFrame() {
     const auto capacity = bytes == 0 ? 0 : cache.byteBudget() / bytes;
     const auto range = session_.workArea();
     const auto first = mapping.value()->nearestFrameIndex(range.start);
-    const auto endMapping = core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
-    if (!endMapping) return;
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping)
+        return;
     const auto maximum = endMapping.value()->maximumFrameIndex() - first;
-    const auto anchor = std::clamp(mapping.value()->nearestFrameIndex(session_.currentTime()), first, first + maximum) - first;
+    const auto anchor = std::clamp(mapping.value()->nearestFrameIndex(session_.currentTime()),
+                                   first, first + maximum) -
+                        first;
     // Each pass visits only the nearest budget-sized set. It never cycles around evicting its
     // own useful frames. Bound each UI turn too, even for enormous compositions/sparse ranges.
     for (int inspected = 0; inspected < 256; ++inspected) {

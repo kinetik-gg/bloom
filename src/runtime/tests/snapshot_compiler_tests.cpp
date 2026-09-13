@@ -1263,6 +1263,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 int main() {
     Expectations expectations;
     try {
+        testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
         testRegistryMustBeFrozen(expectations);

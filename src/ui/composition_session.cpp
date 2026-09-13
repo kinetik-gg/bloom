@@ -23,7 +23,8 @@
 namespace bloom::ui {
 document::WorkArea CompositionSession::workArea() const noexcept {
     const auto* current = composition();
-    return current ? current->workArea().value_or(document::WorkArea{{}, current->duration()}) : document::WorkArea{};
+    return current ? current->workArea().value_or(document::WorkArea{{}, current->duration()})
+                   : document::WorkArea{};
 }
 
 namespace {

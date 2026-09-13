@@ -7,8 +7,8 @@
 #include <bloom/document/validation.hpp>
 #include <bloom/document/value_nodes.hpp>
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>

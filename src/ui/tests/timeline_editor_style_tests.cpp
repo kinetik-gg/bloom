@@ -37,8 +37,6 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <bloom/commands/operations.hpp>
-#include <bloom/commands/transaction.hpp>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPixmap>
@@ -55,6 +53,8 @@
 #include <QVariant>
 #include <QWheelEvent>
 #include <QWidget>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 
 #include <array>
 #include <chrono>
@@ -475,8 +475,10 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     auto* editor = area->findChild<ui::TimelineEditor*>();
     auto* edit = area->findChild<QMenu*>("timelineEditMenu");
     auto* header = area->findChild<QWidget*>("editorHeader");
-    expectations.expect(edit != nullptr && edit->actions().size() == 3 &&
-                            edit->actions()[0] == appUndo && edit->actions()[1] == appRedo,
+    expectations.expect(edit != nullptr && edit->actions().size() == 4 &&
+                            edit->actions()[0] == appUndo && edit->actions()[1] == appRedo &&
+                            edit->actions()[3]->objectName() ==
+                                QStringLiteral("timelineSplitLayerAction"),
                         "header Edit uses the application's actual Undo and Redo QActions");
     auto* addButton = area->findChild<QToolButton*>("addLayerButton");
     expectations.expect(addButton != nullptr && header->isAncestorOf(addButton) &&
@@ -927,13 +929,19 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
 
     const auto layerId = stack->entries().front().layerId;
     const auto before = fixture.commands.size();
-    for (int index = 0; index < 3; ++index) QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(padding + index * toggleWidth + toggleWidth / 2, 16));
+    for (int index = 0; index < 3; ++index)
+        QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(padding + index * toggleWidth + toggleWidth / 2, 16));
     const auto* layer = fixture.session.composition()->graph().findLayer(layerId);
-    expectations.expect(layer && !layer->enabled && layer->solo && layer->locked && fixture.commands.size() == before + 3, "eye, solo and lock each commit once to the bound layer");
-    fixture.session.undo();
-    expectations.expect(!fixture.session.composition()->graph().findLayer(layerId)->locked, "lock undoes once");
-    fixture.session.redo();
-    expectations.expect(fixture.session.composition()->graph().findLayer(layerId)->locked, "lock redoes once");
+    expectations.expect(layer && !layer->enabled && layer->solo && layer->locked &&
+                            fixture.commands.size() == before + 3,
+                        "eye, solo and lock each commit once to the bound layer");
+    (void)fixture.session.undo();
+    expectations.expect(!fixture.session.composition()->graph().findLayer(layerId)->locked,
+                        "lock undoes once");
+    (void)fixture.session.redo();
+    expectations.expect(fixture.session.composition()->graph().findLayer(layerId)->locked,
+                        "lock redoes once");
 
     delete editor;
     finishFixture(fixture);
@@ -1295,54 +1303,119 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{1, 0, 0, 1});
     (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0, 0, 1, 1});
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
-    QWidget host; auto* layout = new QVBoxLayout(&host); layout->addWidget(editor); layoutEditor(host);
-    auto* stack = editor->layerStackForTest(); auto* lanes = editor->laneRegionForTest();
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(editor);
+    layoutEditor(host);
+    auto* stack = editor->layerStackForTest();
+    auto* lanes = editor->laneRegionForTest();
     const auto id = stack->entries().front().layerId;
     const auto second = stack->entries().back().layerId;
     const auto composition = fixture.session.compositionId();
     commands::Transaction trim("Trim", fixture.session.snapshot().revision());
-    trim.emplace<commands::SetLayerRange>(composition, id, core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(3));
-    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(), "trim setup commits");
+    trim.emplace<commands::SetLayerRange>(composition, id, core::RationalTime::fromInteger(1),
+                                          core::RationalTime::fromInteger(3));
+    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
+                        "trim setup commits");
     const auto axis = ui::TimelineAxis::create(*fixture.session.composition(), lanes->width());
-    if (!axis) { expectations.expect(false, "gesture axis"); delete editor; finishFixture(fixture); return; }
-    const auto x = [&](int secondValue) { return static_cast<int>(std::lround(axis->pixelForTime(core::RationalTime::fromInteger(secondValue)))); };
+    if (!axis) {
+        expectations.expect(false, "gesture axis");
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+    const auto x = [&](int secondValue) {
+        return static_cast<int>(
+            std::lround(axis->pixelForTime(core::RationalTime::fromInteger(secondValue))));
+    };
     const auto before = fixture.commands.size();
     sendMouse(*lanes, QEvent::MouseButtonPress, x(2), 16);
     sendMouse(*lanes, QEvent::MouseMove, x(3), 16);
-    expectations.expect(fixture.commands.size() == before, "bar movement remains a session preview until release");
+    expectations.expect(fixture.commands.size() == before,
+                        "bar movement remains a session preview until release");
     sendMouse(*lanes, QEvent::MouseButtonRelease, x(3), 16);
     const auto* moved = fixture.session.composition()->graph().findLayer(id);
-    expectations.expect(moved->inPoint == core::RationalTime::fromInteger(2) && moved->outPoint == core::RationalTime::fromInteger(4) && fixture.commands.size() == before + 1, "body moves both frame-snapped endpoints in one transaction");
-    fixture.session.undo();
-    expectations.expect(fixture.session.composition()->graph().findLayer(id)->inPoint == core::RationalTime::fromInteger(1), "one undo restores both endpoints");
+    expectations.expect(moved->inPoint == core::RationalTime::fromInteger(2) &&
+                            moved->outPoint == core::RationalTime::fromInteger(4) &&
+                            fixture.commands.size() == before + 1,
+                        "body moves both frame-snapped endpoints in one transaction");
+    (void)fixture.session.undo();
+    expectations.expect(fixture.session.composition()->graph().findLayer(id)->inPoint ==
+                            core::RationalTime::fromInteger(1),
+                        "one undo restores both endpoints");
+    sendMouse(*lanes, QEvent::MouseButtonPress, x(1), 16);
+    sendMouse(*lanes, QEvent::MouseMove, x(0), 16);
+    sendMouse(*lanes, QEvent::MouseButtonRelease, x(0), 16);
+    expectations.expect(fixture.session.composition()->graph().findLayer(id)->inPoint ==
+                                core::RationalTime{} &&
+                            fixture.session.composition()->graph().findLayer(id)->outPoint ==
+                                core::RationalTime::fromInteger(3),
+                        "left trim handle changes only the in point");
+    (void)fixture.session.undo();
     QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
     QTest::mouseClick(stack, Qt::LeftButton, Qt::ControlModifier, QPoint(110, 48));
-    expectations.expect(fixture.session.selectedNodes().size() == 2, "Ctrl row selection shares the session selection set");
+    expectations.expect(fixture.session.selectedNodes().size() == 2,
+                        "Ctrl row selection shares the session selection set");
     QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
     QTest::mouseDClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
     auto* rename = stack->findChild<QLineEdit*>("timelineLayerRenameEditor");
     expectations.expect(rename != nullptr, "double click opens inline rename");
-    if (rename) { rename->setText("Renamed"); QTest::keyClick(rename, Qt::Key_Return); }
-    expectations.expect(fixture.session.composition()->graph().findLayer(id)->name == "Renamed", "inline rename commits the layer name");
-    fixture.session.setCurrentTime(core::RationalTime::fromInteger(2));
+    if (rename) {
+        rename->setText("Renamed");
+        QTest::keyClick(rename, Qt::Key_Return);
+    }
+    expectations.expect(fixture.session.composition()->graph().findLayer(id)->name == "Renamed",
+                        "inline rename commits the layer name");
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(2));
     auto* split = editor->findChild<QAction*>("timelineSplitLayerAction");
     expectations.expect(split != nullptr, "split action exists");
-    if (split) split->trigger();
-    expectations.expect(stack->rowCount() == 3 && fixture.session.composition()->graph().findLayer(id)->outPoint == core::RationalTime::fromInteger(2), "split creates an adjacent boundary and slot");
-    fixture.session.undo();
-    fixture.session.setCurrentTime(core::RationalTime::fromInteger(1));
+    if (split)
+        split->trigger();
+    expectations.expect(stack->rowCount() == 3 &&
+                            fixture.session.composition()->graph().findLayer(id)->outPoint ==
+                                core::RationalTime::fromInteger(2),
+                        "split creates an adjacent boundary and slot");
+    (void)fixture.session.undo();
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(1));
     editor->findChild<QAction*>("timelineSetWorkAreaStartAction")->trigger();
-    fixture.session.setCurrentTime(core::RationalTime::fromInteger(4));
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(4));
     editor->findChild<QAction*>("timelineSetWorkAreaEndAction")->trigger();
-    expectations.expect(fixture.session.workArea() == document::WorkArea{core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(4)}, "B/N actions author the shared work area");
+    expectations.expect(fixture.session.workArea() ==
+                            document::WorkArea{core::RationalTime::fromInteger(1),
+                                               core::RationalTime::fromInteger(4)},
+                        "B/N actions author the shared work area");
     auto* strip = editor->findChild<ui::TimelineWorkAreaStrip*>("timelineWorkAreaStrip");
-    if (strip) QTest::mouseDClick(strip, Qt::LeftButton, Qt::NoModifier, QPoint(strip->width() / 2, 1));
-    expectations.expect(!fixture.session.composition()->workArea(), "double click clears the work area");
+    if (strip) {
+        const auto stripAxis =
+            ui::TimelineAxis::create(*fixture.session.composition(), strip->width());
+        if (stripAxis) {
+            const auto left = static_cast<int>(
+                std::lround(stripAxis->pixelForTime(core::RationalTime::fromInteger(1))));
+            const auto next = static_cast<int>(
+                std::lround(stripAxis->pixelForTime(core::RationalTime::fromInteger(2))));
+            const auto history = fixture.commands.size();
+            sendMouse(*strip, QEvent::MouseButtonPress, left, 1);
+            sendMouse(*strip, QEvent::MouseMove, next, 1);
+            expectations.expect(fixture.commands.size() == history,
+                                "work-area handle previews until release");
+            sendMouse(*strip, QEvent::MouseButtonRelease, next, 1);
+            expectations.expect(
+                fixture.session.workArea().start == core::RationalTime::fromInteger(2) &&
+                    fixture.session.workArea().end == core::RationalTime::fromInteger(4),
+                "work-area left handle preserves the exclusive end");
+            (void)fixture.session.undo();
+        }
+        QTest::mouseDClick(strip, Qt::LeftButton, Qt::NoModifier, QPoint(strip->width() / 2, 1));
+    }
+    expectations.expect(!fixture.session.composition()->workArea(),
+                        "double click clears the work area");
     sendMouse(*stack, QEvent::MouseButtonPress, 110, 16);
     sendMouse(*stack, QEvent::MouseMove, 110, 64);
     sendMouse(*stack, QEvent::MouseButtonRelease, 110, 64);
-    expectations.expect(stack->entries().front().layerId == second, "row drag commits stable-slot reorder");
-    delete editor; finishFixture(fixture);
+    expectations.expect(stack->entries().front().layerId == second,
+                        "row drag commits stable-slot reorder");
+    delete editor;
+    finishFixture(fixture);
 }
 
 void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {

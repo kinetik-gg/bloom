@@ -69,14 +69,17 @@ void RamPreviewController::start() {
     compositionId_ = session_.compositionId();
     const auto range = session_.workArea();
     const auto rate = composition->format().frameRate();
-    const auto endMapping = core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
-    if (!endMapping) return;
-    totalFrameCount_ = endMapping.value()->maximumFrameIndex() + 1;
-    nextFrameIndex_ = mapping->nearestFrameIndex(range.start);
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping)
+        return;
+    firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
+    totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
+    nextFrameIndex_ = 0;
     cachedFrameCount_ = 0;
     evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
     caching_ = true;
-    previewController_.beginRamPreviewProgress(totalFrameCount_ - nextFrameIndex_);
+    previewController_.beginRamPreviewProgress(totalFrameCount_);
     emit stateChanged();
     submitNextFrame();
 }
@@ -137,7 +140,7 @@ void RamPreviewController::submitNextFrame() {
     // nobody has edited is immediate, and a range partly filled by ordinary playback finishes the
     // rest.
     while (nextFrameIndex_ < totalFrameCount_) {
-        const auto frameTime = mapping->timeForFrame(nextFrameIndex_);
+        const auto frameTime = mapping->timeForFrame(firstFrameIndex_ + nextFrameIndex_);
         if (!frameTime.hasValue()) {
             finish(false);
             return;
@@ -165,7 +168,7 @@ void RamPreviewController::submitNextFrame() {
         return;
     }
 
-    const auto frameTime = mapping->timeForFrame(nextFrameIndex_);
+    const auto frameTime = mapping->timeForFrame(firstFrameIndex_ + nextFrameIndex_);
     if (!frameTime.hasValue() || generation_ == std::numeric_limits<std::uint64_t>::max()) {
         finish(false);
         return;

@@ -1,4 +1,6 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -228,6 +230,30 @@ void finishFixture(SessionFixture& fixture, Expectations& expectations) {
 
 [[nodiscard]] bool isReady(const ui::CompositionPreviewController& controller) {
     return controller.state().activity == ui::PreviewActivity::Ready;
+}
+
+void testWorkAreaBoundsBackground(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background work area", time(7, 25)));
+    commands::Transaction range("Work area", fixture.session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                        "work area accepted");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "foreground settled");
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
+                        "only three work-area frames fill");
+    for (int frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
+                            "background cache respects both exclusive range edges");
+    }
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
 }
 
 void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
@@ -501,6 +527,7 @@ int main(int argc, char** argv) {
         testHalfCachedPlaybackNeverWaits(expectations);
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
+        testWorkAreaBoundsBackground(expectations);
         testOutwardOrderBudgetAndRestart(expectations);
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
     } catch (const std::exception& error) {
