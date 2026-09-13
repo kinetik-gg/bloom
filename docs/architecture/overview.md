@@ -105,7 +105,7 @@ Platform/GPU capability -> project semantics
 | --- | --- |
 | `apps/bloom` | process entry point and final service wiring |
 | `src/host` | Qt-free application services and `ProjectSession`, compiled-in module catalog, dependency validation, registries |
-| `src/ui` | Qt shell, editor panels, view models, interaction adapters |
+| `src/ui` | Qt shell, editor panels including the Assets composition browser, view models, interaction adapters |
 | `src/core` | IDs, rational time, diagnostics, math, small value types |
 | `src/document` | persistent project authoring model and validation |
 | `src/commands` | commands, transactions, undo/redo, dirty state, events |
@@ -123,6 +123,11 @@ Platform/GPU capability -> project semantics
 round-trip state, path, editability, saved revision, and asynchronous open/save intent without
 depending on Qt. `src/ui` adapts its typed state and results into menus and panels; it does not own a
 parallel project lifecycle.
+
+The Assets editor is one such projection: it reads the immutable project snapshot for composition
+rows and submits Add, Rename, Duplicate, and Delete operations through the shared
+`CompositionSession`. Opening a row changes session composition context; it does not create a
+second document, command stack, or project owner.
 
 `src/core`, `src/document`, `src/commands`, `src/project`, `src/host`, `src/render`, `src/runtime`,
 `src/ui`, and `apps/bloom` now contain proven behavior. Project I/O currently provides bounded

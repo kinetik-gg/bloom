@@ -2,6 +2,7 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/layer_stack.hpp>
+#include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -12,6 +13,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -27,6 +30,210 @@ OperationResult invalidComposition(const document::CompositionId compositionId) 
 OperationResult exhaustedIds() {
     return OperationResult::rejected(OperationIssueCode::Unsupported,
                                      "Document ID space is exhausted");
+}
+
+struct CompositionCloneIds final {
+    document::CompositionId composition;
+    std::unordered_map<document::NodeId, document::NodeId> nodes;
+    std::unordered_map<document::EdgeId, document::EdgeId> edges;
+    std::unordered_map<document::LayerId, document::LayerId> layers;
+    std::unordered_map<document::LayerSlotId, document::LayerSlotId> slots;
+    std::unordered_map<document::ParameterId, document::ParameterId> parameters;
+    std::unordered_map<document::AnimationCurveId, document::AnimationCurveId> curves;
+    std::unordered_map<document::KeyframeId, document::KeyframeId> keyframes;
+    std::unordered_map<document::NodeGroupId, document::NodeGroupId> groups;
+};
+
+[[nodiscard]] std::optional<CompositionCloneIds>
+allocateCompositionCloneIds(document::Draft& draft, const document::Composition& source) {
+    CompositionCloneIds ids;
+    const auto compositionId = draft.ids().allocateComposition();
+    if (!compositionId) {
+        return std::nullopt;
+    }
+    ids.composition = *compositionId;
+    for (const auto& node : source.graph().nodes()) {
+        const auto id = draft.ids().allocateNode();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.nodes.emplace(node.id, *id);
+    }
+    for (const auto& edge : source.graph().edges()) {
+        const auto id = draft.ids().allocateEdge();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.edges.emplace(edge.id, *id);
+    }
+    for (const auto& boundary : source.graph().layerOutputs()) {
+        const auto id = draft.ids().allocateLayer();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.layers.emplace(boundary.layerId, *id);
+    }
+    for (const auto& entry : source.graph().layerStack().entries()) {
+        const auto id = draft.ids().allocateLayerSlot();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.slots.emplace(entry.slotId, *id);
+    }
+    for (const auto& parameter : source.parameters().records()) {
+        const auto id = draft.ids().allocateParameter();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.parameters.emplace(parameter.id, *id);
+    }
+    std::size_t keyframeCount = 0;
+    for (const auto& record : source.animationCurves().records()) {
+        keyframeCount +=
+            std::visit([](const auto& curve) { return curve.keyframes.size(); }, record);
+    }
+    for (const auto& record : source.animationCurves().records()) {
+        const auto curveId = draft.ids().allocateAnimationCurve();
+        if (!curveId) {
+            return std::nullopt;
+        }
+        ids.curves.emplace(document::animationCurveId(record), *curveId);
+        std::visit(
+            [&](const auto& curve) {
+                for (const auto& keyframe : curve.keyframes) {
+                    const auto keyframeId = draft.ids().allocateKeyframe();
+                    if (!keyframeId) {
+                        return;
+                    }
+                    ids.keyframes.emplace(keyframe.id, *keyframeId);
+                }
+            },
+            record);
+        if (ids.keyframes.size() != keyframeCount) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& [groupId, unused] : source.nodeGroups()) {
+        static_cast<void>(unused);
+        const auto id = draft.ids().allocateNodeGroup();
+        if (!id) {
+            return std::nullopt;
+        }
+        ids.groups.emplace(groupId, *id);
+    }
+    return ids;
+}
+
+template <typename Id>
+[[nodiscard]] Id remap(const std::unordered_map<Id, Id>& mapping, const Id id) {
+    return mapping.at(id);
+}
+
+[[nodiscard]] std::optional<document::Composition>
+cloneComposition(document::Draft& draft, const document::Composition& source,
+                 const std::string& name) {
+    const auto ids = allocateCompositionCloneIds(draft, source);
+    if (!ids) {
+        return std::nullopt;
+    }
+
+    const auto newLayerStackId = remap(ids->nodes, source.graph().layerStack().nodeId());
+    document::CanonicalGraph graph(newLayerStackId);
+    for (const auto& sourceNode : source.graph().nodes()) {
+        auto node = sourceNode;
+        node.id = remap(ids->nodes, sourceNode.id);
+        for (auto& binding : node.parameters) {
+            binding.parameterId = remap(ids->parameters, binding.parameterId);
+        }
+        if (!graph.addNode(std::move(node))) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& sourceBoundary : source.graph().layerOutputs()) {
+        auto boundary = sourceBoundary;
+        boundary.nodeId = remap(ids->nodes, sourceBoundary.nodeId);
+        boundary.layerId = remap(ids->layers, sourceBoundary.layerId);
+        if (!graph.addLayerOutput(std::move(boundary))) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& sourceEntry : source.graph().layerStack().entries()) {
+        if (!graph.layerStack().append(
+                {remap(ids->slots, sourceEntry.slotId), remap(ids->layers, sourceEntry.layerId)})) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& sourceEdge : source.graph().edges()) {
+        auto edge = sourceEdge;
+        edge.id = remap(ids->edges, sourceEdge.id);
+        edge.source.nodeId = remap(ids->nodes, sourceEdge.source.nodeId);
+        std::visit(
+            [&](auto& destination) {
+                using Destination = std::decay_t<decltype(destination)>;
+                if constexpr (std::is_same_v<Destination, document::NodeInputRef>) {
+                    destination.nodeId = remap(ids->nodes, destination.nodeId);
+                } else {
+                    destination.stackNodeId = remap(ids->nodes, destination.stackNodeId);
+                    destination.slotId = remap(ids->slots, destination.slotId);
+                }
+            },
+            edge.destination);
+        if (!graph.addEdge(std::move(edge))) {
+            return std::nullopt;
+        }
+    }
+    if (source.graph().compositionOutput().has_value()) {
+        auto output = *source.graph().compositionOutput();
+        output.nodeId = remap(ids->nodes, output.nodeId);
+        graph.setCompositionOutput(std::move(output));
+    }
+
+    document::Composition composition(ids->composition, name, source.duration(), std::move(graph),
+                                      source.format());
+    for (const auto& sourceParameter : source.parameters().records()) {
+        auto parameter = sourceParameter;
+        parameter.id = remap(ids->parameters, sourceParameter.id);
+        std::visit(
+            [&](auto& valueSource) {
+                using Source = std::decay_t<decltype(valueSource)>;
+                if constexpr (std::is_same_v<Source, document::AnimationCurveSource>) {
+                    valueSource.curveId = remap(ids->curves, valueSource.curveId);
+                } else if constexpr (std::is_same_v<Source, document::DriverBindingSource>) {
+                    valueSource.sourceNodeId = remap(ids->nodes, valueSource.sourceNodeId);
+                }
+            },
+            parameter.source);
+        if (!composition.parameters().insert(std::move(parameter))) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& sourceRecord : source.animationCurves().records()) {
+        auto record = sourceRecord;
+        std::visit(
+            [&](auto& curve) {
+                curve.id = remap(ids->curves, curve.id);
+                for (auto& keyframe : curve.keyframes) {
+                    keyframe.id = remap(ids->keyframes, keyframe.id);
+                }
+            },
+            record);
+        if (!composition.animationCurves().insert(std::move(record))) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& [nodeId, layout] : source.nodeLayout()) {
+        composition.nodeLayout().emplace(remap(ids->nodes, nodeId), layout);
+    }
+    for (const auto& [groupId, sourceGroup] : source.nodeGroups()) {
+        auto group = sourceGroup;
+        group.id = remap(ids->groups, groupId);
+        group.members.clear();
+        for (const auto member : sourceGroup.members) {
+            group.members.insert(remap(ids->nodes, member));
+        }
+        composition.nodeGroups().emplace(group.id, std::move(group));
+    }
+    return composition;
 }
 
 // One parameter a source node owns: its node-local role, its global schema key, its initial value,
@@ -381,6 +588,101 @@ OperationResult SetProjectName::apply(document::Draft& draft) const {
     }
     draft.project().setName(name_);
     return OperationResult::applied();
+}
+
+std::string_view AddComposition::typeId() const noexcept { return "bloom.composition.add"; }
+
+OperationResult AddComposition::apply(document::Draft& draft) const {
+    if (!document::isValidHumanFacingName(name_)) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Composition name is invalid");
+    }
+    if (duration_ <= core::RationalTime{}) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Composition duration must be greater than zero");
+    }
+    const auto format = document::CompositionFormat::create(format_.width(), format_.height(),
+                                                            format_.pixelAspect(), frameRate_);
+    if (!format) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Composition format is invalid");
+    }
+
+    const auto compositionId = draft.ids().allocateComposition();
+    const auto layerStackNodeId = draft.ids().allocateNode();
+    const auto outputNodeId = draft.ids().allocateNode();
+    const auto outputEdgeId = draft.ids().allocateEdge();
+    if (!compositionId || !layerStackNodeId || !outputNodeId || !outputEdgeId) {
+        return exhaustedIds();
+    }
+
+    document::CanonicalGraph graph(*layerStackNodeId);
+    if (!graph.addNode({*layerStackNodeId,
+                        std::string(document::kLayerStackNodeType),
+                        {},
+                        document::kLayerStackNodeSchemaVersion}) ||
+        !graph.addNode({*outputNodeId,
+                        std::string(document::kCompositionOutputNodeType),
+                        {},
+                        document::kCompositionOutputNodeSchemaVersion}) ||
+        !graph.addEdge({*outputEdgeId,
+                        {*layerStackNodeId, std::string(document::kLayerStackOutputPort)},
+                        document::NodeInputRef{
+                            *outputNodeId, std::string(document::kCompositionOutputInputPort)}})) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Composition topology could not be created");
+    }
+    graph.setCompositionOutput(
+        {*outputNodeId, std::string(document::kCompositionOutputOutputPort)});
+
+    if (!draft.project().addComposition(
+            document::Composition(*compositionId, name_, duration_, std::move(graph), *format))) {
+        return OperationResult::rejected(OperationIssueCode::DuplicateId,
+                                         "Composition could not be added");
+    }
+    return OperationResult::applied({{std::string(kAddCompositionOutput), *compositionId}});
+}
+
+std::string_view DeleteComposition::typeId() const noexcept { return "bloom.composition.delete"; }
+
+OperationResult DeleteComposition::apply(document::Draft& draft) const {
+    if (draft.project().findComposition(compositionId_) == nullptr) {
+        return invalidComposition(compositionId_);
+    }
+    if (draft.project().compositions().size() <= 1) {
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "The last composition cannot be deleted");
+    }
+    if (!draft.project().removeComposition(compositionId_)) {
+        return invalidComposition(compositionId_);
+    }
+    return OperationResult::applied();
+}
+
+std::string_view DuplicateComposition::typeId() const noexcept {
+    return "bloom.composition.duplicate";
+}
+
+OperationResult DuplicateComposition::apply(document::Draft& draft) const {
+    const auto* source = draft.project().findComposition(compositionId_);
+    if (source == nullptr) {
+        return invalidComposition(compositionId_);
+    }
+    const std::string name = source->name() + " copy";
+    if (!document::isValidHumanFacingName(name)) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Duplicated composition name is invalid");
+    }
+    auto copy = cloneComposition(draft, *source, name);
+    if (!copy) {
+        return exhaustedIds();
+    }
+    const auto copyId = copy->id();
+    if (!draft.project().addComposition(std::move(*copy))) {
+        return OperationResult::rejected(OperationIssueCode::DuplicateId,
+                                         "Composition could not be duplicated");
+    }
+    return OperationResult::applied({{std::string(kDuplicateCompositionOutput), copyId}});
 }
 
 std::string_view SetCompositionName::typeId() const noexcept {

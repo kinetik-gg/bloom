@@ -371,6 +371,10 @@ class CompositionSession final : public QObject {
     // surface through commandRejected() exactly as they do for setSelectedPosition().
     [[nodiscard]] commands::CommandResult
     executeNodeTransaction(commands::Transaction&& transaction);
+    // The shared public submission seam for editor-owned composition transactions. Like the node
+    // submission path, this refreshes the projection and emits the ordinary history/rejection
+    // signals after the command stack publishes.
+    [[nodiscard]] commands::CommandResult executeTransaction(commands::Transaction&& transaction);
 
     [[nodiscard]] bool canUndo() const noexcept;
     [[nodiscard]] bool canRedo() const noexcept;

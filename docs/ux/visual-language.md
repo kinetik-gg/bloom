@@ -157,7 +157,53 @@ An editor panel's footer strip (task C1, item C5) is not a distinct token: it re
 (`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
 the header's own `Border` hairline, just on its top edge, and is empty by default -- see this
 task's report for why an editor's own existing bottom bar (the viewer's status readout, the
-timeline's transport) is not moved into it yet.
+timeline's transport) is not moved into it yet. Editors that offer a task-specific footer, such as
+Assets and Nodes, use the same strip rather than inventing a second chrome treatment.
+
+### Editor panel row (task ASSETS-1)
+
+| Panel | Header menus | Body | Footer |
+| --- | --- | --- | --- |
+| Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
+
+Assets uses the `Folder` panel-switcher icon and the `DataComposition` vocabulary for composition
+rows. Its disabled affordances keep their honest reason in a tooltip, and its composition actions
+use the ordinary `Accent` selected-row treatment; no media thumbnail or import chrome is implied
+before the media pipeline exists.
+
+### Viewer footer readouts
+
+Right-anchored, in this order from the right edge, each one silent when it has nothing true to say.
+The exact frame and timecode readout takes whatever width is left, centered.
+
+| Readout | Shown when | Token |
+| --- | --- | --- |
+| Color-state chip | Always | Chip color follows the preview's qualification state |
+| `N dropped` | While a playback run is counting | `Muted` at zero, `Warn` above it |
+| `Caching N/M` | While a RAM preview run is caching | `Accent` |
+
+All three use `TypeRole::Value`, the monospaced numeric role, so a count never reflows the readouts
+beside it as it changes. "Silent when it has nothing to say" is the rule they share: outside a
+playback run there is no dropped-frame figure, and outside a RAM preview run there is no progress --
+a zero shown out of context reads as a measurement, which would be a different claim.
+
+### Nodes footer (task NODES-1)
+
+Left to right: a zoom dropdown (`nodeZoomDropdown`, the same Fit/25/50/100/200/400 items the
+Viewer's own dropdown offers), a grid-snapping switch (`nodeSnapSwitch`, a `KSwitch`), and a link
+style dropdown (`nodeLinkStyleDropdown`, a `KDropdown` offering Spline/Straight/Angled) -- the same
+two settings View's own Grid Snapping toggle and Link Style submenu offer, so the footer and the
+header menu can never show a stale value for the other. Right-aligned: the selection readout
+(`nodeSelectionReadout`), `Muted` `UiSmall`, reading "N nodes". Unlike the Viewer's own footer, this
+one is ordinary child widgets in a `QHBoxLayout` rather than one surface the editor paints itself --
+there is no per-frame readout here that needs a single paint pass to stay in sync.
+
+### Assets footer (task ASSETS-1)
+
+The footer places New Composition, disabled New Folder, and disabled Import on the left, with
+Delete aligned to the right. New Folder explains `Folders arrive with asset organisation`; Import
+explains `Image and sequence import arrives with the media pipeline`. The panel body is a
+two-column tree whose Kind column reads `Composition`, with a search field above it.
 
 ### Viewer footer readouts
 

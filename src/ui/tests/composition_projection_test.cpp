@@ -177,7 +177,7 @@ parameterForRole(const bloom::document::Composition& composition,
     ui::TimelineEditor timeline(session, previewController);
     ui::NodeGraphEditor nodes(session);
     ui::PropertiesEditor properties(session);
-    [[maybe_unused]] ui::MediaEditor media(session);
+    [[maybe_unused]] ui::AssetsEditor assets(session);
     ui::ViewerEditor viewer(session, previewController);
 
     if (!require(waitUntil([&] {

@@ -23,6 +23,9 @@ the first Compositing workspace proof.
   and creates the selected editor without mutating project data.
 - The application-lifetime `EditorRegistry` owns editor descriptors and factories. Editor type
   identity never depends on display text, picker order, widget position, or translated labels.
+- The built-in `bloom.assets` editor is the Assets composition browser. Its Folder icon and
+  display name are presentation metadata; composition identity remains the document's stable
+  `CompositionId`.
 - Mouse and keyboard focus establish the active area. Commands resolve the active area at
   invocation time rather than capturing a persistent widget position.
 

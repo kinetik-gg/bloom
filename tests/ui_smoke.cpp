@@ -100,7 +100,7 @@ int testRegistry(EditorRegistry& registry) {
     };
     const bool registered =
         addTestEditor("bloom.viewer", "Compositor") && addTestEditor("bloom.nodes", "Nodes") &&
-        addTestEditor("bloom.timeline", "Timeline") && addTestEditor("bloom.media", "Media") &&
+        addTestEditor("bloom.timeline", "Timeline") && addTestEditor("bloom.assets", "Assets") &&
         addTestEditor("bloom.properties", "Properties");
     if (!require(registered, 1)) {
         return 1;

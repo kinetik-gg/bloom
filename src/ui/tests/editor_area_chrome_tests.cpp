@@ -91,7 +91,7 @@ EditorRegistry makeRealIdRegistry() {
     addTrivial("bloom.viewer", "Viewer");
     addTrivial("bloom.nodes", "Nodes");
     addTrivial("bloom.timeline", "Timeline");
-    addTrivial("bloom.media", "Media");
+    addTrivial("bloom.assets", "Assets");
     addTrivial("bloom.properties", "Properties");
     return registry;
 }
@@ -336,7 +336,7 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
     // IconSmall size formal amendment 1 originally used.
     const auto sampleSize = QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
     for (const auto& [id, iconId] :
-         {Mapping{"bloom.media", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
+         {Mapping{"bloom.assets", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
           Mapping{"bloom.timeline", kit::IconId::Clock},
           Mapping{"bloom.properties", kit::IconId::SlidersHorizontal},
           Mapping{"bloom.nodes", kit::IconId::Graph}}) {
@@ -426,7 +426,7 @@ void testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(Expectations& 
         "wrapper");
 }
 
-// FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/media,
+// FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/assets,
 // none of which implement EditorFooterProvider) has no "editorFooter" child at all -- not an
 // empty reserved strip, per the amendment's correction of this task's first report.
 void testAFooterLessEditorHasNoEditorFooterChildAtAll(Expectations& expectations) {

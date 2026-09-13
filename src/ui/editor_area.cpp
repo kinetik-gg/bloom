@@ -39,12 +39,12 @@ namespace {
 // illegible at the button's own corrected size).
 constexpr auto kHeaderIconSize = kit::Size::IconMedium;
 
-// task U8, issue #131, formal amendment 1, A5: the panel-switcher glyph per editor kind. Media
+// task U8, issue #131, formal amendment 1, A5: the panel-switcher glyph per editor kind. Assets
 // reuses Folder (already vendored for the data-kind vocabulary) rather than a duplicate asset. An
 // editor id outside this table (an unavailable-editor placeholder, or a test's own probe id) gets
 // no icon at all -- KPanelSwitcher's own null-QIcon default.
 [[nodiscard]] std::optional<kit::IconId> iconForEditorId(const std::string& editorId) {
-    if (editorId == "bloom.media") {
+    if (editorId == "bloom.assets") {
         return kit::IconId::Folder;
     }
     if (editorId == "bloom.viewer") {
