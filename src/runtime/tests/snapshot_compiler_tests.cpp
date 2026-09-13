@@ -8,10 +8,12 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include "snapshot_compiler_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -339,6 +341,141 @@ compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
         return diagnostic.code == code &&
                (!nodeId.isValid() || diagnostic.subject.nodeId == nodeId);
     });
+}
+
+// Task S7: a Time -> Math -> opacity chain, the smallest graph that proves a driver is resolved per
+// frame rather than once. Returns the project plus the parameter the chain drives.
+struct DrivenChain final {
+    document::Project project;
+    document::ParameterId drivenParameterId;
+};
+
+[[nodiscard]] DrivenChain makeTimeDrivenOpacityChain(const double factor = 0.5) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "chain fixture composition must exist");
+
+    constexpr auto timeNode = NodeId::fromRaw(14);
+    constexpr auto mathNode = NodeId::fromRaw(15);
+    require(composition->graph().addNode(
+                {timeNode, std::string(kTimeValueNodeType), {}, kValueNodeSchemaVersion}),
+            "chain fixture Time node must be accepted");
+
+    // Every declared parameter needs a binding, including the operands this operation does not
+    // read: a node's parameter set is part of its registered shape, and the compiler lowers only
+    // the ones the live operation actually reaches.
+    std::vector<ParameterBinding> mathBindings;
+    auto nextParameterId = std::uint64_t{50};
+    const auto bindParameter = [&](const std::string_view role, const std::string_view schemaKey,
+                                   ParameterValue value) {
+        const auto id = ParameterId::fromRaw(nextParameterId++);
+        require(composition->parameters().insert(
+                    {id, std::string(schemaKey), ConstantValueSource{std::move(value)}}),
+                "chain fixture parameter must be accepted");
+        mathBindings.push_back({std::string(role), id});
+        return id;
+    };
+    const auto firstOperand =
+        bindParameter(kFirstOperandPortName, kScalarOperandParameterSchemaKey, 0.0);
+    bindParameter(kSecondOperandPortName, kScalarOperandParameterSchemaKey, factor);
+    for (std::size_t index = 2; index < kScalarOperandPortNames.size(); ++index) {
+        bindParameter(kScalarOperandPortNames[index], kScalarOperandParameterSchemaKey, 0.0);
+    }
+    bindParameter(kOperationParameterRole, kScalarOperationParameterSchemaKey,
+                  scalarOperationStoredValue(core::primitives::ScalarPrimitive::Multiply));
+    bindParameter(kClampResultParameterRole, kClampResultParameterSchemaKey, false);
+    require(composition->graph().addNode({mathNode, std::string(kScalarMathNodeType),
+                                          std::move(mathBindings), kValueNodeSchemaVersion}),
+            "chain fixture Math node must be accepted");
+
+    require(composition->parameters().setSource(
+                firstOperand, DriverBindingSource{timeNode, std::string(kTimeSecondsPortName)}),
+            "chain fixture Time driver must be accepted");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{mathNode, std::string(kResultPortName)}),
+            "chain fixture opacity driver must be accepted");
+    require(project.validate().ok(), "chain fixture must be valid document truth");
+    return {std::move(project), kFirstOpacity};
+}
+
+void testValueGraphDriverResolution(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto chain = makeTimeDrivenOpacityChain();
+    const auto result = compile(std::move(chain.project), registry);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan,
+                        "a Time to Math to opacity chain compiles");
+    if (!result.plan) {
+        return;
+    }
+    const auto& plan = *result.plan;
+    // Two operations and three outputs: Time's two, the Math result, and nothing else. Reachability
+    // pruning is what keeps it there -- no unreferenced value node is compiled.
+    expectations.expect(plan.valueOperations().size() == 2 && plan.valueOutputCount() == 3,
+                        "the chain compiles to exactly the two value nodes it contains");
+
+    const auto layer = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+        return std::holds_alternative<runtime::CompiledLayerOutput>(operation);
+    });
+    expectations.expect(layer != plan.operations().end(),
+                        "the chain's plan contains its Layer Output");
+    if (layer == plan.operations().end()) {
+        return;
+    }
+    const auto& opacity = std::get<runtime::CompiledLayerOutput>(*layer).opacity;
+    const auto* driven = std::get_if<runtime::ValueOutputIndex>(&opacity.source);
+    expectations.expect(driven != nullptr, "the driven opacity resolves to a value-graph output");
+    if (driven == nullptr) {
+        return;
+    }
+
+    // The same plan, sampled at three frames: 24fps, so second 0, 1 and 2 are frames 0, 24 and 48
+    // -- and the opacity the evaluator reads is half the elapsed seconds at each of them.
+    const std::array<std::pair<std::int64_t, double>, 3> expected{std::pair{std::int64_t{0}, 0.0},
+                                                                  std::pair{std::int64_t{1}, 0.5},
+                                                                  std::pair{std::int64_t{2}, 1.0}};
+    for (const auto& [second, value] : expected) {
+        const auto evaluation = runtime::evaluateValueGraph(
+            plan.valueOperations(), plan.valueOutputCount(),
+            core::RationalTime::fromInteger(second), plan.format().frameRate());
+        const auto* resolved = driven->value() < evaluation.outputs.size()
+                                   ? std::get_if<double>(&evaluation.outputs[driven->value()])
+                                   : nullptr;
+        expectations.expect(evaluation.diagnostics.empty() && resolved != nullptr &&
+                                *resolved == value,
+                            "the driven opacity is re-resolved at each frame");
+    }
+}
+
+void testValueGraphCycleRefusal(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    // Two Reroutes pointing at each other through their parameters is the smallest driver cycle
+    // there is. It is refused by the document's own acyclic check -- the one the image graph
+    // already uses -- rather than by a second rule that could disagree with it.
+    auto chain = makeTimeDrivenOpacityChain();
+    auto* composition = chain.project.findComposition(kCompositionId);
+    require(composition != nullptr, "cycle fixture composition must exist");
+    const auto* mathNode = composition->graph().findNode(NodeId::fromRaw(15));
+    require(mathNode != nullptr, "cycle fixture Math node must exist");
+    const auto operand =
+        std::ranges::find(mathNode->parameters, kFirstOperandPortName, &ParameterBinding::role);
+    require(operand != mathNode->parameters.end(), "cycle fixture operand must exist");
+    require(composition->parameters().setSource(
+                operand->parameterId,
+                DriverBindingSource{NodeId::fromRaw(15), std::string(kResultPortName)}),
+            "a self-driving operand is well-formed as a reference");
+    const auto validation = chain.project.validate();
+    expectations.expect(std::ranges::any_of(validation.issues(),
+                                            [](const auto& issue) {
+                                                return issue.code == ValidationCode::GraphCycle;
+                                            }),
+                        "a parameter driven by its own node is refused as a graph cycle");
 }
 
 void testRegistryMustBeFrozen(Expectations& expectations) {
@@ -1125,6 +1262,8 @@ int main() {
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
         testRegistryMustBeFrozen(expectations);
+        testValueGraphDriverResolution(expectations);
+        testValueGraphCycleRefusal(expectations);
         testDeterministicTypedPlan(expectations);
         testCustomSolidLoweringRemainsSupported(expectations);
         testReachabilityAndUnsupportedNodes(expectations);

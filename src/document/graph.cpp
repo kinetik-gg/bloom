@@ -90,6 +90,20 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
     }
 }
 
+// Whether this input port is backed by a parameter -- an operand socket rather than image
+// transport. An operand's link is recorded as its PARAMETER's driver binding, never as an edge: one
+// authored value has one durable record of where it comes from, so an edge and a binding can never
+// disagree.
+[[nodiscard]] bool isParameterSocket(const bloom::document::NodeRecord& node,
+                                     const InputPortRef& destination) {
+    const auto* fixed = std::get_if<NodeInputRef>(&destination);
+    if (fixed == nullptr) {
+        return false;
+    }
+    return std::ranges::any_of(node.parameters,
+                               [&](const auto& binding) { return binding.role == fixed->port; });
+}
+
 [[nodiscard]] NodeId destinationNode(const InputPortRef& destination) {
     return std::visit(
         [](const auto& input) {
@@ -164,6 +178,10 @@ bool CanonicalGraph::addNode(NodeRecord node) {
 }
 
 bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& registry) {
+    const auto* destination = findNode(destinationNode(edge.destination));
+    if (destination != nullptr && isParameterSocket(*destination, edge.destination)) {
+        return false;
+    }
     const auto sourceKind = outputKind(edge.source, registry);
     const auto targetKind = inputKind(edge.destination, registry);
     // Task S7: equal kinds, or one of the whitelisted promotions. The ONE predicate every connect
@@ -371,9 +389,14 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         }
 
         const auto targetNodeId = destinationNode(edge.destination);
-        if (findNode(targetNodeId) == nullptr) {
+        const auto* targetNode = findNode(targetNodeId);
+        if (targetNode == nullptr) {
             result.add(ValidationCode::MissingReference, path + ".destination",
                        "Edge destination references a missing node");
+        } else if (isParameterSocket(*targetNode, edge.destination)) {
+            result.add(
+                ValidationCode::InvalidValue, path + ".destination",
+                "An operand socket is linked by its parameter's driver binding, not an edge");
         }
 
         if (const auto* nodeInput = std::get_if<NodeInputRef>(&edge.destination)) {

@@ -137,9 +137,10 @@ resolveValueOutput(const document::OutputPortRef& source,
     return index;
 }
 
-// One operand of a value node: the edge into that input port if there is one, otherwise the authored
-// constant behind it. This is the single place the "unlinked means the widget's value, linked means
-// the wire's value" rule is implemented for evaluation, matching the editor's own rule exactly.
+// One operand of a value node: the value-graph output its parameter is driven by if there is one,
+// otherwise the authored constant behind it. This is the single place the "unlinked means the widget's
+// value, linked means the wire's value" rule is implemented for evaluation, matching the editor's own
+// rule exactly.
 [[nodiscard]] std::optional<runtime::CompiledValueOperand>
 valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& definition,
              const std::string_view port) {
@@ -148,25 +149,32 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
     if (declared == definition.inputs.end()) {
         return std::nullopt;
     }
-    if (const auto* edge = fixedInputEdge(node.id, port)) {
-        const auto resolved = resolveValueOutput(edge->source, declared->valueKind);
-        if (!resolved.has_value()) {
-            return std::nullopt;
-        }
-        const auto* binding = runtime::detail::findParameterBinding(node, port);
-        return runtime::CompiledValueOperand{
-            binding == nullptr ? document::ParameterId{} : binding->parameterId, *resolved};
-    }
     const auto* binding = runtime::detail::findParameterBinding(node, port);
     if (binding == nullptr) {
-        // Only a Reroute has a socket with no parameter, and its socket is required -- so an
-        // unconnected one is already a missing-input failure rather than something to default.
-        return std::nullopt;
+        // A socket with no parameter behind it is a Reroute's pass-through, and only a Reroute's: it
+        // carries someone else's value, so it IS reached by an ordinary edge.
+        const auto* edge = fixedInputEdge(node.id, port);
+        if (edge == nullptr) {
+            return std::nullopt;
+        }
+        const auto resolved = resolveValueOutput(edge->source, declared->valueKind);
+        return resolved.has_value()
+                   ? std::optional(runtime::CompiledValueOperand{document::ParameterId{}, *resolved})
+                   : std::nullopt;
     }
     const auto* parameter = findParameter(binding->parameterId);
-    const auto* constant = parameter == nullptr
-                               ? nullptr
-                               : std::get_if<document::ConstantValueSource>(&parameter->source);
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    // An operand socket is LINKED when its parameter carries a driver binding, not when an edge
+    // terminates on it. A parameter and the socket that can fill it are one authored value, so there
+    // is one durable record of where that value comes from -- the parameter's own source -- rather
+    // than an edge and a binding that could disagree. CanonicalGraph::validate() refuses an edge into
+    // a parameter socket for exactly that reason.
+    if (const auto driven = driverOutput(*parameter, declared->valueKind)) {
+        return runtime::CompiledValueOperand{binding->parameterId, *driven};
+    }
+    const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
     if (constant == nullptr) {
         return std::nullopt;
     }
