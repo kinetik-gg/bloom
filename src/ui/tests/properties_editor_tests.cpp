@@ -916,9 +916,10 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     ui::PropertiesEditor properties(session);
     properties.resize(properties.sizeHint());
     // show(), not just resize(): an invisible widget's layout is not guaranteed to activate all
-    // the way down to leaf widgets from resize() alone (testTransformRowsShowTheirOwnKeyframeIndicators
-    // and testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect's own precedent), and this
-    // test means to measure a real, laid-out label geometry.
+    // the way down to leaf widgets from resize() alone
+    // (testTransformRowsShowTheirOwnKeyframeIndicators and
+    // testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect's own precedent), and this test
+    // means to measure a real, laid-out label geometry.
     properties.show();
     QCoreApplication::processEvents();
 

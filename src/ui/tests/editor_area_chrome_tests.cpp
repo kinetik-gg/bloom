@@ -545,12 +545,11 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
 // handle over a selection change.
 void testPanelMinWidthIsFixedRegardlessOfHostedEditorHints(Expectations& expectations) {
     EditorRegistry registry = makeRegistry();
-    (void)registry.registerEditor(
-        {"bloom.wide", "Wide", [](QWidget* parent) -> QWidget* {
-             auto* widget = new QWidget(parent);
-             widget->setMinimumWidth(900);
-             return widget;
-         }});
+    (void)registry.registerEditor({"bloom.wide", "Wide", [](QWidget* parent) -> QWidget* {
+                                       auto* widget = new QWidget(parent);
+                                       widget->setMinimumWidth(900);
+                                       return widget;
+                                   }});
     EditorArea area(registry, "bloom.probe", QString{});
     const int narrowHostedMinimum = area.minimumSizeHint().width();
     expectations.expect(narrowHostedMinimum == kit::px(kit::Size::PanelMinWidth),
@@ -599,8 +598,7 @@ void testPropertiesIsHostedInsideAnIgnoredScrollArea(Expectations& expectations)
     expectations.expect(area.minimumSizeHint().width() == kit::px(kit::Size::PanelMinWidth),
                         "the panel still reports exactly PanelMinWidth with Properties hosted");
 
-    expectations.expect(area.setEditorId("bloom.probe"),
-                        "switching away from Properties succeeds");
+    expectations.expect(area.setEditorId("bloom.probe"), "switching away from Properties succeeds");
     expectations.expect(
         area.findChild<QScrollArea*>(QStringLiteral("editorContentScrollArea")) == nullptr,
         "the scroll area host is torn down, not left behind, once Properties is no longer hosted");
