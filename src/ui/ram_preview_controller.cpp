@@ -44,6 +44,9 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, &RamPreviewController::cancel);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &RamPreviewController::cancel);
+    // A range must not mix factors or policies when the viewer changes resolution mid-run.
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
+            &RamPreviewController::cancel);
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
@@ -98,6 +101,7 @@ void RamPreviewController::beginShutdown() {
     }
     shuttingDown_ = true;
     disconnect(&session_, nullptr, this, nullptr);
+    disconnect(&previewController_, nullptr, this, nullptr);
     cancelAndDetachActive();
     if (caching_) {
         finish(false);
@@ -140,9 +144,10 @@ void RamPreviewController::submitNextFrame() {
             .sourceRevision = snapshot.revision(),
             .time = *frameTime.value(),
             .output = runtime::PreviewOutput::Composition,
-            .resolution = previewController_.settings().resolution,
+            .resolution = previewController_.resolution(),
             .quality = previewController_.settings().quality,
             .colorIntent = previewController_.settings().colorIntent,
+            .resolutionPolicy = previewController_.settings().resolutionPolicy,
         };
         if (!previewController_.frameCache().contains(key)) {
             break;
@@ -168,9 +173,10 @@ void RamPreviewController::submitNextFrame() {
         .requestGeneration = ++generation_,
         .time = *frameTime.value(),
         .output = runtime::PreviewOutput::Composition,
-        .resolution = previewController_.settings().resolution,
+        .resolution = previewController_.resolution(),
         .quality = previewController_.settings().quality,
         .colorIntent = previewController_.settings().colorIntent,
+        .resolutionPolicy = previewController_.settings().resolutionPolicy,
     };
 
     // Foreground, not Interactive: a RAM preview is a background fill the artist asked for, and it

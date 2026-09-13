@@ -57,7 +57,8 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
             .output = identity.output,
             .resolution = identity.resolution,
             .quality = identity.quality,
-            .colorIntent = identity.colorIntent};
+            .colorIntent = identity.colorIntent,
+            .resolutionPolicy = identity.resolutionPolicy};
 }
 
 PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget) noexcept

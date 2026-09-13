@@ -279,14 +279,38 @@ them:
   a sequence of complete publications, not one transaction that could roll back, and the terminal
   outcome says how many landed.
 
+### Viewer Preview Resolution
+
+The preview controller owns an Auto, Full, Half, or Quarter policy. Auto selects the smallest
+rendered extent covering the composition's displayed size, including device pixel ratio: Quarter,
+then Half, then Full. Each proxy dimension rounds up and stays nonzero. Unknown viewer geometry
+uses Full; actual size and larger zooms use Full. Fixed policies ignore zoom. The viewer computes
+zoom, fit, painting, and interaction rectangles from the full composition format, so a proxy is
+upscaled into the same rectangle without changing composition geometry. A zoom or resize requests
+another frame only when its resolved resolution changes.
+
+The Viewer footer places a Resolution dropdown beside Zoom, with Auto, Full, Half, and Quarter.
+It defaults to Auto and persists the policy name in QSettings `viewer/resolution`; an unknown saved
+value falls back to Auto. The control moves with the editor footer. The footer readout includes
+`Auto · ¼`, `Auto · ½`, or `Auto · 1` (or the fixed policy name), followed by exact frame/time.
+This reports the requested factor; retained older pixels remain identified by the existing stale
+frame status. Proxy painting uses the existing smooth image transform into the composition rectangle.
+
+Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
+The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
+and export resolution remain unchanged. RAM preview uses the same controller-resolved factor and
+policy for every request and cache lookup. A policy or Auto factor change cancels an active RAM
+preview run, keeping completed cached frames and requiring a new run at the new resolution. Single
+frame and frame-range exports always evaluate at Full, independently of the Viewer preference.
+
 ### RAM Preview
 
 Preview frames are kept in memory so that playing a range a second time, or stepping back to a frame
 already rendered, costs a lookup rather than an evaluation.
 
-**Cache key.** Everything that decides a frame's PIXELS and nothing else: project, composition,
+**Cache key.** Preview render inputs and the requested resolution policy: project, composition,
 document revision, exact rational time, preview output, resolution (which is where a proxy factor
-lives), quality, and color intent. That is `PreviewRequestIdentity` minus its request generation,
+lives), resolution policy, quality, and color intent. That is `PreviewRequestIdentity` minus its request generation,
 because the generation says which ASK a frame answered, not what it contains -- a hit is therefore
 re-stamped with the asking request's own generation before it is published, so the frame the artist
 sees is the answer to the request they made.

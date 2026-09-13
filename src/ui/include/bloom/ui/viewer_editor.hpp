@@ -132,6 +132,7 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    bool event(QEvent* event) override;
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). press ->
     // beginPositionInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
@@ -174,8 +175,8 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
         render::ImageExtent extent;
         core::PixelAspectRatio pixelAspect;
     };
-    // The current preview frame's extent/pixel aspect, or std::nullopt when there is nothing to
-    // zoom/pan against (no composition, no frame yet). Shared by paintEvent(), currentMapping(),
+    // The composition's full extent/pixel aspect, independent of the delivered proxy size.
+    // Absent only when there is no composition. Shared by paintEvent(), currentMapping(),
     // and every zoom/pan gesture so they never disagree about what "the content" is.
     [[nodiscard]] std::optional<DisplayGeometry> currentDisplayGeometry() const;
 
@@ -186,6 +187,7 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     void updatePanCursor();
     void layoutStatusBar();
     void refreshZoomDropdown();
+    void updatePreviewResolution();
 
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
@@ -208,6 +210,7 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // (every existing standalone test) it stays a direct child of this ViewerEditor, positioned by
     // layoutStatusBar(), exactly as before FORMAL AMENDMENT 1.
     kit::KDropdown* zoomDropdown_ = nullptr;
+    kit::KDropdown* resolutionDropdown_ = nullptr;
     // FORMAL AMENDMENT 1: null until takeFooterWidget() is called; from that point on, the
     // surviving reference this ViewerEditor keeps so its own session/preview-state signal
     // handlers can also repaint the (now externally-owned) footer. Its concrete type is private to

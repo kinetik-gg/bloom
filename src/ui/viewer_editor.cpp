@@ -25,6 +25,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QWheelEvent>
 
@@ -48,6 +49,20 @@ namespace {
 // see refreshZoomDropdown()'s own comment on why that item is renamed in place rather than
 // removed and re-added: kit::KDropdown has no item-removal API.
 constexpr std::array<int, 5> kZoomPresets = {25, 50, 100, 200, 400};
+constexpr std::array<const char*, 4> kResolutionNames = {"Auto", "Full", "Half", "Quarter"};
+constexpr auto kResolutionSetting = "viewer/resolution";
+
+void layoutFooterDropdowns(QWidget* zoom, QWidget* resolution, const QRectF& bar) {
+    int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
+    for (auto* dropdown : {zoom, resolution}) {
+        const auto hint = dropdown->sizeHint();
+        const int y =
+            static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
+        dropdown->setGeometry(x, y, hint.width(), hint.height());
+        x += hint.width() + kit::px(kit::Spacing::S);
+    }
+}
+
 constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
 
 const document::LayerOutputBoundary* layerBoundary(const document::Composition& composition,
@@ -188,6 +203,20 @@ QString exactFrameAndTimecodeText(const CompositionSession& session) {
         }
     }
     return ViewerEditor::tr("Frame %1 · %2").arg(frameText, formatExactSecondsForViewer(time));
+}
+
+QString viewerReadoutText(const CompositionSession& session,
+                          const CompositionPreviewController& controller) {
+    const auto policy = controller.settings().resolutionPolicy;
+    const auto divisor = controller.resolutionDivisor();
+    const QString factor = divisor == 4   ? QStringLiteral("¼")
+                           : divisor == 2 ? QStringLiteral("½")
+                                          : QStringLiteral("1");
+    const QString resolutionText =
+        policy == runtime::PreviewResolutionPolicy::Auto
+            ? ViewerEditor::tr("Auto · %1").arg(factor)
+            : ViewerEditor::tr(kResolutionNames[static_cast<std::size_t>(policy)]);
+    return resolutionText + QStringLiteral(" · ") + exactFrameAndTimecodeText(session);
 }
 
 // The footer's dropped-frame text, or an empty string when nothing honest can be said: counting is
@@ -391,7 +420,7 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 
     const QRectF centerRect(chipLeftBound, bar.top(),
                             std::max<qreal>(0.0, centerRight - chipLeftBound), bar.height());
-    painter.drawText(centerRect, Qt::AlignCenter, exactFrameAndTimecodeText(session));
+    painter.drawText(centerRect, Qt::AlignCenter, viewerReadoutText(session, previewController));
 
     painter.restore();
 }
@@ -403,32 +432,30 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 class ViewerStatusBarFooter final : public QWidget {
   public:
     ViewerStatusBarFooter(CompositionSession& session,
-                          CompositionPreviewController& previewController, QWidget* zoomDropdown)
-        : session_(session), previewController_(previewController), zoomDropdown_(zoomDropdown) {
+                          CompositionPreviewController& previewController, QWidget* zoomDropdown,
+                          QWidget* resolutionDropdown)
+        : session_(session), previewController_(previewController), zoomDropdown_(zoomDropdown),
+          resolutionDropdown_(resolutionDropdown) {
         setFixedHeight(kit::px(kit::Size::Control));
     }
 
     void layoutDropdown() {
-        if (zoomDropdown_ == nullptr) {
-            return;
-        }
-        const QSize hint = zoomDropdown_->sizeHint();
-        const int x = kit::px(kit::Spacing::S);
-        const int y = (height() - hint.height() + 1) / 2;
-        zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
+        layoutFooterDropdowns(zoomDropdown_, resolutionDropdown_, QRectF(rect()));
     }
 
   protected:
     void resizeEvent(QResizeEvent*) override { layoutDropdown(); }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        paintStatusBarSurface(painter, QRectF(rect()), zoomDropdown_, session_, previewController_);
+        paintStatusBarSurface(painter, QRectF(rect()), resolutionDropdown_, session_,
+                              previewController_);
     }
 
   private:
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     QWidget* zoomDropdown_;
+    QWidget* resolutionDropdown_;
 };
 
 } // namespace
@@ -546,6 +573,40 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         }
         setZoomPercent(zoomDropdown_->itemData(index).toInt());
     });
+    resolutionDropdown_ = new kit::KDropdown(this);
+    resolutionDropdown_->setObjectName("viewerResolutionDropdown");
+    resolutionDropdown_->setAccessibleName(tr("Resolution"));
+    resolutionDropdown_->setToolTip(tr("Resolution"));
+    resolutionDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    for (const auto* name : kResolutionNames) {
+        resolutionDropdown_->addItem(tr(name));
+    }
+    const auto saved = QSettings().value(kResolutionSetting, QStringLiteral("Auto")).toString();
+    int savedIndex = 0;
+    for (std::size_t i = 0; i < kResolutionNames.size(); ++i) {
+        if (saved == QLatin1StringView(kResolutionNames[i])) {
+            savedIndex = static_cast<int>(i);
+        }
+    }
+    resolutionDropdown_->setCurrentIndex(savedIndex);
+    previewController_.setResolutionPolicy(
+        static_cast<runtime::PreviewResolutionPolicy>(savedIndex));
+    connect(resolutionDropdown_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) {
+                if (index < 0 || index >= static_cast<int>(kResolutionNames.size())) {
+                    return;
+                }
+                QSettings().setValue(
+                    kResolutionSetting,
+                    QString::fromLatin1(kResolutionNames[static_cast<std::size_t>(index)]));
+                previewController_.setResolutionPolicy(
+                    static_cast<runtime::PreviewResolutionPolicy>(index));
+            });
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this, [this] {
+        const QSignalBlocker blocker(resolutionDropdown_);
+        resolutionDropdown_->setCurrentIndex(
+            static_cast<int>(previewController_.settings().resolutionPolicy));
+    });
     layoutStatusBar();
 
     // Every one of these already repainted the status bar for free when it was part of this
@@ -553,12 +614,14 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // out into its own widget by also nudging statusBarFooter_ (a no-op update() call until then,
     // since it starts null).
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
         }
     });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
@@ -608,6 +671,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             statusBarFooter_->update();
         }
     });
+    updatePreviewResolution();
     updatePreviewAccessibility();
 }
 
@@ -619,7 +683,8 @@ QWidget* ViewerEditor::takeFooterWidget() {
     }
     statusBarFooterTaken_ = true;
 
-    auto* footer = new ViewerStatusBarFooter(session_, previewController_, zoomDropdown_);
+    auto* footer =
+        new ViewerStatusBarFooter(session_, previewController_, zoomDropdown_, resolutionDropdown_);
     if (zoomDropdown_ != nullptr) {
         // setParent() hides the widget by Qt's own convention when reparenting across top-level
         // boundaries; the caller (EditorArea) will show/lay out `footer` itself once it takes
@@ -627,10 +692,13 @@ QWidget* ViewerEditor::takeFooterWidget() {
         zoomDropdown_->setParent(footer);
         zoomDropdown_->show();
     }
+    resolutionDropdown_->setParent(footer);
+    resolutionDropdown_->show();
     footer->layoutDropdown();
     statusBarFooter_ = footer;
     // canvasRect() is now full-bleed (statusBarRect() returns empty) -- repaint immediately rather
     // than waiting for the next incidental update().
+    updatePreviewResolution();
     update();
     return footer;
 }
@@ -638,7 +706,7 @@ QWidget* ViewerEditor::takeFooterWidget() {
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {
-    return exactFrameAndTimecodeText(session_);
+    return viewerReadoutText(session_, previewController_);
 }
 
 QString ViewerEditor::statusBarDroppedFrameTextForTest() const {
@@ -682,15 +750,11 @@ void ViewerEditor::layoutStatusBar() {
     if (statusBarFooterTaken_ || zoomDropdown_ == nullptr) {
         return;
     }
-    const QRectF bar = statusBarRect();
-    const QSize hint = zoomDropdown_->sizeHint();
-    const int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
-    const int y =
-        static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
-    zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
+    layoutFooterDropdowns(zoomDropdown_, resolutionDropdown_, statusBarRect());
 }
 
 void ViewerEditor::refreshZoomDropdown() {
+    updatePreviewResolution();
     if (zoomDropdown_ == nullptr) {
         return;
     }
@@ -735,6 +799,33 @@ void ViewerEditor::refreshZoomDropdown() {
     zoomDropdown_->update();
 }
 
+void ViewerEditor::updatePreviewResolution() {
+    const auto geometry = currentDisplayGeometry();
+    if (!geometry.has_value()) {
+        return;
+    }
+    const auto actual = actualPixelRect(canvasRect(), geometry->extent, geometry->pixelAspect);
+    const auto displayed = viewTransformedDisplayRect(canvasRect(), geometry->extent,
+                                                      geometry->pixelAspect, transform_);
+    if (actual.isEmpty() || displayed.isEmpty()) {
+        return;
+    }
+    previewController_.setDisplayedCompositionScale(
+        std::max(displayed.width() / actual.width(), displayed.height() / actual.height()) *
+        devicePixelRatioF());
+}
+
+bool ViewerEditor::event(QEvent* event) {
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        if (dragActive_) {
+            endDrag(false);
+        }
+        updatePreviewResolution();
+    }
+    return handled;
+}
+
 void ViewerEditor::setZoomFit() {
     transform_ = ViewTransform{};
     refreshZoomDropdown();
@@ -750,16 +841,13 @@ void ViewerEditor::setZoomPercent(const int percent) {
 }
 
 std::optional<ViewerEditor::DisplayGeometry> ViewerEditor::currentDisplayGeometry() const {
-    const auto& preview = previewController_.state();
-    if (preview.frame == nullptr) {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
         return std::nullopt;
     }
-    const auto bufferView = preview.frame->displayBufferView();
-    if (!bufferView.has_value()) {
-        return std::nullopt;
-    }
-    return DisplayGeometry{.extent = bufferView->displayWindow.extent(),
-                           .pixelAspect = bufferView->pixelAspect};
+    const auto format = composition->format();
+    const auto extent = render::ImageExtent::create(format.width(), format.height());
+    return DisplayGeometry{.extent = *extent.value(), .pixelAspect = format.pixelAspect()};
 }
 
 void ViewerEditor::paintEvent(QPaintEvent* event) {
@@ -779,7 +867,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         if (!statusBarFooterTaken_) {
-            paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+            paintStatusBarSurface(painter, statusBarRect(), resolutionDropdown_, session_,
                                   previewController_);
         }
         return;
@@ -812,8 +900,12 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     static_cast<int>(extent.height()),
                     static_cast<qsizetype>(layout.rowStrideBytes), QImage::Format_RGBA8888);
                 if (!image.isNull()) {
-                    const QRectF displayRect = viewTransformedDisplayRect(
-                        frame, extent, bufferView->pixelAspect, transform_);
+                    const auto geometry = currentDisplayGeometry();
+                    const QRectF displayRect =
+                        geometry.has_value()
+                            ? viewTransformedDisplayRect(frame, geometry->extent,
+                                                         geometry->pixelAspect, transform_)
+                            : QRectF{};
                     drawFrameShadow(painter, displayRect);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, image, QRectF(image.rect()));
@@ -855,7 +947,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     }
 
     if (!statusBarFooterTaken_) {
-        paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+        paintStatusBarSurface(painter, statusBarRect(), resolutionDropdown_, session_,
                               previewController_);
     }
 }
@@ -927,8 +1019,12 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
     // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
     // to start a NEW zoom/pan while dragActive_, so this only matters as a defensive backstop).
-    const QRectF displayRect = viewTransformedDisplayRect(
-        canvasRect(), descriptor.displayWindow().extent(), descriptor.pixelAspect(), transform_);
+    const auto geometry = currentDisplayGeometry();
+    if (!geometry.has_value()) {
+        return std::nullopt;
+    }
+    const QRectF displayRect = viewTransformedDisplayRect(canvasRect(), geometry->extent,
+                                                          geometry->pixelAspect, transform_);
     if (displayRect.isEmpty()) {
         return std::nullopt;
     }
@@ -1147,6 +1243,7 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
         updatePanCursor();
     }
     layoutStatusBar();
+    updatePreviewResolution();
 }
 
 void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {

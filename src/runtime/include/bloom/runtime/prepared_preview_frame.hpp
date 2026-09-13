@@ -15,6 +15,8 @@ enum class PreviewOutput : std::uint8_t {
     Composition,
 };
 
+enum class PreviewResolutionPolicy : std::uint8_t { Auto, Full, Half, Quarter };
+
 struct PreviewRequestIdentity final {
     document::ProjectId projectId;
     document::CompositionId compositionId;
@@ -25,6 +27,8 @@ struct PreviewRequestIdentity final {
     EvaluationResolution resolution;
     EvaluationQuality quality = EvaluationQuality::Reference;
     EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
+
+    PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto;
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
@@ -124,10 +128,11 @@ class PreparedPreviewFrame final {
   public:
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     create(std::uint64_t requestGeneration,
-           std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept;
-    [[nodiscard]] static std::optional<PreparedPreviewFrame>
-    createQualified(std::uint64_t requestGeneration,
-                    std::shared_ptr<const QualifiedDisplayFrame> displayFrame) noexcept;
+           std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
+           PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto) noexcept;
+    [[nodiscard]] static std::optional<PreparedPreviewFrame> createQualified(
+        std::uint64_t requestGeneration, std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
+        PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto) noexcept;
     // Re-stamps a retained display-only frame with the generation of the request it now answers.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createDisplayOnly(std::uint64_t requestGeneration,

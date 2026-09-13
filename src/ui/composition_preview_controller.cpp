@@ -7,6 +7,7 @@
 
 #include <QThread>
 
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <string>
@@ -110,10 +111,75 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
         .sourceRevision = snapshot.revision(),
         .time = time,
         .output = runtime::PreviewOutput::Composition,
-        .resolution = settings_.resolution,
+        .resolution = resolution(),
         .quality = settings_.quality,
         .colorIntent = settings_.colorIntent,
+        .resolutionPolicy = settings_.resolutionPolicy,
     };
+}
+
+std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
+    switch (settings_.resolutionPolicy) {
+    case runtime::PreviewResolutionPolicy::Full:
+        return 1;
+    case runtime::PreviewResolutionPolicy::Half:
+        return 2;
+    case runtime::PreviewResolutionPolicy::Quarter:
+        return 4;
+    case runtime::PreviewResolutionPolicy::Auto:
+        break;
+    }
+    const auto* composition = session_.composition();
+    if (composition == nullptr || displayedCompositionScale_ >= 1.0) {
+        return 1;
+    }
+    const auto format = composition->format();
+    for (const std::uint32_t divisor : {4U, 2U}) {
+        const auto width = (format.width() + divisor - 1) / divisor;
+        const auto height = (format.height() + divisor - 1) / divisor;
+        if (width >= format.width() * displayedCompositionScale_ &&
+            height >= format.height() * displayedCompositionScale_) {
+            return divisor;
+        }
+    }
+    return 1;
+}
+
+runtime::EvaluationResolution CompositionPreviewController::resolution() const {
+    const auto divisor = resolutionDivisor();
+    const auto* composition = session_.composition();
+    if (divisor == 1 || composition == nullptr) {
+        return runtime::CompositionFormatResolution{};
+    }
+    const auto format = composition->format();
+    const auto extent = render::ImageExtent::create((format.width() + divisor - 1) / divisor,
+                                                    (format.height() + divisor - 1) / divisor);
+    return runtime::ProxyResolution{*extent.value()};
+}
+
+void CompositionPreviewController::setResolutionPolicy(
+    const runtime::PreviewResolutionPolicy policy) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_ || settings_.resolutionPolicy == policy) {
+        return;
+    }
+    settings_.resolutionPolicy = policy;
+    emit resolutionChanged();
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::setDisplayedCompositionScale(const double scale) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_) {
+        return;
+    }
+    const auto previous = resolution();
+    displayedCompositionScale_ = std::isfinite(scale) && scale > 0.0 ? scale : 1.0;
+    if (previous == resolution()) {
+        return;
+    }
+    emit resolutionChanged();
+    requestPreview(false, PreviewRequestKind::Visible);
 }
 
 void CompositionPreviewController::requestRefresh() {
@@ -323,9 +389,10 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         .requestGeneration = generation,
         .time = session_.currentTime(),
         .output = runtime::PreviewOutput::Composition,
-        .resolution = settings_.resolution,
+        .resolution = resolution(),
         .quality = settings_.quality,
         .colorIntent = settings_.colorIntent,
+        .resolutionPolicy = settings_.resolutionPolicy,
     };
 
     const auto publishTerminal = [this, &desiredIdentity,

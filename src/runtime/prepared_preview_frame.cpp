@@ -7,7 +7,8 @@ namespace bloom::runtime {
 
 std::optional<PreparedPreviewFrame>
 PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
-                             std::shared_ptr<const ReferenceDisplayFrame> displayFrame) noexcept {
+                             std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
+                             const PreviewResolutionPolicy resolutionPolicy) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {
@@ -31,13 +32,15 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
         .resolution = processIdentity.resolution,
         .quality = processIdentity.quality,
         .colorIntent = processIdentity.colorIntent,
+        .resolutionPolicy = resolutionPolicy,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
 
-std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createQualified(
-    const std::uint64_t requestGeneration,
-    std::shared_ptr<const QualifiedDisplayFrame> displayFrame) noexcept {
+std::optional<PreparedPreviewFrame>
+PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
+                                      std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
+                                      const PreviewResolutionPolicy resolutionPolicy) noexcept {
     if (requestGeneration == 0 || displayFrame == nullptr ||
         displayFrame->processFrame() == nullptr ||
         displayFrame->identity().processFrame.plan == nullptr) {
@@ -61,6 +64,7 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createQualified(
         .resolution = processIdentity.resolution,
         .quality = processIdentity.quality,
         .colorIntent = processIdentity.colorIntent,
+        .resolutionPolicy = resolutionPolicy,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
