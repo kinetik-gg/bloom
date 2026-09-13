@@ -114,6 +114,7 @@ class CompositionPreviewController final : public QObject {
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
     // The identity this controller WOULD request for `time` in the live composition, which is what
     // a caller asks the cache about when it wants to know whether a frame is already there (the RAM
@@ -181,6 +182,8 @@ class CompositionPreviewController final : public QObject {
   signals:
     void stateChanged();
     void resolutionChanged();
+    // Synchronous cancellation seam for speculative work, before foreground admission.
+    void foregroundWorkRequested();
     // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
     // update()).

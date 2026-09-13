@@ -209,6 +209,7 @@ add_library(bloom_ui STATIC)
 target_sources(
     bloom_ui
     PRIVATE
+        background_preview_controller.cpp
         application_shutdown_coordinator.cpp
         composition_authoring.cpp
         composition_editor_support.cpp
@@ -248,6 +249,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/background_preview_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp

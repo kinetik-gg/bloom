@@ -94,6 +94,12 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
+bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
+    return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
+           !interactiveTimeChangeArmed_ && !session_.positionInteractionOverride().has_value() &&
+           !ramPreviewProgress_.has_value();
+}
+
 PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
     return *frameCache_;
 }
@@ -232,6 +238,7 @@ void CompositionPreviewController::handlePositionInteractionChanged() {
 void CompositionPreviewController::beginInteractiveScrub() {
     Q_ASSERT(QThread::currentThread() == thread());
     interactiveTimeChangeArmed_ = true;
+    emit foregroundWorkRequested();
 }
 
 void CompositionPreviewController::notifyScrubEnded() {
@@ -281,6 +288,7 @@ CompositionPreviewController::ramPreviewProgress() const noexcept {
 
 void CompositionPreviewController::beginRamPreviewProgress(const std::uint64_t totalFrames) {
     Q_ASSERT(QThread::currentThread() == thread());
+    emit foregroundWorkRequested();
     ramPreviewProgress_ = RamPreviewProgress{.cachedFrames = 0, .totalFrames = totalFrames};
     emit ramPreviewProgressChanged();
 }
@@ -333,6 +341,7 @@ void CompositionPreviewController::beginShutdown() {
     }
 
     shuttingDown_ = true;
+    emit foregroundWorkRequested();
     disconnect(&session_, nullptr, this, nullptr);
     interactiveCadenceTimer_.stop();
     interactiveTimeChangeArmed_ = false;
@@ -462,6 +471,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         }
     }
 
+    emit foregroundWorkRequested();
     PendingRequest pendingRequest{.snapshot = snapshot,
                                   .desiredIdentity = desiredIdentity,
                                   .pixelStorageByteLimit = settings_.pixelStorageByteLimit,
