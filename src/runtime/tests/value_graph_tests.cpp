@@ -438,6 +438,20 @@ void testMalformedPlan(Expectations& expectations) {
     expectations.expect(
         holds(refused, 0, 1.0) && refused.diagnostics.size() == 1,
         "an overlapping output range is refused without corrupting the first write");
+
+    // A kernel whose own output count exceeds the run the operation claims. The compiler cannot
+    // emit one -- both numbers come from the same definition -- so this is the boundary where a
+    // malformed plan would otherwise write past a neighbour's slot.
+    const std::vector<CompiledValueOperation> overreaching{
+        {document::NodeId::fromRaw(1), ValueOutputIndex::fromRaw(0), 1,
+         runtime::CompiledValueSeparate{constant(core::Color4d{0.25, 0.5, 0.75, 1.0}), 4, true}},
+        {document::NodeId::fromRaw(2), ValueOutputIndex::fromRaw(1), 1,
+         runtime::CompiledValuePassthrough{constant(99.0)}}};
+    const auto clamped =
+        runtime::evaluateValueGraph(overreaching, 2, core::RationalTime::fromInteger(0),
+                                    document::FrameRate::framesPerSecond24());
+    expectations.expect(holds(clamped, 0, 0.25) && holds(clamped, 1, 99.0),
+                        "a kernel that would overrun its own run writes only the slots it owns");
 }
 
 } // namespace

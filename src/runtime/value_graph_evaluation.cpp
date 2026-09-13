@@ -167,8 +167,16 @@ class Evaluator final {
         return read(operand, outputs_, written_);
     }
 
+    // Bounds-checked against the operation's OWN run, not just against the table: a kernel's own
+    // output count and the operation's declared one agree in every plan the compiler emits, but
+    // this is the boundary where a malformed plan would otherwise write past a neighbour's slot. A
+    // refused write is silently dropped rather than diagnosed twice -- run() already reported the
+    // operation whose range is wrong, and every slot in the table starts at a usable zero.
     void write(const runtime::CompiledValueOperation& operation, const std::size_t slot,
                CompiledValue value) {
+        if (slot >= static_cast<std::size_t>(operation.outputCount)) {
+            return;
+        }
         outputs_[operation.firstOutput.value() + slot] = std::move(value);
     }
 
@@ -611,7 +619,8 @@ void Evaluator::evaluateSeparate(const runtime::CompiledValueOperation& operatio
             return;
         }
         const std::array<double, 4> channels{color->red, color->green, color->blue, color->alpha};
-        for (std::size_t slot = 0; slot < kernel.componentCount && slot < channels.size(); ++slot) {
+        const auto written = std::min<std::size_t>(kernel.componentCount, channels.size());
+        for (std::size_t slot = 0; slot < written; ++slot) {
             write(operation, slot, channels[slot]);
         }
         return;
@@ -625,7 +634,8 @@ void Evaluator::evaluateSeparate(const runtime::CompiledValueOperation& operatio
         }
         return;
     }
-    for (std::size_t slot = 0; slot < kernel.componentCount; ++slot) {
+    const auto written = std::min<std::size_t>(kernel.componentCount, components->size());
+    for (std::size_t slot = 0; slot < written; ++slot) {
         write(operation, slot, (*components)[slot]);
     }
 }
