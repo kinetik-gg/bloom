@@ -6,6 +6,7 @@
 
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QEvent>
 #include <QFile>
 #include <QImage>
 #include <QListView>
@@ -225,6 +226,16 @@ void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expe
         QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Regular)) &&
             QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Fill)),
         "the vendored double-chevron asset backs IconId::CaretUpDown in both weights");
+
+    // Drive the widget to REST before sampling: on some offscreen platforms (CI's Qt 6.8.3) the
+    // freshly shown window hands activation focus to its only focusable child on a later
+    // event-loop pass, and a cursor parked at the origin can leave it hovered -- both repaint the
+    // border in a state colour and would make the rest-state pins fail for environmental reasons.
+    QCoreApplication::processEvents();
+    dropdown.clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(&dropdown, &leave);
+    QCoreApplication::processEvents();
 
     const QPixmap rendered = dropdown.grab();
     expectations.expect(!rendered.isNull(), "the bordered closed field renders offscreen");
