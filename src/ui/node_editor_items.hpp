@@ -266,9 +266,22 @@ class NodeItem final : public QGraphicsObject {
         primary_ = primary;
         update();
     }
+    // prepareGeometryChange() FIRST, then the flag: the elevation's own offset and blur are part of
+    // this card's effective bounding rectangle -- and, through
+    // QGraphicsItemPrivate::effectiveBoundingRect(), of every socket and hosted control under it,
+    // because an ancestor's enabled effect widens a child's rectangle too. That effective rectangle
+    // is what QGraphicsScene's BSP index files all of them under, and the index can only take an
+    // item back out of the BSP leaves its CURRENT rectangle reaches. Qt's own notification
+    // (QGraphicsEffect::setEnabled -> effectBoundingRectChanged) arrives only AFTER the flag has
+    // flipped, by which time the wider rectangle is gone and the leaves it covered keep pointers to
+    // items the scene goes on to give up or free -- entries a later query or paint walks into.
+    // Announcing the change while the old rectangle is still current is what keeps the index
+    // honest.
     void setDragging(bool dragging) {
-        if (dragShadow_ != nullptr)
-            dragShadow_->setEnabled(dragging);
+        if (dragShadow_ == nullptr || dragShadow_->isEnabled() == dragging)
+            return;
+        prepareGeometryChange();
+        dragShadow_->setEnabled(dragging);
     }
     void startRename();
     void setAuthoringEnabled(bool enabled) {

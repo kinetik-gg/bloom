@@ -586,6 +586,16 @@ target_link_libraries(bloom_node_group_test PRIVATE bloom_ui bloom_project Qt6::
 bloom_enable_warnings(bloom_node_group_test)
 bloom_add_test(NAME bloom.ui.node-groups COMMAND bloom_node_group_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The node canvas's lifetime contract against Qt's scene index: what a card's drag elevation has to
+# announce before it shrinks, so that nothing the scene has given up or freed is left behind in the
+# BSP leaves a later query or paint walks. Its own executable for the same reason node_card_tests.cpp
+# is.
+add_executable(bloom_node_canvas_lifetime_test node_canvas_lifetime_tests.cpp)
+target_include_directories(bloom_node_canvas_lifetime_test PRIVATE ..)
+target_link_libraries(bloom_node_canvas_lifetime_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_canvas_lifetime_test)
+bloom_add_test(NAME bloom.ui.node-canvas-lifetime COMMAND bloom_node_canvas_lifetime_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_production_wiring_test node_production_wiring_tests.cpp)
 target_include_directories(bloom_node_production_wiring_test PRIVATE ..)
 target_link_libraries(bloom_node_production_wiring_test PRIVATE bloom_ui bloom_project Qt6::Test)
