@@ -49,6 +49,10 @@ struct TimelineAxis final {
     [[nodiscard]] qreal pixelForTime(core::RationalTime time) const noexcept;
 };
 
+// Non-drop labels use the nearest nominal integer frame rate for HH:MM:SS:FF.
+[[nodiscard]] QString formatTimelineFrameLabel(std::uint64_t frame, document::FrameRate rate,
+                                               bool timecode);
+
 // The timeline panel's shared row pitch (task T1): the AE-style layer rows, their lanes, and the
 // keyframe lanes underneath them all step by exactly this much, so the left column's rows, the
 // clip bars beside them, and the key rows below read as one grid.
@@ -81,15 +85,9 @@ void paintPlayheadLine(QPainter& painter, const TimelineAxis& axis, core::Ration
 // (CompositionPreviewController::beginInteractiveScrub()/ notifyScrubEnded()). Projection and scrub
 // only: no direct Viewer manipulation, no playback transport, no key-editing gestures.
 //
-// Task T1: the ruler is laid out as the RIGHT part of the timeline's column-header row, so its x
-// origin is the lane region's left edge and its frame-0 label never paints over the layer-stack
-// column. Its own tick density/labelling rules are unchanged -- only the origin and extent moved.
-//
-// Kinetik restyle (task U7, issue #122, decision 3): labeled MAJOR ticks are density-adaptive --
-// the step between them is chosen from the ruler's own width and the widest label this axis could
-// ever paint (its own FONT metrics, not a guessed pixel budget) so adjacent major labels can never
-// collide; unlabeled MINOR ticks fill in at a denser, purely visual grid. The pixel<->frame axis
-// math itself (TimelineAxis above) is completely unchanged.
+// The ruler lives in the RIGHT cell of the EditorArea header, sharing the lane origin and
+// scrollbar gutter. It owns the editor-local viewport range used by every time-axis surface.
+// Frame and non-drop timecode labels use font metrics and density-adaptive spacing.
 class TimelineRuler final : public QWidget {
     Q_OBJECT
 
@@ -109,6 +107,7 @@ class TimelineRuler final : public QWidget {
     void zoomToRange(double start, double end);
     void zoomToFit();
     void zoomBy(double factor, qreal anchorX);
+    void setTimecodeLabels(bool timecode);
     [[nodiscard]] bool handleWheel(QWheelEvent* event);
 
   signals:
@@ -137,6 +136,7 @@ class TimelineRuler final : public QWidget {
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool scrubbing_ = false;
+    bool timecodeLabels_ = false;
 };
 
 // Full-duration overview with a draggable window and independently resizable edges.
@@ -146,6 +146,7 @@ class TimelineNavigator final : public QWidget {
     [[nodiscard]] QRectF windowRect() const;
 
   protected:
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -179,9 +180,8 @@ class TimelineWorkAreaStrip final : public QWidget {
     CompositionSession& session_;
 };
 
-// The RIGHT part of the timeline's header row (task T1): nothing but the work-area strip, centered
-// in the header row's own height, plus the playhead's single head marker at the top of the playhead
-// stroke that continues down through the ruler and every lane.
+// The top of the header's right cell: a work-area strip with the single head marker immediately
+// below it. The shared stroke continues through the ruler labels and every lane.
 //
 // The marker lives here rather than inside TimelineWorkAreaStrip because the strip's one honest
 // claim is that its dim band spans the WHOLE composition range; a solid Accent triangle painted

@@ -93,21 +93,8 @@ constexpr qreal kMajorTickHeight = 8.0;
     return static_cast<std::uint64_t>(std::ceil(kMinimumPixelsPerMinorTick / pixelsPerFrame));
 }
 
-// The labeled major grid (decision 3: "majors every N frames chosen from zoom/width so labels
-// never collide"). `widestLabelPixels` is the ACTUAL rendered width of this axis's widest possible
-// label (its own maxIndex, in the SAME font paintEvent uses) rather than a guessed pixel budget --
-// see the caller. The step is kept an exact multiple of `minorStep` so every major tick lands on a
-// minor tick rather than an off-grid position.
-//
-// Proof of disjointness (pinned by testRulerMajorTickLabelsNeverCollideAtTwoWidths): for two
-// adjacent major indices i < j = i + majorStep, their left-aligned label rects start at
-// pixelForTime(i) + inset and pixelForTime(j) + inset respectively, each at most widestLabelPixels
-// wide (every in-range label's digit count is <= maxIndex's, and this font's digit glyphs are
-// monospaced-within-a-weight so a shorter number never renders wider). The major step guarantees
-// pixelForTime(j) - pixelForTime(i) >= widestLabelPixels + kMajorLabelGapPixels, so label i's
-// right edge (start + width <= start + widestLabelPixels) sits strictly left of label j's left
-// edge (start + widestLabelPixels + kMajorLabelGapPixels), for any pair of consecutive majors --
-// and by induction, every non-adjacent pair too.
+// Choose a readable frame cadence using the actual label font. Geometry is checked again when
+// admitting labels, including timecode field-width changes and narrow right-edge clipping.
 [[nodiscard]] std::uint64_t majorTickStepFrames(const TimelineAxis& axis,
                                                 const qreal widestLabelPixels,
                                                 const std::uint64_t minorStep) {
@@ -209,11 +196,12 @@ struct MajorTickLabel final {
 // The single source of major-tick label geometry: paintEvent() and
 // TimelineRuler::majorTickLabelRectsForTest() both call this, so a test can never observe a
 // different collision-avoidance decision than what actually gets painted.
-[[nodiscard]] std::vector<MajorTickLabel> computeMajorTickLabels(const TimelineAxis& axis,
-                                                                 const qreal labelAreaHeight) {
+[[nodiscard]] std::vector<MajorTickLabel>
+computeMajorTickLabels(const TimelineAxis& axis, const qreal labelAreaHeight, const bool timecode) {
     std::vector<MajorTickLabel> labels;
     const QFontMetrics metrics(tickFont());
-    const qreal widestLabelPixels = metrics.horizontalAdvance(QString::number(axis.maxIndex));
+    const qreal widestLabelPixels = metrics.horizontalAdvance(
+        formatTimelineFrameLabel(axis.maxIndex, axis.frameRate, timecode));
     const auto minorStep = minorTickStepFrames(axis);
     const auto majorStep = majorTickStepFrames(axis, widestLabelPixels, minorStep);
     for (std::uint64_t index = (axis.frameIndexForPixel(0) / majorStep) * majorStep;
@@ -229,9 +217,11 @@ struct MajorTickLabel final {
         if (x < 0) {
             continue;
         }
-        const QString text = QString::number(index);
+        const QString text = formatTimelineFrameLabel(index, axis.frameRate, timecode);
         const qreal textWidth = metrics.horizontalAdvance(text);
-        if (x + kTickLabelInsetPixels + textWidth <= axis.widthPixels) {
+        if (x + kTickLabelInsetPixels + textWidth <= axis.widthPixels &&
+            (labels.empty() ||
+             x + kTickLabelInsetPixels > labels.back().rect.right() + kMajorLabelGapPixels)) {
             labels.push_back(
                 {index, QRectF(x + kTickLabelInsetPixels, 0.0, textWidth, labelAreaHeight)});
         }
@@ -678,6 +668,7 @@ TimelineRuler::TimelineRuler(CompositionSession& session,
             qOverload<>(&TimelineRuler::update));
     setObjectName("timelineRuler");
     setAccessibleName(tr("Scrub ruler"));
+    setFocusPolicy(Qt::StrongFocus);
     setFixedHeight(kRulerHeight);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
@@ -687,6 +678,11 @@ TimelineRuler::TimelineRuler(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineRuler::axisChanged);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             qOverload<>(&TimelineRuler::update));
+}
+
+void TimelineRuler::setTimecodeLabels(const bool timecode) {
+    timecodeLabels_ = timecode;
+    update();
 }
 
 void TimelineRuler::paintEvent(QPaintEvent* event) {
@@ -708,7 +704,7 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
 
     painter.setFont(tickFont());
     const auto labelAreaHeight = static_cast<qreal>(height()) - kMajorTickHeight;
-    const auto majorLabels = computeMajorTickLabels(*axis, labelAreaHeight);
+    const auto majorLabels = computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_);
     const auto minorStep = minorTickStepFrames(*axis);
 
     // Minor grid first (decision 3: "minors as subtle ticks"), so a coincident major tick paints
@@ -744,7 +740,7 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
                          QPointF(x, static_cast<qreal>(height()) - 1.0));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(label.rect, Qt::AlignLeft | Qt::AlignVCenter,
-                         QString::number(label.index));
+                         formatTimelineFrameLabel(label.index, axis->frameRate, timecodeLabels_));
     }
 
     for (const auto& segment : cachedFrameRects()) {
@@ -809,7 +805,7 @@ std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
         return rects;
     }
     const auto labelAreaHeight = static_cast<qreal>(height()) - kMajorTickHeight;
-    for (const auto& label : computeMajorTickLabels(*axis, labelAreaHeight)) {
+    for (const auto& label : computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_)) {
         rects.push_back(label.rect);
     }
     return rects;
@@ -842,6 +838,7 @@ void TimelineRuler::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
+    setFocus(Qt::MouseFocusReason);
     beginScrub(static_cast<int>(event->position().x()));
 }
 
@@ -916,8 +913,7 @@ TimelineWorkAreaRow::TimelineWorkAreaRow(CompositionSession& session, QWidget* p
     setFixedHeight(kit::px(kit::Size::Control));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    // The strip keeps its own fixed thin height and its own objectName/role; this row only centres
-    // it inside the header row's height and paints the playhead's head marker over the remainder.
+    // Keep the strip above the marker so neither covers the other's ink in the compact header.
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);

@@ -15,6 +15,22 @@
 
 namespace bloom::ui {
 
+QString formatTimelineFrameLabel(const std::uint64_t frame, const document::FrameRate rate,
+                                 const bool timecode) {
+    if (!timecode) {
+        return QString::number(frame);
+    }
+    const auto numerator = static_cast<std::uint64_t>(rate.numerator());
+    const auto denominator = static_cast<std::uint64_t>(rate.denominator());
+    const auto nominal = std::max<std::uint64_t>(1, (numerator + denominator / 2) / denominator);
+    const auto seconds = frame / nominal;
+    return QStringLiteral("%1:%2:%3:%4")
+        .arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+        .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+        .arg(frame % nominal, 2, 10, QLatin1Char('0'));
+}
+
 std::optional<TimelineAxis> TimelineAxis::create(const document::Composition& composition,
                                                  const int widthPixels) {
     const auto rate = composition.format().frameRate();
@@ -212,6 +228,15 @@ TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
     setFixedHeight(kit::px(kit::Size::Control));
     setFocusPolicy(Qt::StrongFocus);
     connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
+}
+
+bool TimelineNavigator::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride && drag_ != Drag::None &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        event->accept();
+        return true;
+    }
+    return QWidget::event(event);
 }
 
 QRectF TimelineNavigator::windowRect() const {

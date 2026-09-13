@@ -209,6 +209,12 @@ enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
     return session.selection().contextualLayer;
 }
 
+[[nodiscard]] bool isLayerSelected(const CompositionSession& session, document::LayerId layer) {
+    const auto boundary = session.boundaryNodeForLayer(layer);
+    return (boundary.has_value() && session.selectedNodes().contains(*boundary)) ||
+           selectedLayer(session) == layer;
+}
+
 QToolButton* makeToolButton(const QString& text, const QString& accessibleName, QWidget* parent) {
     auto* button = new QToolButton(parent);
     button->setText(text);
@@ -556,7 +562,6 @@ void TimelineLayerStack::relayoutRows() {
     while (static_cast<int>(rowPool_.size()) < needed) {
         rowPool_.push_back(new TimelineLayerRow(session_, this));
     }
-    const auto selected = selectedLayer(session_);
     for (std::size_t slot = 0; slot < rowPool_.size(); ++slot) {
         auto* row = rowPool_[slot];
         if (static_cast<int>(slot) >= needed) {
@@ -565,7 +570,7 @@ void TimelineLayerStack::relayoutRows() {
         }
         const int index = first + static_cast<int>(slot);
         const auto& entry = entries_[static_cast<std::size_t>(index)];
-        row->bind(entry, selected.has_value() && *selected == entry.layerId);
+        row->bind(entry, isLayerSelected(session_, entry.layerId));
         row->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
         row->show();
     }
@@ -690,6 +695,7 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
                                        QScrollBar& scrollBar, QWidget* parent)
     : QWidget(parent), session_(session), ruler_(ruler), scrollBar_(scrollBar) {
     setObjectName(QStringLiteral("timelineLaneRegion"));
+    setFocusPolicy(Qt::StrongFocus);
     setAccessibleName(tr("Layer lanes"));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
@@ -756,7 +762,6 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::Background));
 
-    const auto selected = selectedLayer(session_);
     const int firstRow = std::max(0, scrollOffset_ / kTimelineRowHeight);
     const int lastRow = std::min(static_cast<int>(entries_.size()) - 1,
                                  (scrollOffset_ + height()) / kTimelineRowHeight);
@@ -764,7 +769,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const auto& entry = entries_[static_cast<std::size_t>(row)];
         const int top = rowTop(row);
         painter.setRenderHint(QPainter::Antialiasing, false);
-        if (selected.has_value() && *selected == entry.layerId) {
+        if (isLayerSelected(session_, entry.layerId)) {
             paintSelectedRowFill(painter, top, width());
         }
         paintRowSeparator(painter, top, width());
@@ -796,6 +801,7 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     // Dragging a lane scrubs, through the ruler's own scrub path. Selection is the left column's
     // job: a lane carries no trim, no clip edge, and no per-clip gesture that a press could mean
     // instead, so making the whole lane region a second scrub surface is the honest reading of it.
+    setFocus(Qt::MouseFocusReason);
     ruler_.beginScrub(static_cast<int>(event->position().x()));
     event->accept();
 }
@@ -829,35 +835,6 @@ void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
 
 // ---------------------------------------------------------------------------------------------
 
-// The full name remains available to accessibility and the tooltip at every width.
-class TimelineCompositionName final : public QWidget {
-  public:
-    explicit TimelineCompositionName(QWidget* parent) : QWidget(parent) {
-        setObjectName("timelineCompositionName");
-        setMinimumHeight(kit::px(kit::Size::Control));
-        setFont(kit::font(kit::TypeRole::Ui));
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    }
-    void setName(const QString& name) {
-        name_ = name;
-        setToolTip(name);
-        setAccessibleName(name);
-        update();
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setFont(font());
-        painter.setPen(kit::color(kit::Color::Foreground));
-        painter.drawText(rect(), Qt::AlignVCenter | Qt::AlignLeft,
-                         fontMetrics().elidedText(name_, Qt::ElideRight, width()));
-    }
-
-  private:
-    QString name_;
-};
-
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
@@ -878,11 +855,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     auto* fallbackLayout = new QHBoxLayout(headerFallback_);
     fallbackLayout->setContentsMargins(0, 0, 0, 0);
     fallbackLayout->setSpacing(0);
-    headerMenus_ = new QWidget(headerFallback_);
-    auto* menusLayout = new QHBoxLayout(headerMenus_);
-    menusLayout->setContentsMargins(0, 0, 0, 0);
-    compositionName_ = new TimelineCompositionName(headerMenus_);
-    menusLayout->addWidget(compositionName_, 1);
+    createHeaderMenus();
     auto* fallbackLeft = new QWidget(headerFallback_);
     fallbackLeft->setFixedWidth(kLayerColumnWidthPx);
     auto* fallbackLeftLayout = new QHBoxLayout(fallbackLeft);
@@ -907,25 +880,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     auto* controlsLayout = new QHBoxLayout(controls);
     controlsLayout->setContentsMargins(kColumnPadding, 0, kColumnPadding, 0);
     controlsLayout->setSpacing(kit::px(kit::Spacing::XS));
-
-    addButton_ = makeToolButton(tr("Add"), tr("Add layer"), controls);
-    addButton_->setObjectName("addLayerButton");
-    addButton_->setIcon(kit::icon(kit::IconId::Add, kit::Size::IconMedium));
-    addButton_->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
-    addButton_->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
-    addButton_->setPopupMode(QToolButton::InstantPopup);
-    addButton_->setToolTip(tr("Add a structured layer"));
-    auto* addMenu = new QMenu(tr("Add Layer"), addButton_);
-    addMenu->setObjectName("addLayerMenu");
-    addMenu->setAccessibleName(tr("Add layer menu"));
-    auto* addSolidAction = addMenu->addAction(tr("Solid"));
-    addSolidAction->setObjectName("addSolidLayerAction");
-    addSolidAction->setToolTip(
-        tr("Add a solid using the next built-in reference-linear-sRGB proof color"));
-    auto* addTextAction = addMenu->addAction(tr("Text"));
-    addTextAction->setObjectName("addTextLayerAction");
-    addTextAction->setToolTip(tr("Add a text layer"));
-    addButton_->setMenu(addMenu);
 
     // Playback transport (issue #105, decision 4): a StepBack/Play-Pause/StepForward/Loop row.
     // playPauseButton_ MUST stay a QToolButton with its existing text()/isChecked() contract
@@ -967,19 +921,14 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     timeReadout_->setAccessibleName(tr("Current frame and time"));
     timeReadout_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     timeReadout_->setFont(kit::font(kit::TypeRole::Value));
-    undoButton_ = makeToolButton(tr("Undo"), tr("Undo last edit"), controls);
-    redoButton_ = makeToolButton(tr("Redo"), tr("Redo last edit"), controls);
     // Left-aligned, in the order the design mock reads them; the trailing stretch is what makes the
     // whole cluster sit against the left edge of the column rather than spreading across it.
-    controlsLayout->addWidget(addButton_);
     controlsLayout->addWidget(stepBackButton_);
     controlsLayout->addWidget(playPauseButton_);
     controlsLayout->addWidget(stepForwardButton_);
     controlsLayout->addWidget(ramPreviewButton_);
     controlsLayout->addWidget(loopIndicator_);
     controlsLayout->addWidget(timeReadout_);
-    controlsLayout->addWidget(undoButton_);
-    controlsLayout->addWidget(redoButton_);
     controlsLayout->addStretch(1);
 
     auto* rulerColumn = new QWidget(headerRow);
@@ -990,6 +939,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     workArea_->setFixedHeight(kit::px(kit::Spacing::M));
     ruler_ = new TimelineRuler(session_, previewController, rulerColumn);
     ruler_->setFixedHeight(kit::px(kit::Size::EditorHeader) - workArea_->height());
+    ruler_->setTimecodeLabels(timecodeFormat_);
     workArea_->setRuler(*ruler_);
     rulerLayout->addWidget(workArea_);
     rulerLayout->addWidget(ruler_);
@@ -1006,10 +956,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     navigatorGutter->setFixedWidth(kScrollGutterWidth);
     transportLayout->addWidget(navigatorGutter);
 
-    // ---- Column-header row: the icon/name/blending/parent headers, then the RULER ---------------
-    // This is what puts frame 0 at the lane region's left edge: the ruler is the RIGHT member of
-    // this row, so its own x origin IS the left column's width, and it never paints over that
-    // column.
+    // Column headings start the body. Their right cell continues the header playhead into the
+    // lanes, using the same viewport mapping and scrollbar gutter.
     auto* columnHeaderRow = new QWidget(this);
     columnHeaderRow->setObjectName("timelineColumnHeaderRow");
     columnHeaderRow->setFixedHeight(kit::px(kit::Size::Control));
@@ -1037,6 +985,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     bodyLayout->setSpacing(0);
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
+    stack_->addAction(deleteLayerAction_);
+    lanes_->addAction(deleteLayerAction_);
     auto* bodyGutter = new QWidget(body);
     bodyGutter->setObjectName("timelineBodyScrollGutter");
     bodyGutter->setFixedWidth(kScrollGutterWidth);
@@ -1075,14 +1025,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->addWidget(keyframeArea);
     layout->addWidget(transportRow);
 
-    // One definition of the "Add Solid"/"Add Text" default name and proof color, shared with the
-    // Nodes canvas context menu (task U4, issue #123) -- see composition_editors.hpp.
-    connect(addSolidAction, &QAction::triggered, this,
-            [this] { (void)addDefaultSolidLayer(session_); });
-    connect(addTextAction, &QAction::triggered, this,
-            [this] { (void)addDefaultTextLayer(session_); });
-    connect(undoButton_, &QToolButton::clicked, &session_, &CompositionSession::undo);
-    connect(redoButton_, &QToolButton::clicked, &session_, &CompositionSession::redo);
     connect(playPauseButton_, &QToolButton::clicked, playback_, &PlaybackController::toggle);
     connect(playback_, &PlaybackController::stateChanged, this,
             &TimelineEditor::updatePlaybackButton);
@@ -1194,6 +1136,13 @@ TimelineEditor::~TimelineEditor() { QObject::disconnect(focusConnection_); }
 QWidget* TimelineEditor::takeHeaderMenuWidget() { return std::exchange(headerMenus_, nullptr); }
 
 QWidget* TimelineEditor::takeHeaderRightWidget() {
+    if (headerRight_ != nullptr) {
+        for (auto* action : actions()) {
+            if (action->shortcutContext() == Qt::WidgetWithChildrenShortcut) {
+                headerRight_->addAction(action);
+            }
+        }
+    }
     headerFallback_->hide();
     return std::exchange(headerRight_, nullptr);
 }
@@ -1212,9 +1161,6 @@ void TimelineEditor::rebuild() {
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
         }
     }
-    static_cast<TimelineCompositionName*>(compositionName_)
-        ->setName(composition != nullptr ? QString::fromStdString(composition->name())
-                                         : tr("No composition"));
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));
     updateScrollRange();
@@ -1244,17 +1190,6 @@ void TimelineEditor::updateSelection() {
     } else if (top + kTimelineRowHeight > scrollBar_->value() + viewport) {
         scrollBar_->setValue(top + kTimelineRowHeight - viewport);
     }
-}
-
-void TimelineEditor::updateHistoryActions() {
-    undoButton_->setEnabled(session_.canUndo());
-    redoButton_->setEnabled(session_.canRedo());
-    const QString undoLabel = session_.undoLabel();
-    const QString redoLabel = session_.redoLabel();
-    undoButton_->setToolTip(undoLabel.isEmpty() ? tr("Nothing to undo")
-                                                : tr("Undo %1").arg(undoLabel));
-    redoButton_->setToolTip(redoLabel.isEmpty() ? tr("Nothing to redo")
-                                                : tr("Redo %1").arg(redoLabel));
 }
 
 void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
@@ -1353,7 +1288,16 @@ void TimelineEditor::updateTimeReadout() {
             frameText = QString::number(*nearest);
         }
     }
-    timeReadout_->setText(tr("Frame %1 · %2").arg(frameText, formatExactSeconds(time)));
+    if (timecodeFormat_ && context.has_value()) {
+        const auto nearest = nearestFrameIndexForTime(context->frameRate, context->duration, time);
+        if (nearest.has_value()) {
+            frameText = formatTimelineFrameLabel(*nearest, context->frameRate, true);
+        }
+    }
+    timeReadout_->setText((timecodeFormat_ ? tr("TC %1 · %2") : tr("Frame %1 · %2"))
+                              .arg(frameText, formatExactSeconds(time)));
+    timeReadout_->setToolTip(timecodeFormat_ ? tr("Non-drop timecode · exact composition time")
+                                             : tr("Frame index · exact composition time"));
 }
 
 } // namespace bloom::ui
