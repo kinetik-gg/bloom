@@ -1,10 +1,14 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QEvent>
+#include <QFile>
+#include <QImage>
 #include <QListView>
 #include <QMouseEvent>
 #include <QSignalSpy>
@@ -210,6 +214,76 @@ void testTheStateMachineAndDisabledDropdown(Expectations& expectations) {
     dropdown.setEnabled(true);
 }
 
+// task U8, issue #131, fix 3: the design sheet's dropdown chrome -- bordered closed field with the
+// vendored double up/down chevron, bordered popup at Radius::Small.
+void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    QCoreApplication::processEvents();
+
+    expectations.expect(
+        QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Regular)) &&
+            QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Fill)),
+        "the vendored double-chevron asset backs IconId::CaretUpDown in both weights");
+
+    // Drive the widget to REST before sampling: on some offscreen platforms (CI's Qt 6.8.3) the
+    // freshly shown window hands activation focus to its only focusable child on a later
+    // event-loop pass, and a cursor parked at the origin can leave it hovered -- both repaint the
+    // border in a state colour and would make the rest-state pins fail for environmental reasons.
+    QCoreApplication::processEvents();
+    dropdown.clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(&dropdown, &leave);
+    QCoreApplication::processEvents();
+
+    const QPixmap rendered = dropdown.grab();
+    expectations.expect(!rendered.isNull(), "the bordered closed field renders offscreen");
+
+    // task U8, formal amendment 1, A2: the closed field's fill is ControlSurface (not Field), and
+    // it still borders with Border (#222222) as A2 asked to verify.
+    const QImage image = rendered.toImage();
+    const QColor controlSurface = kit::color(kit::Color::ControlSurface);
+    const QColor border = kit::color(kit::Color::Border);
+    const auto near = [](const QColor& left, const QColor& right) {
+        return std::abs(left.red() - right.red()) <= 2 &&
+               std::abs(left.green() - right.green()) <= 2 &&
+               std::abs(left.blue() - right.blue()) <= 2;
+    };
+    bool sawFill = false;
+    bool sawBorder = false;
+    for (int y = 0; y < image.height() && (!sawFill || !sawBorder); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (near(pixel, controlSurface)) {
+                sawFill = true;
+            }
+            if (near(pixel, border)) {
+                sawBorder = true;
+            }
+        }
+    }
+    expectations.expect(sawFill, "the closed field really paints ControlSurface");
+    expectations.expect(sawBorder, "the closed field really paints the Border hairline");
+}
+
+void testThePopupFrameIsBorderedAtRadiusSmall(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Linear"));
+    const QString sheet = dropdown.popup()->styleSheet();
+    expectations.expect(sheet.contains(QStringLiteral("border: %1px solid %2;")
+                                           .arg(static_cast<int>(kit::kHairlineWidth))
+                                           .arg(kit::hex(kit::Color::Border))),
+                        "the popup frame carries the Border hairline");
+    expectations.expect(
+        sheet.contains(
+            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Small, 0))),
+        "the popup frame corners are Radius::Small, matching the closed field");
+    expectations.expect(sheet.contains(kit::hex(kit::Color::SurfaceRaised)),
+                        "the popup rests on SurfaceRaised");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -223,5 +297,7 @@ int main(int argc, char** argv) {
     testADisabledItemIsVisibleButNotSelectable(expectations);
     testAnOversizedValueElidesInTheClosedField(expectations);
     testTheStateMachineAndDisabledDropdown(expectations);
+    testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(expectations);
+    testThePopupFrameIsBorderedAtRadiusSmall(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

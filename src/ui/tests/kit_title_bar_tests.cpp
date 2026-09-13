@@ -66,6 +66,23 @@ void testTitleBarShapeAndIdentity(Expectations& expectations) {
                         "each button carries its semantic icon");
 }
 
+// task U8, issue #131, fix 7: title bar min/max/close are icon-only KButtons, audited alongside
+// the header maximize button and the timeline transport -- the app mock shows square-ish window
+// buttons, so these take the same controlExtent square as every other icon-only control.
+void testWindowControlButtonsAreSquare(Expectations& expectations) {
+    kit::TitleBar titleBar;
+    for (const char* objectName :
+         {"titleBarMinimizeButton", "titleBarMaximizeButton", "titleBarCloseButton"}) {
+        auto* button = titleBar.findChild<kit::KButton*>(QString::fromLatin1(objectName));
+        expectations.expect(button != nullptr, std::string{objectName} + " is reachable by name");
+        if (button == nullptr) {
+            continue;
+        }
+        expectations.expect(button->sizeHint().width() == button->sizeHint().height(),
+                            std::string{objectName} + " is square");
+    }
+}
+
 void testTitleFollowsTheProjectName(Expectations& expectations) {
     kit::TitleBar titleBar;
     auto* label = titleBar.findChild<QLabel*>(QStringLiteral("titleBarTitleLabel"));
@@ -158,6 +175,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testTitleBarShapeAndIdentity(expectations);
+    testWindowControlButtonsAreSquare(expectations);
     testTitleFollowsTheProjectName(expectations);
     testButtonsEmitTheirIntents(expectations);
     testDoubleClickOnTheEmptyAreaTogglesMaximize(expectations);

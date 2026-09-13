@@ -35,6 +35,7 @@ enum class IconId : std::uint8_t {
     CaretUp,
     CaretRight,
     CaretLeft,
+    CaretUpDown,
     // Transport.
     Play,
     Pause,
@@ -72,6 +73,12 @@ enum class IconId : std::uint8_t {
     Audio,
     Composition,
     Text,
+    // Panel identity (task U8, issue 131, formal amendment 1, A5): the panel-switcher glyph for
+    // each editor kind. Media's own glyph is Folder above, reused rather than duplicated.
+    Stack,
+    Clock,
+    SlidersHorizontal,
+    Graph,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

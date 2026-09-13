@@ -19,7 +19,7 @@ class KDropdownPopup;
 // The Kinetik dropdown: a closed field carrying the current value and a caret pair, and a popup on
 // a raised surface with full-width accent hover bars.
 //
-// Not a styled QComboBox. The popup has to be a raised surface with Popup elevation, Radius::Medium
+// Not a styled QComboBox. The popup has to be a raised surface with Popup elevation, Radius::Small
 // corners, and hover bars that span the full row -- a QComboBox's popup is a platform-dependent
 // view whose frame, shadow, and hover geometry cannot all be reached from a stylesheet on every
 // platform Bloom ships to.

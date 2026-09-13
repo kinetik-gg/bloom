@@ -3,11 +3,13 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 
+#include <QAction>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QKeySequence>
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
@@ -222,6 +224,23 @@ WorkspaceHost::WorkspaceHost(const EditorRegistry& editorRegistry, QWidget* pare
     rootLayout_->addWidget(rootWidget_);
     setActiveArea(qobject_cast<EditorArea*>(rootWidget_));
     updateAreaControls();
+
+    // task U8, issue #131, fix 6: a window-scope backtick toggles fullscreen for the ACTIVE panel,
+    // wired through the exact same toggleMaximizeActiveArea() routing the header button and the
+    // Window/View menu actions already use. Same WindowShortcut + text-entry-defers idiom as
+    // main_window.cpp's own window-level shortcuts and composition_editors.cpp's Space-key
+    // transport shortcut (QAction + setShortcutContext(Qt::WindowShortcut) + addAction(this)):
+    // Qt::WindowShortcut fires whenever this widget's top-level window is active regardless of
+    // which descendant holds focus, EXCEPT that a focused text-entry widget accepts the
+    // ShortcutOverride event for an ordinary key like backtick first, so typing a literal backtick
+    // in a text field wins over this shortcut -- Qt's own mechanism, no bespoke focus check here.
+    auto* toggleFullscreenAction = new QAction(this);
+    toggleFullscreenAction->setObjectName(QStringLiteral("toggleActivePanelFullscreenAction"));
+    toggleFullscreenAction->setShortcut(QKeySequence(Qt::Key_QuoteLeft));
+    toggleFullscreenAction->setShortcutContext(Qt::WindowShortcut);
+    addAction(toggleFullscreenAction);
+    connect(toggleFullscreenAction, &QAction::triggered, this,
+            &WorkspaceHost::toggleMaximizeActiveArea);
 }
 
 EditorArea* WorkspaceHost::activeArea() const noexcept { return activeArea_; }

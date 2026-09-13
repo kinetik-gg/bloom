@@ -242,9 +242,10 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const auto ringMargin = kFocusRingWidth;
     const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
 
-    // A closed field rests on Field, the top rung of the surface ladder, so its hover step is the
-    // border alone -- exactly what the ladder's clamp says it should be.
-    fillRoundedSurface(painter, bounds, color(surfaceForState(Color::Field, state)),
+    // A closed field rests on ControlSurface (task U8, issue 131, formal amendment 1, A2 --
+    // previously Field). ControlSurface is not a surfaceStep() rung, so its hover step is the
+    // border alone, exactly like Field's own behavior at the top of the ladder before it.
+    fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
                        color(borderForState(state)), Radius::Small);
     if (hasFocus() && state != State::Disabled) {
         drawFocusRing(painter, bounds, Radius::Small);
@@ -255,16 +256,14 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const QRectF caretColumn(bounds.right() - px(Spacing::M) - caretWidth, bounds.top(), caretWidth,
                              bounds.height());
 
-    // The caret pair: an up and a down chevron stacked, which reads as "this opens" rather than
-    // "this scrolls one way".
+    // The caret pair (task U8, issue #131, fix 3): Phosphor's own caret-up-down glyph, a single
+    // vendored double chevron, rather than two separately stacked CaretUp/CaretDown icons -- it
+    // reads as "this opens" rather than "this scrolls one way".
     const auto caretBox = static_cast<qreal>(px(Size::IconSmall));
-    const qreal caretGap = px(Spacing::XXS);
-    const qreal caretTop = caretColumn.center().y() - caretBox + caretGap / 2.0;
-    painter.drawPixmap(QRectF(caretColumn.left(), caretTop, caretBox, caretBox).toRect(),
-                       iconPixmap(IconId::CaretUp, Size::IconSmall, ink, devicePixelRatioF()));
-    painter.drawPixmap(
-        QRectF(caretColumn.left(), caretTop + caretBox - caretGap, caretBox, caretBox).toRect(),
-        iconPixmap(IconId::CaretDown, Size::IconSmall, ink, devicePixelRatioF()));
+    const QRectF caretRect(caretColumn.left(), caretColumn.center().y() - caretBox / 2.0, caretBox,
+                           caretBox);
+    painter.drawPixmap(caretRect.toRect(),
+                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF()));
 
     painter.setPen(ink);
     painter.setFont(font());

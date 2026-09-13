@@ -30,11 +30,19 @@ enum class Color : std::uint8_t {
     Surface,
     SurfaceRaised,
     Field,
+    // task U8 (issue 131), formal amendment 1, A2: the recessed fill for header-variant icon
+    // buttons and every dropdown closed field. Not a surfaceStep() rung -- darker than
+    // Background itself by design, so it never joins the surface ladder.
+    ControlSurface,
     Foreground,
     Muted,
     Faint,
     Border,
     BorderHover,
+    // The active-panel indicator (task U8, issue #131, fix 1): a subtle neutral border a focused
+    // EditorArea takes instead of Accent. Panel chrome never reads as accent-colored; this is the
+    // one role that marks "this is the active panel."
+    BorderActive,
     Accent,
     AccentHover,
     AccentPressed,
@@ -73,6 +81,9 @@ enum class Radius : int {
     Large = 12,
     XLarge = 16,
     Full = -1,
+    // task U8 (issue 131), formal amendment 1, A3: the panel body's own radius, exactly 4 --
+    // deliberately its own named step, not a reuse of Small (3) or any other named radius.
+    Panel = 4,
 };
 
 [[nodiscard]] int radiusPx(Radius token, int extentPx);
@@ -87,6 +98,9 @@ enum class Spacing : int {
     XL = 24,
     XXL = 32,
     Gutter = 6,
+    // task U8 (issue 131), formal amendment 1, A4: the panel header's own vertical padding.
+    // Deliberately off the base-4 scale -- not rounded to XS/S/M or any nearby step.
+    PanelHeader = 10,
 };
 
 // Control and chrome extents.
@@ -99,6 +113,12 @@ enum class Size : int {
     IconLarge = 20,
     TitleBar = 34,
     PanelHeader = 30,
+    // task U8 (issue 131), formal amendment 2, A10: the EditorArea header row's own height (48).
+    // A distinct token from PanelHeader above -- PanelHeader is also node_editor.cpp's card
+    // header height and row-pitch multiplier (kCardHeaderHeight/kNodeRowPitch), completely
+    // unrelated to this panel's own header row, and growing it would have silently resized node
+    // cards on the canvas, a collateral change no design crop covered.
+    EditorHeader = 48,
     TimelineRow = 34,
     ScrollBar = 8,
     ScrollBarHover = 12,

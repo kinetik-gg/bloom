@@ -399,6 +399,30 @@ void testLoopIndicatorIsNonInteractiveAndHonest(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons (Add, the transport's Step
+// Back/Play-Pause/Step Forward) are audited alongside the header maximize button and title bar
+// buttons -- all size to controlExtent square.
+void testTransportAndAddButtonsAreSquare(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Transport Squareness Test"));
+
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    for (const char* objectName : {"addLayerButton", "timelineStepBackButton", "playPauseButton",
+                                   "timelineStepForwardButton"}) {
+        auto* button = editor.findChild<QToolButton*>(QString::fromLatin1(objectName));
+        expectations.expect(button != nullptr, std::string{objectName} + " is reachable by name");
+        if (button == nullptr) {
+            continue;
+        }
+        expectations.expect(button->width() == button->height(),
+                            std::string{objectName} + " is square");
+        expectations.expect(button->width() == ui::kit::px(ui::kit::Size::Control),
+                            std::string{objectName} + " is exactly Size::Control square");
+    }
+
+    finishFixture(fixture);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -411,5 +435,6 @@ int main(int argc, char** argv) {
     testSelectedRowPaintsAccentInsetEdgeNotAFill(expectations);
     testPlayPauseButtonIconSwapsWithState(expectations);
     testLoopIndicatorIsNonInteractiveAndHonest(expectations);
+    testTransportAndAddButtonsAreSquare(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

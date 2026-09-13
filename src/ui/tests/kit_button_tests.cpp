@@ -244,6 +244,31 @@ void testAnIconButtonRendersBothGlyphAndLabel(Expectations& expectations) {
     expectations.expect(sawAccent, "a Primary button really paints its accent fill");
 }
 
+// task U8, issue #131, fix 7: an icon-only button (no text) is a controlExtent square exactly, at
+// every ControlSize -- text buttons and icon+text buttons are unaffected.
+void testIconOnlyButtonsAreSquareAcrossEverySize(Expectations& expectations) {
+    kit::KButton button(kit::IconId::Close, QString{});
+    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
+
+    for (const auto size : {kit::KButton::ControlSize::Compact, kit::KButton::ControlSize::Default,
+                            kit::KButton::ControlSize::Roomy}) {
+        button.setControlSize(size);
+        const QSize hint = button.sizeHint();
+        expectations.expect(hint.width() == hint.height(),
+                            "an icon-only button's size hint is square");
+    }
+
+    button.setControlSize(kit::KButton::ControlSize::Default);
+    expectations.expect(button.sizeHint().width() == kit::px(kit::Size::Control) + ringMargin,
+                        "the square extent is exactly controlExtent plus the focus-ring margin, "
+                        "with no text-button side padding");
+
+    // A labelled button (icon AND text, or text alone) keeps its own, generally non-square, hint.
+    kit::KButton labelled(kit::IconId::Play, QStringLiteral("Play"));
+    expectations.expect(labelled.sizeHint().width() != labelled.sizeHint().height(),
+                        "a labelled button is unaffected by the icon-only square rule");
+}
+
 void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
     // The title bar / panel-header close button convention (task U2, issue #118): flush with its
     // ghost siblings at rest, Error fill only once the pointer commits.
@@ -291,6 +316,7 @@ int main(int argc, char** argv) {
     testDisabledInkIsFortyPercentInEveryVariant(expectations);
     testControlSizesAndTheOutsideFocusRing(expectations);
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
+    testIconOnlyButtonsAreSquareAcrossEverySize(expectations);
     testGhostDangerOnHoverStaysGhostAtRest(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

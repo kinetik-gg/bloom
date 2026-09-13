@@ -31,6 +31,9 @@ add_executable(bloom_kit_dropdown_test
 add_executable(bloom_kit_fonts_test
     kit_fonts_tests.cpp
 )
+add_executable(bloom_kit_panel_switcher_test
+    kit_panel_switcher_tests.cpp
+)
 add_executable(bloom_kit_icons_test
     kit_icons_tests.cpp
 )
@@ -137,7 +140,7 @@ add_executable(bloom_node_editor_test
 )
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
-target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui)
+target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_color_test PRIVATE bloom_ui_kit)
@@ -147,6 +150,7 @@ target_link_libraries(bloom_kit_color_sampler_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_color_swatches_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
+target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_title_bar_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_mnemonic_style_test PRIVATE bloom_ui_kit)
@@ -185,6 +189,7 @@ bloom_enable_warnings(bloom_kit_color_sampler_test)
 bloom_enable_warnings(bloom_kit_color_swatches_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
+bloom_enable_warnings(bloom_kit_panel_switcher_test)
 bloom_enable_warnings(bloom_kit_icons_test)
 bloom_enable_warnings(bloom_kit_title_bar_test)
 bloom_enable_warnings(bloom_kit_mnemonic_style_test)
@@ -298,6 +303,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_fonts
     COMMAND bloom_kit_fonts_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_panel_switcher
+    COMMAND bloom_kit_panel_switcher_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

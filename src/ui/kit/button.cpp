@@ -206,6 +206,17 @@ Size KButton::iconBox() const {
 }
 
 QSize KButton::sizeHint() const {
+    // The focus ring is drawn outside the control rectangle, so the widget reserves room for it on
+    // every side and focusing never shifts a layout.
+    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
+
+    // task U8, issue #131, fix 7: a button with an icon and no text sizes to controlExtent x
+    // controlExtent exactly -- the Spacing::M side padding below is a TEXT button's own margin
+    // recipe and does not apply once there is no label to pad.
+    if (icon_.has_value() && text().isEmpty()) {
+        return {controlExtent() + ringMargin, controlExtent() + ringMargin};
+    }
+
     const QFontMetrics metrics(font());
     int width = px(Spacing::M) * 2;
     if (icon_.has_value()) {
@@ -217,9 +228,6 @@ QSize KButton::sizeHint() const {
     if (!text().isEmpty()) {
         width += metrics.horizontalAdvance(text());
     }
-    // The focus ring is drawn outside the control rectangle, so the widget reserves room for it on
-    // every side and focusing never shifts a layout.
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     return {std::max(width, controlExtent()) + ringMargin, controlExtent() + ringMargin};
 }
 
@@ -281,7 +289,13 @@ void KButton::paintEvent(QPaintEvent* event) {
         // state rather than a glyph and a word fading at different rates.
         const QPixmap pixmap = iconPixmap(*icon_, iconBox(), ink, devicePixelRatioF());
         const auto box = static_cast<qreal>(px(iconBox()));
-        const QRectF iconRect(content.left(), content.center().y() - box / 2.0, box, box);
+        // task U8, issue #131, fix 7: an icon-only button (no text) is a controlExtent square with
+        // no Spacing::M side padding at all (sizeHint() above matches), so its icon centers in the
+        // WHOLE bounds rather than starting from that text button's left inset.
+        const QRectF iconRect =
+            text().isEmpty()
+                ? QRectF(bounds.center().x() - box / 2.0, bounds.center().y() - box / 2.0, box, box)
+                : QRectF(content.left(), content.center().y() - box / 2.0, box, box);
         painter.drawPixmap(iconRect.toRect(), pixmap);
         content.setLeft(iconRect.right() + (text().isEmpty() ? 0.0 : px(Spacing::S)));
     }

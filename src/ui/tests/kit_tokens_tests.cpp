@@ -41,14 +41,21 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     };
 
     expectHex(kit::Color::Background, "#111111");
-    expectHex(kit::Color::Surface, "#161616");
+    // task U8, issue #131, formal amendment 1, A2: darkened from #161616.
+    expectHex(kit::Color::Surface, "#141414");
     expectHex(kit::Color::SurfaceRaised, "#1b1b1b");
     expectHex(kit::Color::Field, "#202020");
+    // task U8, issue #131, formal amendment 1, A2: header-variant icon buttons and every dropdown
+    // closed field -- darker than Background itself, by design.
+    expectHex(kit::Color::ControlSurface, "#0e0e0e");
     expectHex(kit::Color::Foreground, "#ffffff");
     expectHex(kit::Color::Muted, "#999999");
     expectHex(kit::Color::Faint, "#666666");
     expectHex(kit::Color::Border, "#222222");
     expectHex(kit::Color::BorderHover, "#454545");
+    // task U8, issue #131, fix 1 / formal amendment 1, A1: the active-panel indicator is a
+    // neutral border, never Accent. #444444 is the final value, superseding fix 1's #333333.
+    expectHex(kit::Color::BorderActive, "#444444");
     expectHex(kit::Color::Accent, "#0c8ce9");
     expectHex(kit::Color::AccentHover, "#3aa5f0");
     expectHex(kit::Color::AccentPressed, "#0a73c2");
@@ -84,6 +91,9 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::radiusPx(kit::Radius::XLarge, 26) == 16, "Radius::XLarge is 16");
     expectations.expect(kit::radiusPx(kit::Radius::Full, 26) == 13,
                         "Radius::Full is a pill: half the control extent");
+    // task U8, issue #131, formal amendment 1, A3: the panel body's own radius, its own named
+    // step -- Radius::Small stays 3 everywhere else.
+    expectations.expect(kit::radiusPx(kit::Radius::Panel, 26) == 4, "Radius::Panel is 4");
 
     expectations.expect(kit::px(kit::Spacing::XXS) == 2, "Spacing::XXS is 2");
     expectations.expect(kit::px(kit::Spacing::XS) == 4, "Spacing::XS is 4");
@@ -93,6 +103,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Spacing::XL) == 24, "Spacing::XL is 24");
     expectations.expect(kit::px(kit::Spacing::XXL) == 32, "Spacing::XXL is 32");
     expectations.expect(kit::px(kit::Spacing::Gutter) == 6, "Spacing::Gutter is 6");
+    // task U8, issue #131, formal amendment 1, A4: deliberately off the base-4 scale, not rounded.
+    expectations.expect(kit::px(kit::Spacing::PanelHeader) == 10, "Spacing::PanelHeader is 10");
 
     expectations.expect(kit::px(kit::Size::ControlCompact) == 22, "ControlCompact is 22");
     expectations.expect(kit::px(kit::Size::Control) == 26, "Control is 26");
@@ -102,6 +114,10 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Size::IconLarge) == 20, "IconLarge is 20");
     expectations.expect(kit::px(kit::Size::TitleBar) == 34, "TitleBar is 34");
     expectations.expect(kit::px(kit::Size::PanelHeader) == 30, "PanelHeader is 30");
+    // task U8, issue #131, formal amendment 2, A10: the EditorArea header's OWN height (48) is a
+    // distinct token from PanelHeader above, which stays 30 -- node_editor.cpp's card header
+    // height and row pitch still resolve through PanelHeader unchanged.
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 48, "EditorHeader is 48");
     expectations.expect(kit::px(kit::Size::TimelineRow) == 34, "TimelineRow is 34");
     expectations.expect(kit::px(kit::Size::ScrollBar) == 8, "ScrollBar is 8");
     expectations.expect(kit::px(kit::Size::ScrollBarHover) == 12, "ScrollBar hover width is 12");

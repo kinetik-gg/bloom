@@ -208,6 +208,10 @@ QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip
     button->setToolTip(toolTip);
     button->setAccessibleName(accessibleName);
     button->setAutoRaise(true);
+    // task U8, issue #131, fix 7: an icon-only QToolButton (this idiom carries no visible text --
+    // see the comment above this function) sizes to controlExtent x controlExtent exactly, the
+    // same square target kit::KButton's own icon-only sizeHint() now pins.
+    button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     return button;
 }
 
@@ -650,6 +654,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // Data* token honestly names a generic structured layer the way Add names the action).
     addButton_->setIcon(kit::icon(kit::IconId::Add, kit::Size::IconMedium));
     addButton_->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
+    // task U8, issue #131, fix 7: icon-only (its "Add" text() is carried only for
+    // accessibility/tests -- the default IconOnly toolButtonStyle never paints it) so it sizes to
+    // controlExtent x controlExtent exactly, like every other icon-only button in the audit.
+    addButton_->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     addButton_->setPopupMode(QToolButton::InstantPopup);
     addButton_->setToolTip(tr("Add a structured layer"));
     auto* addMenu = new QMenu(tr("Add Layer"), addButton_);
@@ -676,6 +684,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     playPauseButton_ = makeToolButton(tr("Play"), tr("Toggle playback"), controls);
     playPauseButton_->setObjectName("playPauseButton");
     playPauseButton_->setCheckable(true);
+    // task U8, issue #131, fix 7: icon-only in the same sense addButton_ is above (its text()/
+    // isChecked() stay a pinned programmatic contract; the default IconOnly toolButtonStyle never
+    // paints the label), so it takes the same controlExtent square as its transport siblings.
+    playPauseButton_->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     stepForwardButton_ = makeIconToolButton(
         kit::IconId::StepForward, tr("Step forward one frame (Right)"),
         tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), controls);

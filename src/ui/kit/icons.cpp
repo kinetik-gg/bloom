@@ -37,6 +37,7 @@ const auto& iconAssets() {
         {IconId::CaretUp, QLatin1StringView("caret-up")},
         {IconId::CaretRight, QLatin1StringView("caret-right")},
         {IconId::CaretLeft, QLatin1StringView("caret-left")},
+        {IconId::CaretUpDown, QLatin1StringView("caret-up-down")},
         {IconId::Play, QLatin1StringView("play")},
         {IconId::Pause, QLatin1StringView("pause")},
         {IconId::StepBack, QLatin1StringView("skip-back")},
@@ -69,6 +70,10 @@ const auto& iconAssets() {
         {IconId::Audio, QLatin1StringView("music-notes")},
         {IconId::Composition, QLatin1StringView("cube")},
         {IconId::Text, QLatin1StringView("text-t")},
+        {IconId::Stack, QLatin1StringView("stack")},
+        {IconId::Clock, QLatin1StringView("clock")},
+        {IconId::SlidersHorizontal, QLatin1StringView("sliders-horizontal")},
+        {IconId::Graph, QLatin1StringView("graph")},
     });
     return entries;
 }

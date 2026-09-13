@@ -39,14 +39,16 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | Role | Value | Use |
 | --- | --- | --- |
 | `Background` | `#111111` | The window, the workspace, and the visible gutters between panels |
-| `Surface` | `#161616` | Panel chrome: headers, status bar, toolbars |
+| `Surface` | `#141414` | Panel chrome: headers, status bar, toolbars |
 | `SurfaceRaised` | `#1B1B1B` | Menus, popups, dialogs, and raised controls |
-| `Field` | `#202020` | Input cells: dropdowns, value fields, slider tracks |
+| `Field` | `#202020` | Input cells: value fields, slider tracks |
+| `ControlSurface` | `#0E0E0E` | Header-variant icon buttons and every dropdown closed field -- darker than `Background` itself, by design |
 | `Foreground` | `#FFFFFF` | Primary text and active icons |
 | `Muted` | `#999999` | Secondary text, resting icons, units |
 | `Faint` | `#666666` | Placeholder text, tertiary labels, ruler ticks and separators |
 | `Border` | `#222222` | Resting hairlines |
 | `BorderHover` | `#454545` | Hovered hairlines, scrollbar thumbs |
+| `BorderActive` | `#444444` | The active-panel border only -- a subtle neutral, never `Accent` |
 | `Accent` | `#0C8CE9` | Selection, focus, active state, the primary action |
 | `AccentHover` | `#3AA5F0` | An accent surface under the pointer |
 | `AccentPressed` | `#0A73C2` | An accent surface being pressed |
@@ -73,9 +75,10 @@ state recipes below step along exactly this ladder and nothing else.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `Small` | `3` | Controls, chips, item rows |
-| `Medium` | `6` | Popups, menus, cards |
-| `Large` | `12` | Dialogs and panels |
+| `Small` | `3` | Controls, chips, item rows, and dropdown-list popups |
+| `Medium` | `6` | Menus and cards |
+| `Panel` | `4` | Panel bodies and their rounded-corner mask -- its own step, not a reuse of `Small` |
+| `Large` | `12` | Dialogs |
 | `XLarge` | `16` | Full-screen surfaces |
 | `Full` | pill | Resolved as half the shape's own extent: switches, scrollbar thumbs, slider handles |
 
@@ -99,9 +102,11 @@ state recipes below step along exactly this ladder and nothing else.
 | `XL` | `24` |
 | `XXL` | `32` |
 | `Gutter` | `6` |
+| `PanelHeader` | `10` |
 
 `Gutter` is the visible `Background` gap between panels. Panels float on the window; they do not
-share edges.
+share edges. `PanelHeader` is the panel header's own vertical padding -- deliberately off the
+base-4 scale, not rounded to a nearby step.
 
 ### Size
 
@@ -114,7 +119,8 @@ share edges.
 | `IconMedium` | `16` | Default |
 | `IconLarge` | `20` | Prominent actions |
 | `TitleBar` | `34` | The application title bar |
-| `PanelHeader` | `30` | An editor panel's header row |
+| `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
+| `EditorHeader` | `48` | An editor panel's header row |
 | `TimelineRow` | `34` | One timeline row |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 

@@ -24,7 +24,7 @@ namespace {
 QFrame#kDropdownSurface {
     background: {color.SurfaceRaised};
     border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Medium}px;
+    border-radius: {radius.Small}px;
 }
 QListView#kDropdownList {
     background: transparent;
