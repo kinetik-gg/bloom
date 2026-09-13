@@ -210,6 +210,7 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // (every existing standalone test) it stays a direct child of this ViewerEditor, positioned by
     // layoutStatusBar(), exactly as before FORMAL AMENDMENT 1.
     kit::KDropdown* zoomDropdown_ = nullptr;
+    kit::KDropdown* resolutionDropdown_ = nullptr;
     // FORMAL AMENDMENT 1: null until takeFooterWidget() is called; from that point on, the
     // surviving reference this ViewerEditor keeps so its own session/preview-state signal
     // handlers can also repaint the (now externally-owned) footer. Its concrete type is private to

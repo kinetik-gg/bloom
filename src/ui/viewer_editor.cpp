@@ -25,6 +25,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QWheelEvent>
 
@@ -48,6 +49,20 @@ namespace {
 // see refreshZoomDropdown()'s own comment on why that item is renamed in place rather than
 // removed and re-added: kit::KDropdown has no item-removal API.
 constexpr std::array<int, 5> kZoomPresets = {25, 50, 100, 200, 400};
+constexpr std::array<const char*, 4> kResolutionNames = {"Auto", "Full", "Half", "Quarter"};
+constexpr auto kResolutionSetting = "viewer/resolution";
+
+void layoutFooterDropdowns(QWidget* zoom, QWidget* resolution, const QRectF& bar) {
+    int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
+    for (auto* dropdown : {zoom, resolution}) {
+        const auto hint = dropdown->sizeHint();
+        const int y =
+            static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
+        dropdown->setGeometry(x, y, hint.width(), hint.height());
+        x += hint.width() + kit::px(kit::Spacing::S);
+    }
+}
+
 constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
 
 const document::LayerOutputBoundary* layerBoundary(const document::Composition& composition,
@@ -403,32 +418,30 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 class ViewerStatusBarFooter final : public QWidget {
   public:
     ViewerStatusBarFooter(CompositionSession& session,
-                          CompositionPreviewController& previewController, QWidget* zoomDropdown)
-        : session_(session), previewController_(previewController), zoomDropdown_(zoomDropdown) {
+                          CompositionPreviewController& previewController, QWidget* zoomDropdown,
+                          QWidget* resolutionDropdown)
+        : session_(session), previewController_(previewController), zoomDropdown_(zoomDropdown),
+          resolutionDropdown_(resolutionDropdown) {
         setFixedHeight(kit::px(kit::Size::Control));
     }
 
     void layoutDropdown() {
-        if (zoomDropdown_ == nullptr) {
-            return;
-        }
-        const QSize hint = zoomDropdown_->sizeHint();
-        const int x = kit::px(kit::Spacing::S);
-        const int y = (height() - hint.height() + 1) / 2;
-        zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
+        layoutFooterDropdowns(zoomDropdown_, resolutionDropdown_, QRectF(rect()));
     }
 
   protected:
     void resizeEvent(QResizeEvent*) override { layoutDropdown(); }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        paintStatusBarSurface(painter, QRectF(rect()), zoomDropdown_, session_, previewController_);
+        paintStatusBarSurface(painter, QRectF(rect()), resolutionDropdown_, session_,
+                              previewController_);
     }
 
   private:
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     QWidget* zoomDropdown_;
+    QWidget* resolutionDropdown_;
 };
 
 } // namespace
@@ -546,6 +559,40 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         }
         setZoomPercent(zoomDropdown_->itemData(index).toInt());
     });
+    resolutionDropdown_ = new kit::KDropdown(this);
+    resolutionDropdown_->setObjectName("viewerResolutionDropdown");
+    resolutionDropdown_->setAccessibleName(tr("Resolution"));
+    resolutionDropdown_->setToolTip(tr("Resolution"));
+    resolutionDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    for (const auto* name : kResolutionNames) {
+        resolutionDropdown_->addItem(tr(name));
+    }
+    const auto saved = QSettings().value(kResolutionSetting, QStringLiteral("Auto")).toString();
+    int savedIndex = 0;
+    for (std::size_t i = 0; i < kResolutionNames.size(); ++i) {
+        if (saved == QLatin1StringView(kResolutionNames[i])) {
+            savedIndex = static_cast<int>(i);
+        }
+    }
+    resolutionDropdown_->setCurrentIndex(savedIndex);
+    previewController_.setResolutionPolicy(
+        static_cast<runtime::PreviewResolutionPolicy>(savedIndex));
+    connect(resolutionDropdown_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) {
+                if (index < 0 || index >= static_cast<int>(kResolutionNames.size())) {
+                    return;
+                }
+                QSettings().setValue(
+                    kResolutionSetting,
+                    QString::fromLatin1(kResolutionNames[static_cast<std::size_t>(index)]));
+                previewController_.setResolutionPolicy(
+                    static_cast<runtime::PreviewResolutionPolicy>(index));
+            });
+    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this, [this] {
+        const QSignalBlocker blocker(resolutionDropdown_);
+        resolutionDropdown_->setCurrentIndex(
+            static_cast<int>(previewController_.settings().resolutionPolicy));
+    });
     layoutStatusBar();
 
     // Every one of these already repainted the status bar for free when it was part of this
@@ -622,7 +669,8 @@ QWidget* ViewerEditor::takeFooterWidget() {
     }
     statusBarFooterTaken_ = true;
 
-    auto* footer = new ViewerStatusBarFooter(session_, previewController_, zoomDropdown_);
+    auto* footer =
+        new ViewerStatusBarFooter(session_, previewController_, zoomDropdown_, resolutionDropdown_);
     if (zoomDropdown_ != nullptr) {
         // setParent() hides the widget by Qt's own convention when reparenting across top-level
         // boundaries; the caller (EditorArea) will show/lay out `footer` itself once it takes
@@ -630,6 +678,8 @@ QWidget* ViewerEditor::takeFooterWidget() {
         zoomDropdown_->setParent(footer);
         zoomDropdown_->show();
     }
+    resolutionDropdown_->setParent(footer);
+    resolutionDropdown_->show();
     footer->layoutDropdown();
     statusBarFooter_ = footer;
     // canvasRect() is now full-bleed (statusBarRect() returns empty) -- repaint immediately rather
@@ -686,12 +736,7 @@ void ViewerEditor::layoutStatusBar() {
     if (statusBarFooterTaken_ || zoomDropdown_ == nullptr) {
         return;
     }
-    const QRectF bar = statusBarRect();
-    const QSize hint = zoomDropdown_->sizeHint();
-    const int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
-    const int y =
-        static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
-    zoomDropdown_->setGeometry(x, y, hint.width(), hint.height());
+    layoutFooterDropdowns(zoomDropdown_, resolutionDropdown_, statusBarRect());
 }
 
 void ViewerEditor::refreshZoomDropdown() {
@@ -809,7 +854,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         if (!statusBarFooterTaken_) {
-            paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+            paintStatusBarSurface(painter, statusBarRect(), resolutionDropdown_, session_,
                                   previewController_);
         }
         return;
@@ -889,7 +934,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     }
 
     if (!statusBarFooterTaken_) {
-        paintStatusBarSurface(painter, statusBarRect(), zoomDropdown_, session_,
+        paintStatusBarSurface(painter, statusBarRect(), resolutionDropdown_, session_,
                               previewController_);
     }
 }

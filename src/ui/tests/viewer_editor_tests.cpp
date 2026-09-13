@@ -31,6 +31,8 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QRectF>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QWheelEvent>
 
 #include <chrono>
@@ -769,12 +771,68 @@ void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expecta
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/resolution");
+    {
+        ViewerFixture fixture(makeTestProject("Resolution preference"));
+        auto* dropdown = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
+        expectations.expect(dropdown != nullptr, "the footer exposes a named Resolution dropdown");
+        if (dropdown == nullptr) {
+            reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+            return;
+        }
+        expectations.expect(dropdown->accessibleName() == QStringLiteral("Resolution") &&
+                                dropdown->count() == 4 &&
+                                dropdown->currentText() == QStringLiteral("Auto"),
+                            "Resolution defaults to Auto and offers four policies");
+        dropdown->setCurrentIndex(2);
+        expectations.expect(fixture.controller.settings().resolutionPolicy ==
+                                    runtime::PreviewResolutionPolicy::Half &&
+                                QSettings().value("viewer/resolution").toString() ==
+                                    QStringLiteral("Half"),
+                            "choosing Half updates the controller and preference");
+        auto* footer = fixture.viewer.takeFooterWidget();
+        footer->resize(800, ui::kit::px(ui::kit::Size::Control));
+        (void)footer->grab();
+        expectations.expect(dropdown->parentWidget() == footer &&
+                                dropdown->geometry().left() >
+                                    fixture.viewer.zoomDropdownForTest()->geometry().right(),
+                            "Resolution stays beside Zoom in the detached footer");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+    }
+    {
+        ViewerFixture restored(makeTestProject("Restored resolution"));
+        auto* dropdown = restored.viewer.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
+        expectations.expect(dropdown != nullptr &&
+                                dropdown->currentText() == QStringLiteral("Half") &&
+                                restored.controller.resolutionDivisor() == 2,
+                            "a new viewer restores Half");
+        reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
+    }
+    QSettings().setValue("viewer/resolution", QStringLiteral("invalid"));
+    {
+        ViewerFixture invalid(makeTestProject("Invalid resolution preference"));
+        expectations.expect(invalid.controller.settings().resolutionPolicy ==
+                                runtime::PreviewResolutionPolicy::Auto,
+                            "an unrecognized saved preference falls back to Auto");
+        reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
+    }
+    QSettings().remove("viewer/resolution");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QTemporaryDir settingsDirectory;
+    QCoreApplication::setOrganizationName("BloomTests");
+    QCoreApplication::setApplicationName("ViewerResolution");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
+    testResolutionDropdownPersistsAndMovesWithFooter(expectations);
     testSquarePixelFitting(expectations);
     testPixelAspectFitting(expectations);
     testDegenerateAvailableRect(expectations);
