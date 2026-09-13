@@ -1174,6 +1174,12 @@ emitInterpolation(EmitState& state,
         if (!boundary.enabled && (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false)))) return false;
         if (boundary.solo && (!state.ok(writer.memberName("solo")) || !state.ok(writer.booleanValue(true)))) return false;
         if (boundary.locked && (!state.ok(writer.memberName("locked")) || !state.ok(writer.booleanValue(true)))) return false;
+        if (boundary.labelColor) {
+            if (!state.ok(writer.memberName("labelColor")) || !state.ok(writer.beginArray())) return false;
+            for (const auto channel : *boundary.labelColor)
+                if (!state.ok(writer.unsignedIntegerValue(channel))) return false;
+            if (!state.ok(writer.endArray())) return false;
+        }
         if (!emitRetainedTrailing(state)) {
             return false;
         }

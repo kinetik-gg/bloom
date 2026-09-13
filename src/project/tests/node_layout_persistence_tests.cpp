@@ -63,6 +63,7 @@ void migrationAndReopen() {
     auto* editing = draft.project().findComposition(composition.id());
     for (const auto& boundary : composition.graph().layerOutputs()) {
         auto* layer = editing->graph().findLayer(boundary.layerId);
+        layer->labelColor = std::array<std::uint8_t, 3>{12, 34, 56};
         layer->enabled = false;
         layer->solo = true;
         layer->locked = true;

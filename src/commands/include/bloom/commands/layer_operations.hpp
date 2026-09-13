@@ -60,4 +60,16 @@ class SetLayerLocked final : public Operation {
     document::LayerId layer_;
     bool value_;
 };
+class SetLayerLabelColor final : public Operation {
+ public:
+    SetLayerLabelColor(document::CompositionId composition, document::LayerId layer,
+        std::optional<std::array<std::uint8_t, 3>> color)
+        : composition_(composition), layer_(layer), color_(color) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+ private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    std::optional<std::array<std::uint8_t, 3>> color_;
+};
 } // namespace bloom::commands

@@ -94,4 +94,13 @@ OperationResult SetLayerLocked::apply(document::Draft& draft) const {
     layer->locked = value_;
     return OperationResult::applied();
 }
+std::string_view SetLayerLabelColor::typeId() const noexcept { return "bloom.layer.set-label-color"; }
+OperationResult SetLayerLabelColor::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
+    if (!layer) return detail::invalidTarget();
+    if (layer->labelColor == color_) return OperationResult::noChange();
+    layer->labelColor = color_;
+    return OperationResult::applied();
+}
 } // namespace bloom::commands

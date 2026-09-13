@@ -108,6 +108,8 @@ NodeId addSource(Fixture& fixture) {
 
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
+    (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::array<std::uint8_t, 3>{12, 34, 56});
+    (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::nullopt);
     (void)exercise<SetLayerEnabled>(test, fixture, kFirstLayerId, false);
     auto snapshot = fixture.document.snapshot();
     test.expect(snapshot.project().findComposition(kCompositionId)->nodeLayout().at(kFirstLayerNodeId).muted,

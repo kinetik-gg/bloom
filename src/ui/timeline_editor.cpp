@@ -363,6 +363,7 @@ class TimelineLayerRow final : public QWidget {
     // with three.
     void bind(const TimelineLayerEntry& entry, const bool selected) {
         name_ = entry.name;
+        color_ = entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
         selected_ = selected;
         layerId_ = entry.layerId;
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
@@ -413,7 +414,9 @@ class TimelineLayerRow final : public QWidget {
 
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Foreground));
-        const QRect nameRect(kNameCellX, 0, kNameCellWidth, height());
+        const int swatch = kit::px(kit::Spacing::S);
+        painter.fillRect(QRect(kNameCellX, (height() - swatch) / 2, swatch, swatch), color_);
+        const QRect nameRect(kNameCellX + swatch + kCellGap, 0, kNameCellWidth - swatch - kCellGap, height());
         const QFontMetrics metrics = painter.fontMetrics();
         painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                          metrics.elidedText(name_, Qt::ElideRight, nameRect.width()));
@@ -422,6 +425,7 @@ class TimelineLayerRow final : public QWidget {
   private:
     CompositionSession* session_ = nullptr;
     QString name_;
+    QColor color_;
     std::optional<document::LayerId> layerId_;
     bool selected_ = false;
     bool binding_ = false;
@@ -775,7 +779,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         paintRowSeparator(painter, top, width());
         if (const auto bar = clipBarRect(row)) {
             painter.setRenderHint(QPainter::Antialiasing, true);
-            kit::fillRoundedSurface(painter, QRectF(*bar), kit::color(entry.clipColor), QColor(),
+            kit::fillRoundedSurface(painter, QRectF(*bar), entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor), QColor(),
                                     kit::Radius::Small);
         }
     }
@@ -1159,6 +1163,10 @@ void TimelineEditor::rebuild() {
                                .name = layerName(*composition, entry.layerId),
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
+            if (const auto* layer = composition->graph().findLayer(entry.layerId); layer && layer->labelColor) {
+                const auto rgb = *layer->labelColor;
+                entries.back().labelColor = QColor(rgb[0], rgb[1], rgb[2]);
+            }
         }
     }
     stack_->setEntries(entries);

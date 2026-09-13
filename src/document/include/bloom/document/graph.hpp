@@ -8,6 +8,7 @@
 #include <bloom/document/value_nodes.hpp>
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <span>
 #include <string>
@@ -108,6 +109,7 @@ struct LayerOutputBoundary {
     std::string name;
     std::string outputPort;
 
+    std::optional<std::array<std::uint8_t, 3>> labelColor;
     bool enabled = true;
     bool solo = false;
     bool locked = false;
