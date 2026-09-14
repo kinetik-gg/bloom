@@ -21,6 +21,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -28,21 +29,28 @@
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QRect>
 #include <QScrollBar>
+#include <QSettings>
 #include <QString>
 #include <QTableView>
+#include <QTemporaryDir>
+#include <QTest>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QWheelEvent>
 #include <QWidget>
 
 #include <array>
@@ -52,6 +60,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -268,6 +277,300 @@ void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
     }
 
     delete editor;
+    finishFixture(fixture);
+}
+
+void testHeaderSplitInEditorArea(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Header composition with a deliberately long name"));
+    ui::EditorRegistry registry;
+    (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
+                                       return new ui::TimelineEditor(
+                                           fixture.session, fixture.controller, nullptr, parent);
+                                   }});
+    (void)registry.registerEditor(
+        {"bloom.probe", "Probe", [](QWidget* parent) { return new QWidget(parent); }});
+    ui::EditorArea area(registry, "bloom.timeline");
+    area.show();
+    for (const int width : {1200, 900}) {
+        area.resize(width, 400);
+        QCoreApplication::processEvents();
+        auto* editor = area.findChild<ui::TimelineEditor*>();
+        auto* ruler = editor->rulerForTest();
+        auto* lanes = editor->laneRegionForTest();
+        auto* header = area.findChild<QWidget*>("editorHeader");
+        auto* name = area.findChild<QWidget*>("timelineCompositionName");
+        auto* fullscreen = area.findChild<QToolButton*>("maximizeAreaButton");
+        const int laneX = lanes->mapTo(&area, QPoint()).x();
+        expectations.expect(header->isAncestorOf(ruler), "the ruler belongs to the area header");
+        expectations.expect(ruler->mapTo(&area, QPoint()).x() == laneX &&
+                                ruler->width() == lanes->width(),
+                            "header ruler and lanes share both origin and width");
+        expectations.expect(ruler->mapTo(header, QPoint()).y() >= 0 &&
+                                ruler->mapTo(header, QPoint(0, ruler->height())).y() <=
+                                    header->height(),
+                            "the ruler fits entirely inside the header");
+        expectations.expect(name != nullptr && header->isAncestorOf(name) && name->isVisible(),
+                            "the composition name is visible in the header");
+        expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() <= laneX,
+                            "fullscreen stays in the left header cell");
+        auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
+        expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
+                            "column headings are the body's first row");
+        expectations.expect(editor->takeHeaderRightWidget() == nullptr &&
+                                editor->takeHeaderMenuWidget() == nullptr,
+                            "both header transfers are idempotent");
+    }
+    expectations.expect(area.setEditorId("bloom.probe"), "the split editor can be replaced");
+    expectations.expect(area.findChild<ui::TimelineRuler*>() == nullptr,
+                        "replacement destroys the transferred ruler");
+    expectations.expect(area.setEditorId("bloom.timeline"), "the split editor can be restored");
+    finishFixture(fixture);
+}
+
+void testTimeViewportGestures(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Zoom and scroll"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    editor.resize(1200, 400);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* ruler = editor.rulerForTest();
+    auto* lanes = editor.laneRegionForTest();
+    (void)fixture.session.setCurrentTime(time(3));
+    expectations.expect(fixture.session.toggleKeyframe("opacity"), "seed an animated key lane");
+    const auto originalTime = fixture.session.currentTime();
+    const auto revision = fixture.session.snapshot().revision();
+    const auto getAxis = [ruler](int width = -1) {
+        const auto result = ruler->axisForWidth(width < 0 ? ruler->width() : width);
+        if (!result.has_value()) {
+            throw std::runtime_error("Missing timeline test axis");
+        }
+        return *result;
+    };
+    const auto before = getAxis();
+    const qreal cursor = ruler->width() * 0.4;
+    const double anchorTime = before.secondsForPixel(cursor);
+    auto wheel = [](QWidget& widget, qreal x, QPoint angle, Qt::KeyboardModifiers modifiers) {
+        QWheelEvent event(QPointF(x, 10), widget.mapToGlobal(QPoint(static_cast<int>(x), 10)), {},
+                          angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&widget, &event);
+    };
+    wheel(*lanes, cursor, QPoint(0, 120), Qt::ControlModifier);
+    auto axis = getAxis();
+    expectations.expect(axis.t1 - axis.t0 < before.t1 - before.t0,
+                        "Ctrl+wheel over lanes zooms the shared axis");
+    expectations.expect(std::abs(axis.secondsForPixel(cursor) - anchorTime) < 1e-10,
+                        "zoom preserves the cursor time");
+    ruler->zoomToRange(2.0, 5.0);
+    wheel(*ruler, cursor, QPoint(0, -120), Qt::ShiftModifier);
+    axis = getAxis();
+    expectations.expect(axis.t0 > 2.0 && std::abs(axis.t1 - axis.t0 - 3.0) < 1e-10,
+                        "Shift+wheel scrolls without changing the visible span");
+    const double priorStart = axis.t0;
+    wheel(*lanes, cursor, QPoint(120, 0), Qt::NoModifier);
+    expectations.expect(getAxis().t0 < priorStart, "horizontal wheel scrolls the axis");
+    ruler->zoomToRange(2.0, 5.0);
+    auto* keys = editor.findChild<ui::TimelineKeyframePanel*>();
+    const auto keyRows = keys->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+    expectations.expect(!keyRows.isEmpty(), "an animated key row is present");
+    if (!keyRows.isEmpty()) {
+        auto* keyRow = keyRows.front();
+        const auto keyAxis = getAxis(keyRow->width());
+        sendMouse(*keyRow, QEvent::MouseButtonPress, keyAxis.pixelForTime(time(3)),
+                  keyRow->height() / 2.0);
+        expectations.expect(
+            std::holds_alternative<ui::KeyframeSelection>(fixture.session.selection().primary),
+            "keyframe hit testing follows the zoomed shared axis");
+        sendMouse(*keyRow, QEvent::MouseButtonRelease, keyAxis.pixelForTime(time(3)),
+                  keyRow->height() / 2.0);
+    }
+    const auto rects = ruler->majorTickLabelRectsForTest();
+    for (std::size_t i = 1; i < rects.size(); ++i) {
+        expectations.expect(rects[i - 1].right() < rects[i].left(),
+                            "zoomed and scrolled tick labels do not overlap");
+    }
+    auto* navigator =
+        dynamic_cast<ui::TimelineNavigator*>(editor.findChild<QWidget*>("timelineNavigator"));
+    expectations.expect(navigator != nullptr &&
+                            navigator->height() == ui::kit::px(ui::kit::Size::Control),
+                        "the navigator uses the Control row height");
+    if (navigator != nullptr) {
+        const auto window = navigator->windowRect();
+        sendMouse(*navigator, QEvent::MouseButtonPress, window.center().x(), window.center().y());
+        sendMouse(*navigator, QEvent::MouseMove, window.center().x() + 30, window.center().y());
+        expectations.expect(getAxis().t0 > 2.0, "dragging the navigator window pans");
+        QAction applicationEscape(&editor);
+        applicationEscape.setShortcut(QKeySequence(Qt::Key_Escape));
+        editor.addAction(&applicationEscape);
+        bool escapedApplication = false;
+        QObject::connect(&applicationEscape, &QAction::triggered, &editor,
+                         [&escapedApplication] { escapedApplication = true; });
+        editor.activateWindow();
+        navigator->setFocus();
+        QCoreApplication::processEvents();
+        QTest::keyClick(navigator, Qt::Key_Escape);
+        expectations.expect(!escapedApplication,
+                            "a navigator drag owns Escape before application commands");
+        expectations.expect(std::abs(getAxis().t0 - 2.0) < 1e-10,
+                            "Escape restores the original viewport");
+        sendMouse(*navigator, QEvent::MouseButtonPress, window.right(), window.center().y());
+        sendMouse(*navigator, QEvent::MouseButtonRelease, window.right() - 30, window.center().y());
+        axis = getAxis();
+        expectations.expect(axis.t0 == 2.0 && axis.t1 < 5.0,
+                            "resizing the navigator end preserves the start");
+        const auto resized = navigator->windowRect();
+        sendMouse(*navigator, QEvent::MouseButtonPress, resized.left(), resized.center().y());
+        sendMouse(*navigator, QEvent::MouseButtonRelease, resized.left() + 10,
+                  resized.center().y());
+        expectations.expect(getAxis().t0 > 2.0, "the navigator start is independently resizable");
+    }
+    ruler->zoomToRange(-100.0, 100.0);
+    axis = getAxis();
+    expectations.expect(axis.t0 == 0 && axis.t1 == before.duration.toSeconds(),
+                        "ranges clamp to the full composition duration");
+    ruler->zoomToRange(2.0, 2.000001);
+    axis = getAxis();
+    expectations.expect(axis.t1 - axis.t0 >= 1.0 / 24.0 - 1e-10,
+                        "zoom clamps at one visible frame");
+    expectations.expect(axis.pixelForTime(time(0)) < 0,
+                        "offscreen times are clipped rather than pinned to the edge");
+    ruler->zoomToFit();
+    axis = getAxis();
+    expectations.expect(axis.t0 == before.t0 && axis.t1 == before.t1,
+                        "Zoom to Fit restores the entire duration");
+    expectations.expect(fixture.session.currentTime() == originalTime &&
+                            fixture.session.snapshot().revision() == revision,
+                        "all navigation is presentation-only");
+    finishFixture(fixture);
+}
+
+void testTimelineHeaderMenus(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Timeline menu commands"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    QWidget host;
+    auto* appUndo = new QAction("Undo", &host);
+    appUndo->setObjectName("undoAction");
+    appUndo->setShortcut(QKeySequence::Undo);
+    QObject::connect(appUndo, &QAction::triggered, &fixture.session, &ui::CompositionSession::undo);
+    auto* appRedo = new QAction("Redo", &host);
+    appRedo->setObjectName("redoAction");
+    appRedo->setShortcut(QKeySequence::Redo);
+    QObject::connect(appRedo, &QAction::triggered, &fixture.session, &ui::CompositionSession::redo);
+    ui::EditorRegistry registry;
+    (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
+                                       return new ui::TimelineEditor(
+                                           fixture.session, fixture.controller, nullptr, parent);
+                                   }});
+    auto* area = new ui::EditorArea(registry, "bloom.timeline");
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(area);
+    layoutEditor(host);
+    auto* editor = area->findChild<ui::TimelineEditor*>();
+    auto* edit = area->findChild<QMenu*>("timelineEditMenu");
+    auto* header = area->findChild<QWidget*>("editorHeader");
+    expectations.expect(edit != nullptr && edit->actions().size() == 3 &&
+                            edit->actions()[0] == appUndo && edit->actions()[1] == appRedo,
+                        "header Edit uses the application's actual Undo and Redo QActions");
+    auto* addButton = area->findChild<QToolButton*>("addLayerButton");
+    expectations.expect(addButton != nullptr && header->isAncestorOf(addButton) &&
+                            addButton->menu()->objectName() == QStringLiteral("addLayerMenu"),
+                        "the existing Add popup is in the header with its original names");
+    auto* controls = editor->findChild<QWidget*>("timelineControls");
+    for (const auto* button : controls->findChildren<QToolButton*>()) {
+        expectations.expect(button->text() != QStringLiteral("Undo") &&
+                                button->text() != QStringLiteral("Redo"),
+                            "transport has no Undo or Redo buttons");
+    }
+    const auto action = [area](const char* name) {
+        auto* result = area->findChild<QAction*>(QLatin1String(name));
+        if (result == nullptr) {
+            throw std::runtime_error(std::string("Missing action ") + name);
+        }
+        return result;
+    };
+    action("timelineSelectAllAction")->trigger();
+    expectations.expect(fixture.session.selectedNodes().size() == 2,
+                        "Select All selects every layer boundary in the shared session");
+    action("timelineSelectNoneAction")->trigger();
+    expectations.expect(fixture.session.selectedNodes().empty() &&
+                            !fixture.session.selection().contextualLayer.has_value(),
+                        "Select None clears the shared selection");
+    expectations.expect(!action("timelineDeleteLayerAction")->isEnabled(),
+                        "Delete Layer is disabled without a selected layer");
+    host.activateWindow();
+    editor->layerStackForTest()->setFocus();
+    QCoreApplication::processEvents();
+    QTest::keyClick(editor->layerStackForTest(), Qt::Key_A, Qt::ControlModifier);
+    expectations.expect(fixture.session.selectedNodes().size() == 2,
+                        "Ctrl+A selects all layers from the stack");
+    const auto nodeIds = fixture.session.selectedNodes();
+    QTest::keyClick(editor->layerStackForTest(), Qt::Key_Delete);
+    expectations.expect(editor->layerStackForTest()->rowCount() == 0,
+                        "Delete Layer removes all selected structured layer boundaries");
+    appUndo->trigger();
+    expectations.expect(editor->layerStackForTest()->rowCount() == 2,
+                        "the app Undo restores every deleted layer in one transaction");
+    bool restored = true;
+    for (const auto id : nodeIds) {
+        restored = restored && fixture.session.composition()->graph().findNode(id) != nullptr;
+    }
+    expectations.expect(restored, "undo restores the same stable boundary IDs");
+    appRedo->trigger();
+    expectations.expect(editor->layerStackForTest()->rowCount() == 0,
+                        "the app Redo removes the restored boundaries again");
+    appUndo->trigger();
+
+    auto* ruler = editor->rulerForTest();
+    action("timelineZoomInAction")->trigger();
+    const auto zoom = ruler->axisForWidth(ruler->width());
+    expectations.expect(zoom.has_value() && zoom->t0 > 0.0,
+                        "View Zoom In uses the shared centered viewport zoom");
+    ruler->setFocus();
+    QCoreApplication::processEvents();
+    QTest::keyClick(ruler, Qt::Key_0, Qt::ControlModifier);
+    const auto fit = ruler->axisForWidth(ruler->width());
+    expectations.expect(fit.has_value() && fit->t0 == 0.0 && fit->t1 == 10.0,
+                        "View Zoom to Fit restores the full duration");
+    expectations.expect(!action("timelineZoomToFitAction")->shortcut().isEmpty() &&
+                            !action("timelineDeleteLayerAction")->shortcut().isEmpty() &&
+                            !action("timelineSelectAllAction")->shortcut().isEmpty(),
+                        "menus expose their keyboard shortcuts");
+    (void)fixture.session.setCurrentTime(time(3));
+    action("timelineTimecodeAction")->trigger();
+    auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
+    expectations.expect(readout->text().contains(QStringLiteral("00:00:03:00")) &&
+                            readout->text().contains(QStringLiteral("3.000s")),
+                        "timecode readout preserves the exact seconds alongside non-drop timecode");
+    expectations.expect(QSettings().value("timeline/time-format").toString() ==
+                            QStringLiteral("timecode"),
+                        "the display format is persisted under timeline/time-format");
+    for (const auto width : {180, 900}) {
+        ruler->resize(width, ruler->height());
+        const auto rects = ruler->majorTickLabelRectsForTest();
+        for (std::size_t i = 1; i < rects.size(); ++i) {
+            expectations.expect(rects[i - 1].right() < rects[i].left(),
+                                "timecode tick labels never overlap at narrow or wide sizes");
+        }
+    }
+    {
+        ui::TimelineEditor restoredEditor(fixture.session, fixture.controller);
+        expectations.expect(restoredEditor.findChild<QLabel*>("timelineTimeReadout")->text() ==
+                                readout->text(),
+                            "a new timeline restores the persisted time format");
+    }
+    action("timelineFramesAction")->trigger();
+    expectations.expect(readout->text() == QStringLiteral("Frame 72 · 3.000s"),
+                        "Frames restores the existing frame and exact-time readout");
+    auto* bar = area->findChild<QWidget*>("timelineHeaderMenus");
+    bar->setFixedWidth(ui::kit::px(ui::kit::Size::Control));
+    QCoreApplication::processEvents();
+    auto* overflow = area->findChild<QToolButton*>("timelineHeaderOverflowButton");
+    expectations.expect(overflow->isVisible() && overflow->menu()->actions().size() == 4,
+                        "a narrow header collapses all four menus into the overflow popup");
     finishFixture(fixture);
 }
 
@@ -1047,8 +1350,8 @@ void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectatio
     layout->addWidget(editor);
     layoutEditor(host);
 
-    for (const char* objectName : {"addLayerButton", "timelineStepBackButton", "playPauseButton",
-                                   "timelineStepForwardButton"}) {
+    for (const char* objectName :
+         {"timelineStepBackButton", "playPauseButton", "timelineStepForwardButton"}) {
         auto* button = editor->findChild<QToolButton*>(QString::fromLatin1(objectName));
         expectations.expect(button != nullptr, std::string{objectName} + " is reachable by name");
         if (button == nullptr) {
@@ -1080,9 +1383,17 @@ void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectatio
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QCoreApplication::setOrganizationName("BloomTests");
+    QCoreApplication::setApplicationName("TimelineEditorStyle");
+    QTemporaryDir settingsDirectory;
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     try {
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
+        testHeaderSplitInEditorArea(expectations);
+        testTimeViewportGestures(expectations);
+        testTimelineHeaderMenus(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);
         testRowsAreFlatThirtyTwoPixelRows(expectations);
         testOneScrollbarMovesBothHalvesTogether(expectations);

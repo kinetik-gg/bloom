@@ -251,8 +251,8 @@ void sendKey(QWidget& widget, const Qt::Key key) {
     QCoreApplication::sendEvent(&widget, &press);
 }
 
-// 1 second at 24 fps has frame indices 0..23. A ruler resized to 47 logical pixels (width - 1 = 46
-// = 2 * 23) makes every EVEN pixel land exactly on a frame and every ODD pixel land exactly at the
+// 1 second at 24 fps has frame indices 0..23. A ruler resized to 49 logical pixels (width - 1 = 48
+// = 2 * 24) makes every EVEN pixel land exactly on a frame and every ODD pixel land exactly at the
 // halfway point between two frames -- a deterministic, exactly-representable tie case pinned by
 // docs/architecture/animation-and-time.md's tie-to-greater rule.
 void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectations) {
@@ -265,7 +265,7 @@ void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectation
                         "the initial preview leaves the Rendering activity before scrubbing");
 
     ui::TimelineRuler ruler(fixture.session, fixture.controller);
-    ruler.resize(47, 26);
+    ruler.resize(49, 26);
 
     sendClick(ruler, 0.0);
     expectations.expect(fixture.session.currentTime() == time(0, 24),
@@ -284,7 +284,7 @@ void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectation
                         "the tie immediately below the final frame also resolves to the greater "
                         "index");
 
-    sendClick(ruler, 46.0);
+    sendClick(ruler, 48.0);
     expectations.expect(fixture.session.currentTime() == time(23, 24),
                         "the rightmost pixel scrubs to the final valid frame, never the excluded "
                         "duration endpoint");
@@ -569,14 +569,14 @@ void testDeleteGestureRemovesKeyAndRefusesTheLastOne(Expectations& expectations)
                         "a refused delete leaves the selection intact");
 }
 
-// Drag-move gesture (issue #84, decision 3). Uses a 1-second/24fps composition and a 461-logical-
-// pixel-wide row (width - 1 = 460 = 20 * maxIndex(23)) so that pixel 20*i lands EXACTLY on frame i
-// under frameIndexForPixel()'s checked-integer mapping (proved algebraically: product = 20*i*23 =
-// 460*i is an exact multiple of span 460, so quotient = i with zero remainder -- the same tie-to-
-// greater contract testRulerScrubLandsOnExactFrameTimesIncludingATie() pins for the ruler itself,
-// just scaled up by 10x so drag deltas clear QApplication::startDragDistance() on every platform).
-// PRESS positions instead use the forward, continuous pixelForTime() mapping to hit a key at its
-// own exact time.
+// Drag-move gesture (issue #84, decision 3). Uses a 1-second/24fps composition and a 481-logical-
+// pixel-wide row (width - 1 = 480 = 20 * durationFrames(24)) so that pixel 20*i lands EXACTLY on
+// frame i under frameIndexForPixel()'s checked-integer mapping (proved algebraically: product =
+// 20*i*24 = 480*i is an exact multiple of span 480, so quotient = i with zero remainder -- the same
+// tie-to- greater contract testRulerScrubLandsOnExactFrameTimesIncludingATie() pins for the ruler
+// itself, just scaled up by 10x so drag deltas clear QApplication::startDragDistance() on every
+// platform). PRESS positions instead use the forward, continuous pixelForTime() mapping to hit a
+// key at its own exact time.
 void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Keyframe Drag Test", time(1));
@@ -631,7 +631,7 @@ void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations)
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
-    panel.resize(461, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
+    panel.resize(481, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
     expectations.expect(rows.size() == 1, "exactly one row exists for the single animated opacity");
@@ -639,12 +639,12 @@ void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations)
         return;
     }
     auto* row = rows.front();
-    expectations.expect(row->width() == 461, "the row matches the panel's exact pixel width");
+    expectations.expect(row->width() == 481, "the row matches the panel's exact pixel width");
 
-    // Forward (continuous) pixelForTime mapping, duration 1s, width 461 (width - 1 = 460): used
+    // Forward (continuous) pixelForTime mapping, duration 1s, width 481 (width - 1 = 480): used
     // only to compute PRESS positions that hit a key at its own exact time.
     const auto pressPixelForFraction = [](const double numerator, const double denominator) {
-        return 460.0 * numerator / denominator;
+        return 480.0 * numerator / denominator;
     };
     const qreal dragKeyPixel = pressPixelForFraction(1.0, 3.0);    // t = 1/3
     const qreal sentinelPixel = pressPixelForFraction(20.0, 24.0); // frame 20
@@ -759,7 +759,7 @@ void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations)
 // Insert gesture (issue #86, task E1, decision 4): double-clicking a keyframe lane's row
 // BACKGROUND -- never an existing key -- inserts a new key at the exact frame-snapped time, valued
 // at the curve's own exactly sampled value there (CompositionSession::insertKeyframeAtTime()).
-// Width/frame-rate are chosen (1s @ 24fps, 2301 logical pixels, span 2300 = 100 * 23) so the
+// Width/frame-rate are chosen (1s @ 24fps, 2401 logical pixels, span 2400 = 100 * 24) so the
 // REVERSE pixel->frame-index snap used for the click (100 * index, an exact zero-remainder
 // multiple, same proof idiom as the drag test) lands more than kKeyHitToleranceLogicalPixels away
 // from every existing key's own FORWARD pixelForTime() paint position -- including the just-
@@ -814,7 +814,7 @@ void testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
-    panel.resize(2301, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
+    panel.resize(2401, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
     expectations.expect(rows.size() == 1, "exactly one row exists for the single animated opacity");
@@ -822,7 +822,7 @@ void testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(
         return;
     }
     auto* row = rows.front();
-    expectations.expect(row->width() == 2301, "the row matches the panel's exact pixel width");
+    expectations.expect(row->width() == 2401, "the row matches the panel's exact pixel width");
 
     auto findKey = [&](const document::KeyframeId id) -> std::optional<document::ScalarKeyframe> {
         const auto* curve = session.composition()->animationCurves().findScalar(curveId);
@@ -952,7 +952,7 @@ void testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
-    panel.resize(2301, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
+    panel.resize(2401, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
     expectations.expect(rows.size() == 1, "exactly one row exists for the single animated opacity");
@@ -1212,6 +1212,15 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
                                 ui::kit::color(ui::kit::Color::Ok),
                             "the uncached frame gap remains unpainted");
     }
+    ruler.zoomToRange(1.0 / 24.0, 4.0 / 24.0);
+    auto zoomed = ruler.cachedFrameRects();
+    const auto zoomAxis = ruler.axisForWidth(ruler.width());
+    expectations.expect(
+        zoomAxis.has_value() && zoomed.size() == 1 &&
+            std::abs(zoomed.front().left() - zoomAxis->pixelForTime(time(2, 24))) < 0.001 &&
+            std::abs(zoomed.front().right() - zoomAxis->pixelForTime(time(3, 24))) < 0.001,
+        "zoom and scroll clip outside cache coverage and remap the visible frame");
+    ruler.zoomToFit();
     const auto bytes = ui::PreviewFrameCache::frameByteCost(*frames.front());
     cache.setByteBudget(bytes);
     expectations.expect(ruler.cachedFrameRects().size() == 1, "eviction removes ruler segments");

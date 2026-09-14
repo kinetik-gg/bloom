@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 
 #include <bloom/document/ids.hpp>
@@ -18,6 +19,7 @@
 class QAction;
 class QLabel;
 class QScrollBar;
+class QMenu;
 class QToolButton;
 
 namespace bloom::ui {
@@ -48,11 +50,11 @@ struct TimelineLayerEntry final {
     kit::Color clipColor = kit::Color::Muted;
 };
 
-// The After Effects-style timeline panel (task T1): a fixed-width LEFT layer-stack column and a
-// RIGHT lane region sharing one vertical scrollbar, under a transport header row and a
-// column-header row whose right half is the ruler. Frame 0 is at the lane region's left edge, never
-// under the layer column.
-class TimelineEditor final : public QWidget {
+// Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
+// menus and ruler; column headings start the body, with transport and navigator below the lanes.
+class TimelineEditor final : public QWidget,
+                             public EditorHeaderMenuProvider,
+                             public EditorHeaderSplitProvider {
     Q_OBJECT
 
   public:
@@ -69,6 +71,9 @@ class TimelineEditor final : public QWidget {
     // can be fixed; QObject's automatic disconnection happens far too late, in ~QObject, after
     // every child is gone.
     ~TimelineEditor() override;
+    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
+    [[nodiscard]] QWidget* takeHeaderRightWidget() override;
+    [[nodiscard]] int headerSplitPosition() const override { return layerColumnWidth(); }
 
     // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the
     // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
@@ -89,6 +94,12 @@ class TimelineEditor final : public QWidget {
     void rebuild();
     void updateSelection();
     void updateHistoryActions();
+    void createHeaderMenus();
+    void refreshHeaderMenus();
+    void selectAllLayers();
+    void deleteSelectedLayers();
+    void setTimecodeFormat(bool timecode);
+    void showEvent(QShowEvent* event) override;
     void updateScrollRange();
     // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
     // state (design decision 4: "button/icon state reflects transport state via a signal").
@@ -107,6 +118,16 @@ class TimelineEditor final : public QWidget {
     void updateTimeReadout();
 
     CompositionSession& session_;
+    QWidget* headerFallback_ = nullptr;
+    QWidget* headerMenus_ = nullptr;
+    QWidget* headerRight_ = nullptr;
+    QMenu* editMenu_ = nullptr;
+    QAction* undoAction_ = nullptr;
+    QAction* redoAction_ = nullptr;
+    QAction* deleteLayerAction_ = nullptr;
+    QAction* framesAction_ = nullptr;
+    QAction* timecodeAction_ = nullptr;
+    bool timecodeFormat_ = false;
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;
@@ -118,8 +139,6 @@ class TimelineEditor final : public QWidget {
     // rather than a pair of signal handlers that could drift.
     QScrollBar* scrollBar_ = nullptr;
     QToolButton* addButton_ = nullptr;
-    QToolButton* undoButton_ = nullptr;
-    QToolButton* redoButton_ = nullptr;
     // Borrowed from the preview session; every panel controls the same transport.
     PlaybackController* playback_ = nullptr;
     // Borrowed: the RAM Preview command is application-wide (the Composition menu reaches the same
