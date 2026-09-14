@@ -84,19 +84,29 @@ constexpr auto kTimeFormatSetting = "timeline/time-format";
 constexpr auto kLoopSetting = "playback/loop";
 
 // Lays `controls` out left to right inside `bar`, each at its own size hint, vertically centred.
-// The footer is a manual layout rather than a QHBoxLayout because the bar also PAINTS (the surface,
-// the hairline, and -- until the window status bar takes them -- the right-anchored readouts), and
-// those painted elements are positioned relative to the last control's own right edge.
+// A manual layout rather than a QHBoxLayout because the bar paints its own surface and hairline and
+// because of the overflow rule below, which a box layout expresses by squeezing children instead.
+//
+// A control that does not fit ENTIRELY is hidden rather than clipped. A half-drawn dropdown or a
+// truncated transport button is a control an artist can see and cannot use; a narrow Viewer simply
+// offers fewer of them, and widening the panel brings them back. Nothing important is lost by that:
+// the window status bar carries the state that has to stay on screen regardless.
 void layoutFooterControls(const std::vector<QWidget*>& controls, const QRectF& bar) {
+    const int right = static_cast<int>(bar.right()) - kit::px(kit::Spacing::S);
     int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
     for (auto* control : controls) {
         if (control == nullptr) {
             continue;
         }
         const auto hint = control->sizeHint();
+        if (x + hint.width() > right) {
+            control->hide();
+            continue;
+        }
         const int y =
             static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
         control->setGeometry(x, y, hint.width(), hint.height());
+        control->show();
         x += hint.width() + kit::px(kit::Spacing::XS);
     }
 }

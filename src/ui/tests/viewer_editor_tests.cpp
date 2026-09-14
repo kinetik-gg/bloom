@@ -931,6 +931,9 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
         return;
     }
     footer->resize(1400, ui::kit::px(ui::kit::Size::Control));
+    // grab() forces the pending resize (and so the footer's own layout pass) to run now, the same
+    // way testResolutionDropdownPersistsAndMovesWithFooter already does for a detached footer.
+    (void)footer->grab();
     QCoreApplication::processEvents();
 
     const char* const ordered[] = {
