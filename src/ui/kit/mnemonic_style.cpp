@@ -170,15 +170,16 @@ void AltUnderlineProxyStyle::drawControl(const ControlElement element, const QSt
     } else if (item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked) {
         // A checked item with no icon of its own marks itself in the SAME reserved column, so a
         // check mark never shifts a label either.
-        painter->drawPixmap(iconRect, iconPixmap(IconId::Check, Size::IconSmall, labelInk, ratio));
+        painter->drawPixmap(iconRect, iconPixmap(IconId::Check, Size::IconSmall, labelInk, ratio,
+                                                 iconWeight(IconRole::Chrome)));
     }
 
     int right = rect.right() - px(Spacing::MenuItemX);
     if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
         const int arrow = menuArrowWidth();
         const QRect arrowRect(right - arrow, rect.center().y() - arrow / 2, arrow, arrow);
-        painter->drawPixmap(arrowRect,
-                            iconPixmap(IconId::CaretRight, Size::IconSmall, labelInk, ratio));
+        painter->drawPixmap(arrowRect, iconPixmap(IconId::CaretRight, Size::IconSmall, labelInk,
+                                                  ratio, iconWeight(IconRole::Chrome)));
         right = arrowRect.left() - menuColumnGap();
     }
 

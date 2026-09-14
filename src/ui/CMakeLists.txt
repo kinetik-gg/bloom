@@ -99,11 +99,6 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
-        kit/third_party/phosphor-icons/bold/eye-bold.svg
-        kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
-        kit/third_party/phosphor-icons/bold/lock-simple-bold.svg
-        kit/third_party/phosphor-icons/bold/lock-simple-open-bold.svg
-        kit/third_party/phosphor-icons/bold/check-bold.svg
         kit/third_party/phosphor-icons/regular/eye.svg
         kit/third_party/phosphor-icons/regular/film-slate.svg
         kit/third_party/phosphor-icons/regular/film-strip.svg
@@ -138,6 +133,54 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/warning-circle.svg
         kit/third_party/phosphor-icons/regular/warning.svg
         kit/third_party/phosphor-icons/regular/x.svg
+        kit/third_party/phosphor-icons/bold/caret-down-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-left-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-right-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-up-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-up-down-bold.svg
+        kit/third_party/phosphor-icons/bold/check-bold.svg
+        kit/third_party/phosphor-icons/bold/clock-bold.svg
+        kit/third_party/phosphor-icons/bold/corners-in-bold.svg
+        kit/third_party/phosphor-icons/bold/corners-out-bold.svg
+        kit/third_party/phosphor-icons/bold/cube-bold.svg
+        kit/third_party/phosphor-icons/bold/cursor-bold.svg
+        kit/third_party/phosphor-icons/bold/diamond-bold.svg
+        kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
+        kit/third_party/phosphor-icons/bold/eye-bold.svg
+        kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
+        kit/third_party/phosphor-icons/bold/film-slate-bold.svg
+        kit/third_party/phosphor-icons/bold/film-strip-bold.svg
+        kit/third_party/phosphor-icons/bold/folder-bold.svg
+        kit/third_party/phosphor-icons/bold/gear-bold.svg
+        kit/third_party/phosphor-icons/bold/graph-bold.svg
+        kit/third_party/phosphor-icons/bold/hand-bold.svg
+        kit/third_party/phosphor-icons/bold/hand-grabbing-bold.svg
+        kit/third_party/phosphor-icons/bold/image-bold.svg
+        kit/third_party/phosphor-icons/bold/info-bold.svg
+        kit/third_party/phosphor-icons/bold/link-simple-bold.svg
+        kit/third_party/phosphor-icons/bold/list-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-open-bold.svg
+        kit/third_party/phosphor-icons/bold/magnifying-glass-bold.svg
+        kit/third_party/phosphor-icons/bold/minus-bold.svg
+        kit/third_party/phosphor-icons/bold/music-notes-bold.svg
+        kit/third_party/phosphor-icons/bold/pause-bold.svg
+        kit/third_party/phosphor-icons/bold/play-bold.svg
+        kit/third_party/phosphor-icons/bold/plus-bold.svg
+        kit/third_party/phosphor-icons/bold/repeat-bold.svg
+        kit/third_party/phosphor-icons/bold/skip-back-bold.svg
+        kit/third_party/phosphor-icons/bold/skip-forward-bold.svg
+        kit/third_party/phosphor-icons/bold/sliders-horizontal-bold.svg
+        kit/third_party/phosphor-icons/bold/speaker-simple-high-bold.svg
+        kit/third_party/phosphor-icons/bold/speaker-simple-slash-bold.svg
+        kit/third_party/phosphor-icons/bold/square-split-horizontal-bold.svg
+        kit/third_party/phosphor-icons/bold/square-split-vertical-bold.svg
+        kit/third_party/phosphor-icons/bold/stack-bold.svg
+        kit/third_party/phosphor-icons/bold/text-t-bold.svg
+        kit/third_party/phosphor-icons/bold/trash-bold.svg
+        kit/third_party/phosphor-icons/bold/warning-bold.svg
+        kit/third_party/phosphor-icons/bold/warning-circle-bold.svg
+        kit/third_party/phosphor-icons/bold/x-bold.svg
         kit/third_party/phosphor-icons/fill/caret-down-fill.svg
         kit/third_party/phosphor-icons/fill/caret-left-fill.svg
         kit/third_party/phosphor-icons/fill/caret-right-fill.svg

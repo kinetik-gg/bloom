@@ -171,7 +171,8 @@ void testTheMaximizeButtonIsTheOnlyRemainingHeaderButtonAndIsAFullscreenToggle(
     expectations.expect(button->accessibleName() == QStringLiteral("Fullscreen"),
                         "the accessible name matches: an icon never replaces one");
     // task U8, formal amendment 2, A9: IconMedium (16px), not the dense-chrome IconSmall box.
-    expectations.expect(button->iconSize().width() == kit::px(kit::Size::IconMedium),
+    // Task VIEW-1 gave that box a name -- it is kit::IconRole::Chrome's own box now.
+    expectations.expect(button->iconSize().width() == kit::px(kit::iconSize(kit::IconRole::Chrome)),
                         "maximizeAreaButton uses the corrected 16px glyph box");
 
     const qint64 restingIcon = button->icon().cacheKey();
@@ -335,8 +336,9 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
         kit::IconId icon;
     };
     // task U8, formal amendment 2, A7: the crop's own "panel icon 16px" -- IconMedium, not the
-    // IconSmall size formal amendment 1 originally used.
-    const auto sampleSize = QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
+    // IconSmall size formal amendment 1 originally used. Task VIEW-1: that is IconRole::Chrome.
+    const auto chromeBox = kit::px(kit::iconSize(kit::IconRole::Chrome));
+    const auto sampleSize = QSize(chromeBox, chromeBox);
     for (const auto& [id, iconId] :
          {Mapping{"bloom.assets", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
           Mapping{"bloom.timeline", kit::IconId::Clock},
@@ -349,7 +351,7 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
         }
         const QIcon actual = picker->itemIcon(index);
         expectations.expect(!actual.isNull(), std::string{id} + " carries an icon");
-        const QIcon expected = kit::icon(iconId, kit::Size::IconMedium);
+        const QIcon expected = kit::icon(iconId, kit::IconRole::Chrome);
         expectations.expect(actual.pixmap(sampleSize).toImage() ==
                                 expected.pixmap(sampleSize).toImage(),
                             std::string{id} + " maps to its documented glyph");

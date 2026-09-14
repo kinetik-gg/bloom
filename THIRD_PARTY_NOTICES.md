@@ -28,9 +28,9 @@ were taken from, and a SHA-256 for every vendored file.
 Copyright (c) 2023 Phosphor Icons. Licensed under the MIT License. The complete license text is at
 `src/ui/kit/third_party/phosphor-icons/LICENSE`.
 
-Bloom vendors a curated 43-icon subset in the `regular` and `fill` weights, unmodified, from the
-pinned `v2.0.8` release of <https://github.com/phosphor-icons/core>. The complete catalog is not
-embedded.
+Bloom vendors a curated 48-icon subset in the `regular`, `fill`, and `bold` weights, unmodified,
+from the pinned `v2.0.8` release of <https://github.com/phosphor-icons/core>. The complete catalog
+is not embedded.
 
 ### DejaVu Sans
 

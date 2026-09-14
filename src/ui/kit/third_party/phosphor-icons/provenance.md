@@ -1,6 +1,6 @@
 # Phosphor Icons Provenance
 
-Reviewed: 2026-09-02
+Reviewed: 2026-09-14
 
 ## Component
 
@@ -16,16 +16,28 @@ Reviewed: 2026-09-02
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
 | Modified | No. Every SVG below is byte-identical to its file in the pinned archive. |
 
-The archive SHA-256 above was computed over the exact bytes downloaded from that URL on
-2026-09-02 with `sha256sum`, not copied from an upstream publication.
+The archive SHA-256 above was computed over the exact bytes downloaded from that URL with
+`sha256sum`, not copied from an upstream publication. Task VIEW-1 re-downloaded that archive on
+2026-09-14, recomputed the digest, and byte-compared every file in the table below against
+`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 144 matched.
 
 ## What is vendored, and what is not
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 48 of them in two weights (96 files). `regular` is the default interface weight
-and `fill` is the selected/toggled weight; the other four upstream weights (`thin`, `light`,
-`bold`, `duotone`) are deliberately not vendored, because no implemented Bloom control uses them.
+embeds 48 of them in three weights (144 files). The three weights are exactly the three the
+Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
+
+- `regular` -- the resting interface weight, and the default of every non-role call.
+- `fill` -- the selected/toggled weight, and `IconRole::Control` (transport and viewer footer).
+- `bold` -- `IconRole::Chrome` (panel headers, menus, per-item toggles).
+
+Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
+toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
+subset would have rendered some chrome icons blank. All three weights are now complete over the
+same 48 ids, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
+vendored, because no Kinetik icon role names one.
 
 Bloom does not depend on a JavaScript, Node, npm, or web runtime to obtain or render these
 assets, and nothing is fetched from a network while configuring, building, or launching Bloom.
@@ -147,19 +159,73 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/warning-fill.svg` | `90595f8a478ac1f156871ac8d8a35c7c4e372b8d101dad9aeb1bceadf9a2c7f0` |
 | `fill/x-fill.svg` | `6ec0689770c1fb1dc7018039bef101079d2d20931c4661c3981cbe956f20c872` |
 
+### bold
+
+| Path | SHA-256 |
+| --- | --- |
+| `bold/caret-down-bold.svg` | `76a97545e1b923bc13bcc15d7bcbb7f5530105e6eaa98a18c1e30d23e3622843` |
+| `bold/caret-left-bold.svg` | `b78b6f532b53b9847340961848cb9e4f5be7e1da07e9dcf11c60cf64aa3986b7` |
+| `bold/caret-right-bold.svg` | `03cadd956d715541432ec8dc2eda1c53ca341af7d3ccecb8dd32c5b9747e290f` |
+| `bold/caret-up-bold.svg` | `daf7107329787e8f4fd5b5ccf194cf5ae00a0d44d004421696dad770da06371a` |
+| `bold/caret-up-down-bold.svg` | `a3ffa8c728724bf8ace313bcfd2c854ad3c0b47926440f763e94e75c9820f9f1` |
+| `bold/check-bold.svg` | `d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf` |
+| `bold/clock-bold.svg` | `45cf8bb6e1929b4d7fcbf52d83b35c6d130f4ea12d981db19370392cba724f4a` |
+| `bold/corners-in-bold.svg` | `2664fc88c8de3564849e732f5950232109cd7d201b93ede1e516e60931e56300` |
+| `bold/corners-out-bold.svg` | `df74ba3c2a496a344f98e80c0782f43aa3760ed4b8b6103a4c621bfc59575e16` |
+| `bold/cube-bold.svg` | `960f01377a6e286fb39507861a01bb0ff6ff8e5f4b1ac0ded92f6f2bec376e91` |
+| `bold/cursor-bold.svg` | `7339f39dee9b99e0c0412ea73cfd68497ae90faa8cb4a2e07581747af613f945` |
+| `bold/diamond-bold.svg` | `85ec2bc0851b2e1cbaa1deba7a059568688098493f8651949eb45aaebe0b995a` |
+| `bold/dots-three-vertical-bold.svg` | `4bb50d6e3099a6599b8800303a2f457954ad557213554761df79ee61b5aa7b9a` |
+| `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
+| `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
+| `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
+| `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |
+| `bold/folder-bold.svg` | `3f564dd4a0d27706ff9cb2d9738cef9ac1009b70f82d1da6d3bac119e41949a0` |
+| `bold/gear-bold.svg` | `b70f71ce6d08d59ee13575d7278737ff6dc2011adb5d126c9090641bc783fdd2` |
+| `bold/graph-bold.svg` | `967c65d7659edbaf8ccdad545b8b8c9408805bf2c167377984a6c78e84a46690` |
+| `bold/hand-bold.svg` | `901ad6b152b237edf30c5713e0676f1cfd3142672e209b3efc3062b23836a62a` |
+| `bold/hand-grabbing-bold.svg` | `6304ebb420306735baf4131a3c57724e738763ec15e65d6ccf6d97406e684946` |
+| `bold/image-bold.svg` | `d99ef65cc79a3db6a0b213c878238e06689ef701285f207629b49868808b852e` |
+| `bold/info-bold.svg` | `b8241eb546c8764cda301e10c63fc2a9c52c36d75a568832ef7244cb10d15d9b` |
+| `bold/link-simple-bold.svg` | `6e657df99dd4f15c8ee7140cccfc1b0e154dc241a8b32f900f60449c5cd625df` |
+| `bold/list-bold.svg` | `eebf2179178a5d4e93097a35f6a02efec45db6a88c1fbbc027fe81a167fd910f` |
+| `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
+| `bold/lock-simple-open-bold.svg` | `0fe1aa4fa99db2a2fe0827626eeb779a5a398763ba2492a0cf9429f9cdeca6c3` |
+| `bold/magnifying-glass-bold.svg` | `b73e393b20bff0aaee96b9e325d0276fe1ab5fc81b5080633a95827bd14ebae6` |
+| `bold/minus-bold.svg` | `f9be4875a49d6bc9931891127335a396beacb420c7076e068abd9e1505348396` |
+| `bold/music-notes-bold.svg` | `4d906075f68fae7c6380011cdc5303a322e4f6f9ec402e4c725e08e4c7e2e3f6` |
+| `bold/pause-bold.svg` | `0aa900d04cc01d716ecfb668cdc3e3f2bca7fe21a1faa80a11dc342440e22a47` |
+| `bold/play-bold.svg` | `f54e774d80d2b4d134a4babd3c03ee2a217aa4856566ed0a288e48e1a2f29d16` |
+| `bold/plus-bold.svg` | `3d20a4b2e00657baeb922bed94f13fbfa288968b738991d047dd252cb64005d8` |
+| `bold/repeat-bold.svg` | `27beb8327b7112d09c49d81930f7e9b7e7fb4a89f7cc3ccf52c4344edad0eb43` |
+| `bold/skip-back-bold.svg` | `ac34927ca2f4f323411b86830f344c018f1f1bdd92b671c76d9e295266bd1ff2` |
+| `bold/skip-forward-bold.svg` | `c026db317873f9de39d620b20e97d9d9d11293bbc319b0ea90db03db9c706be2` |
+| `bold/sliders-horizontal-bold.svg` | `e409a5fb3c2c134e46d51e48ac395e392223e04535c5ec664253f3e7e78cd7a9` |
+| `bold/speaker-simple-high-bold.svg` | `50e9ee73b1adb298157122fc2393955336c42631da56df2c509b2a6c1dfdb2d2` |
+| `bold/speaker-simple-slash-bold.svg` | `ac1b759c47b926905813c3f6e9d261c08c5e3d5413d023a1bc5477e38ddfcf12` |
+| `bold/square-split-horizontal-bold.svg` | `5ed5b554154f007fb01ac44f80e62150c9d30d179ebc105417dfe7589d141eb9` |
+| `bold/square-split-vertical-bold.svg` | `066160d93b66f7d3fdeba9af16a6c15d7bcc9671794ffc67b4ec1a623b7ecf23` |
+| `bold/stack-bold.svg` | `37b696df1b465b89a6a6da07d85011f52c59afd0d07e4e4d02d360f135e52099` |
+| `bold/text-t-bold.svg` | `ca48a422f871e674081c74d6b29fdfd04b7aa86604e0acdab64387146bc7124b` |
+| `bold/trash-bold.svg` | `14f3fa7bf3588b279a104e6a19b16809fa54f1c2185e2811d3c47cab559f79d5` |
+| `bold/warning-bold.svg` | `c473db9807bb726638eefcdc70554078cd2a195313d87e28a70498531ec106c0` |
+| `bold/warning-circle-bold.svg` | `82a1a5cad112a89581d11f44affb41433a1a8b804a9d77556a5c2b97b23784aa` |
+| `bold/x-bold.svg` | `d540487912a267d83c495954b24ca07981002fda05ee2ea0b492d8fc188d1c3e` |
+
 ## Subset manifest digest
 
 A single value covering the whole vendored subset, so a drift in any one asset is one comparison
-away rather than 86:
+away rather than 144:
 
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = 00bf12ff493f93fbcdab0c55f8159041130b54e1cba50951b7ad0580bf64a9e1
+SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = fbcac73160d8b97da388830b4660997ab2fd613f9d6a5e97a77c63754bf34e69
 ```
 
 Reproduce with:
 
 ```
-(cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg) | LC_ALL=C sort | sha256sum
+(cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) \
+  | LC_ALL=C sort | sha256sum
 ```
 
 ## Status
@@ -167,15 +233,3 @@ Reproduce with:
 Pinned and reviewed. A change to the icon set -- adding an icon, changing a weight, or moving to
 a new upstream release -- replaces this record wholesale: new release row, new archive digest, new
 file table, new manifest digest.
-
-### Bold timeline controls (2026-09-14)
-
-Five unmodified Bold glyphs supply the 16 px timeline toggles. Source: `https://registry.npmjs.org/@phosphor-icons/core/-/core-2.0.8.tgz`, SHA-256 `c4d7eca2a776229c2e33c6749e09dbea32f5f3a83171c7502b3bc52f887a3551`. The same five regular assets in this package were byte-compared with the pinned v2.0.8 assets above. No build or runtime network dependency.
-
-| Path | SHA-256 |
-| --- | --- |
-| `bold/check-bold.svg` | `d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf` |
-| `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
-| `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
-| `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
-| `bold/lock-simple-open-bold.svg` | `0fe1aa4fa99db2a2fe0827626eeb779a5a398763ba2492a0cf9429f9cdeca6c3` |

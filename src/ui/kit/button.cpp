@@ -291,7 +291,8 @@ void KButton::paintEvent(QPaintEvent* event) {
     if (icon_.has_value()) {
         // The icon takes exactly the ink the label does, so a button reads as one object in every
         // state rather than a glyph and a word fading at different rates.
-        const QPixmap pixmap = iconPixmap(*icon_, iconBox(), ink, devicePixelRatioF());
+        const QPixmap pixmap =
+            iconPixmap(*icon_, iconBox(), ink, devicePixelRatioF(), iconWeight(IconRole::Chrome));
         const auto box = static_cast<qreal>(px(iconBox()));
         // task U8, issue #131, fix 7: an icon-only button (no text) is a controlExtent square with
         // no Spacing::M side padding at all (sizeHint() above matches), so its icon centers in the

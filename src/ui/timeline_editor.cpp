@@ -435,10 +435,9 @@ class TimelineLayerRow final : public QWidget {
             const auto id = index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
                             : index == 1 ? kit::IconId::Check
                                          : (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked);
-            const auto glyph = kit::iconPixmap(id, kit::Size::IconMedium,
-                                               active ? kit::Color::Foreground : kit::Color::Faint,
-                                               kit::State::Normal, kit::IconWeight::Bold);
-            const int extent = kit::px(kit::Size::IconMedium);
+            const auto glyph = kit::iconPixmap(id, kit::IconRole::Chrome,
+                                               active ? kit::Color::Foreground : kit::Color::Faint);
+            const int extent = kit::px(kit::iconSize(kit::IconRole::Chrome));
             painter.drawPixmap(QRect(toggleCellX(index) + (kToggleCellWidth - extent) / 2,
                                      (height() - extent) / 2, extent, extent),
                                glyph);
@@ -450,7 +449,7 @@ class TimelineLayerRow final : public QWidget {
         painter.fillRect(QRect(kNameCellX, (height() - swatch) / 2, swatch, swatch), color_);
         const auto chevron =
             kit::iconPixmap(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight,
-                            kit::Size::IconMedium, kit::Color::Muted);
+                            kit::IconRole::Chrome, kit::Color::Muted);
         if (!collapsedImage_)
             painter.drawPixmap(kNameCellX + swatch + kCellGap, (height() - chevron.height()) / 2,
                                chevron);
@@ -495,9 +494,8 @@ void TimelineColumnHeaders::paintEvent(QPaintEvent* event) {
 
     for (int index = 0; index < kToggleCellCount; ++index) {
         const auto glyph =
-            kit::iconPixmap(toggleIcon(index), kit::Size::IconMedium, kit::Color::Muted,
-                            kit::State::Normal, kit::IconWeight::Bold);
-        const int glyphExtent = kit::px(kit::Size::IconMedium);
+            kit::iconPixmap(toggleIcon(index), kit::IconRole::Chrome, kit::Color::Muted);
+        const int glyphExtent = kit::px(kit::iconSize(kit::IconRole::Chrome));
         const int x = toggleCellX(index) + (kToggleCellWidth - glyphExtent) / 2;
         const int y = (height() - glyphExtent) / 2;
         painter.drawPixmap(QRect(x, y, glyphExtent, glyphExtent), glyph);
