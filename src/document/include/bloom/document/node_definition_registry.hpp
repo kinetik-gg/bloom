@@ -164,6 +164,12 @@ enum class NodeCategory : std::uint8_t {
     Layers,
     Compositing,
     Values,
+    // Task UTIL-1. Arithmetic and shaping got their own section because Utilities had become the
+    // place everything that is not a source, a layer or an output ends up: a Math node, a Switch, a
+    // Reroute and a string Trim are not one family, and burying the arithmetic among the plumbing
+    // is what made an artist scroll past it. The category is NOT persisted -- a document stores the
+    // node's type id -- so moving a type between sections needs no migration.
+    Math,
     Output,
     Utilities,
     // Retained persisted schemas, excluded from new-node authoring categories.

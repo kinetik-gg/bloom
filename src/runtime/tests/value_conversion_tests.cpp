@@ -253,8 +253,11 @@ void testNumericConversions(Expectations& expectations) {
         std::int64_t expected;
     };
     static const RoundingCase kCases[]{
-        {2.5, document::RoundingMode::Round, 3},
-        {-2.5, document::RoundingMode::Round, -3},
+        // Ties go to EVEN, the frozen scalar primitive's rule, so this node and a Rounding node
+        // never disagree about 2.5.
+        {2.5, document::RoundingMode::Round, 2},
+        {3.5, document::RoundingMode::Round, 4},
+        {-2.5, document::RoundingMode::Round, -2},
         {2.9, document::RoundingMode::Floor, 2},
         {-2.1, document::RoundingMode::Floor, -3},
         {2.1, document::RoundingMode::Ceiling, 3},

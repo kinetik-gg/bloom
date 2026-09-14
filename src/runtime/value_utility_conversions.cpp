@@ -2,6 +2,7 @@
 
 #include <bloom/core/safe_parse.hpp>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -30,28 +31,21 @@ constexpr std::int32_t kMaximumPadWidth = core::kMaximumFormattedWidth;
 // than wrapping. A double past 2^63 names no std::int64_t at all, and the nearest one it does name
 // is a better answer than an undefined conversion; NaN names none in either direction, so it
 // answers zero.
-[[nodiscard]] std::int64_t roundToInteger(const double value,
-                                          const document::RoundingMode mode) noexcept {
-    if (std::isnan(value)) {
-        return 0;
+//
+// The rounding itself is the FROZEN PRIMITIVE's, never std::round: a Scalar To Integer node and a
+// Rounding node set to the same mode must answer the same thing for 2.5, and the primitive rounds
+// that tie to even.
+[[nodiscard]] std::int64_t roundToInteger(const double value, const document::RoundingMode mode) {
+    if (!std::isfinite(value)) {
+        if (std::isnan(value)) {
+            return 0;
+        }
+        return value > 0.0 ? std::numeric_limits<std::int64_t>::max()
+                           : std::numeric_limits<std::int64_t>::min();
     }
-    double rounded = value;
-    switch (mode) {
-    case document::RoundingMode::Round:
-        // Ties away from zero, which is std::round's own rule and the one an artist means by
-        // "round": 0.5 is 1 and -0.5 is -1.
-        rounded = std::round(value);
-        break;
-    case document::RoundingMode::Floor:
-        rounded = std::floor(value);
-        break;
-    case document::RoundingMode::Ceiling:
-        rounded = std::ceil(value);
-        break;
-    case document::RoundingMode::Truncate:
-        rounded = std::trunc(value);
-        break;
-    }
+    const std::array<double, 1> inputs{value};
+    const double rounded = runtime::detail::evaluateScalarPrimitive(
+        runtime::detail::scalarRoundingPrimitive(mode), inputs);
     // 2^63 exactly: the first double past the signed range, and the comparison is exact because
     // both sides are powers of two.
     constexpr double kUpperBound = 9223372036854775808.0;

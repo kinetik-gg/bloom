@@ -1004,6 +1004,23 @@ class NodeItem final : public QGraphicsObject {
             }
             return items;
         }
+        if (schemaKey == document::kIntegerOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"Add",    "Subtract", "Multiply", "Divide",
+                                               "Modulo", "Minimum",  "Maximum"};
+            for (std::size_t index = 0; index < document::kIntegerOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kIntegerOperations[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kBooleanOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"And", "Or", "Xor", "Nand", "Nor"};
+            for (std::size_t index = 0; index < document::kBooleanOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kBooleanOperations[index]));
+            }
+            return items;
+        }
         if (schemaKey == document::kStringCaseParameterSchemaKey) {
             static constexpr std::array kNames{"Upper", "Lower", "Title"};
             for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {

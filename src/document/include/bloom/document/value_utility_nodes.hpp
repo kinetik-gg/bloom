@@ -79,6 +79,27 @@ enum class ValueUtilityKernel : std::uint8_t {
     StringStartsWith,
     StringEndsWith,
     StringEquals,
+    // Numeric gaps (deliverable 4), in the Math section.
+    IntegerMath,
+    Rounding,
+    Sign,
+    Wrap,
+    Snap,
+    PingPong,
+    Smoothstep,
+    DegreesToRadians,
+    RadiansToDegrees,
+    Rotate2d,
+    PolarToCartesian,
+    CartesianToPolar,
+    SeparateHsv,
+    CombineHsv,
+    HueShift,
+    Luminance,
+    // Logic (deliverable 4), which stays in Utilities: a predicate is not arithmetic.
+    BooleanLogic,
+    BooleanNot,
+    InRange,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -127,6 +148,27 @@ inline constexpr std::string_view kStringStartsWithNodeType = "bloom.string-star
 inline constexpr std::string_view kStringEndsWithNodeType = "bloom.string-ends-with";
 inline constexpr std::string_view kStringEqualsNodeType = "bloom.string-equals";
 
+inline constexpr std::string_view kIntegerMathNodeType = "bloom.integer-math";
+inline constexpr std::string_view kRoundingNodeType = "bloom.rounding";
+inline constexpr std::string_view kSignNodeType = "bloom.sign";
+inline constexpr std::string_view kWrapNodeType = "bloom.wrap";
+inline constexpr std::string_view kSnapNodeType = "bloom.snap";
+inline constexpr std::string_view kPingPongNodeType = "bloom.ping-pong";
+inline constexpr std::string_view kSmoothstepNodeType = "bloom.smoothstep";
+inline constexpr std::string_view kDegreesToRadiansNodeType = "bloom.degrees-to-radians";
+inline constexpr std::string_view kRadiansToDegreesNodeType = "bloom.radians-to-degrees";
+inline constexpr std::string_view kRotate2dNodeType = "bloom.rotate-2d";
+inline constexpr std::string_view kPolarToCartesianNodeType = "bloom.polar-to-cartesian";
+inline constexpr std::string_view kCartesianToPolarNodeType = "bloom.cartesian-to-polar";
+inline constexpr std::string_view kSeparateHsvNodeType = "bloom.separate-hsv";
+inline constexpr std::string_view kCombineHsvNodeType = "bloom.combine-hsv";
+inline constexpr std::string_view kHueShiftNodeType = "bloom.hue-shift";
+inline constexpr std::string_view kLuminanceNodeType = "bloom.luminance";
+
+inline constexpr std::string_view kBooleanLogicNodeType = "bloom.boolean-logic";
+inline constexpr std::string_view kBooleanNotNodeType = "bloom.boolean-not";
+inline constexpr std::string_view kInRangeNodeType = "bloom.in-range";
+
 // ---------------------------------------------------------------------------------------------
 // The selector vocabularies
 // ---------------------------------------------------------------------------------------------
@@ -173,6 +215,40 @@ inline constexpr std::array<StringPadSide, 2> kStringPadSides{StringPadSide::Sta
                                                               StringPadSide::End};
 
 inline constexpr StringPadSide kDefaultStringPadSide = StringPadSide::Start;
+
+// Integer arithmetic. Divide and Modulo by zero answer 0 -- the same documented fallback the scalar
+// tranche already gives -- and every operation saturates at the signed range rather than wrapping,
+// because signed overflow is undefined and a value graph's operands come from anywhere.
+enum class IntegerOperation : std::uint8_t {
+    Add = 0,
+    Subtract = 1,
+    Multiply = 2,
+    Divide = 3,
+    Modulo = 4,
+    Minimum = 5,
+    Maximum = 6,
+};
+
+inline constexpr std::array<IntegerOperation, 7> kIntegerOperations{
+    IntegerOperation::Add,    IntegerOperation::Subtract, IntegerOperation::Multiply,
+    IntegerOperation::Divide, IntegerOperation::Modulo,   IntegerOperation::Minimum,
+    IntegerOperation::Maximum};
+
+inline constexpr IntegerOperation kDefaultIntegerOperation = IntegerOperation::Add;
+
+enum class BooleanOperation : std::uint8_t {
+    And = 0,
+    Or = 1,
+    Xor = 2,
+    Nand = 3,
+    Nor = 4,
+};
+
+inline constexpr std::array<BooleanOperation, 5> kBooleanOperations{
+    BooleanOperation::And, BooleanOperation::Or, BooleanOperation::Xor, BooleanOperation::Nand,
+    BooleanOperation::Nor};
+
+inline constexpr BooleanOperation kDefaultBooleanOperation = BooleanOperation::And;
 
 // The radices an Integer conversion offers on its card. The stored value is the radix ITSELF, not
 // an index into this list, so a document that stores 16 means base sixteen whatever this list says
@@ -280,6 +356,14 @@ inline constexpr std::string_view kSeparatorPortName = "separator";
 inline constexpr std::string_view kIndexPortName = "index";
 inline constexpr std::string_view kSearchPortName = "search";
 inline constexpr std::string_view kCaseSensitivePortName = "caseSensitive";
+inline constexpr std::string_view kMinimumPortName = "min";
+inline constexpr std::string_view kMaximumPortName = "max";
+inline constexpr std::string_view kDegreesPortName = "degrees";
+inline constexpr std::string_view kRadiusPortName = "radius";
+inline constexpr std::string_view kAnglePortName = "angle";
+inline constexpr std::string_view kHuePortName = "hue";
+inline constexpr std::string_view kSaturationPortName = "saturation";
+inline constexpr std::string_view kAlphaPortName = "alpha";
 
 // DROP-FRAME TIMECODE IS NOT SUPPORTED, and is documented as unsupported rather than approximated.
 // A drop-frame count is a different mapping from frame numbers to wall clock -- it skips two labels

@@ -192,12 +192,16 @@ void testSearchKeyboardAndMenus() {
     // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
     // heading only for a section that actually has results under it.
     // Task S7: Values and Utilities are populated now -- the value library is registered under them
-    // -- so the sectioned list shows six headings in the same pipeline reading order it always
-    // used.
+    // -- so the sectioned list is headed in the same pipeline reading order it always used.
+    // Task UTIL-1: Math joins that order after Values, and Output moves to the END, so the reading
+    // order is where pixels come from, how they are arranged, what numbers drive them, the
+    // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
+    // goes.
     expect(sectionHeadings(list->model()) ==
                QStringList{QStringLiteral("Sources"), QStringLiteral("Layers"),
                            QStringLiteral("Compositing"), QStringLiteral("Values"),
-                           QStringLiteral("Output"), QStringLiteral("Utilities")},
+                           QStringLiteral("Math"), QStringLiteral("Utilities"),
+                           QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,

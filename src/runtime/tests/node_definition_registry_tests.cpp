@@ -114,9 +114,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "built-in definitions register as one startup contribution");
     // ADAPTED (task S7, then FIX1 item I, then UTIL-1): the five structural node types, the seven
     // compatibility schemas, the value library's first slice, and UTIL-1's twenty conversions, four
-    // time conversions and fifteen string utilities. The number is pinned rather than computed so
-    // that adding a node type is a deliberate edit here.
-    expectations.expect(registry.definitions().size() == 81,
+    // time conversions, fifteen string utilities and nineteen numeric and logic nodes. The number
+    // is pinned rather than computed so that adding a node type is a deliberate edit here.
+    expectations.expect(registry.definitions().size() == 100,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();

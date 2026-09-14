@@ -121,6 +121,8 @@ inline constexpr std::string_view kRoundingModeParameterSchemaKey = "bloom.conve
 inline constexpr std::string_view kNumberRadixParameterSchemaKey = "bloom.convert.radix";
 inline constexpr std::string_view kStringCaseParameterSchemaKey = "bloom.string.case";
 inline constexpr std::string_view kStringPadSideParameterSchemaKey = "bloom.string.pad-side";
+inline constexpr std::string_view kIntegerOperationParameterSchemaKey = "bloom.integer.operation";
+inline constexpr std::string_view kBooleanOperationParameterSchemaKey = "bloom.boolean.operation";
 
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
 // Evaluation converts them to the canonical premultiplied image representation. The text color

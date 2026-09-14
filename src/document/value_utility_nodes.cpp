@@ -240,7 +240,108 @@ constexpr std::array<ValueUtilityOperand, 3> kStringEqualsOperands{
                         .kind = SocketValueKind::Boolean,
                         .flag = true}};
 
-constexpr std::array<ValueUtilityDescriptor, 39> kDescriptors{
+// ---------------------------------------------------------------------------------------------
+// Deliverable 4: the Math section's numeric gaps, and the logic that stays in Utilities
+// ---------------------------------------------------------------------------------------------
+
+constexpr std::array<ValueUtilityOutput, 2> kPolarResult{
+    ValueUtilityOutput{bloom::document::kRadiusPortName, SocketValueKind::Scalar},
+    ValueUtilityOutput{bloom::document::kAnglePortName, SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOutput, 4> kHsvResult{
+    ValueUtilityOutput{bloom::document::kHuePortName, SocketValueKind::Scalar},
+    ValueUtilityOutput{bloom::document::kSaturationPortName, SocketValueKind::Scalar},
+    ValueUtilityOutput{bloom::document::kValuePortName, SocketValueKind::Scalar},
+    ValueUtilityOutput{bloom::document::kAlphaPortName, SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilitySelector, 1> kIntegerOperationSelector{ValueUtilitySelector{
+    bloom::document::kOperationParameterRole, bloom::document::kIntegerOperationParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::kDefaultIntegerOperation)}};
+
+constexpr std::array<ValueUtilitySelector, 1> kBooleanOperationSelector{ValueUtilitySelector{
+    bloom::document::kOperationParameterRole, bloom::document::kBooleanOperationParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::kDefaultBooleanOperation)}};
+
+constexpr std::array<ValueUtilityOperand, 2> kIntegerPairOperands{
+    ValueUtilityOperand{.role = bloom::document::kFirstOperandPortName,
+                        .kind = SocketValueKind::Integer},
+    ValueUtilityOperand{.role = bloom::document::kSecondOperandPortName,
+                        .kind = SocketValueKind::Integer}};
+
+constexpr std::array<ValueUtilityOperand, 2> kBooleanPairOperands{
+    ValueUtilityOperand{.role = bloom::document::kFirstOperandPortName,
+                        .kind = SocketValueKind::Boolean},
+    ValueUtilityOperand{.role = bloom::document::kSecondOperandPortName,
+                        .kind = SocketValueKind::Boolean}};
+
+// The unit interval, which is what a Wrap and an In Range are most often authored against, so a
+// freshly added node already does something meaningful.
+constexpr std::array<ValueUtilityOperand, 3> kIntervalOperands{
+    ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{.role = bloom::document::kMinimumPortName,
+                        .kind = SocketValueKind::Scalar,
+                        .number = bloom::document::kDefaultRangeMinimum},
+    ValueUtilityOperand{.role = bloom::document::kMaximumPortName,
+                        .kind = SocketValueKind::Scalar,
+                        .number = bloom::document::kDefaultRangeMaximum}};
+
+constexpr std::array<ValueUtilityOperand, 2> kSnapOperands{
+    ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Scalar},
+    // One, not zero: snapping to a zero grid is not a grid, and it is the step a fresh node is
+    // most likely to want.
+    ValueUtilityOperand{.role = "step", .kind = SocketValueKind::Scalar, .number = 1.0}};
+
+constexpr std::array<ValueUtilityOperand, 2> kPingPongOperands{
+    ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{.role = "length", .kind = SocketValueKind::Scalar, .number = 1.0}};
+
+constexpr std::array<ValueUtilityOperand, 3> kSmoothstepOperands{
+    ValueUtilityOperand{.role = "edge0",
+                        .kind = SocketValueKind::Scalar,
+                        .number = bloom::document::kDefaultRangeMinimum},
+    ValueUtilityOperand{.role = "edge1",
+                        .kind = SocketValueKind::Scalar,
+                        .number = bloom::document::kDefaultRangeMaximum},
+    ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 1> kDegreesOperand{ValueUtilityOperand{
+    .role = bloom::document::kDegreesPortName, .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 1> kRadiansOperand{
+    ValueUtilityOperand{.role = "radians", .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 3> kRotate2dOperands{
+    ValueUtilityOperand{.role = bloom::document::kVectorPortName, .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{.role = bloom::document::kDegreesPortName, .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{.role = "pivot", .kind = SocketValueKind::Vector2}};
+
+constexpr std::array<ValueUtilityOperand, 2> kPolarToCartesianOperands{
+    ValueUtilityOperand{
+        .role = bloom::document::kRadiusPortName, .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = bloom::document::kDegreesPortName,
+                        .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 1> kVector2Operand{ValueUtilityOperand{
+    .role = bloom::document::kVectorPortName, .kind = SocketValueKind::Vector2, .number = 1.0}};
+
+constexpr std::array<ValueUtilityOperand, 4> kCombineHsvOperands{
+    ValueUtilityOperand{.role = bloom::document::kHuePortName, .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{.role = bloom::document::kSaturationPortName,
+                        .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{
+        .role = bloom::document::kValuePortName, .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{
+        .role = bloom::document::kAlphaPortName, .kind = SocketValueKind::Scalar, .number = 1.0}};
+
+constexpr std::array<ValueUtilityOperand, 2> kHueShiftOperands{
+    ValueUtilityOperand{.role = bloom::document::kColorPortName, .kind = SocketValueKind::Color},
+    ValueUtilityOperand{.role = bloom::document::kDegreesPortName,
+                        .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
+    ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Boolean}};
+
+constexpr std::array<ValueUtilityDescriptor, 58> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -363,6 +464,62 @@ constexpr std::array<ValueUtilityDescriptor, 39> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kStringEqualsNodeType, "String Equals",
                            ValueUtilityKernel::StringEquals, NodeCategory::Utilities,
                            kStringEqualsOperands, kNoSelectors, kBooleanResult},
+
+    ValueUtilityDescriptor{bloom::document::kIntegerMathNodeType, "Integer Math",
+                           ValueUtilityKernel::IntegerMath, NodeCategory::Math,
+                           kIntegerPairOperands, kIntegerOperationSelector, kIntegerResult},
+    ValueUtilityDescriptor{bloom::document::kRoundingNodeType, "Rounding",
+                           ValueUtilityKernel::Rounding, NodeCategory::Math, kScalarOperand,
+                           kRoundingSelector, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kSignNodeType, "Sign", ValueUtilityKernel::Sign,
+                           NodeCategory::Math, kScalarOperand, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kWrapNodeType, "Wrap", ValueUtilityKernel::Wrap,
+                           NodeCategory::Math, kIntervalOperands, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kSnapNodeType, "Snap", ValueUtilityKernel::Snap,
+                           NodeCategory::Math, kSnapOperands, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kPingPongNodeType, "Ping-pong",
+                           ValueUtilityKernel::PingPong, NodeCategory::Math, kPingPongOperands,
+                           kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kSmoothstepNodeType, "Smoothstep",
+                           ValueUtilityKernel::Smoothstep, NodeCategory::Math, kSmoothstepOperands,
+                           kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kDegreesToRadiansNodeType, "Degrees To Radians",
+                           ValueUtilityKernel::DegreesToRadians, NodeCategory::Math,
+                           kDegreesOperand, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kRadiansToDegreesNodeType, "Radians To Degrees",
+                           ValueUtilityKernel::RadiansToDegrees, NodeCategory::Math,
+                           kRadiansOperand, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kRotate2dNodeType, "Rotate 2D",
+                           ValueUtilityKernel::Rotate2d, NodeCategory::Math, kRotate2dOperands,
+                           kNoSelectors, kVector2Result},
+    ValueUtilityDescriptor{bloom::document::kPolarToCartesianNodeType, "Polar To Cartesian",
+                           ValueUtilityKernel::PolarToCartesian, NodeCategory::Math,
+                           kPolarToCartesianOperands, kNoSelectors, kVector2Result},
+    ValueUtilityDescriptor{bloom::document::kCartesianToPolarNodeType, "Cartesian To Polar",
+                           ValueUtilityKernel::CartesianToPolar, NodeCategory::Math,
+                           kVector2Operand, kNoSelectors, kPolarResult},
+    ValueUtilityDescriptor{bloom::document::kSeparateHsvNodeType, "Separate HSV",
+                           ValueUtilityKernel::SeparateHsv, NodeCategory::Math, kColorOperand,
+                           kNoSelectors, kHsvResult},
+    ValueUtilityDescriptor{bloom::document::kCombineHsvNodeType, "Combine HSV",
+                           ValueUtilityKernel::CombineHsv, NodeCategory::Math, kCombineHsvOperands,
+                           kNoSelectors, kColorResult},
+    ValueUtilityDescriptor{bloom::document::kHueShiftNodeType, "Hue Shift",
+                           ValueUtilityKernel::HueShift, NodeCategory::Math, kHueShiftOperands,
+                           kNoSelectors, kColorResult},
+    ValueUtilityDescriptor{bloom::document::kLuminanceNodeType, "Luminance",
+                           ValueUtilityKernel::Luminance, NodeCategory::Math, kColorOperand,
+                           kNoSelectors, kScalarResult},
+
+    ValueUtilityDescriptor{bloom::document::kBooleanLogicNodeType, "Boolean Logic",
+                           ValueUtilityKernel::BooleanLogic, NodeCategory::Utilities,
+                           kBooleanPairOperands, kBooleanOperationSelector, kBooleanResult},
+    ValueUtilityDescriptor{bloom::document::kBooleanNotNodeType, "Boolean Not",
+                           ValueUtilityKernel::BooleanNot, NodeCategory::Utilities,
+                           kBooleanValueOperand, kNoSelectors, kBooleanResult},
+    ValueUtilityDescriptor{bloom::document::kInRangeNodeType, "In Range",
+                           ValueUtilityKernel::InRange, NodeCategory::Utilities, kIntervalOperands,
+                           kNoSelectors, kBooleanResult},
 };
 
 } // namespace

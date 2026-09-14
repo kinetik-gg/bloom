@@ -211,6 +211,65 @@ Title case upper-cases the first ASCII letter or digit of each run and lower-cas
 answer with the SAME shape the safe parse contract defines -- a value, a `valid` Boolean and a
 `fallback` operand -- so a graph has one rule to learn rather than two.
 
+## Math
+
+Category `Math`. The section holds the ARITHMETIC and nothing else: the existing Math, Vector Math,
+Vector Measure, Map Range, Clamp, Mix, Mix Color, Compare and Random nodes moved into it from
+`Utilities`, and every numeric node below was added to it. Switch, Separate/Combine, Reroute, the
+conversions and the logic stayed in `Utilities`, because a predicate and a wire are not arithmetic.
+
+| Node | Inputs | Outputs | Notes |
+| --- | --- | --- | --- |
+| Integer Math | `a` Integer, `b` Integer; selector `operation` (Add) | `result` Integer | Add, Subtract, Multiply, Divide, Modulo, Minimum, Maximum |
+| Rounding | `value` Scalar; selector `mode` (Round) | `result` Scalar | Round, Floor, Ceiling, Truncate |
+| Sign | `value` Scalar | `result` Scalar | -1, 0 or 1 |
+| Wrap | `value` Scalar, `min` Scalar (0), `max` Scalar (1) | `result` Scalar | Folded into the HALF-OPEN interval, so a value at the maximum is the minimum one period along |
+| Snap | `value` Scalar, `step` Scalar (1) | `result` Scalar | Nearest multiple. A zero or non-finite step is no grid, so the value passes through |
+| Ping-pong | `value` Scalar, `length` Scalar (1) | `result` Scalar | A triangle wave over [0, length]. A non-positive length has no period and answers 0 |
+| Smoothstep | `edge0` Scalar (0), `edge1` Scalar (1), `value` Scalar | `result` Scalar | The frozen primitive's own operand order. A degenerate edge pair is outside its domain and answers 0 |
+| Degrees To Radians | `degrees` Scalar | `result` Scalar | |
+| Radians To Degrees | `radians` Scalar | `result` Scalar | |
+| Rotate 2D | `vector` Vector2, `degrees` Scalar, `pivot` Vector2 | `result` Vector2 | Counter-clockwise in a Y-up frame, about the authored pivot |
+| Polar To Cartesian | `radius` Scalar (1), `degrees` Scalar | `result` Vector2 | |
+| Cartesian To Polar | `vector` Vector2 | `radius` Scalar, `angle` Scalar | Angle in degrees over (-180, 180]. The ORIGIN answers 0, because it has no direction |
+| Separate HSV | `color` Color | `hue`, `saturation`, `value`, `alpha` Scalars | Hue in degrees over [0, 360). A grey has no hue and answers 0 |
+| Combine HSV | `hue`, `saturation`, `value` (1), `alpha` (1) Scalars | `result` Color | Hue WRAPS; saturation is clamped into [0, 1] |
+| Hue Shift | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
+| Luminance | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
+
+### One rounding rule
+
+`Rounding`, `Snap`, `Scalar To Integer` and the existing `Math` node's rounding operations all route
+through `core::primitives::evaluateScalar()`. That matters at a TIE: the frozen primitive uses
+`std::nearbyint`, which rounds half to EVEN, so 2.5 is 2 and 3.5 is 4. Calling `std::round` in one
+node and the primitive in another would make two nodes an artist reads as the same operation
+disagree about exactly the value they are most likely to type.
+
+### Integer arithmetic saturates
+
+Signed overflow is undefined in C++ and a value graph's operands come from anywhere, so every
+`Integer Math` operation is bounded: adding one to the largest integer answers the largest integer
+rather than the smallest. Divide and Modulo by zero answer 0 -- the documented fallback the scalar
+tranche already gives -- and the one signed division that overflows (the most negative value over
+-1) saturates too. Modulo is truncated division's remainder, so it takes the sign of the DIVIDEND,
+which is C's rule and the one every language an artist is likely to have met uses for `%`.
+
+### Vector length, normalize, distance and dot are already here
+
+They were checked before being added and are NOT duplicated: `Vector 2/3 Measure` already offers
+Length, Dot Product and Distance, and `Vector 2/3 Math` already offers Normalize. A second spelling
+of each would be two nodes an artist has to choose between for one operation.
+
+## Logic
+
+Category `Utilities`. A predicate is not arithmetic, so these did not move into `Math`.
+
+| Node | Inputs | Outputs | Notes |
+| --- | --- | --- | --- |
+| Boolean Logic | `a` Boolean, `b` Boolean; selector `operation` (And) | `result` Boolean | And, Or, Xor, Nand, Nor |
+| Boolean Not | `value` Boolean | `result` Boolean | |
+| In Range | `value` Scalar, `min` Scalar (0), `max` Scalar (1) | `result` Boolean | INCLUSIVE at both ends. A reversed pair names no interval, so nothing is inside it; NaN is in no interval |
+
 ### Why these are nodes rather than implicit coercions
 
 The connect-time promotion whitelist (`layer-graph-model.md`, **Socket Kinds And Promotion**) admits

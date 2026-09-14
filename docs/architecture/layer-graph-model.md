@@ -567,12 +567,19 @@ and preserves the slot and edge IDs; a body drop appends. A press where there is
 ### Node Categories
 
 `NodeDefinition::category` declares which Add-surface section a node type is listed under:
-`Sources`, `Layers`, `Compositing`, `Values`, `Output`, `Utilities`. The vocabulary is the artist's --
-what a node is for -- so it is declared beside the type rather than derived from `NodeLoweringKind`,
-which spans several sections at once. The built-ins are Solid and Text under `Sources`, the layer
-boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the literal value sources
-and `Time` under `Values`, and the whole computing library under `Utilities` (see **Value Graph And
-Drivers**).
+`Sources`, `Layers`, `Compositing`, `Values`, `Math`, `Utilities`, `Output`. The vocabulary is the
+artist's -- what a node is for -- so it is declared beside the type rather than derived from
+`NodeLoweringKind`, which spans several sections at once. The built-ins are Solid and Text under
+`Sources`, the layer boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the
+literal value sources and `Time` under `Values`, the arithmetic under `Math`, and the plumbing,
+logic and conversions under `Utilities` (see **Value Graph And Drivers** and
+[value-node-library.md](value-node-library.md)).
+
+`Math` exists because `Utilities` had become the place everything that is not a source, a layer or an
+output ends up: a Math node, a Switch, a Reroute and a string Trim are not one family, and burying
+the arithmetic among the plumbing is what made an artist scroll past it. The category is NOT
+persisted -- a document stores the node's type id -- so moving a type between sections needs no
+migration and no schema step.
 
 Add surfaces list entries in that category order and alphabetically inside each one, and
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no

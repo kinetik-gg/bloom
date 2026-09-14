@@ -145,7 +145,7 @@ struct KindVocabulary final {
             std::move(parameters),
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 [[nodiscard]] NodeDefinition vectorMathDefinition(const std::string_view typeId,
@@ -171,7 +171,7 @@ struct KindVocabulary final {
                        vectorOperationStoredValue(kDefaultVectorOperation))},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 // The reductions are a separate node type from Vector Math, not a mode of it, because their result
@@ -195,7 +195,7 @@ struct KindVocabulary final {
                        vectorReductionStoredValue(kDefaultVectorReduction))},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 [[nodiscard]] NodeDefinition mapRangeDefinition() {
@@ -225,7 +225,7 @@ struct KindVocabulary final {
                        ParameterValueKind::Boolean, false)},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 [[nodiscard]] NodeDefinition clampDefinition() {
@@ -244,7 +244,7 @@ struct KindVocabulary final {
                        ParameterValueKind::Float64, kDefaultRangeMaximum)},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 [[nodiscard]] NodeDefinition mixDefinition() {
@@ -263,7 +263,7 @@ struct KindVocabulary final {
                        ParameterValueKind::Float64, 0.0)},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 // A separate node type from Mix, not a data-type mode of it, for the reason
@@ -286,7 +286,7 @@ struct KindVocabulary final {
                        ParameterValueKind::Color4d, kDefaultValueColor)},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 [[nodiscard]] NodeDefinition compareDefinition() {
@@ -308,7 +308,7 @@ struct KindVocabulary final {
                        compareOperationStoredValue(kDefaultCompareOperation))},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 // One definition per socket kind, because Bloom has no polymorphic port: a Switch whose two branch
@@ -561,7 +561,7 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
                        ParameterValueKind::Float64, kDefaultRangeMaximum)},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Utilities};
+            NodeCategory::Math};
 }
 
 // The one value lowering with a REQUIRED input and no parameter: a Reroute has no value of its own
@@ -588,7 +588,9 @@ namespace bloom::document::detail {
 bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
     if (schemaKey == kRoundingModeParameterSchemaKey ||
         schemaKey == kNumberRadixParameterSchemaKey || schemaKey == kStringCaseParameterSchemaKey ||
-        schemaKey == kStringPadSideParameterSchemaKey) {
+        schemaKey == kStringPadSideParameterSchemaKey ||
+        schemaKey == kIntegerOperationParameterSchemaKey ||
+        schemaKey == kBooleanOperationParameterSchemaKey) {
         return true;
     }
     return schemaKey == kScalarOperationParameterSchemaKey ||
@@ -613,7 +615,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     // Value nodes are never structural: no layer slot, never a singleton, and always offered under
     // one of the two sections the Add surface lists them in.
     if (definition.layerSlotInput.has_value() || definition.cardinality != NodeCardinality::Many ||
-        (definition.category != NodeCategory::Values &&
+        (definition.category != NodeCategory::Values && definition.category != NodeCategory::Math &&
          definition.category != NodeCategory::Utilities)) {
         return false;
     }

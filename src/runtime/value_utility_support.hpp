@@ -1,6 +1,9 @@
 #pragma once
 
+#include <bloom/core/scalar_primitives.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
+
+#include <span>
 
 #include <algorithm>
 #include <cstddef>
@@ -178,10 +181,39 @@ selectorAt(const ValueUtilityInvocation& invocation, const std::size_t index,
     return static_cast<std::int32_t>(invocation.selectors[index]);
 }
 
+// ONE rounding rule for the whole library, and it is the FROZEN PRIMITIVE's. A Rounding node, a
+// Scalar To Integer node and a Math node set to Round must answer the same thing for 2.5, so every
+// one of them routes through core::primitives::evaluateScalar() rather than calling std::round --
+// which rounds ties AWAY FROM ZERO where the primitive's std::nearbyint rounds them TO EVEN.
+[[nodiscard]] inline core::primitives::ScalarPrimitive
+scalarRoundingPrimitive(const document::RoundingMode mode) noexcept {
+    switch (mode) {
+    case document::RoundingMode::Floor:
+        return core::primitives::ScalarPrimitive::Floor;
+    case document::RoundingMode::Ceiling:
+        return core::primitives::ScalarPrimitive::Ceiling;
+    case document::RoundingMode::Truncate:
+        return core::primitives::ScalarPrimitive::Truncate;
+    case document::RoundingMode::Round:
+        break;
+    }
+    return core::primitives::ScalarPrimitive::Round;
+}
+
+// One scalar primitive call with this library's own fallback rule: zero for every domain failure,
+// which is the same answer the Math node already gives.
+[[nodiscard]] inline double
+evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
+                        const std::span<const double> inputs) {
+    const auto result = core::primitives::evaluateScalar(operation, inputs);
+    return result.hasValue() ? *result.value() : 0.0;
+}
+
 // The family entry points. One per deliverable's worth of kernels, so no single translation unit
 // carries the whole library.
 [[nodiscard]] ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

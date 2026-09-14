@@ -14,6 +14,7 @@ enum class Family : std::uint8_t {
     Conversion,
     Time,
     String,
+    Numeric,
 };
 
 [[nodiscard]] Family familyOf(const Kernel kernel) noexcept {
@@ -60,6 +61,26 @@ enum class Family : std::uint8_t {
     case Kernel::StringEndsWith:
     case Kernel::StringEquals:
         return Family::String;
+    case Kernel::IntegerMath:
+    case Kernel::Rounding:
+    case Kernel::Sign:
+    case Kernel::Wrap:
+    case Kernel::Snap:
+    case Kernel::PingPong:
+    case Kernel::Smoothstep:
+    case Kernel::DegreesToRadians:
+    case Kernel::RadiansToDegrees:
+    case Kernel::Rotate2d:
+    case Kernel::PolarToCartesian:
+    case Kernel::CartesianToPolar:
+    case Kernel::SeparateHsv:
+    case Kernel::CombineHsv:
+    case Kernel::HueShift:
+    case Kernel::Luminance:
+    case Kernel::BooleanLogic:
+    case Kernel::BooleanNot:
+    case Kernel::InRange:
+        return Family::Numeric;
     }
     return Family::Conversion;
 }
@@ -74,6 +95,8 @@ ValueUtilityOutcome evaluateValueUtility(const ValueUtilityInvocation& invocatio
         return detail::evaluateValueTime(invocation);
     case Family::String:
         return detail::evaluateValueString(invocation);
+    case Family::Numeric:
+        return detail::evaluateValueNumeric(invocation);
     case Family::Conversion:
         break;
     }

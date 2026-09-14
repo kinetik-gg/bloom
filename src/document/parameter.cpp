@@ -125,6 +125,16 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kRoundingModes, *stored).has_value();
     }
+    if (schemaKey == kIntegerOperationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr &&
+               selectorFromStoredValue(kIntegerOperations, *stored).has_value();
+    }
+    if (schemaKey == kBooleanOperationParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr &&
+               selectorFromStoredValue(kBooleanOperations, *stored).has_value();
+    }
     if (schemaKey == kStringCaseParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kStringCaseModes, *stored).has_value();
