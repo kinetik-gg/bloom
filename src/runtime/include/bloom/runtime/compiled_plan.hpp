@@ -250,8 +250,8 @@ class CompiledCompositionPlan final {
     // candidate definition. It never exposes aliases into the published plan.
     [[nodiscard]] CompiledCompositionPlanDefinition copyDefinition() const;
 
-    friend bool operator==(const CompiledCompositionPlan&,
-                           const CompiledCompositionPlan&) = default;
+    // Memoization controls and derived dependence tables are not semantic identity inputs.
+    friend bool operator==(const CompiledCompositionPlan&, const CompiledCompositionPlan&);
 
   private:
     bool bypassOperationCache_ = false;

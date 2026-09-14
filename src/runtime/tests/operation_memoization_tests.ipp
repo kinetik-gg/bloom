@@ -202,6 +202,13 @@ void testOperationCacheLifecycle(Expectations& expectations) {
     const auto result = evaluator.evaluate(overridePlan, requestFor(*overridePlan), {});
     expectations.expect(result.frame() && evaluator.operationCache()->retainedBytes() == 0,
                         "override plans bypass cache even without a request flag");
+    auto normalDefinition = overridePlan->copyDefinition();
+    normalDefinition.bypassOperationCache = false;
+    const auto normalPlan = publishPlan(std::move(normalDefinition));
+    const auto normal = evaluator.evaluate(normalPlan, requestFor(*normalPlan), {});
+    expectations.expect(result.frame() && normal.frame() &&
+                            result.frame()->identity() == normal.frame()->identity(),
+                        "memoization metadata cannot alter process frame identity");
     if (result.frame())
         expectations.expect(result.frame()->operationCacheStatistics().hits == 0 &&
                                 result.frame()->operationCacheStatistics().misses == 6,
