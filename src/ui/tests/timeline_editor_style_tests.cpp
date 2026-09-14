@@ -1709,6 +1709,7 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     mouse(QEvent::MouseMove, 2, yFor(opacity), Qt::AltModifier);
     mouse(QEvent::MouseButtonRelease, 2, yFor(opacity), Qt::AltModifier);
     const auto duplicate = session.selectedKeyframeData();
+    const auto duplicateKey = session.selection().keyframes.front();
     expectations.expect(duplicate.size() == 1 && duplicate[0].time == time(2) &&
                             session.selection().keyframes.front() != selected.front(),
                         "Alt-drag copies one key with a new identity");
@@ -1781,6 +1782,32 @@ void testIntegratedKeyGestures(Expectations& expectations) {
                                                            document::KeyframeInterpolation::Hold;
                                                 }),
                         "context menu edits every selected interpolation in one transaction");
+    session.selectKeyframes({selected.front(), duplicateKey});
+    mouse(QEvent::MouseButtonPress, 2, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 4, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 4, yFor(opacity), Qt::AltModifier);
+    const auto fixedSubframe = session.selectedKeyframeData();
+    expectations.expect(fixedSubframe.size() == 2 && fixedSubframe[0].time == time(1123, 1000) &&
+                            fixedSubframe[1].time == time(4),
+                        "stretch preserves the opposite endpoint's exact subframe time");
+    (void)session.undo();
+    mouse(QEvent::MouseButtonPress, 1.123, yFor(opacity));
+    mouse(QEvent::MouseMove, 2.5, yFor(opacity));
+    mouse(QEvent::MouseButtonRelease, 2.5, yFor(opacity));
+    const auto spaced = session.selectedKeyframeData();
+    expectations.expect(
+        spaced.size() == 2 && spaced[0].time == time(5, 2) && spaced[1].time == time(3377, 1000),
+        "frame snapping the dragged key preserves every selected key's exact relative offset");
+    (void)session.undo();
+    (void)session.setCurrentTime(time(4007, 1000));
+    mouse(QEvent::MouseButtonPress, 1.123, yFor(opacity));
+    mouse(QEvent::MouseMove, 4.01, yFor(opacity));
+    mouse(QEvent::MouseButtonRelease, 4.01, yFor(opacity));
+    const auto magnetic = session.selectedKeyframeData();
+    expectations.expect(magnetic.size() == 2 && magnetic[0].time == time(4007, 1000) &&
+                            magnetic[1].time == time(4884, 1000),
+                        "magnetic snapping preserves an exact subframe playhead and group spacing");
+    (void)session.undo();
     const auto lockedLayer = session.selection().contextualLayer;
     if (!lockedLayer)
         throw std::runtime_error("Missing keyframe contextual layer");

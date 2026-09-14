@@ -173,9 +173,7 @@ bool CompositionSession::pasteCopiedKeyframes() {
         return false;
     auto keys = keyframeClipboard_;
     const auto first = std::ranges::min_element(keys, {}, &commands::KeyframePaste::time)->time;
-    const auto negativeOrigin = core::RationalTime::create(-first.numerator(), first.denominator());
-    const auto offset =
-        negativeOrigin ? offsetKeyTime(currentTime_, *negativeOrigin) : std::nullopt;
+    const auto offset = keyTimeDifference(currentTime_, first);
     if (!offset)
         return false;
     for (auto& key : keys) {

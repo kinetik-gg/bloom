@@ -193,7 +193,8 @@ sources, IDs, values, times and outgoing modes. No evaluator, sampling, process-
 sampling-version changes are involved.
 
 Endpoint time-stretch submits `MoveKeyframes` with frame-snapped scaled times about the opposite
-selected endpoint. Shift disables ordinary move snapping; the UI converts pointer displacement to
+selected endpoint. That fixed endpoint retains its exact rational time even when it is a subframe;
+only moved keys snap to frames. Shift disables ordinary move snapping; the UI converts pointer displacement to
 a rational nanosecond offset and applies it with checked portable integer arithmetic. Clipboard
 paste uses checked rational offsets relative to the earliest copied key and the current playhead,
 preserving subframe spacing. Unrepresentable arithmetic is refused rather than overflowing.

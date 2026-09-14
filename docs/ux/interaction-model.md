@@ -249,8 +249,10 @@ A click on an already selected key keeps the set during a possible drag, then se
 on release if no drag occurred. Right-clicking a selected key preserves the set. Locked layers reject parameter and key edits. Batch gestures
 commit once on release; a stale revision cancels the gesture. A collision rejects the complete
 move, stretch, duplicate or paste. A stretch keeps its endpoint on the same side of its anchor;
-rounding that would merge keys rejects the edit. Ordinary moves clamp the whole selection to the
-composition, preserving its spacing. Shift subframe pointer offsets use nanosecond resolution and
+rounding that would merge keys rejects the edit. The fixed endpoint retains its exact time,
+including a subframe time; only the moved keys snap. Ordinary moves clamp the whole selection to the
+composition, preserving its exact spacing. The dragged key snaps to a frame or an exact magnetic
+target; the other selected keys retain their rational offsets. Shift subframe pointer offsets use nanosecond resolution and
 checked rational addition. Clipboard offsets remain exact, including a subframe playhead; the
 clipboard is session-local and clears when the composition or document changes.
 

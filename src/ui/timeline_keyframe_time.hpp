@@ -25,6 +25,13 @@ inline std::optional<core::RationalTime> offsetKeyTime(core::RationalTime base,
         return std::nullopt;
     return core::RationalTime::create(a + b, base.denominator() * leftFactor);
 }
+inline std::optional<core::RationalTime> keyTimeDifference(core::RationalTime target,
+                                                           core::RationalTime origin) {
+    if (origin.numerator() == std::numeric_limits<std::int64_t>::min())
+        return std::nullopt;
+    const auto negative = core::RationalTime::create(-origin.numerator(), origin.denominator());
+    return negative ? offsetKeyTime(target, *negative) : std::nullopt;
+}
 inline std::optional<core::RationalTime> keyPointerOffset(double seconds) {
     constexpr std::int64_t precision = 1'000'000'000;
     const double scaled = std::round(seconds * static_cast<double>(precision));

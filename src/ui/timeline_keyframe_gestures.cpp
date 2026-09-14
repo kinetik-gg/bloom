@@ -219,6 +219,36 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
     }
     const auto targetIndex = axis->frameIndexForPixel(
         static_cast<int>(std::lround(axis->pixelForSeconds(targetSeconds))));
+    if (!stretchAnchor_) {
+        const auto target =
+            snapGuide_ ? snapGuide_ : frameTimeForIndex(rate, duration, targetIndex);
+        const auto [firstKey, lastKey] =
+            std::minmax_element(gestureData_.begin(), gestureData_.end(),
+                                [](const auto& a, const auto& b) { return a.time < b.time; });
+        const auto epsilon = core::RationalTime::create(-1, 1'000'000'000);
+        const auto lastInstant = epsilon ? offsetKeyTime(duration, *epsilon) : std::nullopt;
+        const auto minimum = keyTimeDifference(core::RationalTime{}, firstKey->time);
+        const auto maximum =
+            lastInstant ? keyTimeDifference(*lastInstant, lastKey->time) : std::nullopt;
+        const auto requested = target ? keyTimeDifference(*target, pressed_->time) : std::nullopt;
+        moves_.clear();
+        if (!requested || !minimum || !maximum || *minimum > *maximum)
+            return;
+        const auto offset = std::clamp(*requested, *minimum, *maximum);
+        if (offset != *requested)
+            snapGuide_.reset();
+        for (std::size_t i = 0; i < gestureData_.size(); ++i) {
+            const auto time = offsetKeyTime(gestureData_[i].time, offset);
+            if (!time) {
+                moves_.clear();
+                return;
+            }
+            moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *time});
+        }
+        updateRows();
+        event->accept();
+        return;
+    }
     long double delta = static_cast<long double>(targetIndex) - static_cast<long double>(*lead);
     std::vector<std::uint64_t> frames;
     frames.reserve(gestureData_.size());
@@ -232,20 +262,33 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
     delta = std::clamp(delta, -static_cast<long double>(*first),
                        static_cast<long double>(axis->maxIndex - *last));
     moves_.clear();
-    const auto anchor =
-        stretchAnchor_ ? nearestFrameIndexForTime(rate, duration, *stretchAnchor_) : std::nullopt;
+    const auto framePosition = [rate](core::RationalTime time) {
+        return (static_cast<long double>(time.numerator()) /
+                static_cast<long double>(time.denominator())) *
+               static_cast<long double>(rate.numerator()) /
+               static_cast<long double>(rate.denominator());
+    };
     for (std::size_t i = 0; i < frames.size(); ++i) {
         long double frame = static_cast<long double>(frames[i]) + delta;
-        if (anchor && *anchor != *lead) {
-            const long double fixed = static_cast<long double>(*anchor);
-            const long double oldSpan = static_cast<long double>(*lead) - fixed;
-            // Keep the dragged endpoint on its original side; a rounded collision still rejects
-            // atomically in MoveKeyframes, rather than dropping a key from the selection.
+        if (stretchAnchor_) {
+            if (gestureData_[i].time == *stretchAnchor_) {
+                moves_.push_back(
+                    {{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *stretchAnchor_});
+                continue;
+            }
+            const long double fixed = framePosition(*stretchAnchor_);
+            const long double oldSpan = framePosition(pressed_->time) - fixed;
+            if (oldSpan == 0.0L) {
+                moves_.clear();
+                return;
+            }
+            // Preserve the fixed endpoint's exact time, including subframes. Only the moved
+            // times snap to frames. A rounded collision is still rejected by MoveKeyframes.
             const long double newSpan =
                 oldSpan > 0 ? std::max(1.0L, static_cast<long double>(targetIndex) - fixed)
                             : std::min(-1.0L, static_cast<long double>(targetIndex) - fixed);
             frame = std::round(fixed +
-                               (static_cast<long double>(frames[i]) - fixed) * newSpan / oldSpan);
+                               (framePosition(gestureData_[i].time) - fixed) * newSpan / oldSpan);
         }
         const auto time =
             frameTimeForIndex(rate, duration,
