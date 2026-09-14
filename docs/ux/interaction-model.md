@@ -52,8 +52,8 @@ hosts reach with a modifier — bare letters belong to tools.
 Selected layers show their delivered-frame bounds polygon and anchor. Position moves the anchor in
 composition space; anchor is an offset from local content centre, so changing it with position held
 fixed moves content. The overlay follows zoom/pan and shows the actual delivered frame during a stale
-preview. Empty content, another composition, or a pixel-only cached frame without process geometry has
-no overlay. Selecting node cards can show multiple layer boundaries. Existing drag bindings are unchanged.
+preview. Cached display frames retain evaluated geometry without their Float32 process images, so
+playback also shows the overlay without re-rendering. Empty content or another composition has no overlay. Selecting node cards can show multiple layer boundaries. Existing drag bindings are unchanged.
 
 | Binding | Action |
 | --- | --- |

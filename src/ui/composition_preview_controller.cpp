@@ -99,15 +99,14 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 std::vector<runtime::EvaluatedOperationBounds>
 CompositionPreviewController::selectedLayerBounds() const {
     std::vector<runtime::EvaluatedOperationBounds> result;
-    if (!state_.frame || !state_.frame->hasProcessFrame() ||
-        state_.frame->desiredIdentity().compositionId != session_.compositionId())
+    if (!state_.frame || state_.frame->desiredIdentity().compositionId != session_.compositionId())
         return result;
     const auto& selection = session_.selection();
     const auto* primary = std::get_if<document::LayerId>(&selection.primary);
     const auto layer = primary ? std::optional(*primary) : selection.contextualLayer;
     const auto& nodes = session_.selectedNodes();
-    const auto& frame = *state_.frame->processFrame();
-    const auto operations = frame.identity().plan->operations();
+    const auto& frame = *state_.frame;
+    const auto operations = frame.processIdentity().plan->operations();
     const auto allBounds = frame.evaluatedBounds();
     for (std::size_t index = 0; index < allBounds.size(); ++index) {
         const auto& bounds = allBounds[index];

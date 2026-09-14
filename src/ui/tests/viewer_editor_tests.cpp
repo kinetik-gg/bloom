@@ -1248,7 +1248,7 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
         return;
     }
     ViewerFixture fixture(document::makeNewProject("Bounds overlay", "Main",
-                                                   core::RationalTime::fromInteger(1), *format));
+                                                   core::RationalTime::fromInteger(2), *format));
     auto footer = std::unique_ptr<QWidget>(fixture.viewer.takeFooterWidget());
     footer->hide();
     expectations.expect(fixture.session.addSolidLayer("Bounds", {0, 0, 0, 1}),
@@ -1282,6 +1282,12 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     expectations.expect(bounds.size() == 1 && bounds[0].anchor == document::Vec2d{80, 60} &&
                             bounds[0].local == runtime::ContentBounds{0, 0, 80, 40},
                         "query returns delivered local bounds and composition anchor");
+    expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)) &&
+                            waitUntil([&] { return isReady(fixture.controller); }),
+                        "a second bounds frame renders");
+    expectations.expect(fixture.session.setCurrentTime({}) && fixture.controller.state().frame &&
+                            !fixture.controller.state().frame->hasProcessFrame(),
+                        "pixel probes use a cached display-only frame");
     const auto clearInteraction = [&] {
         fixture.viewer.clearFocus();
         for (auto* child : fixture.viewer.findChildren<QWidget*>()) {

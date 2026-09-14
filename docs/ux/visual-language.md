@@ -215,7 +215,7 @@ scope entirely.
 For each selected layer, paint a 1 px `Accent` polygon and a solid filled 6 px diameter anchor dot.
 Geometry follows the same composition-to-view transform as the image, including zoom, pan and pixel
 aspect; line width and dot diameter stay in screen design pixels. This is canvas painting with no
-object names. It reads geometry retained by the delivered process frame, including cached frames.
+object names. It reads geometry retained by the delivered frame, including display-only playback cache hits.
 
 Text Alignment uses the existing `nodeOperandSelector` in node cards and the new
 `timelinePropertyAlignment` dropdown in source property rows. Width, Height, Line Height, and Letter

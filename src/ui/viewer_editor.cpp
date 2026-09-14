@@ -1315,9 +1315,8 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
-                    if (displayedFrame->hasProcessFrame()) {
-                        const auto& format =
-                            displayedFrame->processFrame()->identity().plan->format();
+                    if (displayedFrame->processIdentity().plan) {
+                        const auto& format = displayedFrame->processIdentity().plan->format();
                         const auto toScreen = [&](const document::Vec2d point) {
                             return QPointF(
                                 displayRect.left() + point.x * displayRect.width() /

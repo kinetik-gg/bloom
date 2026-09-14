@@ -543,3 +543,7 @@ Interactive override plans and requests bypass both lookup and insertion, includ
 Their temporary gesture values cannot populate the operation cache. `bypassOperationCache` also
 provides a serial uncached reference for verification. Caching is process-local; nothing is persisted
 in the project or on disk.
+
+Evaluated operation geometry is retained beside cached display pixels. The frame-cache budget
+counts both payloads; releasing the Float32 process image leaves bounds queries and overlays available
+on playback cache hits without evaluation.
