@@ -310,11 +310,56 @@ void testCoverageSolidRow(Expectations& expectations) {
         "a fully transparent text color clears the run instead of writing ink");
 }
 
+void testTypographyGoldens(Expectations& expectations) {
+    using bloom::render::TextAlignment;
+    using bloom::render::TextLayoutOptions;
+    const auto parameters = TextRasterParameters::create(16, 16);
+    const std::array<TextLayoutOptions, 5> settings{{{},
+                                                     {TextAlignment::Center, 1, 0, true},
+                                                     {TextAlignment::Right, 1, 0, true},
+                                                     {TextAlignment::Left, 1.5, 0, true},
+                                                     {TextAlignment::Left, 1, 3, true}}};
+    std::array<std::uint64_t, 5> digests{};
+    for (std::size_t index = 0; index < settings.size(); ++index) {
+        const auto raster = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+            "Ab\ni", *parameters.value(), generousByteLimit(), settings[index]);
+        expectations.expect(static_cast<bool>(raster), "multiline typography rasterizes");
+        if (!raster)
+            continue;
+        auto digest = std::uint64_t{14695981039346656037ULL};
+        for (const auto byte : raster.value()->coverage()) {
+            digest ^= byte;
+            digest *= 1099511628211ULL;
+        }
+        digests[index] = digest;
+        const std::array<std::uint32_t, 5> widths{21, 21, 21, 21, 24};
+        const std::array<std::uint32_t, 5> heights{29, 29, 29, 37, 29};
+        expectations.expect(raster.value()->originX() == 0 && raster.value()->originY() == 2 &&
+                                raster.value()->width() == widths[index] &&
+                                raster.value()->height() == heights[index],
+                            "typography layout bounds golden");
+    }
+    expectations.expect(
+        digests == std::array<std::uint64_t, 5>{7853883709848069213ULL, 3444746878591692842ULL,
+                                                4373560154211617060ULL, 6681727905294334493ULL,
+                                                17380785927925869081ULL},
+        "left, centre, right, line-height and letter-spacing coverage goldens");
+    const auto invalid = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+        "A", *parameters.value(), generousByteLimit(), {TextAlignment::Left, 0, 0, true});
+    expectations.expect(hasError(invalid, ImageErrorCode::InvalidParameter),
+                        "zero line height is refused");
+    const auto huge = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+        "A\nB", *parameters.value(), 1024, {TextAlignment::Left, 1.0e100, 0, true});
+    expectations.expect(hasError(huge, ImageErrorCode::ArithmeticOverflow),
+                        "unrepresentable layout is refused before allocation");
+}
+
 } // namespace
 
 int main() {
     try {
         Expectations expectations;
+        testTypographyGoldens(expectations);
         testEmbeddedFont(expectations);
         testParameterValidation(expectations);
         testGlyphCoverageGolden(expectations);

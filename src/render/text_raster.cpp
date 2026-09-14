@@ -73,11 +73,12 @@ std::span<const std::uint8_t> TextCoverageBitmap::row(const std::uint32_t y) con
     return std::span<const std::uint8_t>(coverage_).subspan(offset, width_);
 }
 
-ImageResult<TextCoverageBitmap>
-TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(const std::string_view utf8Content,
-                                                const TextRasterParameters parameters,
-                                                const std::size_t coverageByteLimit) {
-    if (!core::isValidUtf8(utf8Content)) {
+ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+    const std::string_view utf8Content, const TextRasterParameters parameters,
+    const std::size_t coverageByteLimit, const TextLayoutOptions layout) {
+    if (!core::isValidUtf8(utf8Content) || !std::isfinite(layout.lineHeight) ||
+        layout.lineHeight <= 0.0 || !std::isfinite(layout.letterSpacing) ||
+        layout.alignment > TextAlignment::Right) {
         return ImageResult<TextCoverageBitmap>::failure(
             codeError(ImageErrorCode::InvalidParameter));
     }
@@ -110,7 +111,43 @@ TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(const std::string_view utf8Conte
     auto maximumRight = std::numeric_limits<std::int64_t>::min();
     auto maximumBottom = std::numeric_limits<std::int64_t>::min();
 
-    double pen = 0.0;
+    std::vector<double> lineWidths(1, 0.0);
+    int measurePrevious = -1;
+    for (std::size_t cursor = 0; cursor < utf8Content.size();) {
+        const auto scalar = core::decodeUtf8Scalar(utf8Content, cursor);
+        cursor += scalar.length;
+        if (layout.multiline && scalar.value == U'\n') {
+            lineWidths.push_back(0.0);
+            measurePrevious = -1;
+            continue;
+        }
+        if (layout.multiline && scalar.value == U'\r')
+            continue;
+        const auto glyph = detail::embeddedFontGlyphIndex(scalar.value);
+        auto& width = lineWidths.back();
+        if (measurePrevious >= 0)
+            width +=
+                static_cast<double>(detail::embeddedFontGlyphKernAdvance(measurePrevious, glyph)) *
+                    static_cast<double>(scaleX) +
+                layout.letterSpacing;
+        width +=
+            static_cast<double>(detail::embeddedFontGlyphHorizontalMetrics(glyph).advanceWidth) *
+            static_cast<double>(scaleX);
+        if (!std::isfinite(width) || std::abs(width) > static_cast<double>(kCoordinateBound))
+            return ImageResult<TextCoverageBitmap>::failure(
+                codeError(ImageErrorCode::ArithmeticOverflow));
+        measurePrevious = glyph;
+    }
+    const auto maximumAdvance = *std::max_element(lineWidths.begin(), lineWidths.end());
+    const auto lineOffset = [&](const std::size_t line) {
+        const auto difference = maximumAdvance - lineWidths[line];
+        return layout.alignment == TextAlignment::Left     ? 0.0
+               : layout.alignment == TextAlignment::Center ? difference / 2.0
+                                                           : difference;
+    };
+    std::size_t line = 0;
+    std::int64_t lineRow = 0;
+    double pen = lineOffset(line);
     int previousGlyph = -1;
     std::size_t offset = 0;
     while (offset < utf8Content.size()) {
@@ -124,8 +161,23 @@ TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(const std::string_view utf8Conte
         }
         offset += scalar.length;
 
+        if (layout.multiline && scalar.value == U'\n') {
+            ++line;
+            const auto row =
+                static_cast<double>(line) * parameters.verticalPixelSize() * layout.lineHeight;
+            if (!std::isfinite(row) || row > static_cast<double>(kCoordinateBound))
+                return ImageResult<TextCoverageBitmap>::failure(
+                    codeError(ImageErrorCode::ArithmeticOverflow));
+            lineRow = static_cast<std::int64_t>(std::lround(row));
+            pen = lineOffset(line);
+            previousGlyph = -1;
+            continue;
+        }
+        if (layout.multiline && scalar.value == U'\r')
+            continue;
         const auto glyph = detail::embeddedFontGlyphIndex(scalar.value);
         if (previousGlyph >= 0) {
+            pen += layout.letterSpacing;
             pen += static_cast<double>(detail::embeddedFontGlyphKernAdvance(previousGlyph, glyph)) *
                    static_cast<double>(scaleX);
         }
@@ -141,9 +193,9 @@ TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(const std::string_view utf8Conte
             detail::embeddedFontGlyphBitmapBox(glyph, scaleX, scaleY, shiftX, 0.0F);
         if (box.right > box.left && box.bottom > box.top) {
             const auto left = penColumn + static_cast<std::int64_t>(box.left);
-            const auto top = baselineRow + static_cast<std::int64_t>(box.top);
+            const auto top = lineRow + baselineRow + static_cast<std::int64_t>(box.top);
             const auto right = penColumn + static_cast<std::int64_t>(box.right);
-            const auto bottom = baselineRow + static_cast<std::int64_t>(box.bottom);
+            const auto bottom = lineRow + baselineRow + static_cast<std::int64_t>(box.bottom);
             if (!withinCoordinateBound(left) || !withinCoordinateBound(top) ||
                 !withinCoordinateBound(right) || !withinCoordinateBound(bottom)) {
                 return ImageResult<TextCoverageBitmap>::failure(

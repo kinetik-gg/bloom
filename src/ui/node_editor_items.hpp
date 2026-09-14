@@ -910,9 +910,20 @@ class NodeItem final : public QGraphicsObject {
                 // Integers get zero decimals and the whole signed range the schema admits; a scalar
                 // gets the same wide finite range every other unitless card field already uses,
                 // because a value-graph operand carries no domain beyond its kind.
+                const bool dimension =
+                    declared->schemaKey == document::kSolidWidthParameterSchemaKey ||
+                    declared->schemaKey == document::kSolidHeightParameterSchemaKey;
+                const bool lineHeight =
+                    declared->schemaKey == document::kTextLineHeightParameterSchemaKey;
+                const bool spacing =
+                    declared->schemaKey == document::kTextLetterSpacingParameterSchemaKey;
                 auto* field =
                     makeCardField(QStringLiteral("nodeOperandEditor"), componentLabel,
-                                  -1'000'000'000.0, 1'000'000'000.0, integral ? 0 : 4, QString{});
+                                  dimension    ? 1.0
+                                  : lineHeight ? 0.01
+                                               : -1'000'000'000.0,
+                                  1'000'000'000.0, integral ? 0 : 4,
+                                  dimension || spacing ? QStringLiteral("px") : QString{});
                 addProxy(field);
                 registerControlRole(field, role);
                 bindCell(field, commit);
@@ -940,6 +951,12 @@ class NodeItem final : public QGraphicsObject {
         const auto add = [&items](const QString& text, const std::int64_t stored) {
             items.append({text, stored});
         };
+        if (schemaKey == document::kTextAlignmentParameterSchemaKey) {
+            add(tr("Left"), 0);
+            add(tr("Center"), 1);
+            add(tr("Right"), 2);
+            return items;
+        }
         if (schemaKey == document::kScalarOperationParameterSchemaKey) {
             for (const auto operation : document::kScalarOperations) {
                 const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
