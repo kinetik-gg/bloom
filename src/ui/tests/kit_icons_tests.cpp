@@ -78,9 +78,8 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
     }
     expectations.expect(rendered == static_cast<int>(kit::iconIds().size()) * 9,
                         "every id was rendered at all three sizes in all three weights");
-    // task U8 (issue 131), formal amendment 1, A5 raised the ceiling: four panel-identity glyphs
-    // (Stack/Clock/SlidersHorizontal/Graph) join the curated set, still bounded, not unlimited.
-    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 50,
+    // The curated vocabulary includes the six section and text-alignment glyphs.
+    expectations.expect(kit::iconIds().size() == 55,
                         "the curated vocabulary stays a curated vocabulary");
 }
 
@@ -92,9 +91,8 @@ void testIconIdsAreUniqueAndTotal(Expectations& expectations) {
     expectations.expect(seen.size() == static_cast<int>(kit::iconIds().size()),
                         "no icon id is listed twice");
     // Every declared enumerator has a backing asset: walking the numeric range catches an id added
-    // to the enum but never bound to a file. Graph is the last declared enumerator (task U8,
-    // formal amendment 1, A5 appended the panel-identity glyphs after Text).
-    for (int value = 0; value <= static_cast<int>(kit::IconId::Graph); ++value) {
+    // to the enum but never bound to a file. AlignRight is the last declared enumerator.
+    for (int value = 0; value <= static_cast<int>(kit::IconId::AlignRight); ++value) {
         expectations.expect(seen.contains(value),
                             "icon id " + std::to_string(value) + " has a vendored asset");
     }

@@ -212,8 +212,15 @@ void KeyframeDiamond::paintEvent(QPaintEvent* event) {
     const auto weight = state_ == KeyframeDiamondState::AnimatedWithKey ? kit::IconWeight::Fill
                                                                         : kit::IconWeight::Regular;
     QPainter painter(this);
+    const int extent = kit::px(kit::Size::IconSmall);
+    const QRect box((width() - extent) / 2, (height() - extent) / 2, extent, extent);
     painter.drawPixmap(
-        rect(), kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint, 0.0, weight));
+        box, kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint, 0.0, weight));
+    if (state_ == KeyframeDiamondState::AnimatedWithoutKey) {
+        painter.setClipRect(QRect(box.left(), box.top(), box.width() / 2, box.height()));
+        painter.drawPixmap(box, kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint,
+                                                0.0, kit::IconWeight::Fill));
+    }
 }
 
 void KeyframeDiamond::mousePressEvent(QMouseEvent* event) {

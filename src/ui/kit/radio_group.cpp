@@ -71,6 +71,12 @@ void KRadioGroup::commitIndex(const int index) {
     Q_EMIT currentIndexChanged(index);
 }
 
+void KRadioGroup::setIconsOnly(const bool enabled) {
+    iconsOnly_ = enabled;
+    updateGeometry();
+    update();
+}
+
 void KRadioGroup::setPresentation(const Presentation presentation) {
     if (presentation_ == presentation) {
         return;
@@ -125,6 +131,8 @@ int KRadioGroup::optionAt(const QPoint& point) const {
 }
 
 QSize KRadioGroup::sizeHint() const {
+    if (iconsOnly_)
+        return {px(Size::ControlCompact) * count(), px(Size::ControlCompact)};
     const QFontMetrics metrics(font());
     if (presentation_ == Presentation::Segmented) {
         int widest = 0;
@@ -160,6 +168,8 @@ void KRadioGroup::mouseMoveEvent(QMouseEvent* event) {
     const int hovered = isEnabled() ? optionAt(event->pos()) : -1;
     if (hovered != hoveredIndex_) {
         hoveredIndex_ = hovered;
+        if (iconsOnly_)
+            setToolTip(hovered >= 0 ? optionText(hovered) : QString{});
         update();
     }
     QWidget::mouseMoveEvent(event);
@@ -233,13 +243,17 @@ void KRadioGroup::paintSegmented(QPainter& painter) {
             state == State::Selected ? color(Color::Foreground) : inkForState(Color::Muted, state);
         QRectF content = segment.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0);
         if (const std::optional<IconId> glyph = options_.at(index).icon; glyph.has_value()) {
-            const auto box = static_cast<qreal>(px(Size::IconSmall));
-            const QRectF iconRect(content.left(), content.center().y() - box / 2.0, box, box);
+            const auto size = iconsOnly_ ? iconSize(IconRole::Chrome) : Size::IconSmall;
+            const auto box = static_cast<qreal>(px(size));
+            const QRectF iconRect(iconsOnly_ ? segment.center().x() - box / 2.0 : content.left(),
+                                  content.center().y() - box / 2.0, box, box);
             painter.drawPixmap(iconRect.toRect(),
-                               iconPixmap(glyph.value(), Size::IconSmall, ink, devicePixelRatioF(),
+                               iconPixmap(glyph.value(), size, ink, devicePixelRatioF(),
                                           iconWeight(IconRole::Chrome)));
             content.setLeft(iconRect.right() + px(Spacing::XS));
         }
+        if (iconsOnly_)
+            continue;
         painter.setPen(ink);
         painter.drawText(content, Qt::AlignCenter,
                          metrics.elidedText(options_.at(index).text, Qt::ElideRight,

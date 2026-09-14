@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
 
@@ -89,6 +90,22 @@ QLineEdit#kValueFieldEditor {
 )")));
     editor_->hide();
     editor_->installEventFilter(this);
+}
+
+void KValueField::setCompact(const bool compact) {
+    compact_ = compact;
+    if (compact) {
+        setMinimumWidth(px(Size::PropertiesFieldMinWidth));
+        setMaximumWidth(px(Size::PropertiesFieldWidth));
+        setFixedHeight(px(Size::ControlCompact));
+    }
+    updateGeometry();
+    update();
+}
+
+void KValueField::setStepper(const bool stepper) {
+    stepper_ = stepper;
+    update();
 }
 
 void KValueField::setLabel(const QString& label) {
@@ -181,7 +198,16 @@ bool KValueField::isEditing() const noexcept { return editing_; }
 
 QLineEdit* KValueField::lineEdit() const noexcept { return editor_; }
 
-QString KValueField::displayedValue() const { return QString::number(value_, 'f', decimals_); }
+QString KValueField::displayedValue() const {
+    auto text = QString::number(value_, 'f', compact_ ? std::min(decimals_, 2) : decimals_);
+    if (compact_ && text.contains('.')) {
+        while (text.endsWith('0'))
+            text.chop(1);
+        if (text.endsWith('.'))
+            text.chop(1);
+    }
+    return text == "-0" ? QStringLiteral("0") : text;
+}
 
 int KValueField::labelColumnWidth() const {
     return std::min(kMaximumLabelColumnWidth,
@@ -192,11 +218,12 @@ QRectF KValueField::labelRect() const {
     if (label_.isEmpty()) {
         return {};
     }
-    return {0.0, 0.0, static_cast<qreal>(labelColumnWidth()), static_cast<qreal>(height())};
+    return {compact_ ? static_cast<qreal>(px(Spacing::XS)) : 0.0, 0.0,
+            static_cast<qreal>(labelColumnWidth()), static_cast<qreal>(height())};
 }
 
 QRectF KValueField::cellRect() const {
-    const qreal left = label_.isEmpty() ? 0.0 : labelColumnWidth() + px(Spacing::S);
+    const qreal left = compact_ || label_.isEmpty() ? 0.0 : labelColumnWidth() + px(Spacing::S);
     // The whole remaining width and the WHOLE height. This cell reserves no focus-ring strip: its
     // focus affordance is its own single border (kit::borderForInteraction), stroked on the cell's
     // own edge, so a margin outside that edge would be reserved for something nothing draws. An
@@ -207,7 +234,10 @@ QRectF KValueField::cellRect() const {
 }
 
 QRectF KValueField::cellTextRect() const {
-    return cellRect().adjusted(kCellPaddingX, 0.0, -kCellPaddingX, 0.0);
+    const int padding = compact_ ? px(Spacing::XS) : kCellPaddingX;
+    const int prefix = compact_ && !label_.isEmpty() ? labelColumnWidth() + px(Spacing::XXS) : 0;
+    return cellRect().adjusted(padding + prefix, 0.0,
+                               -padding - (stepper_ ? px(Size::PropertiesStepperWidth) : 0), 0.0);
 }
 
 Color KValueField::borderToken() const {
@@ -235,6 +265,8 @@ State KValueField::visualState() const {
 }
 
 QSize KValueField::sizeHint() const {
+    if (compact_)
+        return {px(Size::PropertiesFieldWidth), px(Size::ControlCompact)};
     const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
     // Sized for the widest number the range can produce, not for the number currently in it: the
     // field must not resize as digits change.
@@ -250,6 +282,8 @@ QSize KValueField::sizeHint() const {
 }
 
 QSize KValueField::minimumSizeHint() const {
+    if (compact_)
+        return {minimumWidth(), px(Size::ControlCompact)};
     // task WIDTH-1: sizeHint() above is this field's PREFERRED width, sized for the widest number
     // its own range can produce so the cell never resizes as digits change. minimumSizeHint() is a
     // different question -- the FLOOR this cell may shrink to when the panel hosting it (Properties
@@ -271,8 +305,10 @@ void KValueField::layOutEditor() {
     const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
     const int unitColumn =
         unit_.isEmpty() ? 0 : valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
-    editor_->setTextMargins(kCellPaddingX - kLineEditTextMargin, 0,
-                            kCellPaddingX + unitColumn - kLineEditTextMargin, 0);
+    const auto text = cellTextRect();
+    editor_->setTextMargins(
+        static_cast<int>(text.left() - cellRect().left()) - kLineEditTextMargin, 0,
+        static_cast<int>(cellRect().right() - text.right()) + unitColumn - kLineEditTextMargin, 0);
 }
 
 void KValueField::beginEdit() {
@@ -281,7 +317,7 @@ void KValueField::beginEdit() {
     }
     editing_ = true;
     layOutEditor();
-    editor_->setText(displayedValue());
+    editor_->setText(compact_ ? QString::number(value_, 'g', 17) : displayedValue());
     editor_->show();
     editor_->setFocus(Qt::MouseFocusReason);
     // Select all on entry: a click-to-edit that kept the caret where the pointer landed would make
@@ -313,6 +349,11 @@ void KValueField::endEdit(const bool keep) {
 
 void KValueField::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton && isEnabled()) {
+        if (stepper_ && event->position().x() >= width() - px(Size::PropertiesStepperWidth)) {
+            stepBy(event->position().y() < height() / 2.0 ? 1 : -1);
+            event->accept();
+            return;
+        }
         pressed_ = true;
         scrubbing_ = false;
         pressPosition_ = event->position().toPoint();
@@ -517,17 +558,27 @@ void KValueField::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     const State state = visualState();
 
-    if (!label_.isEmpty()) {
-        painter.setFont(kit::font(TypeRole::Ui));
-        painter.setPen(inkForState(Color::Muted, state));
-        const QFontMetrics metrics(painter.font());
-        painter.drawText(labelRect(), Qt::AlignVCenter | Qt::AlignLeft,
-                         metrics.elidedText(label_, Qt::ElideRight, labelColumnWidth()));
-    }
-
     const QRectF cell = cellRect();
-    fillRoundedSurface(painter, cell, color(surfaceForState(Color::Field, state)),
-                       cellBorderColor(), Radius::Small);
+    fillRoundedSurface(
+        painter, cell,
+        color(surfaceForState(compact_ ? Color::ControlSurface : Color::Field, state)),
+        compact_ && borderToken() == Color::Border ? color(Color::Border) : cellBorderColor(),
+        Radius::Small);
+    if (!label_.isEmpty()) {
+        painter.setFont(kit::font(TypeRole::UiSmall));
+        painter.setPen(inkForState(Color::Muted, state));
+        painter.drawText(labelRect(), Qt::AlignVCenter | Qt::AlignLeft, label_);
+    }
+    if (stepper_) {
+        const int extent = px(Size::PropertiesStepperWidth);
+        const auto tint = inkForState(Color::Muted, state);
+        painter.drawPixmap(QRect(width() - extent, 0, extent, height() / 2),
+                           iconPixmap(IconId::CaretUp, Size::IconSmall, tint, devicePixelRatioF(),
+                                      iconWeight(IconRole::Chrome)));
+        painter.drawPixmap(QRect(width() - extent, height() / 2, extent, height() / 2),
+                           iconPixmap(IconId::CaretDown, Size::IconSmall, tint, devicePixelRatioF(),
+                                      iconWeight(IconRole::Chrome)));
+    }
 
     // The value takes the monospaced role; the unit takes muted ink so it reads as a unit rather
     // than as part of the number.

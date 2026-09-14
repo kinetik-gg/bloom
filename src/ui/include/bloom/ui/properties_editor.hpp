@@ -5,7 +5,9 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QWidget>
+#include <bloom/ui/editor_area.hpp>
 
+#include <array>
 #include <string_view>
 #include <vector>
 
@@ -18,6 +20,7 @@ namespace bloom::ui {
 class CompositionSession;
 class PropertiesRegistryRow;
 class PropertiesDrivenValues;
+class PropertiesAnchorGrid;
 
 class KeyframeDiamond;
 
@@ -30,11 +33,12 @@ class KSlider;
 class KSwitch;
 } // namespace kit
 
-class PropertiesEditor final : public QWidget {
+class PropertiesEditor final : public QWidget, public EditorHeaderMenuProvider {
     Q_OBJECT
 
   public:
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
+    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -50,6 +54,7 @@ class PropertiesEditor final : public QWidget {
     std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
     QLineEdit* search_ = nullptr;
+    bool headerTaken_ = false;
     std::vector<PropertiesRegistryRow*> registryRows_;
     QWidget* registryPanel_ = nullptr;
     QString registrySignature_;
@@ -143,6 +148,7 @@ class PropertiesEditor final : public QWidget {
     // QLabel that only reported a source. The member names are unchanged -- the row they live in
     // and the objectName the tests read are the same -- so only the control kind moved.
     KeyframeDiamond* positionKeyframe_ = nullptr;
+    PropertiesAnchorGrid* anchorGrid_ = nullptr;
     kit::KValueField* anchorX_ = nullptr;
     kit::KValueField* anchorY_ = nullptr;
     KeyframeDiamond* anchorKeyframe_ = nullptr;
@@ -161,6 +167,7 @@ class PropertiesEditor final : public QWidget {
     // declares the blend mode non-animatable -- an indicator column that can never light up would
     // promise a capability that does not exist.
     kit::KDropdown* blendMode_ = nullptr;
+    kit::KColorChip* solidColorChip_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
     KeyframeDiamond* solidColorKeyframe_ = nullptr;
     // Task P3: the RGBA cells replacing the former read-only solidColorValue_ label.
@@ -177,12 +184,13 @@ class PropertiesEditor final : public QWidget {
     QWidget* textSourcePanel_ = nullptr;
     QLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;
+    std::array<kit::KValueField*, 4> textColorFields_{};
     kit::KColorChip* textColor_ = nullptr;
     KeyframeDiamond* textColorKeyframe_ = nullptr;
     // Task S5, item 1: text size is animatable now, so its row gets a diamond like every other
     // animatable row. It had none before because no command could key it.
     KeyframeDiamond* textSizeKeyframe_ = nullptr;
-    QLabel* textFontName_ = nullptr;
+    kit::KDropdown* textFontName_ = nullptr;
 
     // The no-selection document/composition view (issue #120, decision 3).
     QWidget* documentSection_ = nullptr;

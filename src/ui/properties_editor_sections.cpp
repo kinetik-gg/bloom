@@ -14,6 +14,7 @@
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "properties_anchor_grid.hpp"
 #include "properties_sections.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -39,6 +40,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -78,7 +80,7 @@ std::optional<document::LayerId> contextualLayerId(const CompositionSession& ses
 constexpr double kPracticallyUnbounded = 1'000'000.0;
 
 kit::KSwitch* makeToggle(QWidget* parent, const QString& objectName, const QString& accessible) {
-    auto* toggle = new kit::KSwitch(parent);
+    auto* toggle = new kit::KCheckBox(parent);
     toggle->setObjectName(objectName);
     toggle->setAccessibleName(accessible);
     return toggle;
@@ -104,6 +106,13 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     layerLocked_ = makeToggle(body, QStringLiteral("layerLockedSwitch"), tr("Locked"));
     addRow(rows, body, makeRowLabel(tr("Locked"), body), nullptr, layerLocked_);
 
+    auto* parent = new kit::KDropdown(body);
+    parent->setObjectName("propertiesParentDropdown");
+    parent->addItem(tr("None"));
+    parent->setEnabled(false);
+    parent->setToolTip(tr("Layer parenting is not available yet"));
+    addRow(rows, body, makeRowLabel(tr("Parent"), body), nullptr, parent);
+
     // The items are core::kBlendModes in order, named by the one shared vocabulary, with the mode's
     // stored integer as item data so the control never depends on the order it happened to be
     // filled in -- exactly the timeline row's dropdown, because both author the same parameter
@@ -115,7 +124,7 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
         blendMode_->addItem(blendModeDisplayName(mode),
                             QVariant::fromValue(core::blendModeStoredValue(mode)));
     }
-    addRow(rows, body, makeRowLabel(tr("Blending"), body), nullptr, blendMode_);
+    addRow(rows, body, makeRowLabel(tr("Blending Mode"), body), nullptr, blendMode_);
 
     opacity_ = makeValueCell({.objectName = QStringLiteral("opacityEditor"),
                               .accessibleName = tr("Opacity"),
@@ -170,7 +179,7 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     positionKeyframe_ = makeKeyframeDiamond(session_, document::kPositionParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Position"), body), positionKeyframe_,
            makeCellGroup(QStringLiteral("positionFieldGroup"),
-                         {positionX_, positionY_, positionLink_}, body));
+                         {positionX_, positionLink_, positionY_}, body));
 
     // Rotation is a single degree field with a 1 degree scrub step. Its range is deliberately wider
     // than one turn: the schema accepts any finite angle so a rotation curve can wind, and a field
@@ -221,7 +230,7 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     scaleLink_->setChecked(true);
     scaleKeyframe_ = makeKeyframeDiamond(session_, document::kScaleParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Scale"), body), scaleKeyframe_,
-           makeCellGroup(QStringLiteral("scaleFieldGroup"), {scaleX_, scaleY_, scaleLink_}, body));
+           makeCellGroup(QStringLiteral("scaleFieldGroup"), {scaleX_, scaleLink_, scaleY_}, body));
 
     // The anchor is in the same pixel space Position is, so it takes Position's range, decimals,
     // step, and unit verbatim.
@@ -237,6 +246,8 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     anchorKeyframe_ = makeKeyframeDiamond(session_, document::kAnchorParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Anchor"), body), anchorKeyframe_,
            makeCellGroup(QStringLiteral("anchorFieldGroup"), {anchorX_, anchorY_}, body));
+    anchorGrid_ = new PropertiesAnchorGrid(session_, body);
+    addRow(rows, body, makeRowLabel(tr("Anchor Point"), body), nullptr, anchorGrid_);
 }
 
 void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
@@ -281,10 +292,19 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
     solidColorAlpha_ = makeValueCell(spec, body);
 
     solidColorKeyframe_ = makeKeyframeDiamond(session_, document::kSolidColorParameterRole, body);
-    addRow(rows, body, makeRowLabel(tr("RGBA"), body), solidColorKeyframe_,
-           makeCellGroup(QStringLiteral("solidColorFieldGroup"),
-                         {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_},
-                         body));
+    solidColorChip_ = new kit::KColorChip(body);
+    solidColorChip_->setObjectName("propertiesSolidColorChip");
+    (void)properties::addColorRow(
+        rows, body, solidColorChip_, solidColorKeyframe_,
+        {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_},
+        "propertiesSolidColorExpand", "solidColorFieldGroup");
+    connect(solidColorChip_, &kit::KColorChip::colorChanged, this,
+            [this](const kit::KColor& color) {
+                if (!rebuilding_)
+                    (void)session_.setSelectedSolidColor(core::Color4d{
+                        static_cast<double>(color.red), static_cast<double>(color.green),
+                        static_cast<double>(color.blue), static_cast<double>(color.alpha)});
+            });
 
     solidAlphaAssociation_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, body);
     solidAlphaAssociation_->setObjectName("solidAlphaAssociation");
@@ -318,9 +338,10 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     textContent_ = new QLineEdit(body);
     textContent_->setObjectName("textContentEditor");
     textContent_->setAccessibleName(tr("Text content"));
-    textContent_->setFont(kit::font(kit::TypeRole::Ui));
+    textContent_->setFont(kit::font(kit::TypeRole::Value));
+    textContent_->setFixedHeight(kit::px(kit::Size::ControlCompact));
     textContent_->setClearButtonEnabled(false);
-    addRow(rows, body, makeRowLabel(tr("Content"), body), nullptr, textContent_);
+    addRow(rows, body, makeRowLabel(tr("Text"), body), nullptr, textContent_);
 
     // The range is the text size schema's own domain, not a spelled UI guess: the document refuses
     // anything outside it, so a cell that could scrub past it would only produce refusals.
@@ -333,25 +354,47 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
                                .singleStep = 1.0,
                                .unit = QStringLiteral("px")},
                               body);
+    textSize_->setStepper(true);
     textSizeKeyframe_ = makeKeyframeDiamond(session_, document::kTextSizeParameterRole, body);
-    addRow(rows, body, makeRowLabel(tr("Size"), body), textSizeKeyframe_, textSize_);
+    addRow(rows, body, makeRowLabel(tr("Font Size"), body), textSizeKeyframe_, textSize_);
 
     textColor_ = new kit::KColorChip(body);
     textColor_->setObjectName("textColorChip");
     textColor_->setAccessibleName(tr("Text color"));
     textColorKeyframe_ = makeKeyframeDiamond(session_, document::kTextColorParameterRole, body);
-    addRow(rows, body, makeRowLabel(tr("Color"), body), textColorKeyframe_, textColor_);
+    for (std::size_t index = 0; index < textColorFields_.size(); ++index) {
+        const auto channel = QString("RGBA").mid(static_cast<qsizetype>(index), 1);
+        textColorFields_[index] = makeValueCell({.objectName = "propertiesTextColor" + channel,
+                                                 .accessibleName = tr("Text color %1").arg(channel),
+                                                 .subLabel = channel,
+                                                 .singleStep = 0.01,
+                                                 .unit = {}},
+                                                body);
+        bindCell(textColorFields_[index], [this] {
+            (void)session_.setSelectedTextColor(
+                core::Color4d{textColorFields_[0]->value(), textColorFields_[1]->value(),
+                              textColorFields_[2]->value(), textColorFields_[3]->value()});
+        });
+    }
+    (void)properties::addColorRow(
+        rows, body, textColor_, textColorKeyframe_,
+        {textColorFields_[0], textColorFields_[1], textColorFields_[2], textColorFields_[3]},
+        "propertiesTextColorExpand", "propertiesTextColorFields");
 
-    // The face is fixed, so this row is read-only by honesty rather than by omission: showing a
-    // font dropdown would promise a selection neither the document schema nor the renderer has.
-    textFontName_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, body);
+    textFontName_ = new kit::KDropdown(body);
     textFontName_->setObjectName("textFontName");
     textFontName_->setAccessibleName(tr("Text font"));
-    addRow(rows, body, makeRowLabel(tr("Font"), body), nullptr, textFontName_);
+    textFontName_->addItem(tr("DejaVu Sans"));
+    textFontName_->setEnabled(false);
+    textFontName_->setToolTip(tr("The embedded DejaVu Sans face is the only supported font"));
+    auto* fontRow = addRow(rows, body, makeRowLabel(tr("Font"), body), nullptr, textFontName_);
+    rows->removeWidget(fontRow);
+    rows->insertWidget(1, fontRow);
 
     layout->addWidget(textSourcePanel_);
     auto* multilineRow = new QWidget(body);
-    multilineRow->setProperty("rowLabel", tr("Content"));
+    multilineRow->setProperty("disclosureFor", tr("Text"));
+    multilineRow->setProperty("expanded", false);
     auto* multilineLayout = new QVBoxLayout(multilineRow);
     multilineLayout->setContentsMargins(0, 0, 0, 0);
     auto* multiline = new QPlainTextEdit(multilineRow);
@@ -360,13 +403,21 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     multiline->installEventFilter(this);
     auto* expand = new kit::KButton(body);
     expand->setObjectName("propertiesTextExpand");
-    expand->setText(tr("Edit multiple lines"));
+    expand->setIconId(kit::IconId::CaretRight);
+    expand->setVariant(kit::KButton::Variant::Ghost);
+    expand->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+    expand->setToolTip(tr("Edit multiple lines"));
     expand->setCheckable(true);
-    multilineLayout->addWidget(expand);
+    auto* textRowLayout = qobject_cast<QHBoxLayout*>(textContent_->parentWidget()->layout());
+    textRowLayout->insertWidget(textRowLayout->count() - 1, expand);
     multilineLayout->addWidget(multiline);
     rows->addWidget(multilineRow);
-    multiline->hide();
-    connect(expand, &kit::KButton::toggled, multiline, &QWidget::setVisible);
+    multilineRow->hide();
+    connect(expand, &kit::KButton::toggled, multilineRow, [multilineRow, expand](bool on) {
+        multilineRow->setProperty("expanded", on);
+        multilineRow->setVisible(on);
+        expand->setIconId(on ? kit::IconId::CaretDown : kit::IconId::CaretRight);
+    });
     connect(&session_, &CompositionSession::snapshotChanged, multiline, [this, multiline] {
         if (!multiline->hasFocus())
             multiline->setPlainText(textContent_->text());

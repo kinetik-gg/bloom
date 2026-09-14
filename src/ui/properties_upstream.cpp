@@ -7,6 +7,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -94,6 +95,7 @@ void PropertiesEditor::configureUpstream() {
         upstreamPanel_->setObjectName("propertiesUpstreamPanel");
         auto* layout = new QVBoxLayout(upstreamPanel_);
         layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(kit::px(kit::Spacing::S));
         auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
         selectionLayout->insertWidget(selectionLayout->count() - 1, upstreamPanel_);
         int more = 0;
@@ -109,11 +111,16 @@ void PropertiesEditor::configureUpstream() {
             section->setProperty("nodeId",
                                  QVariant::fromValue(static_cast<qulonglong>(id.value())));
             adoptSection(section, {});
-            auto* jump = new kit::KButton(section->body());
+            auto* jump = new kit::KButton(section);
             jump->setObjectName("propertiesJumpToNode");
-            jump->setText(tr("Jump to node"));
+            jump->setIconId(kit::IconId::Jump);
+            jump->setVariant(kit::KButton::Variant::Ghost);
+            jump->setFixedSize(kit::px(kit::Size::ControlCompact),
+                               kit::px(kit::Size::ControlCompact));
+            jump->setToolTip(tr("Jump to node"));
+            jump->setAccessibleName(tr("Jump to node"));
             jump->setProperty("rowLabel", section->title());
-            section->bodyLayout()->addWidget(jump);
+            section->addHeaderAction(jump);
             connect(jump, &kit::KButton::clicked, this,
                     [this, id] { jumpToPropertiesNode(session_, id, this); });
             const auto* definition =
@@ -130,6 +137,18 @@ void PropertiesEditor::configureUpstream() {
                 section->bodyLayout()->addWidget(row);
                 upstreamRows_.push_back(row);
                 connect(section, &kit::KSection::resetRequested, row, [row] { row->reset(); });
+            }
+            if (definition->lowering == document::NodeLoweringKind::Text) {
+                auto* font = new kit::KDropdown(section->body());
+                font->setObjectName("propertiesUpstreamFont");
+                font->addItem(tr("DejaVu Sans"));
+                font->setEnabled(false);
+                font->setToolTip(tr("The embedded DejaVu Sans face is the only supported font"));
+                auto* row = properties::addRow(
+                    section->bodyLayout(), section->body(),
+                    properties::makeRowLabel(tr("Font"), section->body()), nullptr, font);
+                section->bodyLayout()->removeWidget(row);
+                section->bodyLayout()->insertWidget(1, row);
             }
         }
         if (more) {

@@ -74,6 +74,13 @@ const auto& iconAssets() {
         {IconId::Clock, QLatin1StringView("clock")},
         {IconId::SlidersHorizontal, QLatin1StringView("sliders-horizontal")},
         {IconId::Graph, QLatin1StringView("graph")},
+        {IconId::Reset, QLatin1StringView("arrow-counter-clockwise")},
+        {IconId::Handle, QLatin1StringView("dots-six-vertical")},
+        {IconId::Jump, QLatin1StringView("arrow-square-out")},
+        {IconId::AlignLeft, QLatin1StringView("text-align-left")},
+        {IconId::AlignCenter, QLatin1StringView("text-align-center")},
+        {IconId::AlignRight, QLatin1StringView("text-align-right")},
+
     });
     return entries;
 }

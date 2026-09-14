@@ -66,6 +66,7 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
                 selectionLayout->insertWidget(selectionLayout->count() - 1, registryPanel_);
             }
+            int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
                 // Only these roles already have purpose-built rows. Everything else comes from
                 // the definition, including future source parameters and value-node operands.
@@ -91,7 +92,10 @@ void PropertiesEditor::configureRegistryRows() {
                     continue;
                 auto* row = new PropertiesRegistryRow(session_, node->id, found->parameterId,
                                                       declared, section->body());
-                section->bodyLayout()->addWidget(row);
+                if (definition->lowering == document::NodeLoweringKind::Text)
+                    section->bodyLayout()->insertWidget(textRowIndex++, row);
+                else
+                    section->bodyLayout()->addWidget(row);
                 registryRows_.push_back(row);
                 connect(section, &kit::KSection::resetRequested, row, [row] { row->reset(); });
             }
@@ -111,6 +115,16 @@ void PropertiesEditor::filterRows() {
             auto* row = rows->itemAt(index)->widget();
             if (!row)
                 continue;
+            const auto disclosure = row->property("disclosureFor").toString();
+            if (!disclosure.isEmpty()) {
+                auto* owner = qobject_cast<QWidget*>(row->property("colorOwner").value<QObject*>());
+                const auto* display =
+                    owner ? owner->findChild<QWidget*>("propertiesDrivenDisplay") : nullptr;
+                row->setVisible(row->property("expanded").toBool() &&
+                                disclosure.contains(query, Qt::CaseInsensitive) &&
+                                (!display || display->isHidden()));
+                continue;
+            }
             const auto label = row->property("rowLabel").toString();
             if (label.isEmpty())
                 continue;

@@ -111,10 +111,17 @@ void KDropdown::commitIndex(const int index) {
 
 QString KDropdown::currentText() const { return itemText(currentIndex_); }
 
+int KDropdown::horizontalPadding() const {
+    return px(controlSize_ == ControlSize::Compact ? Spacing::XS : Spacing::M);
+}
+int KDropdown::caretGap() const {
+    return px(controlSize_ == ControlSize::Compact ? Spacing::XXS : Spacing::S);
+}
+
 QString KDropdown::displayedText() const {
     const QFontMetrics metrics(font());
     const int available =
-        std::max(0, width() - px(Spacing::M) * 2 - caretColumnWidth() - px(Spacing::S));
+        std::max(0, width() - horizontalPadding() * 2 - caretColumnWidth() - caretGap());
     return metrics.elidedText(currentText(), Qt::ElideRight, available);
 }
 
@@ -185,13 +192,14 @@ QSize KDropdown::sizeHint() const {
     }
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     const int width =
-        widest + px(Spacing::M) * 2 + px(Spacing::S) + caretColumnWidth() + ringMargin;
+        widest + horizontalPadding() * 2 + caretGap() + caretColumnWidth() + ringMargin;
     return {width, controlExtent() + ringMargin};
 }
 
 QSize KDropdown::minimumSizeHint() const {
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {px(Spacing::M) * 2 + caretColumnWidth() + ringMargin, controlExtent() + ringMargin};
+    return {horizontalPadding() * 2 + caretColumnWidth() + ringMargin,
+            controlExtent() + ringMargin};
 }
 
 void KDropdown::mousePressEvent(QMouseEvent* event) {
@@ -261,8 +269,8 @@ void KDropdown::paintEvent(QPaintEvent* event) {
 
     const QColor ink = inkForState(Color::Foreground, state);
     const auto caretWidth = static_cast<qreal>(caretColumnWidth());
-    const QRectF caretColumn(bounds.right() - px(Spacing::M) - caretWidth, bounds.top(), caretWidth,
-                             bounds.height());
+    const QRectF caretColumn(bounds.right() - horizontalPadding() - caretWidth, bounds.top(),
+                             caretWidth, bounds.height());
 
     // The caret pair (task U8, issue #131, fix 3): Phosphor's own caret-up-down glyph, a single
     // vendored double chevron, rather than two separately stacked CaretUp/CaretDown icons -- it
@@ -276,8 +284,8 @@ void KDropdown::paintEvent(QPaintEvent* event) {
 
     painter.setPen(ink);
     painter.setFont(font());
-    const QRectF label(bounds.left() + px(Spacing::M), bounds.top(),
-                       caretColumn.left() - px(Spacing::S) - bounds.left() - px(Spacing::M),
+    const QRectF label(bounds.left() + horizontalPadding(), bounds.top(),
+                       caretColumn.left() - caretGap() - bounds.left() - horizontalPadding(),
                        bounds.height());
     painter.drawText(label, Qt::AlignVCenter | Qt::AlignLeft, displayedText());
 }

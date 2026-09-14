@@ -27,14 +27,15 @@ class CompositionSession;
 class KeyframeDiamond;
 
 namespace kit {
+class KColorChip;
+class KButton;
 class KSection;
 class KValueField;
 } // namespace kit
 
 namespace properties {
 
-// The fixed right-aligned label column every row in the panel shares (issue #120, decision 1),
-// sized once from the widest label this panel can ever show rather than a spelled pixel width.
+// The token-sized, right-aligned label column shared by every Properties row.
 [[nodiscard]] int labelColumnWidth();
 
 // A row's outer label: the shared column width as its PREFERRED width, elided with Qt::ElideRight
@@ -42,7 +43,7 @@ namespace properties {
 // (task WIDTH-1).
 [[nodiscard]] QLabel* makeRowLabel(const QString& text, QWidget* parent);
 
-// [right-aligned Muted label][optional keyframe indicator][value widgets...], appended to
+// [right-aligned Muted label][value widgets...][fixed keyframe slot], appended to
 // `section`. Every value widget is a DIRECT child of the returned row, so a single-cell row's value
 // widget can always find its row through one parentWidget() hop -- which is exactly what the
 // projection tests rely on.
@@ -74,11 +75,16 @@ struct ValueCellSpec {
 
 [[nodiscard]] kit::KValueField* makeValueCell(const ValueCellSpec& spec, QWidget* parent);
 
-// The [X][Y] (optionally [X][Y][link]) container a paired row puts in its value column. Named so
+// The [X][Y] (optionally [X][link][Y]) container a paired row puts in its value column. Named so
 // the existing positionFieldGroup/anchorFieldGroup/scaleFieldGroup/solidColorFieldGroup objectNames
 // keep resolving.
 [[nodiscard]] QWidget* makeCellGroup(const QString& objectName,
                                      std::initializer_list<QWidget*> cells, QWidget* parent);
+
+// Append a swatch row and a single-line RGBA disclosure. Existing fields retain their names.
+[[nodiscard]] QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip,
+                                   QWidget* diamond, std::initializer_list<QWidget*> fields,
+                                   const QString& expandName, const QString& groupName);
 
 // A proportional/axis link toggle for a paired row. Checkable, Ghost, IconId::Link.
 [[nodiscard]] QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip,

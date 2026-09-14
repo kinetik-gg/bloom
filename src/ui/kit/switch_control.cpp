@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/switch_control.hpp>
 
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -150,6 +151,28 @@ void KSwitch::paintEvent(QPaintEvent* event) {
         thumbFill = withOpacity(thumbFill, kDisabledOpacity);
     }
     fillRoundedSurface(painter, thumb, thumbFill, {}, Radius::Full);
+}
+
+KCheckBox::KCheckBox(QWidget* parent) : KSwitch(parent) {
+    setObjectName(QStringLiteral("kCheckBox"));
+    setFixedSize(sizeHint());
+}
+QSize KCheckBox::sizeHint() const {
+    return {px(Size::PropertiesCheckBox), px(Size::PropertiesCheckBox)};
+}
+QSize KCheckBox::minimumSizeHint() const { return sizeHint(); }
+void KCheckBox::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    const auto state = visualState();
+    fillRoundedSurface(painter, QRectF(rect()),
+                       isEnabled() ? color(isChecked() ? Color::Accent : Color::Field)
+                                   : withOpacity(color(isChecked() ? Color::Accent : Color::Field),
+                                                 kDisabledOpacity),
+                       isChecked() ? QColor{} : color(borderToken()), Radius::Small);
+    if (isChecked())
+        painter.drawPixmap(rect(), iconPixmap(IconId::Check, Size::IconSmall,
+                                              inkForState(Color::Foreground, state),
+                                              devicePixelRatioF(), iconWeight(IconRole::Chrome)));
 }
 
 } // namespace bloom::ui::kit
