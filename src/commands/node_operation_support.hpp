@@ -77,10 +77,9 @@ registeredDefault(const document::CanonicalGraph& graph, const document::NodeId 
 
 inline bool protectedNode(const document::CanonicalGraph& graph, const document::NodeId id) {
     const auto* node = graph.findNode(id);
-    return id == graph.layerStack().nodeId() ||
+    return graph.outputMergeId() == id ||
            (graph.compositionOutput() && graph.compositionOutput()->nodeId == id) ||
-           (node && (node->typeId == document::kLayerStackNodeType ||
-                     node->typeId == document::kCompositionOutputNodeType));
+           (node && node->typeId == document::kCompositionOutputNodeType);
 }
 inline document::NodeLayoutRecord layoutFor(const document::Composition& composition,
                                             const document::NodeId id) {

@@ -106,6 +106,30 @@ NodeId addSource(Fixture& fixture) {
     return *id;
 }
 
+void testMultipleMergeCommands(TestContext& test) {
+    Fixture fixture;
+    const auto added = exercise<AddNode>(test, fixture, std::string(kLayerStackNodeType), Vec2d{});
+    const auto mergeId = added.outputId<NodeId>(kAddNodeOutput);
+    if (!mergeId)
+        return;
+    const auto source = addSource(fixture);
+    const InputPortRef pill = LayerStackInputRef{*mergeId, {}, "content"};
+    const auto first = exercise<ConnectPorts>(test, fixture, OutputPortRef{source, "image"}, pill)
+                           .outputId<LayerSlotId>(kConnectPortsSlotOutput);
+    const auto second =
+        exercise<ConnectPorts>(test, fixture, OutputPortRef{kFirstLayerNodeId, "image"}, pill)
+            .outputId<LayerSlotId>(kConnectPortsSlotOutput);
+    if (!first || !second)
+        return;
+    exercise<ReorderMergeInput>(test, fixture, *mergeId, *second, std::size_t{0});
+    const auto snapshot = fixture.document.snapshot();
+    test.expect(composition(snapshot).graph().merge(*mergeId)->entries().front().slotId == *second,
+                "reorder changes the addressed Merge only");
+    exercise<DisconnectInput>(test, fixture,
+                              InputPortRef{LayerStackInputRef{*mergeId, *first, "content"}});
+    exercise<RemoveNodes>(test, fixture, std::set<NodeId>{*mergeId});
+}
+
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
     (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
@@ -225,8 +249,7 @@ void testAddAndLayout(TestContext& test) {
     // singletons
     // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
-        const bool singleton = definition.key.typeId == kLayerStackNodeType ||
-                               definition.key.typeId == kCompositionOutputNodeType;
+        const bool singleton = definition.key.typeId == kCompositionOutputNodeType;
         test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
                     "exactly the Layer Stack and the composition output are one per composition: " +
                         definition.key.typeId);
@@ -294,8 +317,7 @@ void testWiringAndRename(TestContext& test) {
     refuse<DisconnectInput>(test, fixture, OperationIssueCode::InvalidTarget,
                             InputPortRef{NodeInputRef{source, "image"}});
     const InputPortRef slotInput = LayerStackInputRef{kLayerStackNodeId, kFirstSlotId, "content"};
-    refuse<ConnectPorts>(test, fixture, OperationIssueCode::InvalidValue,
-                         OutputPortRef{source, "image"}, slotInput);
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{source, "image"}, slotInput);
     // ADAPTED (task FIX1, item B): detaching a stack slot's content REMOVES the slot, and
     // connecting a Layer output to the sentinel slot creates one. The slot and the link into it are
     // one thing to the artist, so they are one thing here -- which is what makes a stack slot

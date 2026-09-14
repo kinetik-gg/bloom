@@ -47,6 +47,9 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         const auto* node = original.graph().findNode(id);
         if (!node)
             return detail::invalidTarget();
+        if (node->typeId == document::kCompositionOutputNodeType)
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "Output cannot be duplicated");
         for (const auto& binding : node->parameters) {
             const auto* parameter = original.parameters().find(binding.parameterId);
             if (!parameter)
@@ -126,39 +129,48 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         layerIds.emplace(boundary.layerId, *layerId);
         outputs.push_back({"layer." + std::to_string(boundary.layerId.value()), *layerId});
     }
-    const auto entries = original.graph().layerStack().entries();
-    for (std::size_t index = 0; index < entries.size(); ++index) {
-        const auto& entry = entries[index];
-        if (!layerIds.contains(entry.layerId))
-            continue;
-        const auto slotId = draft.ids().allocateLayerSlot();
-        const auto edgeId = draft.ids().allocateEdge();
-        if (!slotId || !edgeId)
-            return detail::exhaustedIds();
-        const auto layerId = layerIds.at(entry.layerId);
-        if (!graph.layerStack().append({*slotId, layerId}) ||
-            !graph.layerStack().moveBefore(*slotId, index + 1 < entries.size()
-                                                        ? std::optional(entries[index + 1].slotId)
-                                                        : std::nullopt))
-            return OperationResult::rejected(
-                OperationIssueCode::InvalidOrder,
-                "Duplicated layer slot could not be inserted after its original");
-        const auto* originalEdge = detail::inputEdge(
-            original.graph(),
-            document::LayerStackInputRef{original.graph().layerStack().nodeId(), entry.slotId,
-                                         std::string(document::kLayerStackContentInputRole)});
-        if (!originalEdge)
-            return detail::invalidTarget();
-        if (!graph.addEdge(
-                {*edgeId,
-                 {nodeIds.at(originalEdge->source.nodeId), originalEdge->source.port},
-                 document::LayerStackInputRef{graph.layerStack().nodeId(), *slotId,
-                                              std::string(document::kLayerStackContentInputRole)}}))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Duplicated layer could not connect to its slot");
-        outputs.push_back({"slot." + std::to_string(entry.slotId.value()), *slotId});
+    for (const auto& stack : original.graph().merges()) {
+        const bool copyStack = nodeIds.contains(stack.nodeId());
+        const auto targetId = copyStack ? nodeIds.at(stack.nodeId()) : stack.nodeId();
+        auto& target = *graph.merge(targetId);
+        const auto entries = stack.entries();
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            if (!copyStack && !layerIds.contains(entry.layerId))
+                continue;
+            const auto* originalEdge = detail::inputEdge(
+                original.graph(),
+                document::LayerStackInputRef{stack.nodeId(), entry.slotId,
+                                             std::string(document::kLayerStackContentInputRole)});
+            if (!originalEdge)
+                return detail::invalidTarget();
+            const auto slotId = draft.ids().allocateLayerSlot();
+            const auto edgeId = draft.ids().allocateEdge();
+            if (!slotId || !edgeId)
+                return detail::exhaustedIds();
+            const auto layerId =
+                layerIds.contains(entry.layerId) ? layerIds.at(entry.layerId) : entry.layerId;
+            if (!target.append({*slotId, layerId}))
+                return detail::invalidTarget();
+            if (!copyStack &&
+                !target.moveBefore(*slotId, index + 1 < entries.size()
+                                                ? std::optional(entries[index + 1].slotId)
+                                                : std::nullopt))
+                return detail::invalidTarget();
+            auto source = originalEdge->source;
+            if (nodeIds.contains(source.nodeId))
+                source.nodeId = nodeIds.at(source.nodeId);
+            if (!graph.addEdge(
+                    {*edgeId, source,
+                     document::LayerStackInputRef{
+                         targetId, *slotId, std::string(document::kLayerStackContentInputRole)}}))
+                return detail::invalidTarget();
+            outputs.push_back({"slot." + std::to_string(entry.slotId.value()), *slotId});
+        }
     }
     for (auto edge : original.graph().edges()) {
+        if (std::holds_alternative<document::LayerStackInputRef>(edge.destination))
+            continue;
         const auto destination = detail::destinationNode(edge.destination);
         if (!nodes_.contains(destination))
             continue;
