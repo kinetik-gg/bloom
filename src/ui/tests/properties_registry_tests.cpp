@@ -10,6 +10,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStringList>
 #include <QThread>
 #include <QVBoxLayout>
 #include <bloom/commands/command_stack.hpp>
@@ -282,6 +283,26 @@ void registryRows() {
     ui::CompositionSession session(document, stack, id);
     expect(session.addSolidLayer("Solid", {1, 0, 0, 1}), "add solid");
     ui::PropertiesEditor panel(session);
+    auto* solidSection = panel.findChild<ui::kit::KSection*>("propertiesSection_solid");
+    QStringList solidLabels;
+    if (solidSection) {
+        for (int index = 0; index < solidSection->bodyLayout()->count(); ++index) {
+            auto* sourceRow = solidSection->bodyLayout()->itemAt(index)->widget();
+            if (!sourceRow)
+                continue;
+            if (sourceRow->objectName() == "propertiesRegistryRow")
+                sourceRow = sourceRow->findChild<QWidget*>("propertiesRow");
+            else if (sourceRow->objectName() != "propertiesRow")
+                continue;
+            if (sourceRow)
+                solidLabels.push_back(sourceRow->property("rowLabel").toString());
+        }
+    }
+    expect(solidLabels == QStringList{"Color", "Width", "Height"},
+           "Solid Properties exposes only Color, Width, and Height source rows");
+    expect(panel.findChild<QLabel*>("solidAlphaAssociation") == nullptr &&
+               panel.findChild<QLabel*>("solidColorEncoding") == nullptr,
+           "Solid technical alpha and encoding metadata stays out of Properties rows");
     auto* width = row(panel, "width");
     auto* height = row(panel, "height");
     expect(width && height, "registry adds both solid dimensions");

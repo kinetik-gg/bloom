@@ -175,9 +175,6 @@ class PropertiesEditor final : public QWidget, public EditorHeaderMenuProvider {
     kit::KValueField* solidColorGreen_ = nullptr;
     kit::KValueField* solidColorBlue_ = nullptr;
     kit::KValueField* solidColorAlpha_ = nullptr;
-    QLabel* solidAlphaAssociation_ = nullptr;
-    QLabel* solidColorEncoding_ = nullptr;
-
     // Task S3's Text Source group. Content is a QLineEdit rather than a kit control because the kit
     // has no string field; it commits on editingFinished/returnPressed, not per keystroke, so
     // typing a word is one undo step instead of one per letter.

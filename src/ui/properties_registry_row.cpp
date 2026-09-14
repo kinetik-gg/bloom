@@ -18,6 +18,20 @@
 #include <limits>
 
 namespace bloom::ui {
+PropertiesRowVisibility propertiesRowVisibility(const std::string_view role,
+                                                const std::string_view schemaKey) noexcept {
+    // These are presentation metadata, not authored controls. Keep this classification in the UI
+    // registry mapping: the document vocabulary remains the durable source of truth, while the
+    // Properties surface decides which declared values are meaningful to an artist.
+    const bool technicalRole = role == "alpha-association" || role == "color-encoding" ||
+                               role == "color-space" || role == "encoding";
+    const bool technicalSchema =
+        schemaKey == "bloom.color.alpha-association" || schemaKey == "bloom.color.encoding" ||
+        schemaKey == "bloom.solid.alpha-association" || schemaKey == "bloom.solid.encoding";
+    return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
+                                            : PropertiesRowVisibility::Visible;
+}
+
 PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, document::NodeId node,
                                              document::ParameterId parameter,
                                              document::ParameterDefinition definition,
