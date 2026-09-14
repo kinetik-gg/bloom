@@ -5,6 +5,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QThread>
 #include <QVBoxLayout>
@@ -130,6 +132,42 @@ void upstreamRows() {
                "Jump centers the canvas on its node");
     }
 }
+void widthRule() {
+    auto project = document::makeNewProject("Width", "Main", core::RationalTime::fromInteger(10));
+    auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    expect(session.addSolidLayer("A very long source name for a narrow viewport", {1, 0, 0, 1}),
+           "width fixture");
+    ui::PropertiesEditor panel(session);
+    panel.resize(ui::kit::px(ui::kit::Size::PanelMinWidth), 260);
+    panel.show();
+    QCoreApplication::processEvents();
+    auto* scroll = panel.findChild<QScrollArea*>("propertiesScrollArea");
+    expect(panel.width() == ui::kit::px(ui::kit::Size::PanelMinWidth),
+           "panel stays at the unchanged 300-design-pixel minimum");
+    expect(scroll && scroll->verticalScrollBar()->maximum() > 0,
+           "body scrolls vertically at narrow size");
+    if (!scroll)
+        return;
+    expect(scroll->widget()->width() <= scroll->viewport()->width(),
+           "body never exceeds viewport width");
+    bool elided = false;
+    for (auto* child : scroll->widget()->findChildren<QWidget*>()) {
+        if (!child->isVisible() || child->isWindow())
+            continue;
+        expect(child->width() <= scroll->viewport()->width(),
+               "no visible child is wider than viewport");
+        if (auto* field = qobject_cast<ui::kit::KValueField*>(child))
+            expect(field->width() >= field->minimumSizeHint().width(),
+                   "numeric field keeps its legible floor");
+        if (auto* label = qobject_cast<QLabel*>(child);
+            label && label->objectName() == "propertiesRowLabel")
+            elided = elided || label->text().endsWith(QChar(0x2026));
+    }
+    expect(elided, "narrow labels elide instead of stretching viewport");
+}
 void registryRows() {
     auto project =
         document::makeNewProject("Registry", "Main", core::RationalTime::fromInteger(10));
@@ -199,6 +237,7 @@ int main(int argc, char** argv) {
     QSettings().clear();
     registryRows();
     upstreamRows();
+    widthRule();
     QSettings().clear();
     return failures ? 1 : 0;
 }

@@ -35,6 +35,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -161,6 +162,19 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     layout->addWidget(search_);
     connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
 
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName("propertiesScrollArea");
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* body = new QWidget(scroll);
+    body->setObjectName("propertiesScrollBody");
+    auto* bodyLayout = new QVBoxLayout(body);
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(kit::px(kit::Spacing::S));
+    scroll->setWidget(body);
+    layout->addWidget(scroll, 1);
+
     // Task P1 (owner review 2026-09-12: "should not show 'Nothing selected' or any other selected
     // layer info") removed the selection title row entirely. With nothing selected the panel shows
     // only the document/composition section; with a selection it shows only the Object/Transform/
@@ -190,9 +204,9 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     adoptSection(mergeSection_, {});
     selectionLayout->addWidget(mergeInputsPanel_);
     selectionLayout->addStretch(1);
-    layout->addWidget(selectionSection_);
+    bodyLayout->addWidget(selectionSection_);
 
-    buildDocumentSection(layout);
+    buildDocumentSection(bodyLayout);
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);

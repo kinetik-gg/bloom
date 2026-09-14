@@ -6,6 +6,7 @@
 
 #include <QAction>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -55,6 +56,9 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
 
     title_ = new QLabel(title, header_);
     title_->setObjectName(QStringLiteral("kSectionTitle"));
+    title_->setToolTip(title);
+    title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    title_->installEventFilter(this);
     title_->setTextFormat(Qt::PlainText);
     title_->setFont(kit::font(TypeRole::Ui));
     QPalette titlePalette = title_->palette();
@@ -82,9 +86,13 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     layout->addWidget(body_);
 }
 
-QString KSection::title() const { return title_->text(); }
+QString KSection::title() const { return title_->toolTip(); }
 
-void KSection::setTitle(const QString& title) { title_->setText(title); }
+void KSection::setTitle(const QString& title) {
+    title_->setToolTip(title);
+    title_->setText(
+        QFontMetrics(title_->font()).elidedText(title, Qt::ElideRight, title_->width()));
+}
 
 QWidget* KSection::body() const noexcept { return body_; }
 
@@ -144,6 +152,8 @@ void KSection::showSectionMenu() {
 }
 
 bool KSection::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == title_ && event->type() == QEvent::Resize)
+        setTitle(title());
     if (watched == header_ && event->type() == QEvent::MouseButtonRelease) {
         const auto* mouse = static_cast<QMouseEvent*>(event);
         // Only a plain left click on the header's own background toggles; a click that landed on
