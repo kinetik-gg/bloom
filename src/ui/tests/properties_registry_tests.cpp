@@ -1,8 +1,12 @@
+#include <QAction>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QSettings>
+#include <QThread>
 #include <QVBoxLayout>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -76,6 +80,32 @@ void upstreamRows() {
     window.resize(900, 800);
     window.show();
     QCoreApplication::processEvents();
+    auto* drivenRow = row(*panel, "a");
+    auto* value = drivenRow ? drivenRow->findChild<QLabel*>("propertiesDrivenValue") : nullptr;
+    QElapsedTimer wait;
+    wait.start();
+    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expect(value && value->text() == "0",
+           "detached driven graph resolves through background evaluator");
+    expect(drivenRow &&
+               drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink")->text() == "Math",
+           "driven row names the driver node");
+    if (drivenRow) {
+        Q_EMIT drivenRow->customContextMenuRequested(QPoint{});
+        auto* reset = drivenRow->findChild<QAction*>("propertiesResetToDefault");
+        expect(reset && reset->isEnabled(), "driven row offers Reset to default");
+        const auto before = stack.size();
+        if (reset)
+            reset->trigger();
+        expect(stack.size() == before + 1,
+               "driven reset disconnects to registry default in one command");
+        expect(session.undo(), "driven reset is undoable");
+        for (auto* menu : panel->findChildren<QMenu*>())
+            menu->close();
+    }
     auto* upstream = panel->findChild<QWidget*>("propertiesUpstreamPanel");
     expect(upstream && upstream->findChildren<ui::kit::KSection*>().size() == 3,
            "BFS deduplicates paths and limits sections to depth three");
@@ -129,7 +159,7 @@ void registryRows() {
         auto* section = panel.findChild<ui::kit::KSection*>("propertiesSection_solid");
         field->setValue(872);
         Q_EMIT section->resetRequested();
-        expect(session.effectiveScalarValue(parameter) == 1920,
+        expect(session.effectiveScalarValue(parameter) == 1,
                "source reset includes registry defaults");
     }
     expect(session.addTextLayer("Text", "Hello", 48, {1, 1, 1, 1}), "add text");

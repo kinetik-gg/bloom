@@ -305,6 +305,7 @@ void PropertiesEditor::rebuild() {
     configureMergeInputs();
     configureRegistryRows();
     configureUpstream();
+    configureDrivenRows();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
     const auto context = session_.selection().contextualLayer;

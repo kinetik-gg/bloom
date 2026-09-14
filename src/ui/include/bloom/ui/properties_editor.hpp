@@ -17,6 +17,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class PropertiesRegistryRow;
+class PropertiesDrivenValues;
 
 class KeyframeDiamond;
 
@@ -42,6 +43,8 @@ class PropertiesEditor final : public QWidget {
     void rebuild();
     void configureRegistryRows();
     void configureUpstream();
+    void configureDrivenRows();
+    PropertiesDrivenValues* drivenValues_ = nullptr;
     QWidget* upstreamPanel_ = nullptr;
     QString upstreamSignature_;
     std::vector<PropertiesRegistryRow*> upstreamRows_;

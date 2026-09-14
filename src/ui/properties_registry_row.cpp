@@ -90,7 +90,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             connect(color_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
                 if (!refreshing_) {
                     (void)session_.setParameterValue(
-                        parameter_, core::Color4d{color.red, color.green, color.blue, color.alpha},
+                        parameter_,
+                        core::Color4d{
+                            static_cast<double>(color.red), static_cast<double>(color.green),
+                            static_cast<double>(color.blue), static_cast<double>(color.alpha)},
                         tr("Set Color"));
                     refresh();
                 }
@@ -134,8 +137,16 @@ void PropertiesRegistryRow::refresh() {
     refreshing_ = true;
     const auto* composition = session_.composition();
     const auto* parameter = composition ? composition->parameters().find(parameter_) : nullptr;
-    setEnabled(parameter && !composition->nodeLocked(node_) &&
-               !std::holds_alternative<document::DriverBindingSource>(parameter->source));
+    const bool editable = parameter && !composition->nodeLocked(node_) &&
+                          !std::holds_alternative<document::DriverBindingSource>(parameter->source);
+    for (auto* field : fields_)
+        if (field)
+            field->setEnabled(editable);
+    for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(toggle_),
+                          static_cast<QWidget*>(color_), static_cast<QWidget*>(text_),
+                          static_cast<QWidget*>(multiline_)})
+        if (control)
+            control->setEnabled(editable);
     if (parameter) {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))

@@ -293,7 +293,10 @@ target_sources(
         properties_registry_row.cpp
         properties_editor_registry.cpp
         properties_upstream.cpp
+        properties_driven_values.cpp
+        properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
+        composition_driver_probe.cpp
         properties_sections.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp

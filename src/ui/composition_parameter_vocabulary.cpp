@@ -19,7 +19,7 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
             // The frozen signature's own id is the name, with its namespace trimmed: the card
             // must not invent a second spelling for an operation the kernel already names.
             const auto id = signature == nullptr ? std::string_view{} : signature->id;
-            add(node_editor::displayTypeName(id.subsQObject::tr(id.rfind('.') + 1)),
+            add(node_editor::displayTypeName(id.substr(id.rfind('.') + 1)),
                 document::scalarOperationStoredValue(operation));
         }
         return items;
