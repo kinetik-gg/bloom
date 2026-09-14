@@ -45,8 +45,7 @@ void TimelineWorkAreaStrip::paintEvent(QPaintEvent*) {
     painter.fillRect(QRectF(left, 0, std::max<qreal>(0.0, right - left), barHeight),
                      kit::color(kit::Color::Accent));
     painter.fillRect(QRectF(left, 0, handle, height()), kit::color(kit::Color::Accent));
-    painter.fillRect(QRectF(right - handle, 0, handle, height()),
-                     kit::color(kit::Color::Accent));
+    painter.fillRect(QRectF(right - handle, 0, handle, height()), kit::color(kit::Color::Accent));
 }
 void TimelineWorkAreaStrip::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton)

@@ -180,9 +180,7 @@ interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
 
 // Timeline labels are Value-role readouts. Keep the kit font at its declared size so density is
 // controlled by cadence, never by silently shrinking the numbers.
-[[nodiscard]] QFont tickFont() {
-    return kit::font(kit::TypeRole::Value);
-}
+[[nodiscard]] QFont tickFont() { return kit::font(kit::TypeRole::Value); }
 
 struct MajorTickLabel final {
     std::uint64_t index = 0;
@@ -763,9 +761,9 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     const QString frameLabel = formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_);
     const QFontMetrics frameMetrics(tickFont());
     const qreal labelWidth = frameMetrics.horizontalAdvance(frameLabel);
-    const qreal labelX = std::clamp(playheadX + kPlayheadMarkerHalfWidth +
-                                        kit::px(kit::Spacing::XS),
-                                    0.0, std::max(0.0, width() - labelWidth));
+    const qreal labelX =
+        std::clamp(playheadX + kPlayheadMarkerHalfWidth + kit::px(kit::Spacing::XS), 0.0,
+                   std::max(0.0, width() - labelWidth));
     painter.setFont(tickFont());
     painter.setPen(kit::color(kit::Color::Foreground));
     painter.drawText(QRectF(labelX, 0.0, labelWidth, static_cast<qreal>(height())),

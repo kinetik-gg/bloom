@@ -504,13 +504,12 @@ void testTimelineHeaderMenus(Expectations& expectations) {
                                 ui::kit::px(ui::kit::Size::TimelineNameMin) +
                                 2 * ui::kit::px(ui::kit::Size::TimelineColumn),
                         "the default left column is the exact toggle/name/blending/parent sum");
-    expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") !=
-                            nullptr &&
-                            area->findChild<QToolButton*>("timelineKeyframesVisibleButton") !=
-                                nullptr &&
-                            area->findChild<QToolButton*>("timelineGraphEditorButton") != nullptr &&
-                            area->findChild<QToolButton*>("timelineSnappingButton") != nullptr,
-                        "the header exposes the composition selector and timeline tool cluster");
+    expectations.expect(
+        area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") != nullptr &&
+            area->findChild<QToolButton*>("timelineKeyframesVisibleButton") != nullptr &&
+            area->findChild<QToolButton*>("timelineGraphEditorButton") != nullptr &&
+            area->findChild<QToolButton*>("timelineSnappingButton") != nullptr,
+        "the header exposes the composition selector and timeline tool cluster");
     // Task VIEW-1: the transport cluster this used to inspect lives in the viewer footer now, so
     // the claim it made ("no Undo/Redo buttons down there") is made about what is actually left in
     // the row -- the navigator, and the empty left cell that keeps its time axis aligned.
@@ -1116,8 +1115,8 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
                             stack->entries()[1].kind == QStringLiteral("Solid"),
                         "the stack still derives each layer's kind from project truth");
     // The Name cell's own x: past the four toggle cells.
-    const int nameX = ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
-                      ui::kit::px(ui::kit::Spacing::XS) + 8;
+    const int nameX =
+        ui::kit::px(ui::kit::Size::TimelineToggleColumn) + ui::kit::px(ui::kit::Spacing::XS) + 8;
     expectations.expect(stack->toolTipAt(QPoint(nameX, 32 + 16)).contains(QStringLiteral("Solid")),
                         "the Solid row names its kind in the tooltip, so removing the Kind COLUMN "
                         "never removed the information");
@@ -1799,7 +1798,8 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
         return;
     using namespace bloom;
     SessionFixture fixture(makeTestProject("TL-C1 screenshot"));
-    (void)fixture.session.addSolidLayer(QStringLiteral("Solid 1"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("Solid 1"),
+                                        core::Color4d{0.2, 0.3, 0.4, 1.0});
     (void)fixture.session.addTextLayer(QStringLiteral("Text 1"), QStringLiteral("Timeline"));
     ui::EditorRegistry registry;
     (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {

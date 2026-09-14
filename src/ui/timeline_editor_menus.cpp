@@ -31,8 +31,7 @@ class TimelineCompositionName final : public QWidget {
         : QWidget(parent), session_(session), dropdown_(new kit::KDropdown(this)) {
         setObjectName("timelineCompositionName");
         setAccessibleName(tr("Composition"));
-        setMinimumWidth(kit::px(kit::Size::TimelineColumn) -
-                        3 * kit::px(kit::Spacing::M));
+        setMinimumWidth(kit::px(kit::Size::TimelineColumn) - 3 * kit::px(kit::Spacing::M));
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         auto* layout = new QHBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -167,7 +166,6 @@ void TimelineEditor::createHeaderMenus() {
     auto* bar = new TimelineHeaderMenuBar(headerMenus_);
     row->addWidget(bar);
     row->addWidget(new TimelineCompositionName(session_, headerMenus_));
-
 
     const auto menu = [this](const QString& title, const QString& name) {
         auto* result = new QMenu(title, headerMenus_);

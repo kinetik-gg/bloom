@@ -233,8 +233,8 @@ TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
 
 void TimelineNavigator::updateVisibility() {
     const auto axis = ruler_.axisForWidth(width());
-    const bool zoomed = axis.has_value() &&
-                        (axis->t0 > 0.0 || axis->t1 < axis->duration.toSeconds());
+    const bool zoomed =
+        axis.has_value() && (axis->t0 > 0.0 || axis->t1 < axis->duration.toSeconds());
     setVisible(zoomed);
     update();
 }

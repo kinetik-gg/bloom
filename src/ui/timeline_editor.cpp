@@ -410,7 +410,7 @@ class TimelineLayerRow final : public QWidget {
         Q_UNUSED(event)
         QPainter painter(this);
         painter.fillRect(rect(), kit::color(rowIndex_ % 2 == 0 ? kit::Color::Surface
-                                                                 : kit::Color::SurfaceRaised));
+                                                               : kit::Color::SurfaceRaised));
         if (selected_)
             painter.fillRect(QRect(0, 0, kit::px(kit::Size::TimelineWorkAreaHandle) / 2, height()),
                              kit::color(kit::Color::Accent));
@@ -419,10 +419,11 @@ class TimelineLayerRow final : public QWidget {
         for (int index = 0; index < kToggleCellCount; ++index) {
             const auto cell = static_cast<ToggleCell>(index);
             const bool active = cell == ToggleCell::Visibility ? enabled_
-                              : cell == ToggleCell::Solo       ? solo_
-                              : cell == ToggleCell::Lock       ? locked_
-                                                                : false;
-            const QRect box(toggleCellX(index) + (kToggleCellWidth - kit::px(kit::Size::IconMedium)) / 2,
+                                : cell == ToggleCell::Solo     ? solo_
+                                : cell == ToggleCell::Lock     ? locked_
+                                                               : false;
+            const QRect box(toggleCellX(index) +
+                                (kToggleCellWidth - kit::px(kit::Size::IconMedium)) / 2,
                             (height() - kit::px(kit::Size::IconMedium)) / 2,
                             kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
             painter.setBrush(kit::color(kit::Color::ControlSurface));
@@ -431,18 +432,16 @@ class TimelineLayerRow final : public QWidget {
             painter.drawRoundedRect(box, radius, radius);
             const auto id = cell == ToggleCell::Visibility
                                 ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
-                            : cell == ToggleCell::Audio
-                                ? kit::IconId::AudioOff
+                            : cell == ToggleCell::Audio ? kit::IconId::AudioOff
                             : cell == ToggleCell::Solo
                                 ? kit::IconId::Solo
                                 : (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked);
             const auto weight = active ? kit::IconWeight::Fill : kit::IconWeight::Regular;
-            const auto glyph = kit::iconPixmap(
-                id, kit::Size::IconMedium,
-                cell == ToggleCell::Audio
-                    ? kit::Color::Faint
-                    : active ? kit::Color::Foreground : kit::Color::Muted,
-                kit::State::Normal, weight);
+            const auto glyph = kit::iconPixmap(id, kit::Size::IconMedium,
+                                               cell == ToggleCell::Audio ? kit::Color::Faint
+                                               : active                  ? kit::Color::Foreground
+                                                                         : kit::Color::Muted,
+                                               kit::State::Normal, weight);
             painter.drawPixmap(box, glyph);
         }
 
@@ -647,9 +646,10 @@ void TimelineLayerStack::relayoutRows() {
         if (entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             if (property)
                 property->hide();
-            row->bind(entry, entry.imageNodeId.isValid()
-                                 ? session_.selectedNodes().contains(entry.imageNodeId)
-                                 : isLayerSelected(session_, entry.layerId),
+            row->bind(entry,
+                      entry.imageNodeId.isValid()
+                          ? session_.selectedNodes().contains(entry.imageNodeId)
+                          : isLayerSelected(session_, entry.layerId),
                       index);
             row->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             row->show();
@@ -674,9 +674,9 @@ void TimelineLayerStack::paintEvent(QPaintEvent* event) {
     const int lastRow = std::min(static_cast<int>(entries_.size()) - 1,
                                  (scrollOffset_ + height()) / kTimelineRowHeight);
     for (int row = firstRow; row <= lastRow; ++row)
-        painter.fillRect(QRect(0, rowTop(row), width(), kTimelineRowHeight),
-                         kit::color(row % 2 == 0 ? kit::Color::Surface
-                                                 : kit::Color::SurfaceRaised));
+        painter.fillRect(
+            QRect(0, rowTop(row), width(), kTimelineRowHeight),
+            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
     kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
     painter.drawLine(QPointF(static_cast<qreal>(width()) - 0.5, 0.0),
                      QPointF(static_cast<qreal>(width()) - 0.5, static_cast<qreal>(height())));
@@ -739,11 +739,10 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
             transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id, !visible);
         }
         if (toggle == static_cast<int>(ToggleCell::Solo))
-            transaction.emplace<commands::SetLayerSolo>(session_.compositionId(), id,
-                                                         !layer->solo);
+            transaction.emplace<commands::SetLayerSolo>(session_.compositionId(), id, !layer->solo);
         if (toggle == static_cast<int>(ToggleCell::Lock))
             transaction.emplace<commands::SetLayerLocked>(session_.compositionId(), id,
-                                                           !layer->locked);
+                                                          !layer->locked);
         (void)session_.executeTransaction(std::move(transaction));
         return;
     }
@@ -1181,17 +1180,17 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const auto& entry = entries_[static_cast<std::size_t>(row)];
         const int top = rowTop(row);
         painter.setRenderHint(QPainter::Antialiasing, false);
-        painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
-                         kit::color(row % 2 == 0 ? kit::Color::Surface
-                                                 : kit::Color::SurfaceRaised));
+        painter.fillRect(
+            QRect(0, top, width(), kTimelineRowHeight),
+            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
         const bool selected = entry.imageNodeId.isValid()
                                   ? session_.selectedNodes().contains(entry.imageNodeId)
                                   : isLayerSelected(session_, entry.layerId);
         if (selected) {
             paintSelectedRowFill(painter, top, width());
-            painter.fillRect(QRect(0, top, kit::px(kit::Size::TimelineWorkAreaHandle) / 2,
-                                   kTimelineRowHeight),
-                             kit::color(kit::Color::Accent));
+            painter.fillRect(
+                QRect(0, top, kit::px(kit::Size::TimelineWorkAreaHandle) / 2, kTimelineRowHeight),
+                kit::color(kit::Color::Accent));
         }
         paintRowSeparator(painter, top, width());
         if (const auto bar = clipBarRect(row)) {
@@ -1206,8 +1205,8 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                                     kit::hoverFillFor(fill), kit::Radius::Small);
             const int grip = kit::px(kit::Spacing::XXS);
             const int stripe = kit::px(kit::Size::TimelineWorkAreaHandle) / 2;
-            painter.fillRect(QRect(bar->left() + grip, bar->top() + 1, stripe,
-                                   bar->height() - 2), fill);
+            painter.fillRect(QRect(bar->left() + grip, bar->top() + 1, stripe, bar->height() - 2),
+                             fill);
             painter.fillRect(
                 QRect(bar->right() - grip, bar->top() + grip, 1, bar->height() - 2 * grip),
                 kit::hoverFillFor(fill));
@@ -1505,11 +1504,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     toolsLayout->setContentsMargins(0, 0, 0, 0);
     toolsLayout->setSpacing(kit::px(kit::Spacing::XXS));
     toolsLayout->addStretch(1);
-    const auto addHeaderToggle = [timelineTools, toolsLayout](const QString& name,
-                                                                const QString& tip,
-                                                                const kit::IconId iconId,
-                                                                const bool checked,
-                                                                const bool enabled) {
+    const auto addHeaderToggle = [timelineTools,
+                                  toolsLayout](const QString& name, const QString& tip,
+                                               const kit::IconId iconId, const bool checked,
+                                               const bool enabled) {
         auto* button = new QToolButton(timelineTools);
         button->setObjectName(name);
         button->setAccessibleName(tip);
@@ -1520,8 +1518,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         button->setAutoRaise(true);
         button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
                                   enabled ? kit::Color::Foreground : kit::Color::Faint));
-        button->setIconSize(QSize(kit::px(kit::Size::IconMedium),
-                                  kit::px(kit::Size::IconMedium)));
+        button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
         button->setFixedSize(kit::px(kit::Size::ControlCompact),
                              kit::px(kit::Size::ControlCompact));
         toolsLayout->addWidget(button);
