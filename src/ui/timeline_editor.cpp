@@ -436,6 +436,7 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
                   {new kit::KLabel(tr("Blending"), row, kit::TypeRole::UiSmall),
                    new kit::KLabel(tr("Parent"), row, kit::TypeRole::UiSmall)});
     row->setFixedHeight(kit::px(kit::Size::Control));
+    row->setProperty("headerRow", true);
     layout->addWidget(row);
 }
 
@@ -460,7 +461,7 @@ bool TimelineColumnHeaders::event(QEvent* event) {
 
 TimelineLayerStack::TimelineLayerStack(CompositionSession& session, QScrollBar& scrollBar,
                                        QWidget* parent)
-    : QWidget(parent), session_(session), scrollBar_(scrollBar) {
+    : kit::KListSurface(parent), session_(session), scrollBar_(scrollBar) {
     // Unchanged objectName: same role (the composition's layer stack), new primitive.
     setObjectName(QStringLiteral("layerStackView"));
     setAccessibleName(tr("Composition layers"));
@@ -527,6 +528,7 @@ void TimelineLayerStack::setScrollOffset(const int offset) {
         return;
     }
     scrollOffset_ = offset;
+    setGridOffset(offset);
     relayoutRows();
     update();
 }
@@ -1081,6 +1083,14 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::SurfaceSunken));
 
+    for (int row = scrollOffset_ / kTimelineRowHeight;
+         row <= (scrollOffset_ + height()) / kTimelineRowHeight; ++row) {
+        const int top = rowTop(row);
+        painter.fillRect(
+            QRect(0, top, width(), kTimelineRowHeight),
+            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
+        paintRowSeparator(painter, top, width());
+    }
     const int firstRow = std::max(0, scrollOffset_ / kTimelineRowHeight);
     const int lastRow = std::min(static_cast<int>(entries_.size()) - 1,
                                  (scrollOffset_ + height()) / kTimelineRowHeight);

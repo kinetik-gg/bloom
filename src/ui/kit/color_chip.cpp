@@ -131,8 +131,8 @@ int KColorChip::controlExtent() const {
 }
 
 QSize KColorChip::sizeHint() const {
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    const int extent = controlExtent() + ringMargin;
+    // The focus ring is inset by paintEvent, inside the grammar control extent.
+    const int extent = controlExtent();
     return {extent, extent};
 }
 

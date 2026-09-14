@@ -70,6 +70,20 @@ class KAnchorGrid : public QWidget {
   protected:
     void paintEvent(QPaintEvent*) override;
 };
+class KListSurface : public QWidget {
+  public:
+    using QWidget::QWidget;
+    void setGridOffset(int offset) {
+        offset_ = offset;
+        update();
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override;
+
+  private:
+    int offset_ = 0;
+};
 class KSurface : public QWidget {
   public:
     explicit KSurface(QWidget* parent = nullptr);

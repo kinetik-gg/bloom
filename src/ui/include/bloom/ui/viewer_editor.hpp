@@ -189,6 +189,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
     // reaching into private members.
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
+    [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
     // Task VIEW-1's own seams, on the same terms as the four above.

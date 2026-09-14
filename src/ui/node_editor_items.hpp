@@ -583,11 +583,13 @@ class NodeItem final : public QGraphicsObject {
     // linked-hides-the- widget rule by role instead of by identity. A control with no role
     // registered -- a keyframe diamond, a rename editor -- is never hidden by a link, which is
     // correct: neither edits a value.
-    void registerControlRole(const QWidget* widget, const std::string_view role) {
+    void registerControlRole(QWidget* widget, const std::string_view role) {
         if (widget != nullptr) {
             controlRoles_.emplace(
                 widget, QString::fromUtf8(role.data(), static_cast<qsizetype>(role.size())));
         }
+        widget->setProperty("nodeParameterRole",
+                            QString::fromUtf8(role.data(), static_cast<qsizetype>(role.size())));
     }
 
     // The card's own keyframe diamond for `role` (task S5, item 0): the SAME shared

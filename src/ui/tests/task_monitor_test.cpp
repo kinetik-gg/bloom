@@ -9,9 +9,9 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QPlainTextEdit>
-#include <QPushButton>
 #include <QTableView>
 #include <QThread>
+#include <bloom/ui/kit/button.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -189,7 +189,7 @@ void testBridgeModelAndEditor(Expectations& expectations, QApplication& applicat
                         "bloom.jobs registers once as a replaceable editor");
     std::unique_ptr<QWidget> editor(registry.editors().front().create(nullptr));
     auto* table = editor->findChild<QTableView*>("jobsTable");
-    auto* cancel = editor->findChild<QPushButton*>("cancelSelectedJobButton");
+    auto* cancel = editor->findChild<bloom::ui::kit::KButton*>("cancelSelectedJobButton");
     auto* details = editor->findChild<QPlainTextEdit*>("jobDetails");
     expectations.expect(
         table != nullptr && cancel != nullptr && details != nullptr &&

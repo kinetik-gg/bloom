@@ -16,8 +16,8 @@ layout, palette or text, which move tens of percent. There are no excluded regio
 To deliberately approve a change, run the executable with `--update-goldens` once with
 `QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1 BLOOM_REDUCED_MOTION=1` and once with scale 1.5.
 Inspect both captures, commit the references, and explain the visual change in that commit.
-Normal ctest runs only compare. Every run also writes `build/grammar1-window-dpr1.png` or
-`build/grammar1-window-dpr15.png` for inspection.
+Normal ctest runs only compare. Every run also writes `build/grammar2-window-dpr1.png` or
+`build/grammar2-window-dpr15.png` for inspection.
 
 Initial approval: GRAMMAR-1 introduces shared 26 px controls, 32 px chrome and declared overflow.
 The subsequent Inter and timeline row migrations deliberately re-approve their resulting changes.
@@ -31,3 +31,13 @@ Final Qt qualification approval: the fixture installs the application's mnemonic
 the theme. Menu bars and table headers explicitly use TypeRole Ui, including after a style
 change, eliminating Qt-version-dependent platform font substitution and window-layout drift.
 Both references are reapproved for this typography correction with the same tolerance.
+
+GRAMMAR-2 approval: the status strip uses muted UiSmall text with a tinted colour-state label.
+The native menu bar is unchanged. The sidebar spans the workspace height, Assets is above
+Properties, and Timeline spans only Viewer and Nodes. The padded viewer has six real tool
+choices and a compact, ordered footer with one resolution readout. Cards use mixed-case
+kind eyebrows, Title Case labels, kit controls at property-row pitch, aligned edge sockets,
+and accent selection. Empty timeline rows use the shared alternating backdrop.
+The sample graph is arranged through MoveNodes to keep its saved cards distinct; production
+preserves artist-authored positions, including old compact placements. Both DPR references
+are approved for these intentional changes; comparison limits and coverage are unchanged.

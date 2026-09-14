@@ -525,7 +525,7 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     }
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
-                                ui::kit::px(ui::kit::Size::TimelineNameMin) +
+                                ui::kit::px(ui::kit::Size::TimelineNameDefault) +
                                 2 * ui::kit::px(ui::kit::Size::TimelineColumn),
                         "the default left column is the exact toggle/name/blending/parent sum");
     expectations.expect(
@@ -1574,7 +1574,8 @@ void testIntegratedKeyGestures(Expectations& expectations) {
                                                session.snapshot().revision()),
                         "seed keys on two parameters");
     ui::TimelineEditor editor(session, fixture.controller);
-    editor.resize(1400, 700);
+    // Keep the smallest intentional 0.123-second drag beyond the platform drag threshold.
+    editor.resize(1600, 700);
     editor.show();
     QCoreApplication::processEvents();
     const auto summary = editor.laneRegionForTest()->keySummaryTimes(0);

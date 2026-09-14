@@ -486,6 +486,46 @@ struct ViewerFixture final {
     }
 };
 
+void testToolColumnUsesViewGestures(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Tool gestures"));
+    fixture.viewer.show();
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "tool fixture ready");
+    auto* zoom = fixture.viewer.findChild<QToolButton*>("viewerZoomTool");
+    auto* hand = fixture.viewer.findChild<QToolButton*>("viewerHandTool");
+    auto* select = fixture.viewer.findChild<QToolButton*>("viewerSelectTool");
+    const auto before = fixture.commands.size();
+    zoom->click();
+    const auto center = fixture.viewer.canvasRectForTest().center();
+    QMouseEvent zoomPress(QEvent::MouseButtonPress, center, center, Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &zoomPress);
+    expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow && zoom->isChecked() &&
+                            !select->isChecked(),
+                        "zoom tool uses pointer zoom and exclusive selection");
+    hand->click();
+    const auto panBefore = fixture.viewer.viewTransformForTest().pan;
+    QMouseEvent press(QEvent::MouseButtonPress, center, center, Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &press);
+    const QPointF delta(14, 9);
+    QMouseEvent move(QEvent::MouseMove, center + delta, center + delta, Qt::NoButton,
+                     Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, center + delta, center + delta, Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &release);
+    expectations.expect(fixture.viewer.viewTransformForTest().pan == panBefore + delta,
+                        "hand tool maps left-button dragging to pan");
+    expectations.expect(fixture.commands.size() == before,
+                        "view tools do not mutate project truth");
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "tool fixture shuts down");
+}
+
 // The zoom dropdown (decision 3) drives ViewerEditor's ViewTransform in both directions: choosing
 // a preset sets the transform, and the transform's own state is reflected back (Fit's default,
 // then a preset, then a wheel-derived custom value that lands on the dropdown's trailing item).
@@ -1130,7 +1170,7 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         QCoreApplication::processEvents();
         const auto corner = [&fixture] {
             return fixture.viewer.grab().toImage().pixelColor(
-                fixture.viewer.canvasRect().topLeft().toPoint() + QPoint(2, 2));
+                fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
         };
         expectations.expect(corner() == ui::kit::color(ui::kit::Color::Canvas),
                             "Solid paints the application's own canvas Background token");
@@ -1236,15 +1276,16 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
                         "the format is persisted under the SAME key the timeline ruler reads, so "
                         "the two surfaces can never disagree about it");
     QCoreApplication::sendEvent(readout, &press);
+    const auto expectedTimecode = core::RationalTime::create(5, 2);
     editor->setText("00:00:02:12");
     QMetaObject::invokeMethod(editor, "returnPressed");
     QCoreApplication::processEvents();
-    expectations.expect(fixture.session.currentTime() == *core::RationalTime::create(5, 2),
+    expectations.expect(expectedTimecode && fixture.session.currentTime() == *expectedTimecode,
                         "typed timecode maps to exact rational frame time");
     QCoreApplication::sendEvent(readout, &press);
     editor->setText("00:99:00:00");
     QMetaObject::invokeMethod(editor, "returnPressed");
-    expectations.expect(fixture.session.currentTime() == *core::RationalTime::create(5, 2),
+    expectations.expect(expectedTimecode && fixture.session.currentTime() == *expectedTimecode,
                         "invalid timecode leaves time unchanged");
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
     frames->trigger();
@@ -1333,7 +1374,7 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
         clearInteraction();
         const auto selectedImage = fixture.viewer.grab().toImage();
         const auto display = ui::viewTransformedDisplayRect(
-            fixture.viewer.canvasRect(), extent(160, 120), core::PixelAspectRatio::square(),
+            fixture.viewer.canvasRectForTest(), extent(160, 120), core::PixelAspectRatio::square(),
             fixture.viewer.viewTransformForTest());
         const auto screen = [&](double x, double y) {
             return QPoint(qRound(display.left() + x * display.width() / 160.0),
@@ -1580,6 +1621,7 @@ int main(int argc, char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
+    testToolColumnUsesViewGestures(expectations);
     testSelectedBoundsOverlayPixels(expectations);
     testResolutionDropdownPersistsAndMovesWithFooter(expectations);
     testAutoFollowsFitResize(expectations);

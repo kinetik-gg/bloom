@@ -31,7 +31,7 @@ int run(int argc, char** argv) {
     const QString referencePath =
         QStringLiteral(BLOOM_GRAMMAR_GOLDEN_DIR "/window-") + suffix + ".png";
     const QString capturePath =
-        QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR "/grammar1-window-") + suffix + ".png";
+        QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR "/grammar2-window-") + suffix + ".png";
     if (!actual.save(capturePath))
         return 1;
     if (app.arguments().contains("--update-goldens")) {

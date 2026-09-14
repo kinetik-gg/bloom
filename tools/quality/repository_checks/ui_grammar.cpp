@@ -94,6 +94,10 @@ std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& 
     // Construction through new, a temporary, a stack variable or a standard smart-pointer factory.
     append(
         std::regex(
+            R"(\bnew\s+(?:QToolButton|QPushButton|QComboBox|QLineEdit|QCheckBox|QSlider|QLabel|QMenu)\s*;)"),
+        "raw-control");
+    append(
+        std::regex(
             R"(\b(?:new\s+)?(?:QToolButton|QPushButton|QComboBox|QLineEdit|QCheckBox|QSlider|QLabel|QMenu)\s*(?:[({]|\s+[A-Za-z_]\w*\s*[({])|\bmake_(?:unique|shared)\s*<\s*(?:QToolButton|QPushButton|QComboBox|QLineEdit|QCheckBox|QSlider|QLabel|QMenu)\s*>)"),
         "raw-control");
     append(std::regex(R"(\bQFont\s*[({]|\bQFont\s+[A-Za-z_]\w*\s*[({])"), "font");
@@ -114,6 +118,31 @@ std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& 
         std::regex(
             R"(\b(?:int|qreal|double|float)\s+k?\w*(?:Width|Height|Size|Pitch|Gap|Inset|Radius|Padding|Extent)\w*\s*=\s*[1-9][0-9]*(?:\.[0-9]+)?\b)"),
         "dimension");
+    const std::regex extentCall(
+        R"(\b(?:setFixed\w*|setMinimum(?:Size|Width|Height)|setMaximum(?:Size|Width|Height)|setContentsMargins|setSpacing|setGeometry|setIconSize|QSizeF?|QRectF?)\s*\()");
+    const std::regex literal(R"(^\s*-?[1-9][0-9]*(?:\.[0-9]+)?\s*$)");
+    for (std::sregex_iterator it(code.begin(), code.end(), extentCall), end; it != end; ++it) {
+        const auto start = static_cast<std::size_t>(it->position());
+        auto arg = start + static_cast<std::size_t>(it->length());
+        int depth = 1;
+        bool violation = false;
+        for (auto index = arg; index < code.size() && depth > 0; ++index) {
+            if (code[index] == '(')
+                ++depth;
+            if (code[index] == ')')
+                --depth;
+            if ((code[index] == ',' && depth == 1) || depth == 0) {
+                violation = violation || std::regex_match(code.substr(arg, index - arg), literal);
+                arg = index + 1;
+            }
+        }
+        if (violation) {
+            const auto lineNumber =
+                1U + static_cast<std::size_t>(std::count(
+                         code.begin(), code.begin() + static_cast<std::ptrdiff_t>(start), '\n'));
+            findings.push_back({path, "dimension", "UI grammar: use the kit contract", lineNumber});
+        }
+    }
     std::ranges::sort(findings, {}, [](const auto& f) { return uiGrammarEntry(f); });
     const auto duplicates =
         std::ranges::unique(findings, {}, [](const auto& f) { return uiGrammarEntry(f); });

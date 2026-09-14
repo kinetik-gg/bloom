@@ -1,3 +1,4 @@
+#include <bloom/ui/kit/surfaces.hpp>
 #pragma once
 
 #include <bloom/ui/editor_area.hpp>
@@ -126,7 +127,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
 // a pool bounded by the viewport so widget count is independent of layer count.
 //
 // objectName "layerStackView" is deliberately unchanged -- same role, same name, new primitive.
-class TimelineLayerStack final : public QWidget {
+class TimelineLayerStack final : public kit::KListSurface {
     Q_OBJECT
 
   public:

@@ -215,8 +215,9 @@ void testNodeTypesAreNamedForWhatTheyAre() {
            "so the eyebrow is what still says it is a Layer");
     const auto* stack = f.session.composition()->graph().findNode(
         f.session.composition()->graph().layerStack().nodeId());
-    expect(node_editor::nodeEyebrow(*f.session.composition(), *stack).isEmpty(),
-           "and a node named after its own type carries no eyebrow");
+    expect(node_editor::nodeEyebrow(*f.session.composition(), *stack) ==
+               QStringLiteral("Compositing"),
+           "every card carries its kind eyebrow, including a type-named card");
 }
 
 // The Layer card's Blending dropdown: the third surface over the same parameter, committing through
