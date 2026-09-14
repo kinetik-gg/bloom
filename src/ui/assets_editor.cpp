@@ -1,4 +1,6 @@
 #include <bloom/ui/assets_editor.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -214,9 +216,11 @@ void AssetsEditor::showNewCompositionDialog() {
 }
 
 void AssetsEditor::buildHeaderMenus() {
-    auto* bar = new QMenuBar(this);
-    bar->setObjectName(QStringLiteral("assetsHeaderMenuBar"));
-    bar->setNativeMenuBar(false);
+    auto* bar = &chrome_.header;
+    bar->owner = this;
+    bar->objectName = "assetsHeaderMenuBar";
+    bar->overflowButtonName = "assetsHeaderOverflowButton";
+    bar->overflowMenuName = "assetsHeaderOverflowMenu";
 
     auto* view = bar->addMenu(tr("View"));
     view->setObjectName(QStringLiteral("assetsViewMenu"));
@@ -245,53 +249,34 @@ void AssetsEditor::buildHeaderMenus() {
     selectNone->setObjectName(QStringLiteral("assetsSelectNoneAction"));
     connect(selectNone, &QAction::triggered, tree_, &QTreeWidget::clearSelection);
 
-    headerMenuWidget_ = bar;
+    headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
 }
 
 void AssetsEditor::buildFooter() {
-    footerWidget_ = new QWidget(this);
-    footerWidget_->setObjectName(QStringLiteral("assetsFooter"));
-    auto* layout = new QHBoxLayout(footerWidget_);
-    layout->setContentsMargins(8, 0, 8, 0);
-    layout->setSpacing(8);
-
-    auto* newComposition = new QPushButton(tr("New Composition"), footerWidget_);
+    auto* layout = &chrome_.footer;
+    layout->objectName = "assetsFooter";
+    auto* newComposition = new kit::KButton(tr("New Composition"), this);
     newComposition->setObjectName(QStringLiteral("assetsNewCompositionButton"));
-    connect(newComposition, &QPushButton::clicked, this, &AssetsEditor::showNewCompositionDialog);
+    connect(newComposition, &kit::KButton::clicked, this, &AssetsEditor::showNewCompositionDialog);
     layout->addWidget(newComposition);
 
-    auto* newFolder = new QPushButton(tr("New Folder"), footerWidget_);
+    auto* newFolder = new kit::KButton(tr("New Folder"), this);
     newFolder->setObjectName(QStringLiteral("assetsNewFolderButton"));
     setDisabledReason(newFolder, tr("Folders arrive with asset organisation"));
     layout->addWidget(newFolder);
 
-    auto* import = new QPushButton(tr("Import"), footerWidget_);
+    auto* import = new kit::KButton(tr("Import"), this);
     import->setObjectName(QStringLiteral("assetsImportButton"));
     setDisabledReason(import, tr("Image and sequence import arrives with the media pipeline"));
     layout->addWidget(import);
 
     layout->addStretch(1);
-    auto* remove = new QPushButton(tr("Delete"), footerWidget_);
+    auto* remove = new kit::KButton(tr("Delete"), this);
     remove->setObjectName(QStringLiteral("assetsDeleteButton"));
-    connect(remove, &QPushButton::clicked, this,
+    connect(remove, &kit::KButton::clicked, this,
             [this] { deleteComposition(compositionIdForItem(tree_->currentItem())); });
     layout->addWidget(remove);
-}
-
-QWidget* AssetsEditor::takeHeaderMenuWidget() {
-    if (headerMenuWidgetTaken_) {
-        return nullptr;
-    }
-    headerMenuWidgetTaken_ = true;
-    return headerMenuWidget_;
-}
-
-QWidget* AssetsEditor::takeFooterWidget() {
-    if (footerWidgetTaken_) {
-        return nullptr;
-    }
-    footerWidgetTaken_ = true;
-    return footerWidget_;
+    footerWidget_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
 }
 
 } // namespace bloom::ui

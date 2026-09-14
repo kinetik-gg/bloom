@@ -4,8 +4,8 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QHash>
-#include <QImage>
 #include <QIconEngine>
+#include <QImage>
 #include <QLatin1StringView>
 #include <QPainter>
 #include <QSvgRenderer>
@@ -248,20 +248,26 @@ QIcon icon(const IconId id, const IconRole iconRole, const Color role) {
 namespace {
 class SvgIconEngine final : public QIconEngine {
   public:
-    SvgIconEngine(IconId id, Color role, IconWeight weight) : id_(id), role_(role), weight_(weight) {}
+    SvgIconEngine(IconId id, Color role, IconWeight weight)
+        : id_(id), role_(role), weight_(weight) {}
     QIconEngine* clone() const override { return new SvgIconEngine(id_, role_, weight_); }
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
         return scaledPixmap(size, mode, state, 1.0);
     }
     QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State, qreal scale) override {
-        const auto state = mode == QIcon::Disabled ? State::Disabled : mode == QIcon::Normal ? State::Normal : State::Hover;
-        return renderIcon(iconResourcePath(id_, weight_), std::min(size.width(), size.height()), iconTint(role_, state), scale);
+        const auto state = mode == QIcon::Disabled ? State::Disabled
+                           : mode == QIcon::Normal ? State::Normal
+                                                   : State::Hover;
+        return renderIcon(iconResourcePath(id_, weight_), std::min(size.width(), size.height()),
+                          iconTint(role_, state), scale);
     }
-    void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State state) override {
+    void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode,
+               QIcon::State state) override {
         const qreal dpr = painter->device()->devicePixelRatioF();
         const auto value = scaledPixmap(rect.size(), mode, state, dpr);
         painter->drawPixmap(rect.topLeft(), value);
     }
+
   private:
     IconId id_;
     Color role_;

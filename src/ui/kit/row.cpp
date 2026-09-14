@@ -1,9 +1,9 @@
-#include <bloom/ui/kit/row.hpp>
-#include <bloom/ui/kit/dropdown.hpp>
-#include <bloom/ui/kit/color_chip.hpp>
-#include <bloom/ui/kit/slider.hpp>
-#include <QResizeEvent>
 #include <QPainter>
+#include <QResizeEvent>
+#include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/row.hpp>
+#include <bloom/ui/kit/slider.hpp>
 namespace bloom::ui::kit {
 namespace {
 class PropertyRowLabel final : public KLabel {
@@ -38,8 +38,7 @@ class PropertyRowLabel final : public KLabel {
     int preferredWidth_;
 };
 
-
-}
+} // namespace
 QLabel* makePropertyRowLabel(const QString& text, QWidget* parent) {
     auto* label = new PropertyRowLabel(text, px(Size::PropertiesLabelWidth), parent);
     label->setObjectName(QStringLiteral("propertiesRowLabel"));
@@ -54,7 +53,9 @@ QLabel* makePropertyRowLabel(const QString& text, QWidget* parent) {
     return label;
 }
 
-KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator, std::initializer_list<QWidget*> values, QWidget* parent) : QWidget(parent), label_(label) {
+KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
+                           std::initializer_list<QWidget*> values, QWidget* parent)
+    : QWidget(parent), label_(label) {
     this->setObjectName(QStringLiteral("propertiesRow"));
     this->setProperty("rowLabel", label->toolTip());
     setFixedHeight(px(Size::PropertyRow));
@@ -96,7 +97,8 @@ QSize KPropertyRow::minimumSizeHint() const {
     return size;
 }
 void KPropertyRow::resizeEvent(QResizeEvent* event) {
-    label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth : Size::PropertiesLabelWidth));
+    label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
+                                                               : Size::PropertiesLabelWidth));
     QWidget::resizeEvent(event);
 }
 KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
@@ -104,17 +106,33 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     row_->setContentsMargins(0, 0, 0, 0);
     row_->setSpacing(0);
 }
-void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns, QWidget* trailing) {
-    for (auto* cell : toggles) { cell->setFixedSize(px(Size::ToggleCell), px(Size::Control)); row_->addWidget(cell, 0, Qt::AlignVCenter); }
+void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
+                    QWidget* trailing) {
+    for (auto* cell : toggles) {
+        cell->setFixedSize(px(Size::ToggleCell), px(Size::Control));
+        row_->addWidget(cell, 0, Qt::AlignVCenter);
+    }
     row_->addWidget(name, 1);
-    for (auto* cell : columns) { cell->setFixedSize(px(Size::DropdownWidth), px(Size::Control)); row_->addWidget(cell, 0, Qt::AlignVCenter); }
-    if (trailing) { trailing->setFixedWidth(px(Size::ToggleCell)); row_->addWidget(trailing); }
+    for (auto* cell : columns) {
+        cell->setFixedSize(px(Size::DropdownWidth), px(Size::Control));
+        row_->addWidget(cell, 0, Qt::AlignVCenter);
+    }
+    if (trailing) {
+        trailing->setFixedWidth(px(Size::ToggleCell));
+        row_->addWidget(trailing);
+    }
 }
-void KRow::setRowState(int index, bool selected) { index_ = index; selected_ = selected; update(); }
+void KRow::setRowState(int index, bool selected) {
+    index_ = index;
+    selected_ = selected;
+    update();
+}
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.fillRect(rect(), color(index_ % 2 == 0 ? Color::Surface : Color::SurfaceRaised));
-    if (selected_) painter.fillRect(QRect(0, 0, px(Spacing::XXS), height()), color(Color::Accent));
-    painter.setPen(color(Color::Border)); painter.drawLine(rect().bottomLeft(), rect().bottomRight());
+    if (selected_)
+        painter.fillRect(QRect(0, 0, px(Spacing::XXS), height()), color(Color::Accent));
+    painter.setPen(color(Color::Border));
+    painter.drawLine(rect().bottomLeft(), rect().bottomRight());
 }
 } // namespace bloom::ui::kit

@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 
 #include <bloom/ui/viewer_editor.hpp>
@@ -1438,42 +1439,13 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Standalone panels keep a local header; EditorArea takes its two cells when hosted.
-    headerFallback_ = new QWidget(this);
-    auto* fallbackLayout = new QHBoxLayout(headerFallback_);
-    fallbackLayout->setContentsMargins(0, 0, 0, 0);
-    fallbackLayout->setSpacing(0);
     createHeaderMenus();
-    auto* fallbackLeft = new QWidget(headerFallback_);
-    fallbackLeft->setFixedWidth(kLayerColumnWidthPx);
-    auto* fallbackLeftLayout = new QHBoxLayout(fallbackLeft);
-    fallbackLeftLayout->setContentsMargins(0, 0, 0, 0);
-    fallbackLeftLayout->addWidget(headerMenus_);
-    fallbackLayout->addWidget(fallbackLeft);
-    auto* headerRow = new QWidget(headerFallback_);
-    headerRight_ = headerRow;
-    headerRow->setObjectName("timelineHeaderRow");
-    headerRow->setFixedHeight(kit::px(kit::Size::EditorHeader));
-    auto* headerLayout = new QHBoxLayout(headerRow);
-    headerLayout->setContentsMargins(0, 0, 0, 0);
-    headerLayout->setSpacing(0);
-
-    // The transport cluster that used to sit here moved to the viewer footer (task VIEW-1): one
-    // transport, in the panel that shows the frames it drives. What is left of this row is the
-    // time navigator, and an empty left cell of exactly the layer column's width so the navigator's
-    // own time axis stays aligned with the ruler and the lanes above it.
-    auto* transportRow = new QWidget(this);
-    auto* transportLayout = new QHBoxLayout(transportRow);
-    transportLayout->setContentsMargins(0, 0, 0, 0);
-    transportLayout->setSpacing(0);
-    auto* navigatorLeftCell = new QWidget(transportRow);
-    navigatorLeftCell->setObjectName("timelineNavigatorLeftCell");
-    navigatorLeftCell->setFixedWidth(kLayerColumnWidthPx);
-
-    auto* rulerColumn = new QWidget(headerRow);
-    auto* rulerLayout = new QVBoxLayout(rulerColumn);
-    rulerLayout->setContentsMargins(0, 0, 0, 0);
-    rulerLayout->setSpacing(0);
+    chrome_.splitPosition = [] { return layerColumnWidth(); };
+    chrome_.hosted = [this] {
+        headerFallback_->hide();
+        for (auto* action : actions())
+            headerRight_->addAction(action);
+    };
     for (const auto& [key, start] : {std::pair{Qt::Key_B, true}, std::pair{Qt::Key_N, false}}) {
         auto* action = new QAction(this);
         action->setObjectName(start ? "timelineSetWorkAreaStartAction"
@@ -1481,7 +1453,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         action->setShortcut(QKeySequence(key));
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         addAction(action);
-        headerRight_->addAction(action);
         connect(action, &QAction::triggered, this, [this, start] {
             auto area = session_.workArea();
             if (start)
@@ -1494,21 +1465,15 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             (void)session_.executeTransaction(std::move(transaction));
         });
     }
-    headerRight_->addAction(splitLayerAction_);
-    workArea_ = new TimelineWorkAreaRow(session_, rulerColumn);
+    workArea_ = new TimelineWorkAreaRow(session_, this);
     workArea_->setFixedHeight(kit::px(kit::Size::TimelineWorkArea));
-    auto* timelineTools = new QWidget(rulerColumn);
-    timelineTools->setObjectName(QStringLiteral("timelineHeaderToolCluster"));
-    timelineTools->setFixedHeight(kit::px(kit::Size::ControlCompact));
-    auto* toolsLayout = new QHBoxLayout(timelineTools);
-    toolsLayout->setContentsMargins(0, 0, 0, 0);
-    toolsLayout->setSpacing(kit::px(kit::Spacing::XXS));
-    toolsLayout->addStretch(1);
-    const auto addHeaderToggle = [timelineTools,
-                                  toolsLayout](const QString& name, const QString& tip,
-                                               const kit::IconId iconId, const bool checked,
-                                               const bool enabled) {
-        auto* button = new QToolButton(timelineTools);
+    EditorChromeRowSpec tools;
+    tools.objectName = "timelineHeaderToolCluster";
+    const auto addTool = [&tools](QWidget* control) { tools.addWidget(control); };
+    const auto addHeaderToggle = [this, &addTool](const QString& name, const QString& tip,
+                                                  const kit::IconId iconId, const bool checked,
+                                                  const bool enabled) {
+        auto* button = new kit::KIconButton(this);
         button->setObjectName(name);
         button->setAccessibleName(tip);
         button->setToolTip(tip);
@@ -1519,9 +1484,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
                                   enabled ? kit::Color::Foreground : kit::Color::Faint));
         button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
-        button->setFixedSize(kit::px(kit::Size::ControlCompact),
-                             kit::px(kit::Size::ControlCompact));
-        toolsLayout->addWidget(button);
+        button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
+        addTool(button);
     };
     addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
                     kit::IconId::Keyframe, true, true);
@@ -1530,26 +1494,30 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                     false);
     addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
                     kit::IconId::Snap, true, true);
-    ruler_ = new TimelineRuler(session_, previewController, rulerColumn);
-    ruler_->setFixedHeight(kit::px(kit::Size::EditorHeader) - workArea_->height() -
-                           timelineTools->height());
+    ruler_ = new TimelineRuler(session_, previewController, this);
+    ruler_->setFixedHeight(kit::px(kit::Size::HeaderRow) - workArea_->height());
     ruler_->setTimecodeLabels(timecodeFormat_);
     workArea_->setRuler(*ruler_);
-    rulerLayout->addWidget(workArea_);
-    rulerLayout->addWidget(timelineTools);
-    rulerLayout->addWidget(ruler_);
-    auto* headerGutter = new QWidget(headerRow);
-    headerGutter->setObjectName("timelineHeaderScrollGutter");
-    headerGutter->setFixedWidth(kScrollGutterWidth);
-    headerLayout->addWidget(rulerColumn, 1);
-    headerLayout->addWidget(headerGutter);
-    fallbackLayout->addWidget(headerRow, 1);
-    transportLayout->addWidget(navigatorLeftCell);
-    transportLayout->addWidget(new TimelineNavigator(*ruler_, transportRow), 1);
-    auto* navigatorGutter = new QWidget(transportRow);
-    navigatorGutter->setObjectName("timelineNavigatorScrollGutter");
-    navigatorGutter->setFixedWidth(kScrollGutterWidth);
-    transportLayout->addWidget(navigatorGutter);
+    chrome_.header.addWidget(EditorArea::buildChromeRow(tools, this));
+    headerMenus_ = EditorArea::buildChromeRow(chrome_.header, this);
+    for (auto* action : actions())
+        headerMenus_->addAction(action);
+    headerRight_ = EditorArea::buildCanvasChrome({"timelineHeaderRow",
+                                                  "timelineHeaderScrollGutter",
+                                                  workArea_,
+                                                  ruler_,
+                                                  kScrollGutterWidth,
+                                                  0,
+                                                  {}},
+                                                 this);
+    chrome_.headerCanvas = headerRight_;
+    headerFallback_ =
+        EditorArea::buildSplitChrome(headerMenus_, headerRight_, kLayerColumnWidthPx, this);
+    auto* transportRow = EditorArea::buildCanvasChrome(
+        {"timelineNavigatorRow", "timelineNavigatorScrollGutter", nullptr,
+         new TimelineNavigator(*ruler_, this), kScrollGutterWidth, kLayerColumnWidthPx,
+         "timelineNavigatorLeftCell"},
+        this);
 
     // Column headings start the body. Their right cell continues the header playhead into the
     // lanes, using the same viewport mapping and scrollbar gutter.
@@ -1629,20 +1597,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
 
     rebuild();
     updateHistoryActions();
-}
-
-QWidget* TimelineEditor::takeHeaderMenuWidget() { return std::exchange(headerMenus_, nullptr); }
-
-QWidget* TimelineEditor::takeHeaderRightWidget() {
-    if (headerRight_ != nullptr) {
-        for (auto* action : actions()) {
-            if (action->shortcutContext() == Qt::WidgetWithChildrenShortcut) {
-                headerRight_->addAction(action);
-            }
-        }
-    }
-    headerFallback_->hide();
-    return std::exchange(headerRight_, nullptr);
 }
 
 void TimelineEditor::rebuild() {

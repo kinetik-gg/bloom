@@ -1,3 +1,4 @@
+#include "editor_chrome_test_support.hpp"
 #include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
@@ -555,9 +556,9 @@ void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& 
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the fixture's initial frame becomes ready");
 
-    auto* firstCall = fixture.viewer.takeFooterWidget();
+    auto* firstCall = bloom::ui::test::footer(fixture.viewer);
     expectations.expect(firstCall != nullptr, "takeFooterWidget() returns a real widget");
-    expectations.expect(fixture.viewer.takeFooterWidget() == nullptr,
+    expectations.expect(bloom::ui::test::footer(fixture.viewer) == firstCall,
                         "a second call returns nullptr -- this ViewerEditor already gave its "
                         "footer away");
     if (firstCall == nullptr) {
@@ -892,7 +893,7 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
                                 QSettings().value("viewer/resolution").toString() ==
                                     QStringLiteral("Half"),
                             "choosing Half updates the controller and preference");
-        auto* footer = fixture.viewer.takeFooterWidget();
+        auto* footer = bloom::ui::test::footer(fixture.viewer);
         footer->resize(800, ui::kit::px(ui::kit::Size::Control));
         (void)footer->grab();
         expectations.expect(dropdown->parentWidget() == footer &&
@@ -929,7 +930,7 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
 void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Footer Order Test"));
-    auto* footer = fixture.viewer.takeFooterWidget();
+    auto* footer = bloom::ui::test::footer(fixture.viewer);
     expectations.expect(footer != nullptr, "the viewer offers a footer widget");
     if (footer == nullptr) {
         reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
@@ -1253,7 +1254,7 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     }
     ViewerFixture fixture(document::makeNewProject("Bounds overlay", "Main",
                                                    core::RationalTime::fromInteger(2), *format));
-    auto footer = std::unique_ptr<QWidget>(fixture.viewer.takeFooterWidget());
+    auto footer = std::unique_ptr<QWidget>(bloom::ui::test::footer(fixture.viewer));
     footer->hide();
     expectations.expect(fixture.session.addSolidLayer("Bounds", {0, 0, 0, 1}),
                         "bounds fixture adds solid");

@@ -1,9 +1,9 @@
 #pragma once
-#include <bloom/ui/kit/icons.hpp>
 #include <QLabel>
 #include <QLineEdit>
-#include <QToolButton>
 #include <QMenu>
+#include <QToolButton>
+#include <bloom/ui/kit/icons.hpp>
 
 namespace bloom::ui::kit {
 class KMenuButton : public QToolButton {
@@ -23,8 +23,10 @@ class KIconToggle final : public KIconButton {
     explicit KIconToggle(IconId id, QWidget* parent = nullptr);
     void setGlyph(IconId id);
     [[nodiscard]] QPixmap glyphPixmap() const;
+
   protected:
     void paintEvent(QPaintEvent* event) override;
+
   private:
     IconId glyph_;
 };

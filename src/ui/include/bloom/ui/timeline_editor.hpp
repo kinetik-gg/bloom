@@ -59,20 +59,16 @@ struct TimelineLayerEntry final {
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
 // menus and ruler; column headings start the body, with transport and navigator below the lanes.
-class TimelineEditor final : public QWidget,
-                             public EditorHeaderMenuProvider,
-                             public EditorHeaderSplitProvider {
+class TimelineEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     // Task VIEW-1 moved the transport -- and with it the RAM Preview button this constructor used
     // to take a controller for -- to the viewer footer. This panel is the layer stack, the ruler,
     // the lanes and the navigator now; it owns no transport command at all.
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
                    QWidget* parent = nullptr);
-    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
-    [[nodiscard]] QWidget* takeHeaderRightWidget() override;
-    [[nodiscard]] int headerSplitPosition() const override { return layerColumnWidth(); }
 
     // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the
     // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
@@ -88,6 +84,7 @@ class TimelineEditor final : public QWidget,
     [[nodiscard]] QScrollBar* verticalScrollBarForTest() const noexcept { return scrollBar_; }
 
   private:
+    EditorChromeSpec chrome_;
     void rebuild();
     void updateSelection();
     void updateHistoryActions();

@@ -26,16 +26,19 @@
 #include <utility>
 
 namespace bloom::ui::properties {
-namespace {
-
-} // namespace
+namespace {} // namespace
 int labelColumnWidth() { return kit::px(kit::Size::PropertiesLabelWidth); }
-QLabel* makeRowLabel(const QString& text, QWidget* parent) { return kit::makePropertyRowLabel(text, parent); }
-QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator, const std::initializer_list<QWidget*> values) {
-    auto* row = new kit::KPropertyRow(label, indicator, values, sectionParent);
-    section->addWidget(row); return row;
+QLabel* makeRowLabel(const QString& text, QWidget* parent) {
+    return kit::makePropertyRowLabel(text, parent);
 }
-QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator, QWidget* value) {
+QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator,
+                const std::initializer_list<QWidget*> values) {
+    auto* row = new kit::KPropertyRow(label, indicator, values, sectionParent);
+    section->addWidget(row);
+    return row;
+}
+QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator,
+                QWidget* value) {
     return addRow(section, sectionParent, label, indicator, {value});
 }
 

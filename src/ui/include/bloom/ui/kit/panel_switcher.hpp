@@ -3,4 +3,4 @@
 namespace bloom::ui::kit {
 // Source compatibility only: the panel picker is the same control and popup.
 using KPanelSwitcher = KDropdown;
-}
+} // namespace bloom::ui::kit

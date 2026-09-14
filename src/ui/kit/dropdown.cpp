@@ -84,7 +84,6 @@ int KDropdown::findData(const QVariant& data) const {
     return -1;
 }
 
-
 QVariant KDropdown::currentData() const { return itemData(currentIndex_); }
 
 int KDropdown::addItem(const QIcon& icon, const QString& text, const QVariant& data) {
@@ -162,8 +161,9 @@ QString KDropdown::displayedText() const {
     const QFontMetrics metrics(font());
     const int available =
         std::max(0, width() - horizontalPadding() * 2 - caretColumnWidth() - caretGap());
-    return metrics.elidedText(currentText(), Qt::ElideRight, available -
-        (itemIcon(currentIndex_).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
+    return metrics.elidedText(
+        currentText(), Qt::ElideRight,
+        available - (itemIcon(currentIndex_).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
 }
 
 void KDropdown::setControlSize(const ControlSize size) {
@@ -230,8 +230,9 @@ QSize KDropdown::sizeHint() const {
     const QFontMetrics metrics(font());
     int widest = 0;
     for (int index = 0; index < model_->rowCount(); ++index) {
-        widest = std::max(widest, metrics.horizontalAdvance(itemText(index)) +
-            (itemIcon(index).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
+        widest = std::max(widest,
+                          metrics.horizontalAdvance(itemText(index)) +
+                              (itemIcon(index).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
     }
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     const int width =
@@ -241,8 +242,7 @@ QSize KDropdown::sizeHint() const {
 
 QSize KDropdown::minimumSizeHint() const {
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {horizontalPadding() * 2 + caretColumnWidth() + ringMargin,
-            controlExtent()};
+    return {horizontalPadding() * 2 + caretColumnWidth() + ringMargin, controlExtent()};
 }
 
 void KDropdown::mousePressEvent(QMouseEvent* event) {
@@ -336,8 +336,7 @@ void KDropdown::paintEvent(QPaintEvent* event) {
         painter.drawPixmap(origin, pixmap);
         contentLeft += box + caretGap();
     }
-    const QRectF label(contentLeft, bounds.top(),
-                       caretColumn.left() - caretGap() - contentLeft,
+    const QRectF label(contentLeft, bounds.top(), caretColumn.left() - caretGap() - contentLeft,
                        bounds.height());
     painter.drawText(label, Qt::AlignVCenter | Qt::AlignLeft, displayedText());
 }

@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
@@ -137,14 +138,6 @@ QString formatDuration(const TimelineFrameContext& context) {
 
 } // namespace
 
-QWidget* PropertiesEditor::takeHeaderMenuWidget() {
-    if (headerTaken_)
-        return nullptr;
-    headerTaken_ = true;
-    search_->show();
-    return search_;
-}
-
 PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("propertiesEditor");
@@ -156,7 +149,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     setFocusPolicy(Qt::StrongFocus);
-    search_ = new QLineEdit(this);
+    search_ = new kit::KSearchField(this);
     search_->setObjectName("propertiesSearchField");
     search_->setAccessibleName(tr("Search properties"));
     search_->setPlaceholderText(tr("Search properties…"));
@@ -171,7 +164,9 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     search_->setFont(searchFont);
     search_->addAction(kit::icon(kit::IconId::Zoom, kit::IconRole::Chrome),
                        QLineEdit::TrailingPosition);
-    search_->hide();
+    chrome_.header.addWidget(search_);
+    chrome_.header.objectName = "propertiesHeaderControls";
+    (void)EditorArea::buildChromeRow(chrome_.header, this);
     connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
 
     auto* scroll = new QScrollArea(this);

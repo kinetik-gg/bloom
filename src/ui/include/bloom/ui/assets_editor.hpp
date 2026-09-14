@@ -14,18 +14,15 @@ namespace bloom::ui {
 
 class CompositionSession;
 
-class AssetsEditor final : public QWidget,
-                           public EditorHeaderMenuProvider,
-                           public EditorFooterProvider {
+class AssetsEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     explicit AssetsEditor(CompositionSession& session, QWidget* parent = nullptr);
 
-    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
-    [[nodiscard]] QWidget* takeFooterWidget() override;
-
   private:
+    EditorChromeSpec chrome_;
     void rebuild();
     void updateSelection();
     void applyFilter(const QString& text);
@@ -43,8 +40,6 @@ class AssetsEditor final : public QWidget,
     QTreeWidget* tree_ = nullptr;
     QWidget* headerMenuWidget_ = nullptr;
     QWidget* footerWidget_ = nullptr;
-    bool headerMenuWidgetTaken_ = false;
-    bool footerWidgetTaken_ = false;
     bool rebuilding_ = false;
 };
 

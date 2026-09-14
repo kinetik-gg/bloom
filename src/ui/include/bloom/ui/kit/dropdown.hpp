@@ -1,7 +1,7 @@
 #pragma once
 
-#include <bloom/ui/kit/tokens.hpp>
 #include <QIcon>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <QSize>
 #include <QString>

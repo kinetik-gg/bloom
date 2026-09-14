@@ -1,9 +1,11 @@
+#include "editor_chrome_test_support.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 
 #include <QApplication>
 #include <QLineEdit>
@@ -67,7 +69,7 @@ int main(int argc, char** argv) {
                    "assets Select menu exists");
 
     auto* newFolder = editor.findChild<QAction*>(QStringLiteral("assetsNewFolderAction"));
-    auto* import = editor.findChild<QPushButton*>(QStringLiteral("assetsImportButton"));
+    auto* import = editor.findChild<bloom::ui::kit::KButton*>(QStringLiteral("assetsImportButton"));
     context.expect(newFolder != nullptr && !newFolder->isEnabled(),
                    "header New Folder is disabled");
     context.expect(newFolder != nullptr &&
@@ -80,10 +82,10 @@ int main(int argc, char** argv) {
             import->toolTip() ==
                 QStringLiteral("Image and sequence import arrives with the media pipeline"),
         "footer Import explains its disabled state");
-    context.expect(editor.takeHeaderMenuWidget() != nullptr, "header provider returns a widget");
-    context.expect(editor.takeHeaderMenuWidget() == nullptr, "header provider is take-once");
-    context.expect(editor.takeFooterWidget() != nullptr, "footer provider returns a widget");
-    context.expect(editor.takeFooterWidget() == nullptr, "footer provider is take-once");
+    context.expect(bloom::ui::test::header(editor) != nullptr, "header provider returns a widget");
+    context.expect(bloom::ui::test::header(editor) != nullptr, "header provider is take-once");
+    context.expect(bloom::ui::test::footer(editor) != nullptr, "footer provider returns a widget");
+    context.expect(bloom::ui::test::footer(editor) != nullptr, "footer provider is take-once");
 
     bloom::commands::Transaction addTransaction("Add composition", session.snapshot().revision());
     addTransaction.emplace<bloom::commands::AddComposition>(

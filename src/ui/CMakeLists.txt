@@ -298,6 +298,7 @@ target_sources(
         composition_session.cpp
         composition_session_keyframes.cpp
         editor_area.cpp
+        editor_chrome.cpp
         editor_registry.cpp
         frame_export_controller.cpp
         frameless_window_support.cpp

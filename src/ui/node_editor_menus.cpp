@@ -14,6 +14,7 @@
 #include <QToolButton>
 #include <algorithm>
 #include <array>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/search_popup.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
@@ -51,81 +52,10 @@ QString addActionName(const std::string_view type) {
 }
 
 // Task NODES-1, deliverable 1: the header-hosted menu strip NodeGraphEditor hands EditorArea
-// through takeHeaderMenuWidget(). Shows one QToolButton per top-level menu until the header gets
+
 // too narrow to hold all of them side by side, at which point every one of them folds into a
 // single "..." overflow button holding the same menus as submenus -- "never wrap": the header
 // row's height is fixed (Size::EditorHeader), so there is nowhere for a second row to go.
-class NodeHeaderMenuBar final : public QWidget {
-  public:
-    explicit NodeHeaderMenuBar(QWidget* parent) : QWidget(parent) {
-        auto* layout = new QHBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(2);
-        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    }
-
-    void addTopLevelMenu(const QString& label, QMenu* menu) {
-        auto* button = new QToolButton(this);
-        button->setText(label);
-        button->setAutoRaise(true);
-        button->setPopupMode(QToolButton::InstantPopup);
-        button->setMenu(menu);
-        button->setProperty("headerMenuButton", true);
-        static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()),
-                                                          button);
-        buttons_.push_back(button);
-        menus_.push_back(menu);
-    }
-
-    // Called once, after every top-level menu has been added: builds the overflow button/menu that
-    // updateCollapse() swaps in once the buttons above stop fitting the available width.
-    void finish() {
-        overflowButton_ = new QToolButton(this);
-        overflowButton_->setObjectName(QStringLiteral("nodeHeaderOverflowButton"));
-        overflowButton_->setText(QStringLiteral("…"));
-        overflowButton_->setToolTip(QObject::tr("More menus"));
-        overflowButton_->setAccessibleName(overflowButton_->toolTip());
-        overflowButton_->setAutoRaise(true);
-        overflowButton_->setPopupMode(QToolButton::InstantPopup);
-        overflowButton_->setProperty("headerMenuButton", true);
-        overflowMenu_ = new QMenu(this);
-        overflowMenu_->setObjectName(QStringLiteral("nodeHeaderOverflowMenu"));
-        for (auto* menu : menus_) {
-            overflowMenu_->addMenu(menu);
-        }
-        overflowButton_->setMenu(overflowMenu_);
-        overflowButton_->hide();
-        static_cast<QHBoxLayout*>(layout())->addWidget(overflowButton_);
-        updateCollapse();
-    }
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
-        updateCollapse();
-    }
-
-  private:
-    void updateCollapse() {
-        if (overflowButton_ == nullptr) {
-            return;
-        }
-        int needed = 0;
-        for (auto* button : buttons_) {
-            needed += button->sizeHint().width() + layout()->spacing();
-        }
-        const bool collapse = width() > 0 && needed > width();
-        for (auto* button : buttons_) {
-            button->setVisible(!collapse);
-        }
-        overflowButton_->setVisible(collapse);
-    }
-
-    std::vector<QToolButton*> buttons_;
-    std::vector<QMenu*> menus_;
-    QToolButton* overflowButton_ = nullptr;
-    QMenu* overflowMenu_ = nullptr;
-};
 
 } // namespace
 
@@ -491,7 +421,7 @@ void NodeGraphEditor::refreshAddMenuState() {
 QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                                          const std::optional<document::NodeGroupId> group) {
     addRevision_ = session_.snapshot().revision();
-    auto* menu = new QMenu(parent);
+    auto* menu = kit::makeMenu(parent);
     menu->setObjectName(nodeMenu ? QStringLiteral("nodeContextMenu")
                                  : QStringLiteral("nodeCanvasMenu"));
     menu->setAccessibleName(tr("Node graph menu"));
@@ -620,7 +550,7 @@ QMenu* NodeGraphEditor::buildLinkContextMenu(QWidget* parent, const QPoint viewp
         }
     if (link == nullptr)
         return nullptr;
-    auto* menu = new QMenu(parent);
+    auto* menu = kit::makeMenu(parent);
     menu->setObjectName(QStringLiteral("nodeLinkMenu"));
     menu->setAccessibleName(tr("Link menu"));
     const auto input = link->edge.destination;
@@ -825,24 +755,27 @@ void NodeGraphEditor::buildHeaderMenus() {
         return item;
     };
 
-    // The strip itself, created FIRST and parented to `this` only until takeHeaderMenuWidget()
     // hands it to EditorArea (which reparents it into the header, exactly like the footer). Every
     // menu below is parented to `bar` rather than to `this`, so the whole header-menu subtree --
     // buttons, menus, and actions alike -- travels together on that reparent and is torn down
     // together, regardless of which of NodeGraphEditor or the bar happens to be destroyed first.
-    auto* bar = new NodeHeaderMenuBar(this);
+    auto* bar = &chrome_.header;
+    bar->owner = this;
+    bar->objectName = "nodeHeaderMenuBar";
+    bar->overflowButtonName = "nodeHeaderOverflowButton";
+    bar->overflowMenuName = "nodeHeaderOverflowMenu";
 
     // --- Add: the same categorized submenu the canvas's own right-click menu offers (deliverable
     // 1's "the existing categorized submenu"), built once and kept live via refreshAddMenuState()
     // rather than rebuilt -- see populateAddMenu()'s own comment for why. ---
-    headerAddMenu_ = new QMenu(bar);
+    headerAddMenu_ = kit::makeMenu(this);
     headerAddMenu_->setTitle(tr("Add"));
     headerAddMenu_->setObjectName(QStringLiteral("nodeAddMenu"));
     populateAddMenu(headerAddMenu_, &addMenuItems_);
     connect(headerAddMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshAddMenuState);
 
     // --- View ---
-    headerViewMenu_ = new QMenu(bar);
+    headerViewMenu_ = kit::makeMenu(this);
     headerViewMenu_->setTitle(tr("View"));
     headerViewMenu_->setObjectName(QStringLiteral("nodeViewMenu"));
     withDisplayShortcut(action(headerViewMenu_, tr("Fit"), QStringLiteral("nodeFitAction"),
@@ -886,7 +819,7 @@ void NodeGraphEditor::buildHeaderMenus() {
     connect(headerViewMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshViewMenuState);
 
     // --- Select ---
-    headerSelectMenu_ = new QMenu(bar);
+    headerSelectMenu_ = kit::makeMenu(this);
     headerSelectMenu_->setTitle(tr("Select"));
     headerSelectMenu_->setObjectName(QStringLiteral("nodeSelectMenu"));
     withDisplayShortcut(action(headerSelectMenu_, tr("All"), QStringLiteral("nodeSelectAllAction"),
@@ -911,7 +844,7 @@ void NodeGraphEditor::buildHeaderMenus() {
     // -- an item that cannot apply is not merely disabled, it is absent), so this menu instead
     // disables an applicable-but-currently-inapplicable command rather than hiding it, refreshed on
     // every aboutToShow by refreshNodeMenuState(). ---
-    headerNodeMenu_ = new QMenu(bar);
+    headerNodeMenu_ = kit::makeMenu(this);
     headerNodeMenu_->setTitle(tr("Node"));
     headerNodeMenu_->setObjectName(QStringLiteral("nodeNodeMenu"));
     groupAction_ =
@@ -940,13 +873,12 @@ void NodeGraphEditor::buildHeaderMenus() {
     connect(headerNodeMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshNodeMenuState);
 
     // `bar` (created above) stays alive and usable through headerMenuForTest() even before
-    // EditorArea ever calls takeHeaderMenuWidget().
+
     bar->addTopLevelMenu(tr("Add"), headerAddMenu_);
     bar->addTopLevelMenu(tr("View"), headerViewMenu_);
     bar->addTopLevelMenu(tr("Select"), headerSelectMenu_);
     bar->addTopLevelMenu(tr("Node"), headerNodeMenu_);
-    bar->finish();
-    headerMenuWidget_ = bar;
+    headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
 }
 
 void NodeGraphEditor::refreshViewMenuState() {
@@ -1060,14 +992,6 @@ QMenu* NodeGraphEditor::headerMenuForTest(const std::string_view which) const {
     return nullptr;
 }
 
-QWidget* NodeGraphEditor::takeHeaderMenuWidget() {
-    if (headerMenuWidgetTaken_) {
-        return nullptr;
-    }
-    headerMenuWidgetTaken_ = true;
-    return headerMenuWidget_;
-}
-
 // --- Task NODES-1, deliverable 4: the footer
 // ------------------------------------------------------
 
@@ -1083,13 +1007,9 @@ void NodeGraphEditor::buildFooter() {
     // kZoomPresets) -- deliverable 4's "same items as the viewer's".
     constexpr std::array<int, 5> kZoomPresets{25, 50, 100, 200, 400};
 
-    footerWidget_ = new QWidget(this);
-    footerWidget_->setFixedHeight(kit::px(kit::Size::Control));
-    auto* layout = new QHBoxLayout(footerWidget_);
-    layout->setContentsMargins(kit::px(kit::Spacing::S), 0, kit::px(kit::Spacing::S), 0);
-    layout->setSpacing(kit::px(kit::Spacing::S));
-
-    footerZoomDropdown_ = new kit::KDropdown(footerWidget_);
+    auto* layout = &chrome_.footer;
+    layout->objectName = "nodeFooter";
+    footerZoomDropdown_ = new kit::KDropdown(this);
     footerZoomDropdown_->setObjectName(QStringLiteral("nodeZoomDropdown"));
     footerZoomDropdown_->setAccessibleName(tr("Zoom"));
     footerZoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
@@ -1106,7 +1026,7 @@ void NodeGraphEditor::buildFooter() {
     });
     layout->addWidget(footerZoomDropdown_);
 
-    auto* snapSwitch = new kit::KSwitch(footerWidget_);
+    auto* snapSwitch = new kit::KSwitch(this);
     snapSwitch->setObjectName(QStringLiteral("nodeSnapSwitch"));
     snapSwitch->setAccessibleName(tr("Grid Snapping"));
     snapSwitch->setToolTip(tr("Grid Snapping"));
@@ -1122,7 +1042,7 @@ void NodeGraphEditor::buildFooter() {
     footerSnapSwitch_ = snapSwitch;
     layout->addWidget(snapSwitch);
 
-    footerLinkStyleDropdown_ = new kit::KDropdown(footerWidget_);
+    footerLinkStyleDropdown_ = new kit::KDropdown(this);
     footerLinkStyleDropdown_->setObjectName(QStringLiteral("nodeLinkStyleDropdown"));
     footerLinkStyleDropdown_->setAccessibleName(tr("Link Style"));
     footerLinkStyleDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
@@ -1142,7 +1062,7 @@ void NodeGraphEditor::buildFooter() {
 
     layout->addStretch(1);
 
-    footerSelectionLabel_ = new QLabel(footerWidget_);
+    footerSelectionLabel_ = new kit::KLabel(this);
     footerSelectionLabel_->setObjectName(QStringLiteral("nodeSelectionReadout"));
     footerSelectionLabel_->setFont(kit::font(kit::TypeRole::UiSmall));
     QPalette palette = footerSelectionLabel_->palette();
@@ -1152,16 +1072,10 @@ void NodeGraphEditor::buildFooter() {
 
     connect(&session_, &CompositionSession::selectionChanged, this,
             &NodeGraphEditor::refreshSelectionReadout);
+    footerWidget_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
     refreshSelectionReadout();
 }
 
 QWidget* NodeGraphEditor::footerWidgetForTest() { return footerWidget_; }
 
-QWidget* NodeGraphEditor::takeFooterWidget() {
-    if (footerWidgetTaken_) {
-        return nullptr;
-    }
-    footerWidgetTaken_ = true;
-    return footerWidget_;
-}
 } // namespace bloom::ui

@@ -1,3 +1,4 @@
+#include "editor_chrome_test_support.hpp"
 
 // Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
 // chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
@@ -348,8 +349,8 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
         auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
         expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
                             "column headings are the body's first row");
-        expectations.expect(editor->takeHeaderRightWidget() == nullptr &&
-                                editor->takeHeaderMenuWidget() == nullptr,
+        expectations.expect(editor->editorChrome().headerCanvas != nullptr &&
+                                editor->editorChrome().header.host != nullptr,
                             "both header transfers are idempotent");
     }
     expectations.expect(area.setEditorId("bloom.probe"), "the split editor can be replaced");

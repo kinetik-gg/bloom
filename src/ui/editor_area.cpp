@@ -1,4 +1,5 @@
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/kit/controls.hpp>
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -160,7 +161,8 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // than relying on margin arithmetic to land them in the 48px row (Size::EditorHeader).
     const auto headerPadding = kit::px(kit::Spacing::PanelHeader);
     headerLayout->setContentsMargins(headerPadding, 0, headerPadding, 0);
-    headerLayout->setSpacing(4);
+    headerLayout->setSpacing(kit::px(kit::Spacing::XXS));
+    header_->setFixedHeight(kit::px(kit::Size::HeaderRow));
 
     // task U8, issue #131, formal amendment 2, A7/A8: a purpose-built kit switcher, not a
     // QComboBox -- the QSS-on-QComboBox approach could not render the design (no chevron
@@ -199,7 +201,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // builds is fixed at kHeaderButtonExtent square, uniformly.
     auto makeHeaderButton = [this](const kit::IconId iconId, const QString& toolTip,
                                    const QString& objectName) {
-        auto* button = new QToolButton(header_);
+        auto* button = new kit::KIconButton(header_);
         button->setIcon(kit::icon(iconId, kHeaderIconRole));
         const int iconExtent = kit::px(kit::iconSize(kHeaderIconRole));
         button->setIconSize(QSize(iconExtent, iconExtent));
@@ -217,7 +219,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // panelContextMenuButton entirely, and a right-click anywhere on the header (caught by
     // EditorArea's own eventFilter below, since header_ is one of the widgets watchForActivation()
     // installs it on) opens this exact menu at the cursor instead.
-    contextMenu_ = new QMenu(this);
+    contextMenu_ = kit::makeMenu(this);
     contextMenu_->setObjectName("panelOptionsMenu");
     auto* splitHorizontalAction = contextMenu_->addAction("Split Horizontally");
     splitHorizontalAction->setObjectName("panelSplitHorizontalAction");
@@ -255,7 +257,6 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
 
     // FORMAL AMENDMENT 1: the footer slot itself is built here (empty: `layout_` has header and
     // content only so far), but whether it is ever populated is entirely rebuildEditor()'s call --
-    // see the EditorFooterProvider dynamic_cast there.
 
     connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
             [this](int index) { rebuildEditor(index); });
@@ -428,9 +429,9 @@ void EditorArea::rebuildEditor(int editorIndex) {
     if (descriptor != editorRegistry_.editors().end()) {
         editorWidget_ = descriptor->create(contentLayout_->parentWidget());
     } else {
-        auto* unavailable = new QLabel(QStringLiteral("Editor unavailable\n\n%1")
-                                           .arg(QString::fromStdString(selectedEditorId)),
-                                       contentLayout_->parentWidget());
+        auto* unavailable = new kit::KLabel(QStringLiteral("Editor unavailable\n\n%1")
+                                                .arg(QString::fromStdString(selectedEditorId)),
+                                            contentLayout_->parentWidget());
         unavailable->setObjectName("unavailableEditorPlaceholder");
         unavailable->setTextFormat(Qt::PlainText);
         unavailable->setAlignment(Qt::AlignCenter);
@@ -466,43 +467,24 @@ void EditorArea::rebuildEditor(int editorIndex) {
     contentLayout_->addWidget(editorHost_);
     watchForActivation(editorWidget_);
 
-    // FORMAL AMENDMENT 1: the footer slot is OPTIONAL. An editor widget that also implements
-    // EditorFooterProvider (ViewerEditor is the only one today) may hand back a real footer
-    // widget, which EditorArea takes ownership of by reparenting it here; an editor that does not
-    // implement the interface, or returns nullptr, gets no footer row at all -- content already
-    // extends to the panel's own bottom border via `layout_`'s own stretch factor on `content`.
-    if (auto* footerProvider = dynamic_cast<EditorFooterProvider*>(editorWidget_)) {
-        if (auto* offeredFooter = footerProvider->takeFooterWidget()) {
-            footer_ = offeredFooter;
-            footer_->setObjectName(QStringLiteral("editorFooter"));
-            footer_->setParent(this);
+    if (auto* provider = dynamic_cast<EditorChromeProvider*>(editorWidget_)) {
+        auto& spec = provider->editorChrome();
+        if (spec.hosted)
+            spec.hosted();
+        footer_ = buildChromeRow(spec.footer, this, true);
+        if (footer_) {
+            footer_->setObjectName("editorFooter");
             layout_->addWidget(footer_);
         }
-    }
-
-    // Task NODES-1: the header's own OPTIONAL extra, same idempotent take-once contract as the
-    // footer above. Inserted at index 1 -- right after the panel switcher (index 0) and before the
-    // stretch (index 1 until this insert pushes it to 2) that keeps the maximize button pinned to
-    // the header's far right, so the widget reads as part of the header row rather than crowding
-    // either end of it.
-    if (auto* menuProvider = dynamic_cast<EditorHeaderMenuProvider*>(editorWidget_)) {
-        if (auto* offeredMenus = menuProvider->takeHeaderMenuWidget()) {
-            headerMenus_ = offeredMenus;
-            headerMenus_->setParent(headerLeft_);
-            headerLayout_->insertWidget(1, headerMenus_);
-            headerLayout_->setAlignment(headerMenus_, Qt::AlignVCenter);
+        headerMenus_ = buildChromeRow(spec.header, headerLeft_);
+        if (headerMenus_) {
+            headerLayout_->insertWidget(1, headerMenus_, 1, Qt::AlignVCenter);
         }
-    }
-
-    if (auto* splitProvider = dynamic_cast<EditorHeaderSplitProvider*>(editorWidget_)) {
-        if (auto* offeredRight = splitProvider->takeHeaderRightWidget()) {
-            headerRight_ = offeredRight;
+        if (spec.headerCanvas) {
+            headerRight_ = spec.headerCanvas;
             headerRight_->setParent(header_);
-            headerLeft_->setFixedWidth(splitProvider->headerSplitPosition());
-            if (headerMenus_ != nullptr) {
-                headerLayout_->setStretchFactor(headerMenus_, 1);
-                headerLayout_->setStretch(2, 0);
-            }
+            headerLeft_->setFixedWidth(spec.splitPosition());
+            headerLayout_->setStretch(2, 0);
             const int inset = static_cast<int>(kit::kHairlineWidth);
             headerCellsLayout_->setContentsMargins(inset, 0, inset, 0);
             headerCellsLayout_->addWidget(headerRight_, 1);
