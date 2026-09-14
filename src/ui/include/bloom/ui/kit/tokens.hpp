@@ -144,7 +144,7 @@ enum class Size : int {
     DropdownWidth = 100,
     DropdownWidthCompact = 108,
     DropdownWidthWide = 120,
-    ControlCompact = 22,
+    ControlCompact = 26,
     Control = 26,
     ControlRoomy = 32,
     IconSmall = 12,
@@ -194,7 +194,7 @@ enum class Size : int {
     PropertiesDropdownWidth = 108,
     PropertiesSearchWidth = 180,
     PropertiesCheckBox = 12,
-    PropertiesSwatchHeight = 20,
+    PropertiesSwatchHeight = 26,
     PropertiesAnchorDot = 8,
     PropertiesStepperWidth = 12,
 };

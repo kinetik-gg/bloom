@@ -65,6 +65,7 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(kit::px(kit::Spacing::XXS));
     label->setFixedWidth(px(Size::PropertiesLabelWidth));
+    label->setFixedHeight(px(Size::Control));
     layout->addWidget(label);
     bool expanding = false;
     for (auto* value : values) {

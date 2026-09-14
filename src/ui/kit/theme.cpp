@@ -221,7 +221,6 @@ QFrame#editorArea[active="true"] {
 QWidget#editorHeader {
     background: {color.Surface};
     border-bottom: {border.Hairline}px solid {color.Border};
-    min-height: {size.EditorHeader}px;
 }
 QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};
@@ -326,7 +325,6 @@ QToolButton {
     border: {border.Hairline}px solid transparent;
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.XS}px;
-    min-height: {size.ControlCompact}px;
 }
 QToolButton:hover {
     background: {color.SurfaceRaised};

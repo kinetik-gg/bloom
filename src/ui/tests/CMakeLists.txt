@@ -720,3 +720,14 @@ add_executable(bloom_properties_mockup_test properties_mockup_tests.cpp)
 target_link_libraries(bloom_properties_mockup_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_properties_mockup_test)
 bloom_add_test(NAME bloom.ui.properties-mockup COMMAND bloom_properties_mockup_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_ui_grammar_audit_test ui_grammar_audit_tests.cpp)
+target_link_libraries(bloom_ui_grammar_audit_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_ui_grammar_audit_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_ui_grammar_audit_test)
+foreach(scale IN ITEMS 1 1.5 2)
+    add_test(NAME bloom.ui.grammar_audit.dpr${scale} COMMAND bloom_ui_grammar_audit_test)
+    set_tests_properties(bloom.ui.grammar_audit.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 60)
+endforeach()
