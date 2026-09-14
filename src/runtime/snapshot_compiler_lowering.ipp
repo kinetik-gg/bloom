@@ -298,7 +298,7 @@ lower(const std::vector<document::NodeId>& order) {
             std::move(curveTables->scalar), std::move(curveTables->vec2),
             std::move(curveTables->color4), std::move(valueOperations_), valueOutputCount_,
             runtime::kCompiledCompositionPlanSemanticsVersion,
-            runtime::kAnimationSamplingSemanticsVersion});
+            runtime::kAnimationSamplingSemanticsVersion, request_.parameterOverride.has_value()});
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

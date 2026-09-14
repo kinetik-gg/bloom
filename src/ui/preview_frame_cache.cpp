@@ -1,3 +1,4 @@
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QLatin1StringView>
@@ -214,6 +215,16 @@ std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {
     if (!parsed || bytes == 0) {
         return kDefaultPreviewFrameCacheByteBudget;
     }
+    return static_cast<std::size_t>(bytes);
+}
+
+std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings) {
+    bool parsed = false;
+    const auto bytes = settings.value(QStringLiteral("playback/operation-cache-bytes"))
+                           .toString()
+                           .toULongLong(&parsed);
+    if (!parsed || bytes == 0 || bytes > std::numeric_limits<std::size_t>::max())
+        return runtime::kDefaultOperationCacheBytes;
     return static_cast<std::size_t>(bytes);
 }
 

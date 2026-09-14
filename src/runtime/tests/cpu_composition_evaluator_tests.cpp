@@ -1403,7 +1403,8 @@ void testRowBandPlanIsDeterministicAndBounded(Expectations& expectations) {
 void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto plan = bandedPlan();
-    const auto request = requestFor(*plan, 1U << 24U);
+    auto request = requestFor(*plan, 1U << 24U);
+    request.bypassOperationCache = true;
 
     const auto serial = evaluator.evaluate(plan, request, {}, {}, nullptr);
     runtime::CpuRowBandExecutor executor(5);
@@ -1442,6 +1443,20 @@ void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
         std::memcmp(serialPixels.data(), wideResult.frame()->processImage().pixels().data(),
                     serialPixels.size_bytes()) == 0;
     expectations.expect(everyWidthAgrees, "every band width publishes the same pixels");
+
+    request.bypassOperationCache = false;
+    const auto coldBanded = evaluator.evaluate(plan, request, {}, {}, &executor);
+    const auto cached = evaluator.evaluate(plan, request, {});
+    expectations.expect(coldBanded.frame() && cached.frame(), "banded cache fixture evaluates");
+    if (coldBanded.frame() && cached.frame()) {
+        expectations.expect(
+            std::memcmp(serialPixels.data(), cached.frame()->processImage().pixels().data(),
+                        serialPixels.size_bytes()) == 0 &&
+                coldBanded.frame()->operationCacheStatistics().misses ==
+                    plan->operations().size() &&
+                cached.frame()->operationCacheStatistics().hits == plan->operations().size(),
+            "cached banded kernels preserve the uncached serial golden");
+    }
 
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     const auto serialDisplay =
@@ -1794,11 +1809,21 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
     }
 }
 
+#include "operation_memoization_tests.ipp"
+
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
     Expectations expectations;
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--memo-benchmark") {
+            benchmarkOperationMemoization(expectations);
+            return expectations.failures() == 0 ? 0 : 1;
+        }
+        testOperationCacheLifecycle(expectations);
+        testOperationMemoization(expectations);
+        testOperationTimeInvariance(expectations);
+        testOperationDirtyPropagation(expectations);
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);

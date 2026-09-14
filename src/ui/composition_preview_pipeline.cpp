@@ -265,6 +265,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .quality = desiredIdentity.quality,
             .colorIntent = desiredIdentity.colorIntent,
             .pixelStorageByteLimit = pixelStorageByteLimit,
+            .bypassOperationCache = interactionOverride.has_value(),
         };
         auto evaluationResult = evaluator.evaluate(
             compileResult.plan, evaluationRequest, context.cancellation(),

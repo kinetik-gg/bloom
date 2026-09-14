@@ -10,6 +10,7 @@ namespace bloom::runtime {
 
 class CpuCompositionEvaluator final {
   public:
+    [[nodiscard]] const std::shared_ptr<OperationCache>& operationCache() const { return cache_; }
     // `rowBands` is the bounded pool the per-row kernels are spread across (the scheduler owns one;
     // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band
     // on the calling thread, in band order.
@@ -22,7 +23,11 @@ class CpuCompositionEvaluator final {
                                             const EvaluationRequest& request,
                                             const CancellationToken& cancellation,
                                             EvaluationProgressCallback progress = {},
-                                            CpuRowBandExecutor* rowBands = nullptr) const;
+                                            CpuRowBandExecutor* rowBands = nullptr,
+                                            OperationCacheStatistics* statistics = nullptr) const;
+
+  private:
+    std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();
 };
 
 } // namespace bloom::runtime

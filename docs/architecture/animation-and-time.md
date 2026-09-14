@@ -526,3 +526,24 @@ modes remain deferred.
 Per-key Bezier tangents (handles an artist can drag -- `EaseInOut`'s handles are fixed), curve
 modifiers, procedural extrapolation, expression sampling, shared curves, playback audio sync,
 multi-layer transform gestures, and onion skinning are explicitly deferred.
+
+## Operation memoization
+
+Compilation marks each image and value operation time-dependent when a curve, Time node or a
+driver reaching one contributes to its inputs. Dependence propagates through transforms, Merge
+and output; a constant driver does not make an otherwise static branch animated. An invariant
+operation omits request time from its memoization key, so a static solid-plus-text composition
+runs each of its six image operations once across 24 requested frames, provided the cache can
+retain those results. Frame identities still carry the exact requested rational time.
+
+Memoization sits beneath the existing frame cache and is shared by the session's foreground,
+RAM-preview and background pipeline. Keys resolve each operation's own operands and input content
+hashes, with revision-qualified addresses and cross-revision content reuse. A solid-color edit
+reruns the solid, its transformed output, Merge and composition output while the text branch hits.
+Half-open layer visibility is an explicit key input even when all authored values are invariant.
+
+The LRU budget is `playback/operation-cache-bytes`, 1 GiB by default, separate from the packed
+RAM-preview frame budget. Drag overrides bypass lookup and insertion. Per-frame statistics are
+available from the process frame; no status-bar UI is added. Cache retention never changes the
+pixel reference or semantic identity versions. See [Operation memoization](evaluation-primitives.md#operation-memoization)
+for the complete key, ownership, concurrency and budget contract.

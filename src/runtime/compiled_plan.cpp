@@ -4,9 +4,9 @@
 
 namespace bloom::runtime {
 
-CompiledCompositionPlan::CompiledCompositionPlan(
-    CompiledCompositionPlanDefinition definition) noexcept
-    : sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
+CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefinition definition)
+    : bypassOperationCache_(definition.bypassOperationCache),
+      sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
       compositionId_(definition.compositionId), format_(definition.format),
       operations_(std::move(definition.operations)), output_(definition.output),
       scalarCurves_(std::move(definition.scalarCurves)),
@@ -15,7 +15,20 @@ CompiledCompositionPlan::CompiledCompositionPlan(
       valueOperations_(std::move(definition.valueOperations)),
       valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
-      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {}
+      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {
+    analyzeTimeDependence();
+}
+
+bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPlan& rhs) {
+    return lhs.sourceRevision_ == rhs.sourceRevision_ && lhs.projectId_ == rhs.projectId_ &&
+           lhs.compositionId_ == rhs.compositionId_ && lhs.format_ == rhs.format_ &&
+           lhs.operations_ == rhs.operations_ && lhs.output_ == rhs.output_ &&
+           lhs.scalarCurves_ == rhs.scalarCurves_ && lhs.vec2Curves_ == rhs.vec2Curves_ &&
+           lhs.color4Curves_ == rhs.color4Curves_ && lhs.valueOperations_ == rhs.valueOperations_ &&
+           lhs.valueOutputCount_ == rhs.valueOutputCount_ &&
+           lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
+           lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_;
+}
 
 CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() const {
     return {.sourceRevision = sourceRevision_,
@@ -30,7 +43,8 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .valueOperations = valueOperations_,
             .valueOutputCount = valueOutputCount_,
             .planSemanticsVersion = planSemanticsVersion_,
-            .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_};
+            .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_,
+            .bypassOperationCache = bypassOperationCache_};
 }
 
 } // namespace bloom::runtime
