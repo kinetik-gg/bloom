@@ -23,6 +23,7 @@ struct ColorPlaceholder {
 const auto& colorPlaceholders() {
     static const auto entries = std::to_array<ColorPlaceholder>({
         {QLatin1StringView("Background"), Color::Background},
+        {QLatin1StringView("SurfaceSunken"), Color::SurfaceSunken},
         {QLatin1StringView("Surface"), Color::Surface},
         {QLatin1StringView("SurfaceRaised"), Color::SurfaceRaised},
         {QLatin1StringView("Field"), Color::Field},

@@ -4,6 +4,8 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
@@ -26,23 +28,21 @@ namespace {
 class TimelineCompositionName final : public QWidget {
   public:
     TimelineCompositionName(CompositionSession& session, QWidget* parent)
-        : QWidget(parent), session_(session) {
+        : QWidget(parent), session_(session), dropdown_(new kit::KDropdown(this)) {
         setObjectName("timelineCompositionName");
-        setMinimumHeight(kit::px(kit::Size::Control));
-        setFont(kit::font(kit::TypeRole::Ui));
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setAccessibleName(tr("Composition"));
+        setMinimumWidth(kit::px(kit::Size::TimelineColumn) - 3 * kit::px(kit::Spacing::M));
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        auto* layout = new QHBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        dropdown_->setObjectName("timelineCompositionSelector");
+        dropdown_->setAccessibleName(tr("Composition"));
+        dropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        layout->addWidget(dropdown_);
         connect(&session, &CompositionSession::snapshotChanged, this, [this] { refresh(); });
         connect(&session, &CompositionSession::compositionChanged, this, [this] { refresh(); });
         refresh();
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setFont(font());
-        painter.setPen(kit::color(kit::Color::Foreground));
-        painter.drawText(rect(), Qt::AlignVCenter | Qt::AlignLeft,
-                         fontMetrics().elidedText(name_, Qt::ElideRight, width()));
     }
 
   private:
@@ -50,11 +50,14 @@ class TimelineCompositionName final : public QWidget {
         const auto* composition = session_.composition();
         name_ = composition != nullptr ? QString::fromStdString(composition->name())
                                        : tr("No composition");
+        dropdown_->clearItems();
+        dropdown_->addItem(name_);
+        dropdown_->setCurrentIndex(0);
         setToolTip(name_);
         setAccessibleName(name_);
-        update();
     }
     CompositionSession& session_;
+    kit::KDropdown* dropdown_ = nullptr;
     QString name_;
 };
 
@@ -80,12 +83,13 @@ class TimelineHeaderMenuBar final : public QWidget {
         overflow_->hide();
     }
 
-    QToolButton* addMenu(QMenu* menu, const QString& name) {
+    QToolButton* addMenu(QMenu* menu, const QString& name, const bool showInHeader = true) {
         auto* button = new QToolButton(this);
         button->setText(menu->title());
         button->setObjectName(name);
         button->setAccessibleName(menu->title());
         configure(*button);
+        button->setProperty("headerMenuVisible", showInHeader);
         button->setMenu(menu);
         static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()),
                                                           button);
@@ -98,6 +102,8 @@ class TimelineHeaderMenuBar final : public QWidget {
     QSize sizeHint() const override {
         int width = 0;
         for (auto* button : buttons_) {
+            if (!button->property("headerMenuVisible").toBool())
+                continue;
             width += button->sizeHint().width() + layout()->spacing();
         }
         return {width, kit::px(kit::Size::Control)};
@@ -107,9 +113,12 @@ class TimelineHeaderMenuBar final : public QWidget {
   protected:
     void resizeEvent(QResizeEvent* event) override {
         QWidget::resizeEvent(event);
-        const bool collapsed = width() < sizeHint().width();
+        // The parent header reserves its own inter-control gap outside this widget. Account for
+        // that one kit spacing step so the three requested menus remain visible at the 400px
+        // default layer-column split instead of collapsing one row too early.
+        const bool collapsed = width() + kit::px(kit::Spacing::M) < sizeHint().width();
         for (auto* button : buttons_) {
-            button->setVisible(!collapsed);
+            button->setVisible(button->property("headerMenuVisible").toBool() && !collapsed);
         }
         overflow_->setVisible(collapsed);
     }
@@ -119,7 +128,7 @@ class TimelineHeaderMenuBar final : public QWidget {
         button.setAutoRaise(true);
         button.setPopupMode(QToolButton::InstantPopup);
         button.setProperty("headerMenuButton", true);
-        button.setFont(kit::font(kit::TypeRole::Ui));
+        button.setFont(kit::font(kit::TypeRole::UiSmall));
         button.setFixedHeight(kit::px(kit::Size::Control));
     }
     std::vector<QToolButton*> buttons_;
@@ -153,10 +162,10 @@ void TimelineEditor::createHeaderMenus() {
     headerMenus_ = new QWidget(headerFallback_);
     auto* row = new QHBoxLayout(headerMenus_);
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(kit::px(kit::Spacing::S));
+    row->setSpacing(kit::px(kit::Spacing::XXS));
     auto* bar = new TimelineHeaderMenuBar(headerMenus_);
     row->addWidget(bar);
-    row->addWidget(new TimelineCompositionName(session_, headerMenus_), 1);
+    row->addWidget(new TimelineCompositionName(session_, headerMenus_));
 
     const auto menu = [this](const QString& title, const QString& name) {
         auto* result = new QMenu(title, headerMenus_);
@@ -185,8 +194,6 @@ void TimelineEditor::createHeaderMenus() {
     auto* text = localAction(add, tr("Text"), QStringLiteral("addTextLayerAction"), {},
                              [this] { (void)addDefaultTextLayer(session_); });
     text->setToolTip(tr("Add a text layer"));
-    addButton_ = bar->addMenu(add, QStringLiteral("addLayerButton"));
-    addButton_->setToolTip(tr("Add a structured layer"));
 
     auto* view = menu(tr("View"), QStringLiteral("timelineViewMenu"));
     localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),
@@ -245,7 +252,7 @@ void TimelineEditor::createHeaderMenus() {
                                                                     *layer, session_.currentTime());
             (void)session_.executeTransaction(std::move(transaction));
         });
-    bar->addMenu(editMenu_, QStringLiteral("timelineEditButton"));
+    bar->addMenu(editMenu_, QStringLiteral("timelineEditButton"), false);
 
     auto* select = menu(tr("Select"), QStringLiteral("timelineSelectMenu"));
     localAction(select, tr("All"), QStringLiteral("timelineSelectAllAction"),
@@ -254,6 +261,8 @@ void TimelineEditor::createHeaderMenus() {
                 QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A),
                 [this] { session_.clearSelection(); });
     bar->addMenu(select, QStringLiteral("timelineSelectButton"));
+    addButton_ = bar->addMenu(add, QStringLiteral("addLayerButton"));
+    addButton_->setToolTip(tr("Add a structured layer"));
     connect(editMenu_, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineEditor::refreshHeaderMenus);

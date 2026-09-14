@@ -144,7 +144,13 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `TitleBar` | `34` | `kit::TitleBar`'s own row height. Compiled and tested, but currently unused: task C1 moved Bloom to native (OS) window chrome only, so `MainWindow` never constructs `kit::TitleBar` today -- the token and the widget both stay ready for a possible future custom-chrome/CSD return |
 | `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
 | `EditorHeader` | `48` | An editor panel's header row |
-| `TimelineRow` | `34` | No longer the timeline's row pitch. The layer-stack rows, their clip lanes, and the keyframe lanes all step by `32` (`ControlRoomy`), the pitch the timeline design specifies; this token survives only as a stylesheet variable until the kit either restates it as `32` or retires it |
+| `TimelineRow` | `32` | Shared pitch for layer rows, clip lanes, expanded property rows, and keyframe lanes |
+| `TimelineBar` | `20` | Clip-bar height inside a timeline row |
+| `TimelineToggleColumn` | `80` | Four 20px toggle cells in the layer column |
+| `TimelineNameMin` | `120` | Minimum flexible Name column width |
+| `TimelineColumn` | `100` | Blending and Parent column widths |
+| `TimelineWorkArea` / `TimelineWorkAreaHandle` | `6` / `6` | Work-area strip height and endpoint handle width |
+| `TimelineNavigatorThumb` | `6` | Resting navigator thumb height |
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 | `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
 | `PanelMinWidth` | `300` | Every `EditorArea`'s own strict minimum width, in Figma design px |
@@ -167,7 +173,7 @@ Assets and Nodes, use the same strip rather than inventing a second chrome treat
 | Panel | Header menus | Body | Footer |
 | --- | --- | --- | --- |
 | Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
-| Timeline | Left cell: switcher, Add/View/Edit/Select, elided composition name (`Type::UI`), fullscreen. Right cell: work-area strip, tick labels, and playhead head | Column headings first; synchronized layer stack, expanded property rows and their keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
+| Timeline | Left cell: switcher, View/Select/Add menus, composition selector, fullscreen. Right cell: work-area strip, keyframe/graph/snap toggles, tick labels, and playhead head | Column headings first; synchronized layer stack, expanded property rows and their keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
 
 The timeline header splits at exactly the body's layer-column divider. Its ruler begins at the lane
 region's x origin and reserves the same vertical-scrollbar gutter. The ruler lives inside the
@@ -176,10 +182,11 @@ the header, the right side of the column-heading row, and all lanes. The work-ar
 persisted range, with Accent grips at both endpoints and the same zoom/scroll axis as the ruler.
 
 Timeline major labels use the frame cadence `1, 2, 5, 10, 24, 48, 96, …`, chosen from available pixel
-density and actual label font metrics. Ten-frame spacing is used at fit when it has enough room;
-labels are never allowed to overlap or cross the ruler's right edge. The navigator shows the full
-duration with an Accent-dim visible-range window and solid Accent edge grips. Zoom and scroll
-change the window and projections, while layer-row height stays `32` (`ControlRoomy`).
+density and actual `TypeRole::Value` metrics. Adjacent labels are at least 40 px apart; at fit the
+cadence is ten frames whenever that spacing permits. Minor ticks are per-frame at 8 px/frame or
+more, otherwise every five frames. The navigator is a 6 px `Muted` scrollbar-style thumb on a
+`SurfaceSunken` track and is hidden while the complete composition is visible. Zoom and scroll
+change the window and projections, while layer-row height stays `32`.
 
 Assets uses the `Folder` panel-switcher icon and the `DataComposition` vocabulary for composition
 rows. Its disabled affordances keep their honest reason in a tooltip, and its composition actions
@@ -650,13 +657,17 @@ licensing, substitution, and missing-dependency workflow.
 
 ### Timeline layer row controls
 
-The layer-stack column carries Bold 16 px visibility, solo and lock glyphs with distinct on/off
-states, a label swatch and name, and a Compact Blending dropdown. Audio and Parent are hidden:
+The layer-stack column is a fixed 80 px toggle strip followed by a flexible Name column (minimum
+120 px), a 100 px Blending column, and a 100 px Parent column. Each toggle is a 16 px square with
+a Border, ControlSurface fill, and semantic Phosphor glyph: visibility, disabled audio, solo, and
+lock. The disabled audio tooltip states that media controls are not available yet. The Name cell
+has no swatch; a fixed 16 px chevron sits directly left of the name. Parent is a visible disabled
+Compact dropdown showing `None` with an honest tooltip.
 
 | Row control | Object name | State |
 | --- | --- | --- |
 | Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
-| Parent | `layerParentDropdown` | Hidden until parenting exists |
+| Parent | `layerParentDropdown` | Visible, disabled `None` placeholder; tooltip explains that parenting does not exist yet |
 
 A disabled placeholder always states its reason in its tooltip rather than merely looking
 unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
@@ -669,8 +680,8 @@ Layer, group-heading and parameter rows share the 32 px `ControlRoomy` pitch and
 scroll offset. A 16 px Phosphor CaretRight/CaretDown beside the layer name discloses expansion.
 Group headings read TRANSFORM, APPEARANCE and SOURCE. Parameter names are indented beneath the
 layer name; the 64 px name column, shared diamond, and inline value column stay on the left of the
-lane divider. The layer column is 396 px, widened by one `ControlRoomy` token so paired
-values fit their units. The child-row left inset is 112 px, derived from the layer control table;
+lane divider. The default layer column is 400 px: 80 px toggles plus a 120 px minimum Name and two
+100 px fields. The child-row left inset is derived from the layer control table;
 control gaps are `Spacing::XS` (4 px), with `Spacing::XXS` (2 px) inside component cells.
 
 Position, Anchor and Scale have compact X/Y labels and two `KValueField` cells on one row.
@@ -780,12 +791,13 @@ which authoring affordances can currently be offered.
 `#D97C7C`, `#D9A66C`, `#C9C76B`, `#83BD84`, `#68BABA`, `#799ED2`, `#AA8ACC`, `#CE89B4`.
 A custom RGB label uses the same row swatch and bar fill. Kind colors remain the default.
 
-Bars span the layer's half-open range, inset vertically by `Spacing::XS`, with a one-pixel inner
-border from `hoverFillFor(barColor)` and shallow `Elevation::TimelineBar` shadow. Both ends have
-trim grips; snapping shows a vertical guide. Row drag shows an Accent insertion rule. Toggle
-states use `Visible`/`Hidden`, `Check` for solo and `Locked`/`Unlocked`, rendered in the curated
-Bold weight at `Size::IconMedium` (16 px). Their source and hashes are in the Phosphor provenance
-record; other icon weights and meanings are unchanged.
+Bars span the layer's half-open range at `TimelineBar` (20 px) height, centered in the 32 px row,
+with a 3 px radius, one-pixel lighter top edge, and shallow `Elevation::TimelineBar` shadow. A 3 px
+kind-color stripe marks the left edge; trim grips and frame snapping remain available. Rows use
+alternating `Surface`/`SurfaceRaised` fills with a low-alpha Border separator; the lane track is
+`SurfaceSunken`. Selected rows carry a 3 px Accent stripe. Toggle states use the semantic icons
+listed above, rendered at `IconMedium` (16 px); their source and hashes are in the Phosphor
+provenance record.
 
 ### Nested Merge Rows
 

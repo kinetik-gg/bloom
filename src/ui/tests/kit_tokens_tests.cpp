@@ -147,7 +147,17 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     // distinct token from PanelHeader above, which stays 30 -- node_editor.cpp's card header
     // height and row pitch still resolve through PanelHeader unchanged.
     expectations.expect(kit::px(kit::Size::EditorHeader) == 48, "EditorHeader is 48");
-    expectations.expect(kit::px(kit::Size::TimelineRow) == 34, "TimelineRow is 34");
+    expectations.expect(kit::px(kit::Size::TimelineRow) == 32, "TimelineRow is 32");
+    expectations.expect(kit::px(kit::Size::TimelineBar) == 20, "TimelineBar is 20");
+    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 80,
+                        "TimelineToggleColumn is 80");
+    expectations.expect(kit::px(kit::Size::TimelineNameMin) == 120, "TimelineNameMin is 120");
+    expectations.expect(kit::px(kit::Size::TimelineColumn) == 100, "TimelineColumn is 100");
+    expectations.expect(kit::px(kit::Size::TimelineWorkArea) == 6, "TimelineWorkArea is 6");
+    expectations.expect(kit::px(kit::Size::TimelineWorkAreaHandle) == 6,
+                        "TimelineWorkAreaHandle is 6");
+    expectations.expect(kit::px(kit::Size::TimelineNavigatorThumb) == 6,
+                        "TimelineNavigatorThumb is 6");
     expectations.expect(kit::px(kit::Size::ScrollBar) == 8, "ScrollBar is 8");
     expectations.expect(kit::px(kit::Size::ScrollBarHover) == 12, "ScrollBar hover width is 12");
     // task S1, item 3: the narrowest a menu popup may be.

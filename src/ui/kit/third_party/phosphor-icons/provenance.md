@@ -19,13 +19,13 @@ Reviewed: 2026-09-14
 The archive SHA-256 above was computed over the exact bytes downloaded from that URL with
 `sha256sum`, not copied from an upstream publication. Task PROPS-3 re-downloaded that archive on
 2026-09-14, recomputed the digest, and byte-compared every file in the table below against
-`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 162 matched.
+`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 168 matched.
 
 ## What is vendored, and what is not
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 54 of them in three weights (162 files). The three weights are exactly the three the
+embeds 56 of them in three weights (168 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -35,7 +35,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 54 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 56 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -66,6 +66,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/caret-up.svg` | `bccc26004e73e5de783ac6dde607e3671e776261d81972ccdbd296b4aca21ca9` |
 | `regular/check.svg` | `cbb89a8c42f283d4f846eb935e05d88c1be04462f16480e068c0f82b9ce40b12` |
 | `regular/clock.svg` | `b8c6c2899d2b9af48a55ba02ba6d7faf89b757915772dd24f5397f7b0d02aa5c` |
+| `regular/circle.svg` | `4aaa8e07fc1bbaa341774c2094d8609c24a8cca62f7496f98f076207d2fe335f` |
 | `regular/corners-in.svg` | `31e9060aafdd6e24f4b8aef7742a89e7e616e6e2da07160691d020cb5ab07dee` |
 | `regular/corners-out.svg` | `fd79277404b3662b50b737127fb6bf6f63ae93c9b60d9f2aca9122a950ec08c8` |
 | `regular/cube.svg` | `7c0f13cb492d0dd212e48ab259dabec4627df32d71aa00ce31b3228c0f35112b` |
@@ -89,6 +90,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/lock-simple-open.svg` | `55c3dcdb0db66b65f4afab5ead515b0db381aecfbac9f61ec1e2691d83cc5330` |
 | `regular/lock-simple.svg` | `b99d3713ac86cb610eb66974d69de2aa1223c4f6387fb1053e3d375e62f5dc1c` |
 | `regular/magnifying-glass.svg` | `f9fa2561978a9a3291e8ae0ebfcb651104f5069fade8f84871627bca68889cde` |
+| `regular/magnet.svg` | `bc1562b7569caaa947e52d9ac1fcd3ff4ae9c133dcc05e565cfbc8f5fe6671c4` |
 | `regular/minus.svg` | `5a068d1cfd707fde5ddb0ce0623958123b6a5afba98401318983aeb0fdad6382` |
 | `regular/music-notes.svg` | `e40b3381d49b45275c8875d7e85f2332a11eb467f7ad9e7c9b4656c29a97e9e1` |
 | `regular/pause.svg` | `7a9a8fe311234262b85c6e332f77db4ba9a59b6ca4292c41d327977cf61a2fc9` |
@@ -125,6 +127,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/caret-up-fill.svg` | `a4703a6e23011c86e9d7d18234b30bba36ba04f43f37ca08bb3d04beb9e3770b` |
 | `fill/check-fill.svg` | `d114007dc371976dc3e8f4ebc59c5aef429fae59ae58d56acdf231a52b4700be` |
 | `fill/clock-fill.svg` | `4abe98cfc61350de60baf70ce93e85b3a9acbb80e34f9cf19688661aaddbc140` |
+| `fill/circle-fill.svg` | `55e98bf729f8760c132f3a59ac330afdf09e3694c2bb15a9a0abc3d9222c93fe` |
 | `fill/corners-in-fill.svg` | `ade092d133654ec69ee3484ed10b79523ffe23eb9b8f9c96e5e1fe72b7af31be` |
 | `fill/corners-out-fill.svg` | `206cdf1c6c7a3d2da17edebae2a122b5bcf8186f276170cac730a041c3077a1d` |
 | `fill/cube-fill.svg` | `9c681bfc8547fbb142d5df4d69ad923af5c422fea1013e6d69c32cef9ced3de3` |
@@ -148,6 +151,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/lock-simple-fill.svg` | `54b137caf94b8082e63a2831e5b726bbc9cd32ad40938bf5656ff4d44b442d95` |
 | `fill/lock-simple-open-fill.svg` | `fa4603d9987e96952fb892c19a717bfa674af6520f1e469eb6a812411303c60e` |
 | `fill/magnifying-glass-fill.svg` | `e7cf953bb787af2a4b11f8a248f35b56aab2f2b44f535d03593f490a4a633244` |
+| `fill/magnet-fill.svg` | `b3e0a68a703bd5c6b0d262584cecb527cda420ad71bb1637d16a28bc96142488` |
 | `fill/minus-fill.svg` | `fc5b1fa0d71db88886b70da6a675f7de3e7d4007444e87ba68f174a9ecef037e` |
 | `fill/music-notes-fill.svg` | `d8b530db5c510539e8235a5e80d7f984504f7b5ae24408d080a8468ae12e29dc` |
 | `fill/pause-fill.svg` | `156d3cdfa5cea803caec50b35f49bc635070c8bd84e7fe78df94b025017ccee1` |
@@ -184,6 +188,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/caret-up-down-bold.svg` | `a3ffa8c728724bf8ace313bcfd2c854ad3c0b47926440f763e94e75c9820f9f1` |
 | `bold/check-bold.svg` | `d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf` |
 | `bold/clock-bold.svg` | `45cf8bb6e1929b4d7fcbf52d83b35c6d130f4ea12d981db19370392cba724f4a` |
+| `bold/circle-bold.svg` | `f379b4d00604bc0f55a57d857a158cdd0e41529f372c643b70c41f82aad3ec51` |
 | `bold/corners-in-bold.svg` | `2664fc88c8de3564849e732f5950232109cd7d201b93ede1e516e60931e56300` |
 | `bold/corners-out-bold.svg` | `df74ba3c2a496a344f98e80c0782f43aa3760ed4b8b6103a4c621bfc59575e16` |
 | `bold/cube-bold.svg` | `960f01377a6e286fb39507861a01bb0ff6ff8e5f4b1ac0ded92f6f2bec376e91` |
@@ -207,6 +212,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
 | `bold/lock-simple-open-bold.svg` | `0fe1aa4fa99db2a2fe0827626eeb779a5a398763ba2492a0cf9429f9cdeca6c3` |
 | `bold/magnifying-glass-bold.svg` | `b73e393b20bff0aaee96b9e325d0276fe1ab5fc81b5080633a95827bd14ebae6` |
+| `bold/magnet-bold.svg` | `a23e3f521d6c8c55de7c25209f194696f7e6210af6b30bca8dc39d613558f8f3` |
 | `bold/minus-bold.svg` | `f9be4875a49d6bc9931891127335a396beacb420c7076e068abd9e1505348396` |
 | `bold/music-notes-bold.svg` | `4d906075f68fae7c6380011cdc5303a322e4f6f9ec402e4c725e08e4c7e2e3f6` |
 | `bold/pause-bold.svg` | `0aa900d04cc01d716ecfb668cdc3e3f2bca7fe21a1faa80a11dc342440e22a47` |
@@ -233,10 +239,10 @@ Digests are SHA-256 over the exact checked-in bytes.
 ## Subset manifest digest
 
 A single value covering the whole vendored subset, so a drift in any one asset is one comparison
-away rather than 162:
+away rather than 168:
 
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = b6a2424a59847c84bf9146e9f361542de03263cb38b5fcea94622ea1d6d96ea7
+SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = ef00240b2ba6d7829817d9ffc8fbe5ba5f14b6f7239bfe65f2407aa8e355d22c
 ```
 
 Reproduce with:

@@ -106,6 +106,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/text-align-left.svg
         kit/third_party/phosphor-icons/regular/text-align-right.svg
         kit/third_party/phosphor-icons/regular/caret-down.svg
+        kit/third_party/phosphor-icons/regular/circle.svg
         kit/third_party/phosphor-icons/regular/caret-left.svg
         kit/third_party/phosphor-icons/regular/caret-right.svg
         kit/third_party/phosphor-icons/regular/caret-up-down.svg
@@ -134,6 +135,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/lock-simple-open.svg
         kit/third_party/phosphor-icons/regular/lock-simple.svg
         kit/third_party/phosphor-icons/regular/magnifying-glass.svg
+        kit/third_party/phosphor-icons/regular/magnet.svg
         kit/third_party/phosphor-icons/regular/minus.svg
         kit/third_party/phosphor-icons/regular/music-notes.svg
         kit/third_party/phosphor-icons/regular/pause.svg
@@ -154,6 +156,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/warning.svg
         kit/third_party/phosphor-icons/regular/x.svg
         kit/third_party/phosphor-icons/bold/caret-down-bold.svg
+        kit/third_party/phosphor-icons/bold/circle-bold.svg
         kit/third_party/phosphor-icons/bold/caret-left-bold.svg
         kit/third_party/phosphor-icons/bold/caret-right-bold.svg
         kit/third_party/phosphor-icons/bold/caret-up-bold.svg
@@ -182,6 +185,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/lock-simple-bold.svg
         kit/third_party/phosphor-icons/bold/lock-simple-open-bold.svg
         kit/third_party/phosphor-icons/bold/magnifying-glass-bold.svg
+        kit/third_party/phosphor-icons/bold/magnet-bold.svg
         kit/third_party/phosphor-icons/bold/minus-bold.svg
         kit/third_party/phosphor-icons/bold/music-notes-bold.svg
         kit/third_party/phosphor-icons/bold/pause-bold.svg
@@ -202,6 +206,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/warning-circle-bold.svg
         kit/third_party/phosphor-icons/bold/x-bold.svg
         kit/third_party/phosphor-icons/fill/caret-down-fill.svg
+        kit/third_party/phosphor-icons/fill/circle-fill.svg
         kit/third_party/phosphor-icons/fill/caret-left-fill.svg
         kit/third_party/phosphor-icons/fill/caret-right-fill.svg
         kit/third_party/phosphor-icons/fill/caret-up-down-fill.svg
@@ -230,6 +235,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/lock-simple-fill.svg
         kit/third_party/phosphor-icons/fill/lock-simple-open-fill.svg
         kit/third_party/phosphor-icons/fill/magnifying-glass-fill.svg
+        kit/third_party/phosphor-icons/fill/magnet-fill.svg
         kit/third_party/phosphor-icons/fill/minus-fill.svg
         kit/third_party/phosphor-icons/fill/music-notes-fill.svg
         kit/third_party/phosphor-icons/fill/pause-fill.svg
