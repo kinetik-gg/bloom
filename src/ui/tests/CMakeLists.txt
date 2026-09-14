@@ -650,6 +650,34 @@ target_link_libraries(bloom_node_driver_gesture_test PRIVATE bloom_ui bloom_runt
 bloom_enable_warnings(bloom_node_driver_gesture_test)
 bloom_add_test(NAME bloom.ui.node-driver-gesture COMMAND bloom_node_driver_gesture_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Task FIX2, deliverable 2: one truth across every surface. Its own executable rather than more
+# cases inside composition_projection_test.cpp, which owns the cross-editor projection contract this
+# task keeps intact.
+add_executable(bloom_surface_synchronization_test surface_synchronization_tests.cpp)
+target_include_directories(bloom_surface_synchronization_test PRIVATE ..)
+target_link_libraries(bloom_surface_synchronization_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_surface_synchronization_test)
+bloom_add_test(NAME bloom.ui.surface-synchronization COMMAND bloom_surface_synchronization_test LABELS ui integration kit TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Task FIX2, the owner's known case: the timeline row's own controls under a real pointer. Its own
+# executable rather than more cases inside timeline_editor_style_tests.cpp, which owns the row
+# CHROME contract this task keeps intact.
+add_executable(bloom_timeline_row_controls_test timeline_row_controls_tests.cpp)
+target_include_directories(bloom_timeline_row_controls_test PRIVATE ..)
+target_link_libraries(bloom_timeline_row_controls_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_timeline_row_controls_test)
+bloom_add_test(NAME bloom.ui.timeline-row-controls COMMAND bloom_timeline_row_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Task FIX2, deliverable 1: the owner's "values in nodes parameters are not workable", driven
+# through real pointer and key events on the production canvas. Its own executable for the same
+# reason node_card_tests.cpp is -- and deliberately separate from node_production_wiring_tests.cpp,
+# which owns the "no adapter on setSubmit()" contract rather than the gesture contract.
+add_executable(bloom_node_card_value_gesture_test node_card_value_gesture_tests.cpp)
+target_include_directories(bloom_node_card_value_gesture_test PRIVATE ..)
+target_link_libraries(bloom_node_card_value_gesture_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_node_card_value_gesture_test)
+bloom_add_test(NAME bloom.ui.node-card-value-gesture COMMAND bloom_node_card_value_gesture_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_production_wiring_test node_production_wiring_tests.cpp)
 target_include_directories(bloom_node_production_wiring_test PRIVATE ..)
 target_link_libraries(bloom_node_production_wiring_test PRIVATE bloom_ui bloom_project Qt6::Test)

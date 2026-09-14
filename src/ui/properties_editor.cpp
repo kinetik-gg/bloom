@@ -619,32 +619,25 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     documentLayout->addStretch(1);
     layout->addWidget(documentSection_);
 
+    // Every numeric row is bound through bindCell(), never straight to valueChanged: a cell emits
+    // that for every pixel of a scrub, and ADR 0017 is explicit that a drag does not mutate the
+    // document on pointer motion and that one completed gesture is one undo step. See bindCell().
     const auto commitPosition = [this] {
-        if (!rebuilding_) {
-            (void)session_.setSelectedPosition(positionX_->value(), positionY_->value());
-        }
+        (void)session_.setSelectedPosition(positionX_->value(), positionY_->value());
     };
-    connect(positionX_, &kit::KValueField::valueChanged, this, commitPosition);
-    connect(positionY_, &kit::KValueField::valueChanged, this, commitPosition);
+    bindCell(positionX_, commitPosition);
+    bindCell(positionY_, commitPosition);
     const auto commitAnchor = [this] {
-        if (!rebuilding_) {
-            (void)session_.setSelectedAnchor(anchorX_->value(), anchorY_->value());
-        }
+        (void)session_.setSelectedAnchor(anchorX_->value(), anchorY_->value());
     };
-    connect(anchorX_, &kit::KValueField::valueChanged, this, commitAnchor);
-    connect(anchorY_, &kit::KValueField::valueChanged, this, commitAnchor);
+    bindCell(anchorX_, commitAnchor);
+    bindCell(anchorY_, commitAnchor);
     const auto commitScale = [this] {
-        if (!rebuilding_) {
-            (void)session_.setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
-        }
+        (void)session_.setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
     };
-    connect(scaleX_, &kit::KValueField::valueChanged, this, commitScale);
-    connect(scaleY_, &kit::KValueField::valueChanged, this, commitScale);
-    connect(rotation_, &kit::KValueField::valueChanged, this, [this](const double value) {
-        if (!rebuilding_) {
-            (void)session_.setSelectedRotation(value);
-        }
-    });
+    bindCell(scaleX_, commitScale);
+    bindCell(scaleY_, commitScale);
+    bindCell(rotation_, [this] { (void)session_.setSelectedRotation(rotation_->value()); });
     connect(blendMode_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
         if (rebuilding_ || index < 0) {
             return;
@@ -655,21 +648,15 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
             (void)session_.setSelectedBlendMode(*mode);
         }
     });
-    connect(opacity_, &kit::KValueField::valueChanged, this, [this](const double value) {
-        if (!rebuilding_) {
-            (void)session_.setSelectedOpacity(value / 100.0);
-        }
-    });
+    bindCell(opacity_, [this] { (void)session_.setSelectedOpacity(opacity_->value() / 100.0); });
     // Task P3: exactly Position's own commitPosition shape (read every cell in the group, write
     // the whole value through one session call) -- one SetSolidColor command per emitted
     // valueChanged, the same one-command-per-emission parity Position already has (BASE FACTS:
     // "accept that parity; do not add coalescing").
     const auto commitSolidColor = [this] {
-        if (!rebuilding_) {
-            (void)session_.setSelectedSolidColor(
-                core::Color4d{solidColorRed_->value(), solidColorGreen_->value(),
-                              solidColorBlue_->value(), solidColorAlpha_->value()});
-        }
+        (void)session_.setSelectedSolidColor(
+            core::Color4d{solidColorRed_->value(), solidColorGreen_->value(),
+                          solidColorBlue_->value(), solidColorAlpha_->value()});
     };
     const auto commitTextContent = [this] {
         if (!rebuilding_) {
@@ -677,11 +664,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
         }
     };
     connect(textContent_, &QLineEdit::editingFinished, this, commitTextContent);
-    connect(textSize_, &kit::KValueField::valueChanged, this, [this](const double value) {
-        if (!rebuilding_) {
-            (void)session_.setSelectedTextSize(value);
-        }
-    });
+    bindCell(textSize_, [this] { (void)session_.setSelectedTextSize(textSize_->value()); });
     connect(textColor_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
         if (!rebuilding_) {
             (void)session_.setSelectedTextColor(
@@ -689,15 +672,20 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                               static_cast<double>(color.blue), static_cast<double>(color.alpha)});
         }
     });
-    connect(solidColorRed_, &kit::KValueField::valueChanged, this, commitSolidColor);
-    connect(solidColorGreen_, &kit::KValueField::valueChanged, this, commitSolidColor);
-    connect(solidColorBlue_, &kit::KValueField::valueChanged, this, commitSolidColor);
-    connect(solidColorAlpha_, &kit::KValueField::valueChanged, this, commitSolidColor);
+    bindCell(solidColorRed_, commitSolidColor);
+    bindCell(solidColorGreen_, commitSolidColor);
+    bindCell(solidColorBlue_, commitSolidColor);
+    bindCell(solidColorAlpha_, commitSolidColor);
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &PropertiesEditor::configureMergeInputs);
+    // Same reason the node canvas follows it: every animated row shows its curve's value at the
+    // session time, and its keyframe diamond says whether a key sits there. Neither question has
+    // the same answer at two different times, so a playhead move is a rebuild here even though the
+    // document did not change.
+    connect(&session_, &CompositionSession::currentTimeChanged, this, &PropertiesEditor::rebuild);
 
     rebuild();
 }

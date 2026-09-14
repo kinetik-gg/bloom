@@ -51,6 +51,9 @@ class KValueField final : public QWidget {
     [[nodiscard]] int decimals() const noexcept;
 
     [[nodiscard]] double value() const noexcept;
+    // Projection, never an edit: a cell the artist is currently DRAGGING refuses it, because the
+    // gesture owns the value until it ends (ADR 0017) and a surface repainting the cell from the
+    // document underneath a live scrub would fight the pointer.
     void setValue(double value);
 
     void stepBy(int steps);
@@ -95,7 +98,19 @@ class KValueField final : public QWidget {
     [[nodiscard]] QSize minimumSizeHint() const override;
 
   Q_SIGNALS:
+    // Every change of the held value, the live ones a scrub produces included. It says what the
+    // CELL now shows, which is not the same question as what should be written down -- see the
+    // gesture boundary below.
     void valueChanged(double value);
+
+    // The scrub gesture's own boundary (ADR 0017: "Do not mutate the document on pointer motion.
+    // On release, commit exactly one typed document transaction... A zero-delta gesture commits
+    // nothing"). Without it a surface had only valueChanged to go on and turned every pointer move
+    // into its own undoable command. scrubStarted() is emitted once, when the press passes the drag
+    // threshold; exactly one of scrubFinished()/scrubCancelled() follows.
+    void scrubStarted();
+    void scrubFinished();
+    void scrubCancelled();
 
   protected:
     void paintEvent(QPaintEvent* event) override;

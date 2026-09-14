@@ -114,6 +114,13 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // Cards for nodes that left the graph are removed; edges, which carry no widget state, are
     // rebuilt outright each time.
     void setProjection(const document::Snapshot& snapshot, document::CompositionId compositionId);
+    // Re-reads every card's VALUES and keyframe diamonds from the current snapshot, leaving the
+    // projection's structure -- cards, sockets, links, frames, the scene rectangle -- exactly where
+    // it is. The session TIME is not a document change, but it IS what an animated parameter's
+    // shown value and its diamond are read at, so a playhead move has to reach the cards; doing it
+    // through setProjection() would rebuild every edge and re-frame the canvas once per frame of
+    // playback for a question only the rows ask.
+    void refreshValues();
     [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const;
     [[nodiscard]] QGraphicsItem* findNodeGroupItem(document::NodeGroupId groupId) const;
     // Recomputes every group frame from the live member cards. Called by the projection and by

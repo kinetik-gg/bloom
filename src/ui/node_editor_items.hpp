@@ -278,6 +278,16 @@ class NodeItem final : public QGraphicsObject {
         relayout();
     }
 
+    // Re-reads this card's values and keyframe diamonds from the snapshot WITHOUT reconciling its
+    // structure. What changes between two calls here is not the document but the session TIME an
+    // animated parameter is sampled at, and the rows are the only thing that asks. Layout is
+    // deliberately untouched: a cell's width comes from its schema's range, never from the digits
+    // in it, so no value can move the card's geometry.
+    void refreshCurrentValues(const document::NodeRecord& node,
+                              const document::Composition& composition) {
+        refreshValues(node, composition);
+    }
+
     [[nodiscard]] bool hasInputSocket() const {
         return std::ranges::any_of(sockets_,
                                    [](const auto* socket) { return socket->input.has_value(); });
@@ -359,6 +369,17 @@ class NodeItem final : public QGraphicsObject {
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override;
 
   protected:
+    // See addProxy(): the click focus a hosted widget cannot get from Qt's own delivery path.
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* widget = qobject_cast<QWidget*>(watched);
+            if (widget != nullptr && widget->isEnabled() &&
+                (widget->focusPolicy() & Qt::ClickFocus) != 0 && !widget->hasFocus()) {
+                widget->setFocus(Qt::MouseFocusReason);
+            }
+        }
+        return QGraphicsObject::eventFilter(watched, event);
+    }
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
     void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
         if (authoringEnabled_)
@@ -411,45 +432,44 @@ class NodeItem final : public QGraphicsObject {
         kit::KDropdown* selector = nullptr;
     };
 
-    // Selects THIS node through the session's one selection truth before any edit, because every
-    // session write path this card uses (setSelectedPosition/setSelectedOpacity) targets the
-    // session's current selection -- the same functions, on the same parameters, that
-    // PropertiesEditor calls. Returns false if the node is no longer selectable, in which case no
-    // command is issued at all.
-    [[nodiscard]] bool selectSelf() {
-        if (session_ == nullptr) {
-            return false;
-        }
-        session_->selectNode(id_);
-        const auto* selected = std::get_if<document::NodeId>(&session_->selection().primary);
-        return selected != nullptr && *selected == id_;
-    }
+    // This card's own node, named as the target of every write below. The card used to call
+    // CompositionSession::selectNode() first, because the session's write paths resolved their
+    // parameter from the current selection -- which meant editing one card's value collapsed a
+    // multi-card selection to that card and moved the Properties panel off whatever the artist was
+    // reading. Selection is the PRESS's business (NodeGraphicsScene::mousePressEvent already
+    // selects the card under the pointer, preserving a selection that contains it); a commit's
+    // business is the value. Same session functions, same parameters, same refusals as
+    // PropertiesEditor -- only the target differs.
+    [[nodiscard]] AuthoringTarget target() const noexcept { return id_; }
 
     void commitPosition() {
-        if (refreshing_ || positionX_ == nullptr || positionY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || positionX_ == nullptr || positionY_ == nullptr || session_ == nullptr) {
             return;
         }
         // Both components in one call, exactly as PropertiesEditor's own commitPosition lambda
         // does: one gesture is one SetParameterSource/SetKeyframeAtTime transaction, so it is one
         // undo step.
-        (void)session_->setSelectedPosition(positionX_->value(), positionY_->value());
+        (void)session_->setSelectedPosition(positionX_->value(), positionY_->value(), target());
     }
 
     void commitOpacity() {
-        if (refreshing_ || opacity_ == nullptr || !selectSelf()) {
+        if (refreshing_ || opacity_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedOpacity(opacity_->value() / 100.0);
+        (void)session_->setSelectedOpacity(opacity_->value() / 100.0, target());
     }
 
     void commitBlendMode(const int index) {
-        if (refreshing_ || blendMode_ == nullptr || index < 0 || !selectSelf()) {
+        if (refreshing_ || blendMode_ == nullptr || index < 0 || session_ == nullptr) {
             return;
         }
         const auto mode =
             core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
-        if (mode.has_value()) {
-            (void)session_->setSelectedBlendMode(*mode);
+        // By LAYER, never through the selection: setLayerBlendMode() is the primitive the timeline
+        // row already uses for exactly this reason, and the card knows which layer it draws.
+        const auto layerId = session_->layerForNode(id_);
+        if (mode.has_value() && layerId.has_value()) {
+            (void)session_->setLayerBlendMode(*layerId, *mode);
         }
     }
 
@@ -470,58 +490,89 @@ class NodeItem final : public QGraphicsObject {
     // PropertiesEditor's matching row calls, so the two surfaces cannot drift. Scale is authored as
     // a percentage on the card exactly as it is in the panel.
     void commitAnchor() {
-        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || anchorX_ == nullptr || anchorY_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value());
+        (void)session_->setSelectedAnchor(anchorX_->value(), anchorY_->value(), target());
     }
 
     void commitScale() {
-        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || !selectSelf()) {
+        if (refreshing_ || scaleX_ == nullptr || scaleY_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0);
+        (void)session_->setSelectedScale(scaleX_->value() / 100.0, scaleY_->value() / 100.0,
+                                         target());
     }
 
     void commitRotation() {
-        if (refreshing_ || rotation_ == nullptr || !selectSelf()) {
+        if (refreshing_ || rotation_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedRotation(rotation_->value());
+        (void)session_->setSelectedRotation(rotation_->value(), target());
     }
 
     // Task S3's three text writes, each through exactly the session method PropertiesEditor's own
     // Text Source row calls, so the two surfaces cannot drift.
     void commitTextContent() {
-        if (refreshing_ || textContent_ == nullptr || !selectSelf()) {
+        if (refreshing_ || textContent_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedTextContent(textContent_->text());
+        (void)session_->setSelectedTextContent(textContent_->text(), target());
     }
 
     void commitTextSize() {
-        if (refreshing_ || textSize_ == nullptr || !selectSelf()) {
+        if (refreshing_ || textSize_ == nullptr || session_ == nullptr) {
             return;
         }
-        (void)session_->setSelectedTextSize(textSize_->value());
+        (void)session_->setSelectedTextSize(textSize_->value(), target());
     }
 
     // One chip, two schemas: the role string is "color" for both a solid source and a text source
     // (see document::kTextColorParameterRole), so the card builds one control and dispatches on the
     // node's own type only to pick the honest undo label.
     void commitColor(const kit::KColor& color) {
-        if (refreshing_ || colorChip_ == nullptr || !selectSelf()) {
+        if (refreshing_ || colorChip_ == nullptr || session_ == nullptr) {
             return;
         }
         const core::Color4d value{static_cast<double>(color.red), static_cast<double>(color.green),
                                   static_cast<double>(color.blue),
                                   static_cast<double>(color.alpha)};
-        (void)(isTextSource_ ? session_->setSelectedTextColor(value)
-                             : session_->setSelectedSolidColor(value));
+        (void)(isTextSource_ ? session_->setSelectedTextColor(value, target())
+                             : session_->setSelectedSolidColor(value, target()));
+    }
+
+    // One rule for every numeric cell this card carries (ADR 0017: "Do not mutate the document on
+    // pointer motion. On release, commit exactly one typed document transaction"). A cell emits
+    // valueChanged for every pixel of a scrub, so binding a commit straight to it turned one drag
+    // into a drag's worth of undo entries, each one re-projecting every editor mid-gesture. The
+    // gesture's own boundary is what is bound here instead: nothing while the pointer is moving,
+    // exactly one command on release, and none at all for an abandoned scrub.
+    template <typename Commit> void bindCell(kit::KValueField* field, Commit commit) {
+        connect(field, &kit::KValueField::valueChanged, this, [this, commit] {
+            if (!scrubbing_) {
+                commit();
+            }
+        });
+        connect(field, &kit::KValueField::scrubStarted, this, [this] { scrubbing_ = true; });
+        connect(field, &kit::KValueField::scrubCancelled, this, [this] { scrubbing_ = false; });
+        connect(field, &kit::KValueField::scrubFinished, this, [this, commit] {
+            scrubbing_ = false;
+            commit();
+        });
     }
 
     void addProxy(QWidget* widget) {
         hostTranslucent(*widget);
+        // Click-to-focus, which a hosted widget otherwise never gets. Qt focuses a widget on press
+        // inside QWidgetWindow's delivery path (QApplicationPrivate::giveFocusAccordingToFocus-
+        // Policy), and an embedded widget never travels that path; QGraphicsProxyWidget::focusIn-
+        // Event then only forwards focus to widget->focusWidget(), which is null for a widget that
+        // has never held it. The kit's own controls hide that gap because each of them calls
+        // setFocus() from its own mousePressEvent -- a plain QLineEdit does not, and a text row
+        // that never holds focus never emits editingFinished, so typing into it and clicking away
+        // threw the edit away. One rule here, for every widget the card hosts, rather than a
+        // setFocus() bolted onto each control.
+        widget->installEventFilter(this);
         auto* proxy = new QGraphicsProxyWidget(this);
         proxy->setWidget(widget);
     }
@@ -633,10 +684,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(positionY_);
                 registerControlRole(positionX_, document::kPositionParameterRole);
                 registerControlRole(positionY_, document::kPositionParameterRole);
-                connect(positionX_, &kit::KValueField::valueChanged, this,
-                        [this] { commitPosition(); });
-                connect(positionY_, &kit::KValueField::valueChanged, this,
-                        [this] { commitPosition(); });
+                bindCell(positionX_, [this] { commitPosition(); });
+                bindCell(positionY_, [this] { commitPosition(); });
                 valueRows_.push_back({QStringLiteral("X"), positionX_,
                                       makeCardDiamond(document::kPositionParameterRole),
                                       document::kPositionParameterRole});
@@ -651,10 +700,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(anchorY_);
                 registerControlRole(anchorX_, document::kAnchorParameterRole);
                 registerControlRole(anchorY_, document::kAnchorParameterRole);
-                connect(anchorX_, &kit::KValueField::valueChanged, this,
-                        [this] { commitAnchor(); });
-                connect(anchorY_, &kit::KValueField::valueChanged, this,
-                        [this] { commitAnchor(); });
+                bindCell(anchorX_, [this] { commitAnchor(); });
+                bindCell(anchorY_, [this] { commitAnchor(); });
                 valueRows_.push_back({tr("Anchor X"), anchorX_,
                                       makeCardDiamond(document::kAnchorParameterRole),
                                       document::kAnchorParameterRole});
@@ -668,8 +715,8 @@ class NodeItem final : public QGraphicsObject {
                 addProxy(scaleY_);
                 registerControlRole(scaleX_, document::kScaleParameterRole);
                 registerControlRole(scaleY_, document::kScaleParameterRole);
-                connect(scaleX_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
-                connect(scaleY_, &kit::KValueField::valueChanged, this, [this] { commitScale(); });
+                bindCell(scaleX_, [this] { commitScale(); });
+                bindCell(scaleY_, [this] { commitScale(); });
                 valueRows_.push_back({tr("Scale X"), scaleX_,
                                       makeCardDiamond(document::kScaleParameterRole),
                                       document::kScaleParameterRole});
@@ -679,8 +726,7 @@ class NodeItem final : public QGraphicsObject {
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
                 addProxy(rotation_);
                 registerControlRole(rotation_, document::kRotationParameterRole);
-                connect(rotation_, &kit::KValueField::valueChanged, this,
-                        [this] { commitRotation(); });
+                bindCell(rotation_, [this] { commitRotation(); });
                 valueRows_.push_back({tr("Rotation"), rotation_,
                                       makeCardDiamond(document::kRotationParameterRole),
                                       document::kRotationParameterRole});
@@ -689,8 +735,7 @@ class NodeItem final : public QGraphicsObject {
                                          100.0, 1, QStringLiteral("%"));
                 addProxy(opacity_);
                 registerControlRole(opacity_, document::kOpacityParameterRole);
-                connect(opacity_, &kit::KValueField::valueChanged, this,
-                        [this] { commitOpacity(); });
+                bindCell(opacity_, [this] { commitOpacity(); });
                 valueRows_.push_back({tr("Opacity"), opacity_,
                                       makeCardDiamond(document::kOpacityParameterRole),
                                       document::kOpacityParameterRole});
@@ -746,8 +791,7 @@ class NodeItem final : public QGraphicsObject {
                                   document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
                 addProxy(textSize_);
                 registerControlRole(textSize_, document::kTextSizeParameterRole);
-                connect(textSize_, &kit::KValueField::valueChanged, this,
-                        [this] { commitTextSize(); });
+                bindCell(textSize_, [this] { commitTextSize(); });
                 valueRows_.push_back({tr("Size"), textSize_,
                                       makeCardDiamond(document::kTextSizeParameterRole),
                                       document::kTextSizeParameterRole});
@@ -871,7 +915,7 @@ class NodeItem final : public QGraphicsObject {
                                   -1'000'000'000.0, 1'000'000'000.0, integral ? 0 : 4, QString{});
                 addProxy(field);
                 registerControlRole(field, role);
-                connect(field, &kit::KValueField::valueChanged, this, [commit] { commit(); });
+                bindCell(field, commit);
                 row.numeric[static_cast<std::size_t>(component)] = field;
                 // One diamond per PARAMETER, on its first component row: a Vector 2's X and Y are
                 // one curve, exactly as a layer position's are.
@@ -1003,7 +1047,7 @@ class NodeItem final : public QGraphicsObject {
             }
             return std::nullopt;
         }();
-        if (!value.has_value() || !selectSelf()) {
+        if (!value.has_value()) {
             return;
         }
         // Constant or KEY, by the session's own rule (task FIX1, item G): editing an animated value
@@ -1560,6 +1604,9 @@ class NodeItem final : public QGraphicsObject {
     QGraphicsProxyWidget* renameProxy_ = nullptr;
     bool fieldsBuilt_ = false;
     bool refreshing_ = false;
+    // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
+    // the whole card, because a card has one pointer on it.
+    bool scrubbing_ = false;
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
     std::vector<OperandRow> operandRows_;

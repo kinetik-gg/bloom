@@ -91,6 +91,12 @@ class KeyframeDiamond final : public QWidget {
     // because its rows ARE the selection's rows. An invalid id clears the binding.
     void setParameterId(document::ParameterId parameterId);
     void setRole(std::string role);
+    // Which parameter this diamond currently keys, or nothing when it follows the selection's own
+    // row instead. Diagnostic: a card names every one of its diamonds "nodeKeyframeDiamond", so a
+    // reader asking whether the right diamond is on the right row has to be able to ask it.
+    [[nodiscard]] const std::optional<document::ParameterId>& parameterId() const noexcept {
+        return parameterId_;
+    }
 
     // Re-reads the session and repaints. Called from the owning surface's own refresh pass, so a
     // diamond is never a frame behind the row it sits in.

@@ -305,10 +305,20 @@ void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixel
 // signals, and it never connects to anything, so it stays free of moc, exactly like
 // TimelineKeyframeRow.
 //
-// It is WA_TransparentForMouseEvents: selection, keyboard navigation, and tooltips all belong to
-// the column as a whole, so there is exactly one hit-test and one tooltip table instead of one per
-// row. The attribute applies only to this widget, never to its children, so its two dropdowns still
-// receive their own events.
+// Selection, keyboard navigation, and tooltips all belong to the column as a whole, so there is
+// exactly one hit-test and one tooltip table instead of one per row. The row reaches that by
+// HANDLING NOTHING rather than by being WA_TransparentForMouseEvents, which is what it used to be:
+// QWidget::childAt() -- the receiver picking behind every mouse event Qt delivers -- skips a
+// transparent child AND everything under it, so the attribute did not merely forgive the row its
+// own clicks, it made the dropdowns inside it unreachable. The owner's report was exactly that
+// (2026-09-14: "timeline Blending dropdown does nothing on click"); the S6 wiring below was real
+// all along, and no pointer could get to it.
+//
+// What replaces the attribute is Qt's own propagation: this row overrides no mouse or tooltip
+// handler, QWidget's defaults ignore both, and QApplication::notify walks an ignored mouse or help
+// event up to the parent with the position translated -- so a press on the row's blank area still
+// arrives at TimelineLayerStack::mousePressEvent, and a hover still asks its one tooltip table,
+// while a press on a child control is that control's own.
 //
 // It declares no Q_OBJECT: it emits nothing. It does CONNECT its blending dropdown to a lambda, but
 // as the connection's context object rather than as a sender, which needs only QObject -- which
