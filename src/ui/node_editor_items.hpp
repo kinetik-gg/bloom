@@ -1004,6 +1004,22 @@ class NodeItem final : public QGraphicsObject {
             }
             return items;
         }
+        if (schemaKey == document::kStringCaseParameterSchemaKey) {
+            static constexpr std::array kNames{"Upper", "Lower", "Title"};
+            for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kStringCaseModes[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kStringPadSideParameterSchemaKey) {
+            static constexpr std::array kNames{"Start", "End"};
+            for (std::size_t index = 0; index < document::kStringPadSides.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kStringPadSides[index]));
+            }
+            return items;
+        }
         if (schemaKey == document::kNumberRadixParameterSchemaKey) {
             // The stored value IS the radix, so the offered list is a convenience rather than a
             // mapping: a document carrying base 36 keeps it, and this dropdown simply has no row

@@ -162,6 +162,55 @@ refused rather than read as non-drop.
 - Hours are NOT wrapped at 24 and not truncated to two digits. A composition may legitimately be
   longer than a day, and a label that silently rolled over would name the wrong instant.
 
+## String Utilities
+
+Category `Utilities`.
+
+| Node | Inputs | Outputs | Notes |
+| --- | --- | --- | --- |
+| Concatenate | `a`, `b`, `c`, `d` String, `separator` String | `result` String | EMPTY parts are skipped, separator and all -- four operands is the shape, but most uses fill two |
+| Format | `pattern` String (`{0} {1}`), `a`, `b`, `c`, `d` String | `result` String | `{0}`-`{3}`; `{{` and `}}` escape a brace. A slot the node does not have becomes NOTHING; an unmatched brace is literal |
+| Length | `text` String | `result` Integer | Unicode scalars, not bytes |
+| Substring | `text` String, `start` Integer (0), `length` Integer (-1) | `result` String | Clamped at both ends. A NEGATIVE length means "to the end", which is what makes a fresh node answer the whole string |
+| Character At | `text` String, `index` Integer (0), `fallback` String | `value` String, `valid` Boolean | One scalar, or the fallback |
+| Split | `text` String, `separator` String (`,`), `index` Integer (0), `fallback` String | `value` String, `valid` Boolean | An EMPTY separator splits nothing and answers invalid. An empty PIECE is a real answer, which is why the fallback and the empty string must not look alike |
+| Replace | `text` String, `search` String, `replacement` String | `result` String | Every occurrence, left to right, non-overlapping. An empty search answers the text unchanged |
+| Trim | `text` String | `result` String | ASCII whitespace, both ends |
+| Case | `text` String; selector `mode` (Upper) | `result` String | Upper, Lower, Title. ASCII only |
+| Pad | `text` String, `width` Integer (0), `fill` String (space); selector `side` (Start) | `result` String | Width in scalars. The fill contributes its FIRST scalar only; an empty fill pads nothing |
+| Repeat | `text` String, `count` Integer (1) | `result` String | Count clamped into [0, 1024] |
+| Contains | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search is contained |
+| Starts With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |
+| Ends With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |
+| String Equals | `a` String, `b` String, `caseSensitive` Boolean (true) | `result` Boolean | Byte equality, or ASCII-folded equality |
+
+### Text is measured in Unicode scalars
+
+`Length`, `Substring`, `Character At` and `Pad` count what an artist counts: `é` is one character
+whether it arrived as two bytes or one, and an emoji is one character rather than four.
+
+A byte that is not a well-formed UTF-8 scalar counts as ONE unit and survives unchanged. That is the
+only total answer: a document may carry text from anywhere, and refusing to measure a string because
+one byte is malformed would stop a whole graph at a caption nobody can see is broken.
+`core::decodeUtf8Scalar()` decides what "well formed" means, so the library has no second opinion
+about UTF-8.
+
+### Case mapping is ASCII-only, deliberately
+
+`Case` and every case-insensitive comparison fold ASCII and pass everything else through unchanged.
+A Unicode case mapping is locale-sensitive (Turkish dotless i), context-sensitive (Greek final
+sigma) and tied to a Unicode table version, so a node claiming to do it would answer differently on
+a different machine or in a different year. That is documented rather than silently approximated.
+
+Title case upper-cases the first ASCII letter or digit of each run and lower-cases the rest, so
+`two-part name` becomes `Two-Part Name`.
+
+### Nodes that can be asked for something that is not there
+
+`Character At` and `Split` are not parsers, but an index can name a piece that does not exist. They
+answer with the SAME shape the safe parse contract defines -- a value, a `valid` Boolean and a
+`fallback` operand -- so a graph has one rule to learn rather than two.
+
 ### Why these are nodes rather than implicit coercions
 
 The connect-time promotion whitelist (`layer-graph-model.md`, **Socket Kinds And Promotion**) admits

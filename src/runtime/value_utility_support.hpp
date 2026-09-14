@@ -182,5 +182,6 @@ selectorAt(const ValueUtilityInvocation& invocation, const std::size_t index,
 // carries the whole library.
 [[nodiscard]] ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

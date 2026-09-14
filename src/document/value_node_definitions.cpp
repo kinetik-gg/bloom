@@ -587,7 +587,8 @@ namespace bloom::document::detail {
 
 bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
     if (schemaKey == kRoundingModeParameterSchemaKey ||
-        schemaKey == kNumberRadixParameterSchemaKey) {
+        schemaKey == kNumberRadixParameterSchemaKey || schemaKey == kStringCaseParameterSchemaKey ||
+        schemaKey == kStringPadSideParameterSchemaKey) {
         return true;
     }
     return schemaKey == kScalarOperationParameterSchemaKey ||

@@ -154,7 +154,93 @@ constexpr std::array<ValueUtilityOperand, 2> kTimecodeToSecondsOperands{
     ValueUtilityOperand{.role = bloom::document::kFallbackPortName,
                         .kind = SocketValueKind::Scalar}};
 
-constexpr std::array<ValueUtilityDescriptor, 24> kDescriptors{
+// ---------------------------------------------------------------------------------------------
+// Deliverable 3: string utilities
+// ---------------------------------------------------------------------------------------------
+
+// The same value/valid pair a parsing node writes. Character At and Split are not parsers, but they
+// can be ASKED FOR SOMETHING THAT IS NOT THERE, and answering that with the same shape the safe
+// parse contract already defines means a graph has one rule to learn rather than two.
+constexpr std::array<ValueUtilityOutput, 2> kParsedString{
+    ValueUtilityOutput{bloom::document::kValuePortName, SocketValueKind::String},
+    ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
+
+constexpr std::array<ValueUtilitySelector, 1> kStringCaseSelector{ValueUtilitySelector{
+    bloom::document::kModeParameterRole, bloom::document::kStringCaseParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::kDefaultStringCaseMode)}};
+
+constexpr std::array<ValueUtilitySelector, 1> kStringPadSelector{ValueUtilitySelector{
+    "side", bloom::document::kStringPadSideParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::kDefaultStringPadSide)}};
+
+constexpr std::array<ValueUtilityOperand, 5> kConcatenateOperands{
+    ValueUtilityOperand{.role = "a", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "b", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "c", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "d", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kSeparatorPortName,
+                        .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 5> kFormatOperands{
+    ValueUtilityOperand{.role = "pattern", .kind = SocketValueKind::String, .text = "{0} {1}"},
+    ValueUtilityOperand{.role = "a", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "b", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "c", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "d", .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 1> kTextOperand{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 3> kSubstringOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Integer, .integer = 0},
+    // Negative means "to the end", which is what makes a freshly added node answer the whole
+    // string rather than nothing at all.
+    ValueUtilityOperand{.role = "length", .kind = SocketValueKind::Integer, .integer = -1}};
+
+constexpr std::array<ValueUtilityOperand, 3> kCharacterAtOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kIndexPortName, .kind = SocketValueKind::Integer},
+    ValueUtilityOperand{.role = bloom::document::kFallbackPortName,
+                        .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 4> kSplitOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{
+        .role = bloom::document::kSeparatorPortName, .kind = SocketValueKind::String, .text = ","},
+    ValueUtilityOperand{.role = bloom::document::kIndexPortName, .kind = SocketValueKind::Integer},
+    ValueUtilityOperand{.role = bloom::document::kFallbackPortName,
+                        .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 3> kReplaceOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kSearchPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "replacement", .kind = SocketValueKind::String}};
+
+constexpr std::array<ValueUtilityOperand, 3> kPadOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "width", .kind = SocketValueKind::Integer, .integer = 0},
+    ValueUtilityOperand{.role = "fill", .kind = SocketValueKind::String, .text = " "}};
+
+constexpr std::array<ValueUtilityOperand, 2> kRepeatOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "count", .kind = SocketValueKind::Integer, .integer = 1}};
+
+constexpr std::array<ValueUtilityOperand, 3> kSearchOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kSearchPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kCaseSensitivePortName,
+                        .kind = SocketValueKind::Boolean,
+                        .flag = true}};
+
+constexpr std::array<ValueUtilityOperand, 3> kStringEqualsOperands{
+    ValueUtilityOperand{.role = "a", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = "b", .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kCaseSensitivePortName,
+                        .kind = SocketValueKind::Boolean,
+                        .flag = true}};
+
+constexpr std::array<ValueUtilityDescriptor, 39> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -231,6 +317,52 @@ constexpr std::array<ValueUtilityDescriptor, 24> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kTimecodeToSecondsNodeType, "Timecode To Seconds",
                            ValueUtilityKernel::TimecodeToSeconds, NodeCategory::Utilities,
                            kTimecodeToSecondsOperands, kNoSelectors, kParsedScalar},
+
+    ValueUtilityDescriptor{bloom::document::kStringConcatenateNodeType, "Concatenate",
+                           ValueUtilityKernel::StringConcatenate, NodeCategory::Utilities,
+                           kConcatenateOperands, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringFormatNodeType, "Format",
+                           ValueUtilityKernel::StringFormat, NodeCategory::Utilities,
+                           kFormatOperands, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringLengthNodeType, "Length",
+                           ValueUtilityKernel::StringLength, NodeCategory::Utilities, kTextOperand,
+                           kNoSelectors, kIntegerResult},
+    ValueUtilityDescriptor{bloom::document::kStringSubstringNodeType, "Substring",
+                           ValueUtilityKernel::StringSubstring, NodeCategory::Utilities,
+                           kSubstringOperands, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringCharacterAtNodeType, "Character At",
+                           ValueUtilityKernel::StringCharacterAt, NodeCategory::Utilities,
+                           kCharacterAtOperands, kNoSelectors, kParsedString},
+    ValueUtilityDescriptor{bloom::document::kStringSplitNodeType, "Split",
+                           ValueUtilityKernel::StringSplit, NodeCategory::Utilities, kSplitOperands,
+                           kNoSelectors, kParsedString},
+    ValueUtilityDescriptor{bloom::document::kStringReplaceNodeType, "Replace",
+                           ValueUtilityKernel::StringReplace, NodeCategory::Utilities,
+                           kReplaceOperands, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringTrimNodeType, "Trim",
+                           ValueUtilityKernel::StringTrim, NodeCategory::Utilities, kTextOperand,
+                           kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringCaseNodeType, "Case",
+                           ValueUtilityKernel::StringCase, NodeCategory::Utilities, kTextOperand,
+                           kStringCaseSelector, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringPadNodeType, "Pad",
+                           ValueUtilityKernel::StringPad, NodeCategory::Utilities, kPadOperands,
+                           kStringPadSelector, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringRepeatNodeType, "Repeat",
+                           ValueUtilityKernel::StringRepeat, NodeCategory::Utilities,
+                           kRepeatOperands, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kStringContainsNodeType, "Contains",
+                           ValueUtilityKernel::StringContains, NodeCategory::Utilities,
+                           kSearchOperands, kNoSelectors, kBooleanResult},
+    ValueUtilityDescriptor{bloom::document::kStringStartsWithNodeType, "Starts With",
+                           ValueUtilityKernel::StringStartsWith, NodeCategory::Utilities,
+                           kSearchOperands, kNoSelectors, kBooleanResult},
+    ValueUtilityDescriptor{bloom::document::kStringEndsWithNodeType, "Ends With",
+                           ValueUtilityKernel::StringEndsWith, NodeCategory::Utilities,
+                           kSearchOperands, kNoSelectors, kBooleanResult},
+    ValueUtilityDescriptor{bloom::document::kStringEqualsNodeType, "String Equals",
+                           ValueUtilityKernel::StringEquals, NodeCategory::Utilities,
+                           kStringEqualsOperands, kNoSelectors, kBooleanResult},
 };
 
 } // namespace

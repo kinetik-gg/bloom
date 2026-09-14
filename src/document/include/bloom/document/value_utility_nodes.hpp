@@ -63,6 +63,22 @@ enum class ValueUtilityKernel : std::uint8_t {
     FramesToSeconds,
     SecondsToTimecode,
     TimecodeToSeconds,
+    // String utilities (deliverable 3).
+    StringConcatenate,
+    StringFormat,
+    StringLength,
+    StringSubstring,
+    StringCharacterAt,
+    StringSplit,
+    StringReplace,
+    StringTrim,
+    StringCase,
+    StringPad,
+    StringRepeat,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
+    StringEquals,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -95,6 +111,22 @@ inline constexpr std::string_view kFramesToSecondsNodeType = "bloom.frames-to-se
 inline constexpr std::string_view kSecondsToTimecodeNodeType = "bloom.seconds-to-timecode";
 inline constexpr std::string_view kTimecodeToSecondsNodeType = "bloom.timecode-to-seconds";
 
+inline constexpr std::string_view kStringConcatenateNodeType = "bloom.string-concatenate";
+inline constexpr std::string_view kStringFormatNodeType = "bloom.string-format";
+inline constexpr std::string_view kStringLengthNodeType = "bloom.string-length";
+inline constexpr std::string_view kStringSubstringNodeType = "bloom.string-substring";
+inline constexpr std::string_view kStringCharacterAtNodeType = "bloom.string-character-at";
+inline constexpr std::string_view kStringSplitNodeType = "bloom.string-split";
+inline constexpr std::string_view kStringReplaceNodeType = "bloom.string-replace";
+inline constexpr std::string_view kStringTrimNodeType = "bloom.string-trim";
+inline constexpr std::string_view kStringCaseNodeType = "bloom.string-case";
+inline constexpr std::string_view kStringPadNodeType = "bloom.string-pad";
+inline constexpr std::string_view kStringRepeatNodeType = "bloom.string-repeat";
+inline constexpr std::string_view kStringContainsNodeType = "bloom.string-contains";
+inline constexpr std::string_view kStringStartsWithNodeType = "bloom.string-starts-with";
+inline constexpr std::string_view kStringEndsWithNodeType = "bloom.string-ends-with";
+inline constexpr std::string_view kStringEqualsNodeType = "bloom.string-equals";
+
 // ---------------------------------------------------------------------------------------------
 // The selector vocabularies
 // ---------------------------------------------------------------------------------------------
@@ -117,6 +149,30 @@ inline constexpr std::array<RoundingMode, 4> kRoundingModes{
     RoundingMode::Round, RoundingMode::Floor, RoundingMode::Ceiling, RoundingMode::Truncate};
 
 inline constexpr RoundingMode kDefaultRoundingMode = RoundingMode::Round;
+
+// Case mapping is ASCII-only, and the vocabulary says so by having exactly these three members: a
+// Unicode case mapping is locale-sensitive, context-sensitive and tied to a table version, so a
+// node claiming to do it would answer differently on a different machine.
+enum class StringCaseMode : std::uint8_t {
+    Upper = 0,
+    Lower = 1,
+    Title = 2,
+};
+
+inline constexpr std::array<StringCaseMode, 3> kStringCaseModes{
+    StringCaseMode::Upper, StringCaseMode::Lower, StringCaseMode::Title};
+
+inline constexpr StringCaseMode kDefaultStringCaseMode = StringCaseMode::Upper;
+
+enum class StringPadSide : std::uint8_t {
+    Start = 0,
+    End = 1,
+};
+
+inline constexpr std::array<StringPadSide, 2> kStringPadSides{StringPadSide::Start,
+                                                              StringPadSide::End};
+
+inline constexpr StringPadSide kDefaultStringPadSide = StringPadSide::Start;
 
 // The radices an Integer conversion offers on its card. The stored value is the radix ITSELF, not
 // an index into this list, so a document that stores 16 means base sixteen whatever this list says
@@ -220,6 +276,10 @@ inline constexpr std::string_view kModeParameterRole = "mode";
 inline constexpr std::string_view kRadixParameterRole = "radix";
 inline constexpr std::string_view kSecondsPortName = "seconds";
 inline constexpr std::string_view kFramesPortName = "frames";
+inline constexpr std::string_view kSeparatorPortName = "separator";
+inline constexpr std::string_view kIndexPortName = "index";
+inline constexpr std::string_view kSearchPortName = "search";
+inline constexpr std::string_view kCaseSensitivePortName = "caseSensitive";
 
 // DROP-FRAME TIMECODE IS NOT SUPPORTED, and is documented as unsupported rather than approximated.
 // A drop-frame count is a different mapping from frame numbers to wall clock -- it skips two labels

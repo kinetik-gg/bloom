@@ -125,6 +125,14 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kRoundingModes, *stored).has_value();
     }
+    if (schemaKey == kStringCaseParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kStringCaseModes, *stored).has_value();
+    }
+    if (schemaKey == kStringPadSideParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kStringPadSides, *stored).has_value();
+    }
     if (schemaKey == kNumberRadixParameterSchemaKey) {
         // The radix itself, not an index: anything core::parseInteger() can actually read, so a
         // document may carry base 36 even though the card offers four bases.

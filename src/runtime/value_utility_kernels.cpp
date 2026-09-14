@@ -13,6 +13,7 @@ using Kernel = bloom::document::ValueUtilityKernel;
 enum class Family : std::uint8_t {
     Conversion,
     Time,
+    String,
 };
 
 [[nodiscard]] Family familyOf(const Kernel kernel) noexcept {
@@ -43,6 +44,22 @@ enum class Family : std::uint8_t {
     case Kernel::SecondsToTimecode:
     case Kernel::TimecodeToSeconds:
         return Family::Time;
+    case Kernel::StringConcatenate:
+    case Kernel::StringFormat:
+    case Kernel::StringLength:
+    case Kernel::StringSubstring:
+    case Kernel::StringCharacterAt:
+    case Kernel::StringSplit:
+    case Kernel::StringReplace:
+    case Kernel::StringTrim:
+    case Kernel::StringCase:
+    case Kernel::StringPad:
+    case Kernel::StringRepeat:
+    case Kernel::StringContains:
+    case Kernel::StringStartsWith:
+    case Kernel::StringEndsWith:
+    case Kernel::StringEquals:
+        return Family::String;
     }
     return Family::Conversion;
 }
@@ -55,6 +72,8 @@ ValueUtilityOutcome evaluateValueUtility(const ValueUtilityInvocation& invocatio
     switch (familyOf(invocation.operation)) {
     case Family::Time:
         return detail::evaluateValueTime(invocation);
+    case Family::String:
+        return detail::evaluateValueString(invocation);
     case Family::Conversion:
         break;
     }

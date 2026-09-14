@@ -74,6 +74,7 @@ target_sources(
         value_utility_kernels.cpp
         value_utility_conversions.cpp
         value_utility_time.cpp
+        value_utility_strings.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include

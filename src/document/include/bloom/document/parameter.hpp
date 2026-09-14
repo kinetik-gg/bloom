@@ -119,6 +119,8 @@ inline constexpr std::string_view kRoundingModeParameterSchemaKey = "bloom.conve
 // index into an offered list, so a document that stores 16 means base sixteen even if the card
 // later offers a different set of bases.
 inline constexpr std::string_view kNumberRadixParameterSchemaKey = "bloom.convert.radix";
+inline constexpr std::string_view kStringCaseParameterSchemaKey = "bloom.string.case";
+inline constexpr std::string_view kStringPadSideParameterSchemaKey = "bloom.string.pad-side";
 
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
 // Evaluation converts them to the canonical premultiplied image representation. The text color
