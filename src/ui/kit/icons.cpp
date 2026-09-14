@@ -47,6 +47,7 @@ const auto& iconAssets() {
         {IconId::Hidden, QLatin1StringView("eye-slash")},
         {IconId::AudioOn, QLatin1StringView("speaker-simple-high")},
         {IconId::AudioOff, QLatin1StringView("speaker-simple-slash")},
+        {IconId::Solo, QLatin1StringView("circle")},
         {IconId::Locked, QLatin1StringView("lock-simple")},
         {IconId::Unlocked, QLatin1StringView("lock-simple-open")},
         {IconId::Add, QLatin1StringView("plus")},
@@ -80,7 +81,7 @@ const auto& iconAssets() {
         {IconId::AlignLeft, QLatin1StringView("text-align-left")},
         {IconId::AlignCenter, QLatin1StringView("text-align-center")},
         {IconId::AlignRight, QLatin1StringView("text-align-right")},
-
+        {IconId::Snap, QLatin1StringView("magnet")},
     });
     return entries;
 }

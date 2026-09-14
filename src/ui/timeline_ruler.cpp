@@ -57,7 +57,7 @@ void paintPlayheadLine(QPainter& painter, const TimelineAxis& axis, const core::
 
 namespace {
 
-// Ruler/lane extents (task U7, issue #122, decisions 1/3): TimelineRow (34px) is the token every
+// Ruler/lane extents (task TL-C1): TimelineRow (32px) is the token every
 // track row -- header AND lane -- now shares; the ruler keeps its own extent (no dedicated
 // "ruler height" token exists) but is still resolved from Control (26px) rather than a bare
 // literal, matching this file's own prior 26px value exactly.
@@ -67,14 +67,15 @@ const int kRulerHeight = kit::px(kit::Size::Control);
 const int kKeyframeRowHeight = kTimelineRowHeight;
 // The honest work-area strip (decision 3): thin, using the smallest spacing token rather than an
 // invented pixel gap.
-const int kWorkAreaStripHeight = kit::px(kit::Spacing::XS);
+const int kWorkAreaStripHeight = kit::px(kit::Size::TimelineWorkArea);
 constexpr qreal kKeyDiamondRadius = 4.5;
 constexpr qreal kKeyHitToleranceLogicalPixels = 6.0;
 // Minor ticks are a dense, purely visual grid (decision 3: "minors as subtle ticks"); majors are
 // re-derived per paint from the axis's OWN font metrics so adjacent labels can never collide (see
 // majorTickStepFrames() below) rather than reusing this fixed minor-tick pixel budget for labels
 // the way the pre-restyle single-density ruler did.
-constexpr qreal kMinimumPixelsPerMinorTick = 6.0;
+constexpr qreal kMinimumPixelsPerMinorTick = 8.0;
+constexpr qreal kMinimumPixelsPerMajorTick = 40.0;
 // Extra breathing room between two adjacent major labels, beyond their own widest possible text
 // width -- keeps the collision-avoidance math from packing labels edge-to-edge.
 constexpr qreal kMajorLabelGapPixels = 10.0;
@@ -82,17 +83,10 @@ constexpr qreal kTickLabelInsetPixels = 3.0;
 constexpr qreal kMinorTickHeight = 4.0;
 constexpr qreal kMajorTickHeight = 8.0;
 
-// The dense, unlabeled minor grid (decision 3: "minors as subtle ticks"): the smallest frame step
-// whose pixel spacing is still at least kMinimumPixelsPerMinorTick apart.
+// One minor per frame while frames have room to breathe; otherwise keep the ruler legible with
+// five-frame minors.
 [[nodiscard]] std::uint64_t minorTickStepFrames(const TimelineAxis& axis) {
-    if (axis.maxIndex == 0 || axis.widthPixels <= 1) {
-        return 1;
-    }
-    const double pixelsPerFrame = axis.pixelsPerFrame();
-    if (pixelsPerFrame >= kMinimumPixelsPerMinorTick) {
-        return 1;
-    }
-    return static_cast<std::uint64_t>(std::ceil(kMinimumPixelsPerMinorTick / pixelsPerFrame));
+    return axis.pixelsPerFrame() >= kMinimumPixelsPerMinorTick ? 1 : 5;
 }
 
 // Choose a readable frame cadence using the actual label font. Geometry is checked again when
@@ -105,7 +99,9 @@ constexpr qreal kMajorTickHeight = 8.0;
         return flooredMinor;
     }
     const double pixelsPerFrame = axis.pixelsPerFrame();
-    const double neededFrames = (widestLabelPixels + kMajorLabelGapPixels) / pixelsPerFrame;
+    const double neededFrames =
+        std::max(kMinimumPixelsPerMajorTick, widestLabelPixels + kMajorLabelGapPixels) /
+        pixelsPerFrame;
     for (const std::uint64_t step : {1ULL, 2ULL, 5ULL, 10ULL, 24ULL, 48ULL}) {
         if (static_cast<double>(step) >= neededFrames) {
             return step;
@@ -182,13 +178,9 @@ interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
     return QStringLiteral("Linear");
 }
 
-// The Geist Mono tick/label font (decision 3), sized down slightly the same way the pre-restyle
-// ruler already scaled its tick font -- ticks are secondary chrome, not a Value-role readout.
-[[nodiscard]] QFont tickFont() {
-    QFont font = kit::font(kit::TypeRole::Value);
-    font.setPointSizeF(font.pointSizeF() * 0.9);
-    return font;
-}
+// Timeline labels are Value-role readouts. Keep the kit font at its declared size so density is
+// controlled by cadence, never by silently shrinking the numbers.
+[[nodiscard]] QFont tickFont() { return kit::font(kit::TypeRole::Value); }
 
 struct MajorTickLabel final {
     std::uint64_t index = 0;
@@ -752,10 +744,30 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
         painter.fillRect(segment, kit::color(kit::Color::Ok));
     }
 
-    // Playhead (task T1): the shared 1px Accent stroke, continuing down through every lane below.
-    // Its single head marker is painted once by TimelineWorkAreaRow, the row directly above this
-    // one -- two stacked markers (one here, one there) would read as two playheads.
+    // Playhead: the shared 1px Accent stroke, with its single marker and frame readout in this
+    // ruler. The label follows the marker and uses the same Value role as the tick labels.
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
+    const qreal playheadX = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(kit::color(kit::Color::Accent));
+    QPolygonF marker;
+    marker << QPointF(playheadX - kPlayheadMarkerHalfWidth, 0.0)
+           << QPointF(playheadX + kPlayheadMarkerHalfWidth, 0.0)
+           << QPointF(playheadX, kPlayheadMarkerHeight);
+    painter.drawPolygon(marker);
+
+    const auto frame = axis->frameIndexForPixel(static_cast<int>(std::lround(playheadX)));
+    const QString frameLabel = formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_);
+    const QFontMetrics frameMetrics(tickFont());
+    const qreal labelWidth = frameMetrics.horizontalAdvance(frameLabel);
+    const qreal labelX =
+        std::clamp(playheadX + kPlayheadMarkerHalfWidth + kit::px(kit::Spacing::XS), 0.0,
+                   std::max(0.0, width() - labelWidth));
+    painter.setFont(tickFont());
+    painter.setPen(kit::color(kit::Color::Foreground));
+    painter.drawText(QRectF(labelX, 0.0, labelWidth, static_cast<qreal>(height())),
+                     Qt::AlignLeft | Qt::AlignVCenter, frameLabel);
 }
 
 std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
@@ -919,32 +931,6 @@ void TimelineWorkAreaRow::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::Surface));
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return;
-    }
-    const auto axis = ruler_ != nullptr ? ruler_->axisForWidth(width())
-                                        : TimelineAxis::create(*composition, width());
-    if (!axis.has_value()) {
-        return;
-    }
-    if (session_.currentTime().toSeconds() < axis->t0 ||
-        session_.currentTime().toSeconds() >= axis->t1) {
-        return;
-    }
-    paintPlayheadLine(painter, *axis, session_.currentTime(), height());
-    // The playhead's single head marker, at the very top of the stroke that continues through the
-    // ruler and every lane below: a small Accent triangle pointing down toward the line it heads.
-    const qreal x = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;
-    const auto bottom = static_cast<qreal>(height());
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(kit::color(kit::Color::Accent));
-    QPolygonF marker;
-    marker << QPointF(x - kPlayheadMarkerHalfWidth, bottom - kPlayheadMarkerHeight)
-           << QPointF(x + kPlayheadMarkerHalfWidth, bottom - kPlayheadMarkerHeight)
-           << QPointF(x, bottom);
-    painter.drawPolygon(marker);
 }
 
 TimelineKeyframePanel::TimelineKeyframePanel(CompositionSession& session, QWidget* parent)

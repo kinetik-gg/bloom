@@ -27,6 +27,7 @@ namespace bloom::ui::kit {
 // Brand is the Bloom logo color and is never used for interface chrome.
 enum class Color : std::uint8_t {
     Background,
+    SurfaceSunken,
     Surface,
     SurfaceRaised,
     Field,
@@ -147,7 +148,14 @@ enum class Size : int {
     // unrelated to this panel's own header row, and growing it would have silently resized node
     // cards on the canvas, a collateral change no design crop covered.
     EditorHeader = 48,
-    TimelineRow = 34,
+    TimelineRow = 32,
+    TimelineBar = 20,
+    TimelineToggleColumn = 80,
+    TimelineNameMin = 120,
+    TimelineColumn = 100,
+    TimelineWorkArea = 6,
+    TimelineWorkAreaHandle = 6,
+    TimelineNavigatorThumb = 6,
     ScrollBar = 8,
     ScrollBarHover = 12,
     // task S1, item 3: the narrowest a QMenu popup may be, roughly half again the width Bloom's

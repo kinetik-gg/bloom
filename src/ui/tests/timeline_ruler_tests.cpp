@@ -1116,9 +1116,8 @@ void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
                         "the playhead color fixture reaches asynchronous scheduler quiescence");
 }
 
-// Decision 3: the honest work-area strip spans the WHOLE [0, duration) width by construction (no
-// range-editing feature exists to make it partial) and is a dim Accent band, sampled at both edges
-// to prove it is not a fake partial trim.
+// The work-area strip is a 3px Accent bar with 6px endpoint handles. Its range remains editable by
+// the existing trim gesture, so the default full-duration range is sampled at the strip's top edge.
 void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations) {
     using namespace bloom;
     auto newProject = makeTestProject("Work Area Strip Test", time(4));
@@ -1127,27 +1126,17 @@ void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations
     ui::CompositionSession session(document, commands, newProject.initialCompositionId);
 
     ui::TimelineWorkAreaStrip strip(session);
-    strip.resize(300, strip.sizeHint().height() > 0 ? strip.sizeHint().height() : 4);
+    strip.resize(300, ui::kit::px(ui::kit::Size::TimelineWorkArea));
 
     const QImage image = strip.grab().toImage();
-    const QColor surface = ui::kit::color(ui::kit::Color::Surface);
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
-    const QColor expected(
-        static_cast<int>(std::lround(accent.red() * ui::kit::kDisabledOpacity +
-                                     surface.red() * (1.0 - ui::kit::kDisabledOpacity))),
-        static_cast<int>(std::lround(accent.green() * ui::kit::kDisabledOpacity +
-                                     surface.green() * (1.0 - ui::kit::kDisabledOpacity))),
-        static_cast<int>(std::lround(accent.blue() * ui::kit::kDisabledOpacity +
-                                     surface.blue() * (1.0 - ui::kit::kDisabledOpacity))));
 
-    const int y = image.height() / 2;
-    expectations.expect(near(image.pixelColor(4, y), expected, 20),
-                        "the dim Accent band reaches the LEFT edge (time 0)");
-    expectations.expect(near(image.pixelColor(image.width() - 4, y), expected, 20),
-                        "the dim Accent band reaches the RIGHT edge (just before duration) -- the "
-                        "whole [0, duration) span, never a partial/trimmed band");
-    expectations.expect(!near(image.pixelColor(4, y), accent, 6),
-                        "the band is DIM, not a solid opaque Accent fill");
+    expectations.expect(near(image.pixelColor(4, 0), accent, 6),
+                        "the Accent work-area bar reaches the LEFT edge (time 0)");
+    expectations.expect(near(image.pixelColor(image.width() - 4, 0), accent, 6),
+                        "the Accent work-area bar reaches the RIGHT edge (duration)");
+    expectations.expect(near(image.pixelColor(image.width() / 2, 0), accent, 6),
+                        "the default work-area bar spans the full duration");
 }
 
 void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations) {
