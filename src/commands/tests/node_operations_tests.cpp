@@ -33,6 +33,14 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
             a.graph().layerStack().nodeId() != b->graph().layerStack().nodeId() ||
             a.graph().compositionOutput() != b->graph().compositionOutput())
             return false;
+        if (a.graph().merges().size() != b->graph().merges().size())
+            return false;
+        for (const auto& merge : a.graph().merges()) {
+            const auto* other = b->graph().merge(merge.nodeId());
+            if (!other || merge.enabled() != other->enabled() ||
+                !std::ranges::equal(merge.entries(), other->entries()))
+                return false;
+        }
     }
     return true;
 }
@@ -579,8 +587,8 @@ void testDuplicationOwnershipEdges(TestContext& test) {
                     entries[0].layerId == kFirstLayerId && entries[1].layerId == *firstCopy &&
                     entries[2].layerId == kSecondLayerId && entries[3].layerId == *secondCopy,
                 "multiple copied layer slots each follow their own original");
-    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::InvalidValue,
-                           std::set<NodeId>{kFirstLayerNodeId, kLayerStackNodeId}, Vec2d{});
+    exercise<DuplicateNodes>(test, fixture, std::set<NodeId>{kFirstLayerNodeId, kLayerStackNodeId},
+                             Vec2d{});
     if (!apply<MoveNodes>(
              fixture,
              std::map<NodeId, Vec2d>{{kFirstLayerNodeId, {std::numeric_limits<double>::max(), 0}}})

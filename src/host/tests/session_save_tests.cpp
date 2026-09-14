@@ -574,7 +574,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 6,
+                         .schemaMinor = 7,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "

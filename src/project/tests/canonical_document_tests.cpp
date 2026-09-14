@@ -1416,7 +1416,7 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "schemaMinor=6 with no overlay sizes exactly with the golden");
@@ -1454,7 +1454,7 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a root-attached retained member sizes exactly with the golden");
@@ -1491,7 +1491,7 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a project-attached retained member sizes exactly with the golden");
@@ -1572,7 +1572,7 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "composition- and format-attached retained members size exactly with the "
@@ -1624,7 +1624,7 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "a node-attached retained member sizes exactly with the golden");
@@ -1675,7 +1675,7 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "an edge-attached retained member sizes exactly with the golden");
@@ -1735,7 +1735,7 @@ void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
                         "idAllocation- and highestIssued-attached retained members size exactly "
@@ -1771,7 +1771,7 @@ void testOverlayLeftoverEntryIsTypedError(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(!size.hasValue() &&
                             size.error() == CanonicalDocumentError::RoundTripStateMismatch,
@@ -1813,7 +1813,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = &roundTrip,
-                                      .schemaMinor = 6};
+                                      .schemaMinor = 7};
     const auto size = bloom::project::canonicalDocumentSize(request);
     if (!size.hasValue()) {
         expectations.expect(false, "the overlay capacity fixture preflights successfully");
@@ -2084,7 +2084,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 6};
+                                             .schemaMinor = 7};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "

@@ -38,7 +38,7 @@ is its normative v1 implementation contract.
 ## Version 1 Constants
 
 The container version remains `1.0`; the current document schema is `1.6`.
-The earlier document `1.0`, `1.1`, `1.2`, and `1.3` artifacts are retained for migration fixtures.
+The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
@@ -46,9 +46,8 @@ The schemas use JSON Schema Draft 2020-12. They live at
 `schemas/project/manifest-1.6.schema.json` and `schemas/project/document-1.6.schema.json`, with
 absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.6` and
 `urn:kinetik:bloom:schema:project-document:1.6`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.6`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
-`1.3`, manifest and
-document -- remains checked, and each version's checker validates what its own minor adds and then
+`1.0`; its document declaration is `1.6`. Every historical artifact from `1.0` through `1.5`, manifest and
+document, remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
 
 Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant

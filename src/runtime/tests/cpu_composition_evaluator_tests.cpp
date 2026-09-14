@@ -373,6 +373,10 @@ void testNestedMergeEqualsFlat(Expectations& expectations) {
     auto plainDefinition = oneSolidPlan()->copyDefinition();
     std::get<runtime::CompiledMerge>(plainDefinition.operations[2]).entries = {
         {kSlotA, {}, runtime::OperationIndex::fromRaw(0)}};
+    plainDefinition.operations.erase(plainDefinition.operations.begin() + 1);
+    std::get<runtime::CompiledCompositionOutput>(plainDefinition.operations[2]).input =
+        runtime::OperationIndex::fromRaw(1);
+    plainDefinition.output = runtime::OperationIndex::fromRaw(2);
     const auto plain = publishPlan(std::move(plainDefinition));
     const auto result = evaluator.evaluate(plain, requestFor(*plain), {});
     render::Rgba32f value = render::Rgba32f::transparent();

@@ -313,8 +313,14 @@ bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {
 ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                                           const NodeDefinitionRegistry& registry) const {
     ValidationResult result;
-    for (const auto& stack : layerStacks_)
+    std::unordered_set<LayerSlotId> slots;
+    for (const auto& stack : layerStacks_) {
         result.append("merges", stack.validate());
+        for (const auto& entry : stack.entries())
+            if (!slots.insert(entry.slotId).second)
+                result.add(ValidationCode::DuplicateId, "merges.entries.slotId",
+                           "Slot IDs must be unique across Merges");
+    }
 
     std::unordered_set<NodeId> nodeIds;
     for (const auto& node : nodes_) {

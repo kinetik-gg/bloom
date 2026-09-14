@@ -838,7 +838,7 @@ void testRoundTrippedNewerMinorSurvivesFullCycle(Expectations& expectations) {
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 6};
+                                            .schemaMinor = 7};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built), "round-tripped cycle: fixture archive builds");
@@ -920,7 +920,7 @@ void testRoundTrippedNewerMinorSurvivesFullCycle(Expectations& expectations) {
     }
     auto finalValue = std::move(reopenedArchive).takeOpened();
     expectations.expect(
-        finalValue.schemaMinor == 6,
+        finalValue.schemaMinor == 7,
         "round-tripped cycle: the final published file still declares schemaMinor 5");
     expectations.expect(
         finalValue.roundTrip.has_value(),

@@ -86,8 +86,18 @@ std::vector<std::byte> archiveOf(const document::Snapshot& snapshot,
     const CanonicalManifestV1 manifest;
     const CanonicalDocumentV1 input{.snapshot = &snapshot, .colorSettings = &settings};
     auto saved = buildVerifiedSaveArchive(manifest, input, {}, memory());
-    if (!saved || !saved.archive())
+    if (!saved || !saved.archive()) {
+        const auto* failure = saved.failure();
+        if (failure) {
+            std::cerr << "archive stage " << static_cast<int>(failure->stage()) << '\n';
+            if (const auto* decoded = failure->payloadAs<SaveArchiveDocumentDecodeFailure>())
+                std::cerr << "decode " << static_cast<int>(decoded->error) << " "
+                          << decoded->path.view() << '\n';
+            if (const auto* reconstructed = failure->payloadAs<ReconstructionRejected>())
+                std::cerr << "reconstruct " << static_cast<int>(reconstructed->stage) << '\n';
+        }
         throw std::runtime_error("group archive");
+    }
     const auto bytes = saved.archive()->bytes();
     return {bytes.begin(), bytes.end()};
 }
@@ -282,7 +292,7 @@ void multipleMergeRoundTrip() {
     const auto restored = opened.document->snapshot();
     const auto& restoredGraph = restored.project().findComposition(authored.compositionId)->graph();
     expect(restoredGraph.merges().size() == 2 && restoredGraph.merge(nested) &&
-               restoredGraph.layerStack().find(slot),
+               !restoredGraph.merge(nested)->enabled() && restoredGraph.layerStack().find(slot),
            "Merge ownership and plain-image slot survive");
     expect(archiveOf(restored, opened.colorSettings) == bytes,
            "multiple Merge archive is byte stable");

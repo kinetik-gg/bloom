@@ -454,7 +454,7 @@ owner's second report.
 `RemoveNodes(set<NodeId>)` validates the entire set, then removes those nodes, incident edges,
 layout records, and parameters that no surviving node references. Orphaned owned animation curves
 are removed too. Removing a Layer Output also removes its boundary and stable stack slot, without
-removing shared upstream nodes. Stack and composition-output nodes cannot be removed.
+removing shared upstream nodes. Only Output and the Merge directly feeding it are protected.
 
 `DuplicateNodes(set<NodeId>, offset)` allocates new node and parameter IDs, deeply copies owned
 curves and keyframes, copies all layout fields with a finite offset, and copies only edges between
@@ -462,8 +462,9 @@ the selected nodes. Selected layer boundaries gain a new LayerId, `<name> copy`,
 immediately after the original, with its required boundary-to-slot edge. Results expose
 `node.<oldId>`, `parameter.<oldId>`, `curve.<oldId>`, `layer.<oldId>`, and `slot.<oldId>` mappings.
 Driver bindings have no copyable records in the current model, so duplication of driven parameters
-is refused. The single canonical stack cannot be cloned together with its slot-addressed edges;
-that topology is rejected by graph validation.
+is refused except for Layer boundaries, which retain their driver reference. Duplicating a Merge
+copies its ordered slots with fresh IDs, sharing external sources and remapping selected sources.
+Only Output cannot be duplicated.
 
 `RenameLayer(LayerId, name)` changes the boundary's valid, nonempty UTF-8 human-facing name while
 preserving every graph and stack identity. An identical name is a no-op.

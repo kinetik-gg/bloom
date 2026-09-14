@@ -378,9 +378,8 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto* layer =
                         std::get_if<CompiledLayerOutput>(&plan.operations()[entry.input.value()]);
-                    if (entry.layerId.isValid()
-                            ? (layer == nullptr || layer->layerId != entry.layerId)
-                            : layer != nullptr) {
+                    if (entry.layerId.isValid() &&
+                        (layer == nullptr || layer->layerId != entry.layerId)) {
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack entry does not match its layer output", {},
@@ -1567,16 +1566,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                 .total = totalRows});
                                 continue;
                             }
-                            // The mode comes off the Layer Output the entry names, which is where
-                            // the layer's own blend mode lives. hasExpectedInputKinds() has already
-                            // proven that operation is a CompiledLayerOutput whose layerId matches
-                            // this entry, so the lookup cannot legitimately fail; the check stays
-                            // because a silent fall back to Normal would composite the wrong
-                            // picture rather than report anything.
+                            // Only a direct Layer input contributes its blend mode. An elided
+                            // reroute can resolve to a Layer operation while remaining a plain
+                            // image input, so the slot identity also participates in this choice.
                             const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                 &plan->operations()[entry->input.value()]);
-                            const auto blendMode =
-                                layerOutput ? layerOutput->blendMode : core::BlendMode::Normal;
+                            const auto blendMode = layerOutput && entry->layerId.isValid()
+                                                       ? layerOutput->blendMode
+                                                       : core::BlendMode::Normal;
                             auto sourceView = slots[entry->input.value()]->view();
                             if (!sourceView) {
                                 operationFailure =

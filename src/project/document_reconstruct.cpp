@@ -168,6 +168,9 @@ struct InjectedLayerOutputParameter final {
                                         layerId.value());
         }
     }
+    if (graph.merges().size() !=
+        decodedGraph.merges.size() + (decodedGraph.layerStack.nodeId.isValid() ? 1U : 0U))
+        return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId, 0);
     graph.layerStack().setEnabled(decodedGraph.layerStack.enabled);
     for (const auto& entry : decodedGraph.layerStack.entries) {
         if (!graph.layerStack().append(entry)) {

@@ -778,6 +778,20 @@ void testMultipleMerges(ExpectationContext& expectations) {
         "Merge accepts another Merge");
     expectations.expect(graph.validate(composition.parameters()).ok(),
                         "nested Merge graph validates");
+    const auto boundary = graph.layerOutputs().front();
+    expectations.expect(
+        graph.merge(nested)->append({id<LayerSlotId>(903), boundary.layerId}) &&
+            graph.addEdge({id<EdgeId>(904),
+                           {boundary.nodeId, boundary.outputPort},
+                           LayerStackInputRef{nested, id<LayerSlotId>(903), "content"}}),
+        "one Layer can feed multiple Merges");
+    expectations.expect(graph.validate(composition.parameters()).ok(),
+                        "shared Layer membership validates");
+    auto duplicate = graph;
+    expectations.expect(duplicate.merge(nested)->append({id<LayerSlotId>(901), {}}),
+                        "per-node slot insertion permits validation fixture");
+    expectations.expect(!duplicate.validate(composition.parameters()).ok(),
+                        "duplicate slots across Merges are refused");
     expectations.expect(graph.eraseNode(nested) &&
                             !graph.merge(original)->find(id<LayerSlotId>(901)),
                         "deletion removes downstream slots");

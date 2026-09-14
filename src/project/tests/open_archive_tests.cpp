@@ -503,7 +503,7 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 6};
+                                            .schemaMinor = 7};
 
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -524,7 +524,7 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
         return;
     }
     auto openedValue = std::move(opened).takeOpened();
-    expectations.expect(openedValue.schemaMinor == 6, "open RT: schemaMinor decodes to 5");
+    expectations.expect(openedValue.schemaMinor == 7, "open RT: schemaMinor decodes to 5");
     expectations.expect(openedValue.roundTrip.has_value(),
                         "open RT: RoundTripState is present for the newer-minor document");
     if (!openedValue.roundTrip.has_value()) {
@@ -814,7 +814,7 @@ void testVersionDisagreementFailure(Expectations& expectations) {
     // exercised here.
     const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 6}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{
-        .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 6};
+        .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 7};
     auto built = buildSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built),
                         "open version disagreement: fixture archive builds (unverified)");

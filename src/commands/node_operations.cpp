@@ -104,7 +104,7 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         if (detail::protectedNode(composition->graph(), id))
             return OperationResult::rejected(
                 OperationIssueCode::Unsupported,
-                "The Layer Stack and composition output cannot be removed");
+                "Output and its directly connected Merge cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
     }
@@ -361,7 +361,7 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     if (detail::protectedNode(graph, nodeId_))
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,
-            "The Layer Stack and composition output cannot be dissolved");
+            "Output and its directly connected Merge cannot be dissolved");
     const auto* definition = registry_.find(node->typeId, node->schemaVersion);
     if (!definition)
         return OperationResult::rejected(OperationIssueCode::Unsupported,

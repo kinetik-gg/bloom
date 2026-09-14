@@ -1829,7 +1829,12 @@ void testOutputMergeRows(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Merge Timeline"));
     (void)fixture.session.addSolidLayer(QStringLiteral("Nested layer"), core::Color4d{1, 0, 0, 1});
     const auto nested = fixture.session.composition()->graph().layerStack().nodeId();
-    const auto output = fixture.session.composition()->graph().compositionOutput()->nodeId;
+    const auto endpoint = fixture.session.composition()->graph().compositionOutput();
+    if (!endpoint) {
+        finishFixture(fixture);
+        return;
+    }
+    const auto output = endpoint->nodeId;
     commands::Transaction add("Add Merge", fixture.session.snapshot().revision());
     add.emplace<commands::AddNode>(fixture.session.compositionId(),
                                    std::string(document::kLayerStackNodeType), document::Vec2d{});

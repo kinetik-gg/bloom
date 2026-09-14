@@ -68,7 +68,8 @@ template <typename Visitor>
         }
         for (const auto& stack : composition.graph().merges())
             for (const auto& entry : stack.entries()) {
-                if (!visitor(entry.slotId) || !visitor(entry.layerId)) {
+                if (!visitor(entry.slotId) ||
+                    (entry.layerId.isValid() && !visitor(entry.layerId))) {
                     return false;
                 }
             }

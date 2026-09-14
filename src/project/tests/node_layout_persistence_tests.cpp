@@ -154,7 +154,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 6,
+    expect(opened.roundTrip && opened.schemaMinor == 7,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -164,7 +164,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 6},
+                                                     .schemaMinor = 7},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)
