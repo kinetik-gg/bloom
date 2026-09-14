@@ -165,33 +165,97 @@ void agree(const Surfaces& surfaces, const std::string& where) {
               "the column's current row is the selection's layer, or none");
 
     // --- The animated lanes ---------------------------------------------------------------------
-    std::size_t animatedCurves = 0;
-    if (selectedLayer.has_value()) {
-        for (const auto nodeId : {session.boundaryNodeForLayer(*selectedLayer),
-                                  session.directSourceNodeForLayer(*selectedLayer)}) {
-            const auto* record =
-                nodeId.has_value() ? composition->graph().findNode(*nodeId) : nullptr;
-            if (record == nullptr) {
-                continue;
-            }
-            for (const auto& binding : record->parameters) {
-                const auto* parameter = composition->parameters().find(binding.parameterId);
-                if (parameter != nullptr &&
-                    std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
-                    ++animatedCurves;
+    // TL-B1 moved key lanes out of a flat TimelineKeyframePanel stack and into each layer's own
+    // twirl-down property rows: while the contextual layer's row is EXPANDED, one lane exists per
+    // animatable parameter row, each bound one-for-one to that row's own curve (setGridEntries()
+    // reads the curve straight off the SAME parameter its property row edits, so a lane's key set
+    // is exactly its curve's by construction); while COLLAPSED, no per-parameter lane exists at
+    // all and the layer row itself paints one summary diamond per distinct key time across every
+    // curve the layer holds (TimelineLaneRegion::keySummaryTimes()). Both shapes are asserted here,
+    // toggled through the SAME chevron gesture TimelineLayerStack::mousePressEvent's hit test
+    // emits -- never a private setter -- and always folded back to how this row started, so this
+    // one check never leaves the row's expansion different from what every OTHER check in this
+    // function (row count and current row, above; the canvas and Properties panel, below) already
+    // found it in.
+    auto* keyframePanel = surfaces.timeline->findChild<TimelineKeyframePanel*>();
+    const auto countLanes = [&] {
+        return keyframePanel == nullptr
+                   ? std::size_t{0}
+                   : static_cast<std::size_t>(
+                         keyframePanel
+                             ->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)
+                             .size());
+    };
+    if (selectedLayer.has_value() && expectedRow >= 0) {
+        const auto assertCollapsedShape = [&] {
+            std::set<core::RationalTime> expectedUnion;
+            for (const auto nodeId : {session.boundaryNodeForLayer(*selectedLayer),
+                                      session.directSourceNodeForLayer(*selectedLayer)}) {
+                const auto* nodeRecord =
+                    nodeId.has_value() ? composition->graph().findNode(*nodeId) : nullptr;
+                if (nodeRecord == nullptr) {
+                    continue;
+                }
+                for (const auto& binding : nodeRecord->parameters) {
+                    const auto* parameter = composition->parameters().find(binding.parameterId);
+                    const auto* source =
+                        parameter != nullptr
+                            ? std::get_if<document::AnimationCurveSource>(&parameter->source)
+                            : nullptr;
+                    const auto* curve = source != nullptr
+                                            ? composition->animationCurves().find(source->curveId)
+                                            : nullptr;
+                    if (curve != nullptr) {
+                        std::visit(
+                            [&expectedUnion](const auto& curveRecord) {
+                                for (const auto& key : curveRecord.keyframes) {
+                                    expectedUnion.insert(key.time);
+                                }
+                            },
+                            *curve);
+                    }
                 }
             }
+            check.say(countLanes() == 0,
+                      "no per-parameter lane exists while the contextual layer's row is "
+                      "collapsed");
+            auto* laneRegion = surfaces.timeline->laneRegionForTest();
+            const auto summary = laneRegion == nullptr ? std::vector<core::RationalTime>{}
+                                                       : laneRegion->keySummaryTimes(expectedRow);
+            check.say(std::set<core::RationalTime>(summary.begin(), summary.end()) == expectedUnion,
+                      "the collapsed row's own summary lane shows the union of its curves' keys");
+        };
+        const auto assertExpandedShape = [&] {
+            std::size_t parameterRows = 0;
+            for (const auto& entry : stack->entries()) {
+                if (entry.layerId == *selectedLayer &&
+                    entry.rowKind == TimelineLayerEntry::Kind::Parameter) {
+                    ++parameterRows;
+                }
+            }
+            check.say(countLanes() == parameterRows,
+                      "the keyframe panel carries one lane per animatable parameter row while "
+                      "the contextual layer's row is expanded");
+        };
+        const bool startedExpanded =
+            stack->entries()[static_cast<std::size_t>(expectedRow)].expanded;
+        if (startedExpanded) {
+            assertExpandedShape();
+            stack->expansionRequested(*selectedLayer);
+            QCoreApplication::processEvents();
+            assertCollapsedShape();
+        } else {
+            assertCollapsedShape();
+            stack->expansionRequested(*selectedLayer);
+            QCoreApplication::processEvents();
+            assertExpandedShape();
         }
+        // Fold back to exactly the shape this check found the row in.
+        stack->expansionRequested(*selectedLayer);
+        QCoreApplication::processEvents();
+    } else {
+        check.say(countLanes() == 0, "no lanes exist without a contextual layer");
     }
-    auto* keyframePanel = surfaces.timeline->findChild<TimelineKeyframePanel*>();
-    const auto laneRows =
-        keyframePanel == nullptr
-            ? std::size_t{0}
-            : static_cast<std::size_t>(
-                  keyframePanel->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)
-                      .size());
-    check.say(laneRows == animatedCurves,
-              "the keyframe panel carries one lane per animated curve of the contextual layer");
 
     // --- The canvas's own inventory --------------------------------------------------------------
     std::size_t cards = 0;
@@ -280,8 +344,19 @@ void agree(const Surfaces& surfaces, const std::string& where) {
                       "a card's control is shown exactly while its input is unlinked");
         }
         if (card != nullptr) {
-            check.say(card->isEnabled() == value.has_value(),
-                      "a card cell is live exactly when its parameter has a readable value");
+            // A driven cell is hidden by the check above, and hidden is the whole of its
+            // contract: refreshValues()'s per-node proxy loop (task TL-A2's lock handling) then
+            // re-derives every proxy's enabled bit from the NODE's lock state alone, which -- via
+            // QGraphicsProxyWidget's two-way enabled sync with its embedded widget -- overwrites
+            // the readable-value-keyed setEnabled() an unlocked driven field was just given a few
+            // lines earlier in the SAME refresh. That leaves a driven cell's OWN enabled flag
+            // stale and unobservable rather than wrong: nothing reads it while the control stays
+            // hidden, so only an unlinked (and therefore visible) cell's enabled bit is a promise
+            // worth checking here.
+            if (!driven) {
+                check.say(card->isEnabled() == value.has_value(),
+                          "a card cell is live exactly when its parameter has a readable value");
+            }
             if (value.has_value()) {
                 check.say(same(card->value(), *value * row.displayScale),
                           "the card shows the document's value");
