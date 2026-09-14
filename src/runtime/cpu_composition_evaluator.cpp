@@ -1385,6 +1385,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 static_cast<double>(descriptor.dataWindow().extent().width());
                             double exactHeight =
                                 static_cast<double>(descriptor.dataWindow().extent().height());
+                            double authorWidth = plan->format().width();
+                            double authorHeight = plan->format().height();
                             if (solid.width && solid.height) {
                                 const auto width =
                                     detail::resolveParameter(*solid.width, *plan, resolved);
@@ -1397,8 +1399,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         "Solid dimensions are not evaluable", {}, operationSubject);
                                     return;
                                 }
-                                exactWidth = width->value * resolved.horizontalScale;
-                                exactHeight = height->value * resolved.verticalScale;
+                                // Preserve the exact device extent of composition-sized sources:
+                                // width * (proxyWidth / width) can round above the integer and
+                                // otherwise allocate an extra column, changing legacy pivots.
+                                authorWidth = width->value;
+                                authorHeight = height->value;
+                                if (authorWidth != plan->format().width())
+                                    exactWidth = authorWidth * resolved.horizontalScale;
+                                if (authorHeight != plan->format().height())
+                                    exactHeight = authorHeight * resolved.verticalScale;
                                 const auto w = std::ceil(exactWidth);
                                 const auto h = std::ceil(exactHeight);
                                 if (!std::isfinite(w) || !std::isfinite(h) || w > 16777216.0 ||
@@ -1426,8 +1435,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
                                                                           resolved.horizontalScale,
                                                                           resolved.verticalScale);
-                            bounds[index].local.right = exactWidth / resolved.horizontalScale;
-                            bounds[index].local.bottom = exactHeight / resolved.verticalScale;
+                            bounds[index].local.right = authorWidth;
+                            bounds[index].local.bottom = authorHeight;
                             bounds[index].output = bounds[index].local;
                             auto builder = render::Rgba32fImageBuilder::create(
                                 descriptor, remainingPixelBudget());

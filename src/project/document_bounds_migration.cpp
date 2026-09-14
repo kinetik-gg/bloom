@@ -91,7 +91,7 @@ MigrationStepOutcome migrateContentBoundsV1_6(const JsonValue& root,
     if (!compositions || compositions->kind() != JsonValueKind::Array || !highWater ||
         !highWater->asString())
         return MigrationStepOutcome::failure("/idAllocation/highestIssued/parameter");
-    const auto parsed = parseCanonicalObjectId(*highWater->asString());
+    const auto parsed = parseCanonicalAllocatorHighWater(*highWater->asString());
     if (!parsed)
         return MigrationStepOutcome::failure("/idAllocation/highestIssued/parameter");
     auto next = *parsed.value();

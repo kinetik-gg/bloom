@@ -1104,7 +1104,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 
 The `1.6` → `1.7` DOM migration upgrades each Solid v1 to v2, adding Scalar `width` and `height`
 parameters equal to that composition's format. IDs are allocated above the persisted parameter high
-water, bindings are ordered by role, and the high water is raised. Numeric tokens outside the owned
+water (including an initial zero), bindings are ordered by role, and the high water is raised. Numeric tokens outside the owned
 rewrite are copied unchanged; malformed input and exhausted IDs fail through the migration runner.
 Saving/reopening 1.7 repeats neither injection nor coordinate conversion.
 
@@ -1118,4 +1118,6 @@ The document/manifest 1.7 artifacts retain the 1.6 JSON shape and generic typed 
 node versions and the node registry define the new per-role contracts. Historical artifacts are
 unchanged. `content_bounds_migration_tests` compares every RGBA32F bit of a pinned 1.6 fixture with
 off-centre rotated/scaled Solid and clipped Text, including an animated anchor, before migration,
-after migration, and after saving/reopening 1.7.
+after migration, and after saving/reopening 1.7, at full 41×47 and proxy 7×3 resolution.
+Composition-sized Solid dimensions use the exact proxy extent to avoid rounding an extra column or
+row into the legacy pivot.

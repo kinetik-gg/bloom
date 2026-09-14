@@ -19,8 +19,9 @@ void require(const bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
 }
-std::shared_ptr<const runtime::ProcessFrame> evaluate(const document::Snapshot& snapshot,
-                                                      const core::RationalTime time = {}) {
+std::shared_ptr<const runtime::ProcessFrame>
+evaluate(const document::Snapshot& snapshot, const core::RationalTime time = {},
+         runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     const auto composition = snapshot.project().compositions().front().id();
     const auto compiled = compiler.compile({snapshot, composition}, {});
@@ -34,7 +35,7 @@ std::shared_ptr<const runtime::ProcessFrame> evaluate(const document::Snapshot& 
         evaluator.evaluate(compiled.plan,
                            {.time = time,
                             .output = compiled.plan->output(),
-                            .resolution = runtime::CompositionFormatResolution{},
+                            .resolution = resolution,
                             .quality = runtime::EvaluationQuality::Reference,
                             .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
                             .pixelStorageByteLimit = 16U << 20U},
@@ -91,7 +92,7 @@ void comparePixels(const runtime::ProcessFrame& before, const runtime::ProcessFr
         }
 }
 void migrationProof() {
-    const auto format = document::CompositionFormat::create(64, 48);
+    const auto format = document::CompositionFormat::create(41, 47);
     if (!format)
         throw std::runtime_error("format");
     auto initial = document::makeNewProject("Bounds migration", "Off centre",
@@ -209,13 +210,23 @@ void migrationProof() {
                 std::get<double>(std::get<document::ConstantValueSource>(parameter.source).value);
             require(
                 value ==
-                    (parameter.schemaKey == document::kSolidWidthParameterSchemaKey ? 64.0 : 48.0),
+                    (parameter.schemaKey == document::kSolidWidthParameterSchemaKey ? 41.0 : 47.0),
                 "migrated dimension equals composition size");
             ++dimensions;
         }
     }
     require(dimensions == 2, "both solid dimensions migrated");
-    std::cout << "1.6 -> 1.7 -> saved/reopened 1.7: every pixel bit identical; off-centre "
+    const auto proxy = render::ImageExtent::create(7, 3);
+    if (!proxy)
+        throw std::runtime_error("proxy extent");
+    for (const auto time : {core::RationalTime{}, *half, core::RationalTime::fromInteger(1)}) {
+        const runtime::EvaluationResolution resolution = runtime::ProxyResolution{*proxy.value()};
+        const auto oldProxy = evaluate(beforeDocument->snapshot(), time, resolution);
+        comparePixels(*oldProxy, *evaluate(afterDocument->snapshot(), time, resolution));
+        comparePixels(*oldProxy, *evaluate(reopened->snapshot(), time, resolution));
+    }
+    std::cout << "1.6 -> 1.7 -> saved/reopened 1.7: every pixel bit identical at full and 7x3 "
+                 "proxy resolution; off-centre "
                  "scaled/rotated solid and clipped text\n";
 }
 } // namespace
