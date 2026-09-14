@@ -1,5 +1,6 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
+#include <bloom/runtime/value_utility_kernels.hpp>
 
 #include "operation_key.hpp"
 #include <deque>
@@ -236,6 +237,11 @@ class Evaluator final {
                             key.add(kernel.componentCount);
                         if constexpr (requires { kernel.promotion; })
                             key.add(kernel.promotion);
+                        if constexpr (requires { kernel.selectors; }) {
+                            key.add(kernel.selectors.size());
+                            for (const auto selector : kernel.selectors)
+                                key.add(selector);
+                        }
                         if constexpr (requires { kernel.components; }) {
                             if constexpr (std::is_integral_v<decltype(kernel.components)>)
                                 key.add(kernel.components);
@@ -338,6 +344,8 @@ class Evaluator final {
                         const runtime::CompiledValueRandom& kernel);
     void evaluatePromotion(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValuePromotion& kernel);
+    void evaluateUtility(const runtime::CompiledValueOperation& operation,
+                         const runtime::CompiledValueUtility& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -381,6 +389,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateCombine(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueRandom>) {
                 evaluateRandom(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueUtility>) {
+                evaluateUtility(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -882,6 +892,29 @@ void Evaluator::evaluatePromotion(const runtime::CompiledValueOperation& operati
         }
         return;
     }
+    }
+}
+
+// Task UTIL-1's library. The Evaluator's part is exactly the plan's bookkeeping -- read each
+// operand, hand the values to the pure kernel, write what comes back -- and none of the operations
+// themselves live here.
+void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation,
+                                const runtime::CompiledValueUtility& kernel) {
+    std::vector<const CompiledValue*> operands;
+    operands.reserve(kernel.operands.size());
+    for (const auto& operand : kernel.operands) {
+        operands.push_back(operandOf(operand));
+    }
+    const auto outcome =
+        runtime::evaluateValueUtility({kernel.operation, operands, kernel.selectors, time_, rate_});
+    if (outcome.failed) {
+        const auto& blamed = outcome.failedOperand < kernel.operands.size()
+                                 ? kernel.operands[outcome.failedOperand]
+                                 : CompiledValueOperand{};
+        fail(operation, blamed.id, std::string(outcome.summary), std::string(outcome.detail));
+    }
+    for (std::size_t slot = 0; slot < outcome.outputCount; ++slot) {
+        write(operation, slot, outcome.outputs[slot]);
     }
 }
 

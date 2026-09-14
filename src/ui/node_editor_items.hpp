@@ -22,6 +22,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 
 #include <QAction>
 #include <QBrush>
@@ -990,6 +991,59 @@ class NodeItem final : public QGraphicsObject {
             for (std::size_t index = 0; index < document::kRangeInterpolations.size(); ++index) {
                 add(QString::fromUtf8(kNames[index]),
                     document::rangeInterpolationStoredValue(document::kRangeInterpolations[index]));
+            }
+            return items;
+        }
+        // Task UTIL-1's selectors. Each offers its own closed vocabulary in the order the document
+        // numbers it, so the card cannot offer a member the schema would refuse.
+        if (schemaKey == document::kRoundingModeParameterSchemaKey) {
+            static constexpr std::array kNames{"Round", "Floor", "Ceiling", "Truncate"};
+            for (std::size_t index = 0; index < document::kRoundingModes.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kRoundingModes[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kIntegerOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"Add",    "Subtract", "Multiply", "Divide",
+                                               "Modulo", "Minimum",  "Maximum"};
+            for (std::size_t index = 0; index < document::kIntegerOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kIntegerOperations[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kBooleanOperationParameterSchemaKey) {
+            static constexpr std::array kNames{"And", "Or", "Xor", "Nand", "Nor"};
+            for (std::size_t index = 0; index < document::kBooleanOperations.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kBooleanOperations[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kStringCaseParameterSchemaKey) {
+            static constexpr std::array kNames{"Upper", "Lower", "Title"};
+            for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kStringCaseModes[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kStringPadSideParameterSchemaKey) {
+            static constexpr std::array kNames{"Start", "End"};
+            for (std::size_t index = 0; index < document::kStringPadSides.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]),
+                    document::selectorStoredValue(document::kStringPadSides[index]));
+            }
+            return items;
+        }
+        if (schemaKey == document::kNumberRadixParameterSchemaKey) {
+            // The stored value IS the radix, so the offered list is a convenience rather than a
+            // mapping: a document carrying base 36 keeps it, and this dropdown simply has no row
+            // for it.
+            static constexpr std::array kNames{"Binary", "Octal", "Decimal", "Hexadecimal"};
+            for (std::size_t index = 0; index < document::kOfferedRadices.size(); ++index) {
+                add(QString::fromUtf8(kNames[index]), document::kOfferedRadices[index]);
             }
             return items;
         }

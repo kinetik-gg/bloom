@@ -23,6 +23,7 @@ provide research or rationale, but they are not binding until adopted here.
    dependency direction.
 6. [`architecture/module-system.md`](architecture/module-system.md),
    [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
+   [`architecture/value-node-library.md`](architecture/value-node-library.md),
    [`architecture/animation-and-time.md`](architecture/animation-and-time.md),
    [`architecture/evaluation-primitives.md`](architecture/evaluation-primitives.md),
    [`architecture/task-system.md`](architecture/task-system.md),

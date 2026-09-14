@@ -5,6 +5,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 
 #include <compare>
@@ -238,12 +239,30 @@ struct CompiledValuePromotion final {
     friend bool operator==(const CompiledValuePromotion&, const CompiledValuePromotion&) = default;
 };
 
+// Task UTIL-1's whole library, as one kernel. `operation` names WHICH conversion, string
+// operation, numeric operation or readout this is; `operands` are the node's socket-backed inputs
+// in its descriptor's order, and `selectors` its inline selectors in theirs. Both lists are exactly
+// as long as the descriptor says, so the kernel indexes them positionally rather than searching by
+// name once per frame.
+//
+// One variant alternative rather than sixty is the same trade CompiledValueSwitch already makes
+// across seven socket kinds: these operations differ in what they COMPUTE, not in how they are
+// addressed, and sixty structs holding the same two vectors would be sixty places for the operand
+// order to drift from the table that produced it.
+struct CompiledValueUtility final {
+    document::ValueUtilityKernel operation = document::ValueUtilityKernel::ScalarToString;
+    std::vector<CompiledValueOperand> operands;
+    std::vector<std::int64_t> selectors;
+
+    friend bool operator==(const CompiledValueUtility&, const CompiledValueUtility&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
-                 CompiledValuePromotion>;
+                 CompiledValuePromotion, CompiledValueUtility>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -259,7 +278,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {
                 visit(step.value);
-            } else if constexpr (std::is_same_v<Step, CompiledValueScalarMath>) {
+            } else if constexpr (std::is_same_v<Step, CompiledValueScalarMath> ||
+                                 std::is_same_v<Step, CompiledValueUtility>) {
                 for (const auto& operand : step.operands)
                     visit(operand);
             } else if constexpr (std::is_same_v<Step, CompiledValueCombine>) {
