@@ -683,6 +683,16 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
                                                                edge->edge.destination);
     } else if (gesture.mode == NodeInteraction::Mode::Link) {
         const auto* target = socketAt(*this, event->scenePos());
+        bool bodyDrop = false;
+        if (!target && gesture.output) {
+            if (const auto* card = cardAt(*this, event->scenePos()))
+                for (const auto* socket : card->sockets())
+                    if (socket->multiInput()) {
+                        target = socket;
+                        bodyDrop = true;
+                        break;
+                    }
+        }
         if (target && target->draggable() &&
             ((gesture.output && target->input) || (gesture.input && target->output))) {
             const auto input =
@@ -692,12 +702,36 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
             // Where in the stack order a drop on Merge's pill lands. Read off the same caret the
             // artist watched during the drag, so the order they saw is the order written.
             std::optional<document::LayerSlotId> insertBefore;
-            if (gesture.output && target->multiInput())
+            if (gesture.output && target->multiInput() && !bodyDrop)
                 insertBefore = target->slotInsertionAt(target->mapFromScene(event->scenePos()));
-            if (gesture.pickedInput && *gesture.pickedInput != input)
-                transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);
-            transaction.emplace<commands::ConnectPorts>(
-                compositionId, output, input, document::builtInNodeDefinitions(), insertBefore);
+            const auto* picked =
+                gesture.pickedInput
+                    ? std::get_if<document::LayerStackInputRef>(&*gesture.pickedInput)
+                    : nullptr;
+            const auto* mergeInput = std::get_if<document::LayerStackInputRef>(&input);
+            if (picked && mergeInput && picked->stackNodeId == mergeInput->stackNodeId &&
+                target->multiInput()) {
+                const auto entries =
+                    session_->composition()->graph().merge(picked->stackNodeId)->entries();
+                std::size_t index = entries.size();
+                if (insertBefore)
+                    index = static_cast<std::size_t>(std::distance(
+                        entries.begin(), std::ranges::find(entries, *insertBefore,
+                                                           &document::LayerStackEntry::slotId)));
+                const auto old = static_cast<std::size_t>(std::distance(
+                    entries.begin(), std::ranges::find(entries, picked->slotId,
+                                                       &document::LayerStackEntry::slotId)));
+                if (index > old)
+                    --index;
+                transaction.emplace<commands::ReorderMergeInput>(compositionId, picked->stackNodeId,
+                                                                 picked->slotId, index);
+            } else {
+                if (gesture.pickedInput && *gesture.pickedInput != input)
+                    transaction.emplace<commands::DisconnectInput>(compositionId,
+                                                                   *gesture.pickedInput);
+                transaction.emplace<commands::ConnectPorts>(
+                    compositionId, output, input, document::builtInNodeDefinitions(), insertBefore);
+            }
         } else if (!target && !cardAt(*this, event->scenePos())) {
             if (gesture.pickedInput)
                 transaction.emplace<commands::DisconnectInput>(compositionId, *gesture.pickedInput);

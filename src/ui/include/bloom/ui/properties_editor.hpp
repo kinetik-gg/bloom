@@ -25,6 +25,8 @@ class PropertiesEditor final : public QWidget {
 
   private:
     void rebuild();
+    void configureMergeInputs();
+    QWidget* mergeInputsPanel_ = nullptr;
     void configurePosition();
     void configureAnchor();
     void configureScale();

@@ -546,7 +546,7 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
 | Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
-| Ordered multi-input | Merge's one stack port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, while the pill stays dimmed |
+| Ordered multi-input | Each Merge's ordered image port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, and the pill highlights compatible image drops; the card shows its input count |
 | Card eyebrow | A layer card's `UiSmall`/`Faint` "Layer" line above its own name, because the name is the layer's |
 | In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Today's one instance is a layer's Blending. It carries no keyframe indicator, because the value is not animatable |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
@@ -584,3 +584,11 @@ trim grips; snapping shows a vertical guide. Row drag shows an Accent insertion 
 states use `Visible`/`Hidden`, `Check` for solo and `Locked`/`Unlocked`, rendered in the curated
 Bold weight at `Size::IconMedium` (16 px). Their source and hashes are in the Phosphor provenance
 record; other icon weights and meanings are unchanged.
+
+### Nested Merge Rows
+
+The timeline draws a direct nested Merge as one collapsed row in `DataComposition`, using the
+Merge display name. It has no expansion affordance, solo or lock control; enabled is editable.
+The Properties input list shows plain images with disabled Normal blend and 100% opacity fields.
+New automation object names: `mergeInputsPanel`, `mergeInputRow`, `mergeInputName`,
+`mergeInputBlendMode`, and `mergeInputOpacity`. Existing object names are unchanged.

@@ -33,6 +33,14 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
             a.graph().layerStack().nodeId() != b->graph().layerStack().nodeId() ||
             a.graph().compositionOutput() != b->graph().compositionOutput())
             return false;
+        if (a.graph().merges().size() != b->graph().merges().size())
+            return false;
+        for (const auto& merge : a.graph().merges()) {
+            const auto* other = b->graph().merge(merge.nodeId());
+            if (!other || merge.enabled() != other->enabled() ||
+                !std::ranges::equal(merge.entries(), other->entries()))
+                return false;
+        }
     }
     return true;
 }
@@ -104,6 +112,30 @@ NodeId addSource(Fixture& fixture) {
     if (!(id.has_value()))
         throw std::logic_error("source fixture adds");
     return *id;
+}
+
+void testMultipleMergeCommands(TestContext& test) {
+    Fixture fixture;
+    const auto added = exercise<AddNode>(test, fixture, std::string(kLayerStackNodeType), Vec2d{});
+    const auto mergeId = added.outputId<NodeId>(kAddNodeOutput);
+    if (!mergeId)
+        return;
+    const auto source = addSource(fixture);
+    const InputPortRef pill = LayerStackInputRef{*mergeId, {}, "content"};
+    const auto first = exercise<ConnectPorts>(test, fixture, OutputPortRef{source, "image"}, pill)
+                           .outputId<LayerSlotId>(kConnectPortsSlotOutput);
+    const auto second =
+        exercise<ConnectPorts>(test, fixture, OutputPortRef{kFirstLayerNodeId, "image"}, pill)
+            .outputId<LayerSlotId>(kConnectPortsSlotOutput);
+    if (!first || !second)
+        return;
+    exercise<ReorderMergeInput>(test, fixture, *mergeId, *second, std::size_t{0});
+    const auto snapshot = fixture.document.snapshot();
+    test.expect(composition(snapshot).graph().merge(*mergeId)->entries().front().slotId == *second,
+                "reorder changes the addressed Merge only");
+    exercise<DisconnectInput>(test, fixture,
+                              InputPortRef{LayerStackInputRef{*mergeId, *first, "content"}});
+    exercise<RemoveNodes>(test, fixture, std::set<NodeId>{*mergeId});
 }
 
 void testLayerToggles(TestContext& test) {
@@ -225,8 +257,7 @@ void testAddAndLayout(TestContext& test) {
     // singletons
     // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
-        const bool singleton = definition.key.typeId == kLayerStackNodeType ||
-                               definition.key.typeId == kCompositionOutputNodeType;
+        const bool singleton = definition.key.typeId == kCompositionOutputNodeType;
         test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
                     "exactly the Layer Stack and the composition output are one per composition: " +
                         definition.key.typeId);
@@ -294,8 +325,7 @@ void testWiringAndRename(TestContext& test) {
     refuse<DisconnectInput>(test, fixture, OperationIssueCode::InvalidTarget,
                             InputPortRef{NodeInputRef{source, "image"}});
     const InputPortRef slotInput = LayerStackInputRef{kLayerStackNodeId, kFirstSlotId, "content"};
-    refuse<ConnectPorts>(test, fixture, OperationIssueCode::InvalidValue,
-                         OutputPortRef{source, "image"}, slotInput);
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{source, "image"}, slotInput);
     // ADAPTED (task FIX1, item B): detaching a stack slot's content REMOVES the slot, and
     // connecting a Layer output to the sentinel slot creates one. The slot and the link into it are
     // one thing to the artist, so they are one thing here -- which is what makes a stack slot
@@ -557,8 +587,8 @@ void testDuplicationOwnershipEdges(TestContext& test) {
                     entries[0].layerId == kFirstLayerId && entries[1].layerId == *firstCopy &&
                     entries[2].layerId == kSecondLayerId && entries[3].layerId == *secondCopy,
                 "multiple copied layer slots each follow their own original");
-    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::InvalidValue,
-                           std::set<NodeId>{kFirstLayerNodeId, kLayerStackNodeId}, Vec2d{});
+    exercise<DuplicateNodes>(test, fixture, std::set<NodeId>{kFirstLayerNodeId, kLayerStackNodeId},
+                             Vec2d{});
     if (!apply<MoveNodes>(
              fixture,
              std::map<NodeId, Vec2d>{{kFirstLayerNodeId, {std::numeric_limits<double>::max(), 0}}})
@@ -786,6 +816,7 @@ void testNodeGroups(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testMultipleMergeCommands(test);
         bloom::commands::test::testLayerToggles(test);
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);

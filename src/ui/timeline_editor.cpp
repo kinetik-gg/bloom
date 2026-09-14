@@ -1,3 +1,4 @@
+#include "node_editor_items.hpp"
 #include <bloom/ui/timeline_editor.hpp>
 
 #include "composition_editor_support.hpp"
@@ -349,6 +350,7 @@ class TimelineLayerRow final : public QWidget {
         color_ = entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
         selected_ = selected;
         layerId_ = entry.layerId;
+        collapsedImage_ = entry.imageNodeId.isValid();
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
         // document truth, never an edit: a blocked signal would still leave the lambda armed for a
         // nested change, and a row re-pointed during a scroll must author nothing at all.
@@ -358,6 +360,10 @@ class TimelineLayerRow final : public QWidget {
         const auto* composition = session_->composition();
         const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
         enabled_ = layer && layer->enabled;
+        if (collapsedImage_ && composition) {
+            const auto* merge = composition->graph().merge(entry.imageNodeId);
+            enabled_ = merge ? merge->enabled() : true;
+        }
         if (layer) {
             const auto layout = composition->nodeLayout().find(layer->nodeId);
             enabled_ =
@@ -413,6 +419,8 @@ class TimelineLayerRow final : public QWidget {
         paintRowSeparator(painter, 0, width());
 
         for (int index = 0; index < kToggleCellCount; ++index) {
+            if (collapsedImage_ && index != 0)
+                continue;
             const bool active = index == 0 ? enabled_ : index == 1 ? solo_ : locked_;
             const auto id = index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
                             : index == 1 ? kit::IconId::Check
@@ -433,8 +441,9 @@ class TimelineLayerRow final : public QWidget {
         const auto chevron =
             kit::iconPixmap(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight,
                             kit::Size::IconMedium, kit::Color::Muted);
-        painter.drawPixmap(kNameCellX + swatch + kCellGap, (height() - chevron.height()) / 2,
-                           chevron);
+        if (!collapsedImage_)
+            painter.drawPixmap(kNameCellX + swatch + kCellGap, (height() - chevron.height()) / 2,
+                               chevron);
         const int indent = kit::px(kit::Size::IconMedium);
         const QRect nameRect(kNameCellX + swatch + kCellGap + indent, 0,
                              kNameCellWidth - swatch - kCellGap - indent, height());
@@ -451,6 +460,7 @@ class TimelineLayerRow final : public QWidget {
     bool selected_ = false;
     bool expanded_ = false;
     bool enabled_ = true, solo_ = false, locked_ = false;
+    bool collapsedImage_ = false;
     bool binding_ = false;
     kit::KDropdown* blending_ = nullptr;
     kit::KDropdown* parentDropdown_ = nullptr;
@@ -536,6 +546,11 @@ void TimelineLayerStack::syncCurrentRowFromSelection() {
             }
         }
     }
+    for (int index = 0; index < rowCount(); ++index)
+        if (entries_[static_cast<std::size_t>(index)].imageNodeId.isValid() &&
+            session_.selectedNodes().contains(
+                entries_[static_cast<std::size_t>(index)].imageNodeId))
+            resolved = index;
     if (resolved == currentRow_) {
         // Still worth repainting: the row whose FILL changed may not be the current row at all (a
         // node selection can move the contextual layer without moving this column's current row).
@@ -579,7 +594,11 @@ void TimelineLayerStack::setCurrentRow(const int row) {
     currentRow_ = row;
     // Navigation IS selection here (single-selection, exactly like the QTreeWidget before it): the
     // session owns selection truth, and every other editor follows it from selectionChanged.
-    session_.selectLayer(entries_[static_cast<std::size_t>(row)].layerId);
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    if (entry.imageNodeId.isValid())
+        session_.selectNode(entry.imageNodeId);
+    else
+        session_.selectLayer(entry.layerId);
     relayoutRows();
     update();
 }
@@ -609,7 +628,9 @@ void TimelineLayerStack::relayoutRows() {
         if (entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             if (property)
                 property->hide();
-            row->bind(entry, isLayerSelected(session_, entry.layerId));
+            row->bind(entry, entry.imageNodeId.isValid()
+                                 ? session_.selectedNodes().contains(entry.imageNodeId)
+                                 : isLayerSelected(session_, entry.layerId));
             row->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             row->show();
         } else {
@@ -656,6 +677,18 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     const auto id = entry.layerId;
     if (entry.rowKind != TimelineLayerEntry::Kind::Layer)
         return;
+    if (entry.imageNodeId.isValid()) {
+        const auto* merge = session_.composition()->graph().merge(entry.imageNodeId);
+        if (merge && event->position().x() >= kToggleStripX &&
+            event->position().x() < kToggleStripX + kToggleCellWidth) {
+            commands::Transaction transaction("Toggle Merge", session_.snapshot().revision());
+            transaction.emplace<commands::SetMergeEnabled>(session_.compositionId(),
+                                                           entry.imageNodeId, !merge->enabled());
+            (void)session_.executeTransaction(std::move(transaction));
+        } else
+            session_.selectNode(entry.imageNodeId);
+        return;
+    }
     const int chevronX = kNameCellX + kit::px(kit::Spacing::S) + kCellGap;
     if (event->position().x() >= chevronX &&
         event->position().x() < chevronX + kit::px(kit::Size::IconMedium)) {
@@ -1053,13 +1086,13 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     }
     const auto* layer =
         composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
-    if (!layer ||
+    if ((!layer && !entries_[static_cast<std::size_t>(row)].imageNodeId.isValid()) ||
         entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
         return std::nullopt;
     const auto range =
-        drag_ && drag_->layer == layer->layerId
-            ? drag_->preview
-            : document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
+        layer && drag_ && drag_->layer == layer->layerId ? drag_->preview
+        : layer ? document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())}
+                : document::WorkArea{core::RationalTime{}, composition->duration()};
     const qreal mappedLeft = axis->pixelForTime(range.start);
     const qreal mappedRight = axis->pixelForTime(range.end);
     if (mappedRight < 0 || mappedLeft >= width())
@@ -1118,7 +1151,8 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const auto& entry = entries_[static_cast<std::size_t>(row)];
         const int top = rowTop(row);
         painter.setRenderHint(QPainter::Antialiasing, false);
-        if (isLayerSelected(session_, entry.layerId)) {
+        if (entry.imageNodeId.isValid() ? session_.selectedNodes().contains(entry.imageNodeId)
+                                        : isLayerSelected(session_, entry.layerId)) {
             paintSelectedRowFill(painter, top, width());
         }
         paintRowSeparator(painter, top, width());
@@ -1202,8 +1236,10 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     if (bar && bar->contains(event->position().toPoint()) && composition && mapping) {
         const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
         const auto* layer = composition->graph().findLayer(layerId);
-        if (!layer)
+        if (!layer) {
+            session_.selectNode(entries_[static_cast<std::size_t>(row)].imageNodeId);
             return;
+        }
         const auto range =
             document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
         const bool locked = layer->locked;
@@ -1681,10 +1717,33 @@ QWidget* TimelineEditor::takeHeaderRightWidget() {
 void TimelineEditor::rebuild() {
     std::vector<TimelineLayerEntry> entries;
     const auto* composition = session_.composition();
-    if (composition != nullptr) {
-        const auto stackEntries = composition->graph().layerStack().entries();
+    if (composition != nullptr && session_.timelineMerge()) {
+        const auto stackEntries = session_.timelineMerge()->entries();
         entries.reserve(stackEntries.size());
         for (const auto& entry : stackEntries) {
+            if (!entry.layerId.isValid()) {
+                const auto edges = composition->graph().edges();
+                const auto edge = std::ranges::find_if(edges, [&](const auto& candidate) {
+                    const auto* input =
+                        std::get_if<document::LayerStackInputRef>(&candidate.destination);
+                    return input && input->stackNodeId == session_.timelineMerge()->nodeId() &&
+                           input->slotId == entry.slotId;
+                });
+                if (edge == edges.end())
+                    continue;
+                const auto* node = composition->graph().findNode(edge->source.nodeId);
+                if (!node)
+                    continue;
+                const bool merge = node->typeId == document::kLayerStackNodeType;
+                entries.push_back(
+                    {.layerId = {},
+                     .slotId = entry.slotId,
+                     .name = node_editor::nodeDisplayName(*composition, *node),
+                     .kind = node_editor::nodeTypeDisplayName(node->typeId),
+                     .clipColor = merge ? kit::Color::DataComposition : kit::Color::DataImage,
+                     .imageNodeId = node->id});
+                continue;
+            }
             entries.push_back({.layerId = entry.layerId,
                                .slotId = entry.slotId,
                                .name = layerName(*composition, entry.layerId),

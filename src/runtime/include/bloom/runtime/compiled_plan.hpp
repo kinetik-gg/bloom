@@ -38,7 +38,7 @@ namespace bloom::runtime {
 // new alternative appearing. Both numbers below also enter ProcessFrameIdentity and therefore every
 // cached/exported frame digest (src/output/process_frame_semantic_identity.cpp), which is why the
 // identity goldens were re-derived in the same change.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 2;
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 3;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -137,20 +137,20 @@ struct CompiledLayerOutput {
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 
-struct CompiledLayerStackEntry {
+// Plan v3: an invalid layerId denotes a plain image with Normal blending.
+struct CompiledMergeInput {
     document::LayerSlotId slotId;
     document::LayerId layerId;
     OperationIndex input;
 
-    friend bool operator==(const CompiledLayerStackEntry&,
-                           const CompiledLayerStackEntry&) = default;
+    friend bool operator==(const CompiledMergeInput&, const CompiledMergeInput&) = default;
 };
 
-struct CompiledLayerStack {
+struct CompiledMerge {
     document::NodeId sourceNodeId;
-    std::vector<CompiledLayerStackEntry> entries;
+    std::vector<CompiledMergeInput> entries;
 
-    friend bool operator==(const CompiledLayerStack&, const CompiledLayerStack&) = default;
+    friend bool operator==(const CompiledMerge&, const CompiledMerge&) = default;
 };
 
 struct CompiledCompositionOutput {
@@ -162,7 +162,7 @@ struct CompiledCompositionOutput {
 };
 
 using CompiledOperation = std::variant<CompiledSolid, CompiledText, CompiledLayerOutput,
-                                       CompiledLayerStack, CompiledCompositionOutput>;
+                                       CompiledMerge, CompiledCompositionOutput>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot

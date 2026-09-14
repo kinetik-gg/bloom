@@ -125,7 +125,10 @@ struct LayerOutputBoundary {
 
 class CanonicalGraph final {
   public:
-    explicit CanonicalGraph(NodeId layerStackNodeId) noexcept : layerStack_(layerStackNodeId) {}
+    explicit CanonicalGraph(NodeId layerStackNodeId) noexcept : layerStacks_{} {
+        if (layerStackNodeId.isValid())
+            layerStacks_.emplace_back(layerStackNodeId);
+    }
 
     [[nodiscard]] std::span<const NodeRecord> nodes() const noexcept { return nodes_; }
     [[nodiscard]] std::span<const EdgeRecord> edges() const noexcept { return edges_; }
@@ -135,8 +138,13 @@ class CanonicalGraph final {
     [[nodiscard]] const NodeRecord* findNode(NodeId id) const noexcept;
     [[nodiscard]] NodeRecord* findNode(NodeId id) noexcept;
 
-    [[nodiscard]] const LayerStack& layerStack() const noexcept { return layerStack_; }
-    [[nodiscard]] LayerStack& layerStack() noexcept { return layerStack_; }
+    // Legacy authoring convenience: the Merge directly feeding Output, otherwise the first Merge.
+    [[nodiscard]] const LayerStack& layerStack() const noexcept;
+    [[nodiscard]] LayerStack& layerStack() noexcept;
+    [[nodiscard]] const LayerStack* merge(NodeId id) const noexcept;
+    [[nodiscard]] LayerStack* merge(NodeId id) noexcept;
+    [[nodiscard]] std::span<const LayerStack> merges() const noexcept { return layerStacks_; }
+    [[nodiscard]] std::optional<NodeId> outputMergeId() const noexcept;
     [[nodiscard]] const std::optional<OutputPortRef>& compositionOutput() const noexcept {
         return compositionOutput_;
     }
@@ -175,7 +183,8 @@ class CanonicalGraph final {
     std::vector<NodeRecord> nodes_;
     std::vector<EdgeRecord> edges_;
     std::vector<LayerOutputBoundary> layerOutputs_;
-    LayerStack layerStack_;
+    std::vector<LayerStack> layerStacks_;
+    LayerStack emptyStack_{NodeId{}};
     std::optional<OutputPortRef> compositionOutput_;
 };
 

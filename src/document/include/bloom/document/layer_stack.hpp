@@ -20,6 +20,9 @@ class LayerStack final {
   public:
     explicit LayerStack(NodeId nodeId) noexcept : nodeId_(nodeId) {}
 
+    [[nodiscard]] bool enabled() const noexcept { return enabled_; }
+    void setEnabled(bool enabled) noexcept { enabled_ = enabled; }
+
     [[nodiscard]] NodeId nodeId() const noexcept { return nodeId_; }
     [[nodiscard]] std::span<const LayerStackEntry> entries() const noexcept { return entries_; }
     [[nodiscard]] const LayerStackEntry* find(LayerSlotId slotId) const noexcept;
@@ -31,6 +34,7 @@ class LayerStack final {
     [[nodiscard]] ValidationResult validate() const;
 
   private:
+    bool enabled_ = true;
     NodeId nodeId_;
     std::vector<LayerStackEntry> entries_;
 };

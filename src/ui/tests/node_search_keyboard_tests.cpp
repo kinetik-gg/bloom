@@ -217,15 +217,16 @@ void testSearchKeyboardAndMenus() {
     const QRegion mask = list->mask();
     expect(mask.contains(QPoint(0, 0)) && mask.contains(QPoint(list->width() - 1, 0)),
            "the list is not rounded again where it meets the filter field");
-    // Task S1, item 5: the composition's one evaluation endpoint and its one Layer Stack are
-    // already present, so search offers them as refusals rather than as commands.
-    for (const auto typeId :
-         {document::kCompositionOutputNodeType, document::kLayerStackNodeType}) {
+    // Only Output remains a singleton; every Merge stays addable.
+    for (const auto typeId : {document::kCompositionOutputNodeType}) {
         const auto row = rowForKey(list->model(), typeId);
         expect(row.isValid() && !row.flags().testFlag(Qt::ItemIsEnabled) &&
                    row.data(Qt::ToolTipRole).toString().contains(QStringLiteral("Only one")),
                "a one-per-composition kind is listed disabled, with the command's own refusal");
     }
+    expect(
+        rowForKey(list->model(), document::kLayerStackNodeType).flags().testFlag(Qt::ItemIsEnabled),
+        "another Merge remains addable from search");
     expect(rowForKey(list->model(), document::kLayerOutputNodeType)
                .flags()
                .testFlag(Qt::ItemIsEnabled),

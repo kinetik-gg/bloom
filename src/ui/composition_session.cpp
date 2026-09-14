@@ -224,6 +224,14 @@ void CompositionSession::selectLayer(const document::LayerId layerId) {
     }
 }
 
+const document::LayerStack* CompositionSession::timelineMerge() const noexcept {
+    const auto* comp = composition();
+    if (!comp)
+        return nullptr;
+    const auto id = comp->graph().outputMergeId();
+    return id ? comp->graph().merge(*id) : nullptr;
+}
+
 void CompositionSession::selectNode(const document::NodeId nodeId) {
     selectNodes({nodeId}, nodeId);
 }

@@ -20,7 +20,7 @@ timelinePropertyEntries(const CompositionSession& session,
     if (!composition)
         return rows;
     for (auto layer : layers) {
-        layer.expanded = expanded.contains(layer.layerId);
+        layer.expanded = !layer.imageNodeId.isValid() && expanded.contains(layer.layerId);
         rows.push_back(layer);
         if (!layer.expanded)
             continue;

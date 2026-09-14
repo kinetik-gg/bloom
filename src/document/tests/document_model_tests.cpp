@@ -759,10 +759,51 @@ void testDocumentProvenance(ExpectationContext& expectations) {
         "draft base revision must match caller expected revision");
 }
 
+void testMultipleMerges(ExpectationContext& expectations) {
+    auto project = validProject();
+    auto& composition = *project.findComposition(project.compositions().front().id());
+    auto& graph = composition.graph();
+    const auto original = graph.layerStack().nodeId();
+    const auto nested = id<NodeId>(900);
+    expectations.expect(
+        graph.addNode({nested, std::string(bloom::document::kLayerStackNodeType), {}, 1}),
+        "a second Merge is addable");
+    expectations.expect(graph.merge(nested) && graph.merge(nested)->entries().empty(),
+                        "each Merge owns slots");
+    expectations.expect(
+        graph.merge(original)->append({id<LayerSlotId>(901), {}}) &&
+            graph.addEdge({id<EdgeId>(902),
+                           {nested, "image"},
+                           LayerStackInputRef{original, id<LayerSlotId>(901), "content"}}),
+        "Merge accepts another Merge");
+    expectations.expect(graph.validate(composition.parameters()).ok(),
+                        "nested Merge graph validates");
+    const auto boundary = graph.layerOutputs().front();
+    expectations.expect(
+        graph.merge(nested)->append({id<LayerSlotId>(903), boundary.layerId}) &&
+            graph.addEdge({id<EdgeId>(904),
+                           {boundary.nodeId, boundary.outputPort},
+                           LayerStackInputRef{nested, id<LayerSlotId>(903), "content"}}),
+        "one Layer can feed multiple Merges");
+    expectations.expect(graph.validate(composition.parameters()).ok(),
+                        "shared Layer membership validates");
+    auto duplicate = graph;
+    expectations.expect(duplicate.merge(nested)->append({id<LayerSlotId>(901), {}}),
+                        "per-node slot insertion permits validation fixture");
+    expectations.expect(!duplicate.validate(composition.parameters()).ok(),
+                        "duplicate slots across Merges are refused");
+    expectations.expect(graph.eraseNode(nested) &&
+                            !graph.merge(original)->find(id<LayerSlotId>(901)),
+                        "deletion removes downstream slots");
+    expectations.expect(graph.validate(composition.parameters()).ok(),
+                        "deletion preserves graph validity");
+}
+
 } // namespace
 
 int main() try {
     ExpectationContext expectations;
+    testMultipleMerges(expectations);
     testRationalTime(expectations);
     testIdsAndParameters(expectations);
     testBuiltInBindingSchemaValidation(expectations);

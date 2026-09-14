@@ -168,10 +168,26 @@ struct InjectedLayerOutputParameter final {
                                         layerId.value());
         }
     }
+    if (graph.merges().size() !=
+        decodedGraph.merges.size() + (decodedGraph.layerStack.nodeId.isValid() ? 1U : 0U))
+        return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId, 0);
+    graph.layerStack().setEnabled(decodedGraph.layerStack.enabled);
     for (const auto& entry : decodedGraph.layerStack.entries) {
         if (!graph.layerStack().append(entry)) {
             return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
                                         entry.slotId.value());
+        }
+    }
+    for (const auto& stack : decodedGraph.merges) {
+        auto* target = graph.merge(stack.nodeId);
+        if (!target)
+            return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
+                                        stack.nodeId.value());
+        target->setEnabled(stack.enabled);
+        for (const auto& entry : stack.entries) {
+            if (!target->append(entry))
+                return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
+                                            entry.slotId.value());
         }
     }
     graph.setCompositionOutput(std::move(decodedGraph.compositionOutput));

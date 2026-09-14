@@ -1329,7 +1329,8 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     }
 
     LayerId layerId;
-    if (!decodeObjectId(*members[1], state, joinPath(path, "layerId"), layerId)) {
+    if (!(state.documentMinor >= 6 && members[1]->kind() == JsonValueKind::Null) &&
+        !decodeObjectId(*members[1], state, joinPath(path, "layerId"), layerId)) {
         return false;
     }
     out.slotId = slotId;
@@ -1363,7 +1364,9 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
 
 [[nodiscard]] bool decodeLayerStack(const JsonValue& node, DecodeState& state,
                                     const std::string& path, DecodedLayerStack& out) {
-    static constexpr std::array<std::string_view, 2> keys{"nodeId", "entries"};
+    std::vector<std::string_view> keys{"nodeId", "entries"};
+    if (state.documentMinor >= 6 && node.findMember("enabled"))
+        keys.push_back("enabled");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1376,6 +1379,13 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     if (!decodeLayerStackEntries(*members[1], state, joinPath(path, "entries"), entries)) {
         return false;
     }
+    if (const auto* enabled = node.findMember("enabled"); enabled && state.documentMinor >= 6) {
+        if (enabled->kind() != JsonValueKind::Boolean) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "enabled"));
+            return false;
+        }
+        out.enabled = enabled->asBoolean().value_or(true);
+    }
     out.nodeId = nodeId;
     out.entries = std::move(entries);
     return true;
@@ -1383,8 +1393,10 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
 
 [[nodiscard]] bool decodeGraph(const JsonValue& node, DecodeState& state, const std::string& path,
                                const std::vector<ParameterRecord>& parameters, DecodedGraph& out) {
-    static constexpr std::array<std::string_view, 5> keys{"nodes", "edges", "layerOutputs",
-                                                          "layerStack", "compositionOutput"};
+    std::vector<std::string_view> keys{"nodes", "edges", "layerOutputs", "layerStack",
+                                       "compositionOutput"};
+    if (state.documentMinor >= 6 && node.findMember("merges"))
+        keys.push_back("merges");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1417,15 +1429,41 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     const auto layerStackPath = joinPath(path, "layerStack");
     {
         const AttachmentScope layerStackScope(state, "layerStack");
-        if (!decodeLayerStack(*members[3], state, layerStackPath, out.layerStack)) {
+        if (!(state.documentMinor >= 6 && members[3]->kind() == JsonValueKind::Null) &&
+            !decodeLayerStack(*members[3], state, layerStackPath, out.layerStack)) {
             return false;
         }
     }
-    if (!nodeExists(out.nodes, out.layerStack.nodeId)) {
+    if (out.layerStack.nodeId.isValid() && !nodeExists(out.nodes, out.layerStack.nodeId)) {
         state.fail(DocumentDecodeError::DanglingReference, joinPath(layerStackPath, "nodeId"));
         return false;
     }
 
+    if (const auto* merges = node.findMember("merges"); merges && state.documentMinor >= 6) {
+        if (merges->kind() != JsonValueKind::Array) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "merges"));
+            return false;
+        }
+        const AttachmentScope scope(state, "merges");
+        for (const auto& value : merges->arrayElements()) {
+            DecodedLayerStack stack;
+            NodeId id;
+            const auto* member = value.findMember("nodeId");
+            if (!member || !decodeObjectId(*member, state, joinPath(path, "merges.nodeId"), id))
+                return false;
+            const AttachmentScope mergeScope(state, RoundTripCollectionKind::Node,
+                                             std::to_string(id.value()));
+            if (!decodeLayerStack(value, state, joinPath(path, "merges"), stack))
+                return false;
+            if (!nodeExists(out.nodes, stack.nodeId) || stack.nodeId == out.layerStack.nodeId ||
+                std::ranges::any_of(
+                    out.merges, [&](const auto& other) { return other.nodeId == stack.nodeId; })) {
+                state.fail(DocumentDecodeError::DanglingReference, joinPath(path, "merges.nodeId"));
+                return false;
+            }
+            out.merges.push_back(std::move(stack));
+        }
+    }
     const auto compositionOutputPath = joinPath(path, "compositionOutput");
     {
         const AttachmentScope compositionOutputScope(state, "compositionOutput");

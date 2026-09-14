@@ -161,8 +161,9 @@ lower(const std::vector<document::NodeId>& order) {
         if (!definition || definition->lowering == runtime::NodeLoweringKind::LayerStack ||
             definition->lowering == runtime::NodeLoweringKind::CompositionOutput)
             continue;
-        // A value node carries no pixels, so "empty image" is not a state it can be in -- and a muted
-        // one must not be classified as one, or the parameter it drives would lose its source.
+        // A value node carries no pixels, so "empty image" is not a state it can be in -- and a
+        // muted one must not be classified as one, or the parameter it drives would lose its
+        // source.
         if (isValueNode(id))
             continue;
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput)
@@ -187,11 +188,11 @@ lower(const std::vector<document::NodeId>& order) {
     if (!curveTables.has_value()) {
         return {};
     }
-    // The value graph is compiled FIRST, and in the same order: every parameter the image pass lowers
-    // may name one of its outputs, so the whole of it has to exist before a single image operation is
-    // built. It shares no address space with the image chain -- a ValueOutputIndex and an
-    // OperationIndex are different things -- which is exactly why the two passes can be sequential
-    // rather than interleaved.
+    // The value graph is compiled FIRST, and in the same order: every parameter the image pass
+    // lowers may name one of its outputs, so the whole of it has to exist before a single image
+    // operation is built. It shares no address space with the image chain -- a ValueOutputIndex and
+    // an OperationIndex are different things -- which is exactly why the two passes can be
+    // sequential rather than interleaved.
     if (!compileValueGraph(order)) {
         return {};
     }
@@ -219,9 +220,8 @@ lower(const std::vector<document::NodeId>& order) {
         // exists only to tidy a wire.
         if (isImageReroute(nodeId)) {
             const auto* rerouteEdge = fixedInputEdge(nodeId, document::kValuePortName);
-            const auto source = rerouteEdge == nullptr
-                                    ? indices.end()
-                                    : indices.find(rerouteEdge->source.nodeId);
+            const auto source =
+                rerouteEdge == nullptr ? indices.end() : indices.find(rerouteEdge->source.nodeId);
             if (source == indices.end()) {
                 addTopologyFailure(nodeId, "Image Reroute input was not lowered.");
                 return {};
@@ -256,14 +256,24 @@ lower(const std::vector<document::NodeId>& order) {
             ((isMuted(nodeId) && outputEdge == nullptr) ||
              (outputEdge && emptyImages_.contains(outputEdge->source.nodeId)))) {
             const auto empty = runtime::OperationIndex::fromRaw(operations.size());
-            operations.emplace_back(runtime::CompiledLayerStack{nodeId, {}});
+            operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
             indices.emplace(nodeId, runtime::OperationIndex::fromRaw(operations.size()));
             operations.emplace_back(runtime::CompiledCompositionOutput{nodeId, empty});
             continue;
         }
-        const auto operation = lowerNode(*node, *definition->second, indices);
+        auto operation = lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
             return {};
+        }
+        // Output always publishes a full composition image. A graph wired directly to a
+        // source or Layer gets a derived Normal Merge, including empty/cropped Layer images.
+        // Its zero slot ID is synthetic plan metadata, never a durable document slot.
+        if (auto* output = std::get_if<runtime::CompiledCompositionOutput>(&*operation);
+            output &&
+            !std::holds_alternative<runtime::CompiledMerge>(operations[output->input.value()])) {
+            const auto normalized = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledMerge{nodeId, {{{}, {}, output->input}}});
+            output->input = normalized;
         }
         const auto index = runtime::OperationIndex::fromRaw(operations.size());
         operations.push_back(*operation);
@@ -418,10 +428,12 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         addTopologyFailure(node.id, "Layer Stack definition has no slot-input contract.");
         return std::nullopt;
     }
+    if (!composition_->graph().merge(node.id)->enabled())
+        return runtime::CompiledMerge{node.id, {}};
     const auto& layerSlotInput = *definition.layerSlotInput;
-    std::vector<runtime::CompiledLayerStackEntry> entries;
-    entries.reserve(composition_->graph().layerStack().entries().size());
-    const auto slots = composition_->graph().layerStack().entries();
+    std::vector<runtime::CompiledMergeInput> entries;
+    entries.reserve(composition_->graph().merge(node.id)->entries().size());
+    const auto slots = composition_->graph().merge(node.id)->entries();
     for (const auto& entry : slots) {
         if ((isMuted(node.id) && entry.slotId != slots.front().slotId) || mutedLayer(entry))
             continue;
@@ -442,7 +454,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         }
         entries.push_back({entry.slotId, entry.layerId, source->second});
     }
-    return runtime::CompiledLayerStack{node.id, std::move(entries)};
+    return runtime::CompiledMerge{node.id, std::move(entries)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation> lowerCompositionOutput(
@@ -469,9 +481,9 @@ parameterConstant(const document::ParameterBinding* binding) const noexcept {
     return constant == nullptr ? nullptr : std::get_if<Value>(&constant->value);
 }
 
-// No longer const: resolving a driver may SYNTHESIZE a promotion operation into the value graph, and
-// a widening that needs an operation is better compiled once here than hidden inside whoever reads
-// the value.
+// No longer const: resolving a driver may SYNTHESIZE a promotion operation into the value graph,
+// and a widening that needs an operation is better compiled once here than hidden inside whoever
+// reads the value.
 [[nodiscard]] std::optional<runtime::CompiledScalarParameter>
 compiledScalarParameter(const document::ParameterBinding* binding) {
     if (binding == nullptr) {
@@ -494,8 +506,8 @@ compiledScalarParameter(const document::ParameterBinding* binding) {
                    ? std::nullopt
                    : std::optional(runtime::CompiledScalarParameter{parameter->id, *value});
     }
-    // Task S7: the third arm. A driver binding resolves to the value-graph output it names, through a
-    // promotion operation when the kinds differ -- so an Integer node can drive a Scalar operand
+    // Task S7: the third arm. A driver binding resolves to the value-graph output it names, through
+    // a promotion operation when the kinds differ -- so an Integer node can drive a Scalar operand
     // without the widening being invisible.
     if (const auto driven = driverOutput(*parameter, runtime::SocketValueKind::Scalar)) {
         return runtime::CompiledScalarParameter{parameter->id, *driven};

@@ -173,7 +173,7 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
@@ -194,12 +194,10 @@ twoSolidPlan(const bool redOnTop = true) {
         runtime::CompiledSolid{kSolidNodeB, {kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {}));
-    const runtime::CompiledLayerStackEntry red{kSlotA, kLayerA,
-                                               runtime::OperationIndex::fromRaw(1)};
-    const runtime::CompiledLayerStackEntry blue{kSlotB, kLayerB,
-                                                runtime::OperationIndex::fromRaw(3)};
-    operations.emplace_back(runtime::CompiledLayerStack{
-        kStackNode, redOnTop ? std::vector{red, blue} : std::vector{blue, red}});
+    const runtime::CompiledMergeInput red{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)};
+    const runtime::CompiledMergeInput blue{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)};
+    operations.emplace_back(runtime::CompiledMerge{kStackNode, redOnTop ? std::vector{red, blue}
+                                                                        : std::vector{blue, red}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -237,7 +235,7 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
@@ -265,9 +263,9 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {.blendMode = bottomMode}));
     operations.emplace_back(
-        runtime::CompiledLayerStack{kStackNode,
-                                    {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)},
-                                     {kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)}}});
+        runtime::CompiledMerge{kStackNode,
+                               {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)},
+                                {kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -278,7 +276,7 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
 
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledLayerStack{kStackNode, {}});
+    operations.emplace_back(runtime::CompiledMerge{kStackNode, {}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -345,6 +343,72 @@ displayRequest(const std::size_t aggregateBudget = 1U << 20U) {
     return &storage;
 }
 
+void testNestedMergeEqualsFlat(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto flat = twoSolidPlan(true);
+    auto definition = flat->copyDefinition();
+    auto& merge = std::get<runtime::CompiledMerge>(definition.operations[4]);
+    const auto top = merge.entries.front();
+    merge.entries.erase(merge.entries.begin());
+    definition.operations.insert(
+        definition.operations.begin() + 5,
+        runtime::CompiledMerge{
+            document::NodeId::fromRaw(900),
+            {top, {document::LayerSlotId::fromRaw(900), {}, runtime::OperationIndex::fromRaw(4)}}});
+    std::get<runtime::CompiledCompositionOutput>(definition.operations[6]).input =
+        runtime::OperationIndex::fromRaw(5);
+    definition.output = runtime::OperationIndex::fromRaw(6);
+    const auto nested = publishPlan(std::move(definition));
+    const auto expected = evaluator.evaluate(flat, requestFor(*flat), {});
+    const auto actual = evaluator.evaluate(nested, requestFor(*nested), {});
+    expectations.expect(expected.frame() && actual.frame(), "nested Merge evaluates");
+    if (!expected.frame() || !actual.frame())
+        return;
+    for (std::int64_t y = 0; y < 2; ++y)
+        for (std::int64_t x = 0; x < 4; ++x) {
+            render::Rgba32f a = render::Rgba32f::transparent(), b = a;
+            expectations.expect(pixel(expected, x, y, a) && pixel(actual, x, y, b) && a == b,
+                                "two-level Normal Merge is bit-identical to flattened layers");
+        }
+    auto wrappedDefinition = nested->copyDefinition();
+    wrappedDefinition.operations.insert(
+        wrappedDefinition.operations.begin() + 6,
+        layerOutput(document::NodeId::fromRaw(901), document::LayerId::fromRaw(901),
+                    runtime::OperationIndex::fromRaw(5),
+                    {document::ParameterId::fromRaw(901), document::ParameterId::fromRaw(902),
+                     document::ParameterId::fromRaw(903), document::ParameterId::fromRaw(904),
+                     document::ParameterId::fromRaw(905), document::ParameterId::fromRaw(906)},
+                    {}));
+    wrappedDefinition.operations.insert(
+        wrappedDefinition.operations.begin() + 7,
+        runtime::CompiledMerge{
+            document::NodeId::fromRaw(902),
+            {{document::LayerSlotId::fromRaw(902), document::LayerId::fromRaw(901),
+              runtime::OperationIndex::fromRaw(6)}}});
+    std::get<runtime::CompiledCompositionOutput>(wrappedDefinition.operations[8]).input =
+        runtime::OperationIndex::fromRaw(7);
+    wrappedDefinition.output = runtime::OperationIndex::fromRaw(8);
+    const auto wrapped = publishPlan(std::move(wrappedDefinition));
+    const auto wrappedResult = evaluator.evaluate(wrapped, requestFor(*wrapped), {});
+    render::Rgba32f originalPixel = render::Rgba32f::transparent(), wrappedPixel = originalPixel;
+    expectations.expect(pixel(actual, 1, 1, originalPixel) &&
+                            pixel(wrappedResult, 1, 1, wrappedPixel) &&
+                            originalPixel == wrappedPixel,
+                        "a Merge can feed an identity Layer without changing pixels");
+    auto plainDefinition = oneSolidPlan()->copyDefinition();
+    std::get<runtime::CompiledMerge>(plainDefinition.operations[2]).entries = {
+        {kSlotA, {}, runtime::OperationIndex::fromRaw(0)}};
+    plainDefinition.operations.erase(plainDefinition.operations.begin() + 1);
+    std::get<runtime::CompiledCompositionOutput>(plainDefinition.operations[2]).input =
+        runtime::OperationIndex::fromRaw(1);
+    plainDefinition.output = runtime::OperationIndex::fromRaw(2);
+    const auto plain = publishPlan(std::move(plainDefinition));
+    const auto result = evaluator.evaluate(plain, requestFor(*plain), {});
+    render::Rgba32f value = render::Rgba32f::transparent();
+    expectations.expect(pixel(result, 1, 1, value) && value.alpha() == 1.0F,
+                        "plain source is composited at full opacity");
+}
+
 void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto centered = oneSolidPlan();
@@ -380,7 +444,7 @@ squareTransformPlan(const LayerTransformValues values) {
         runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, values));
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNode, {{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(2)});
@@ -1294,9 +1358,9 @@ void testRepeatability(Expectations& expectations) {
         kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2), kLayerParametersB,
         {.position = {80.0, 60.0}, .scale = {0.8, 0.8}, .rotation = 15.0, .opacity = 0.75}));
     operations.emplace_back(
-        runtime::CompiledLayerStack{kStackNode,
-                                    {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)},
-                                     {kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
+        runtime::CompiledMerge{kStackNode,
+                               {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(3)},
+                                {kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(4)});
     return publishPlan(runtime::CompiledCompositionPlanDefinition{
@@ -1735,6 +1799,7 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
 int main() {
     Expectations expectations;
     try {
+        testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);
         testLayerTransformShapesTheFrame(expectations);

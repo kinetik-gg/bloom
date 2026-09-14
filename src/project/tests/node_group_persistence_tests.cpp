@@ -86,8 +86,18 @@ std::vector<std::byte> archiveOf(const document::Snapshot& snapshot,
     const CanonicalManifestV1 manifest;
     const CanonicalDocumentV1 input{.snapshot = &snapshot, .colorSettings = &settings};
     auto saved = buildVerifiedSaveArchive(manifest, input, {}, memory());
-    if (!saved || !saved.archive())
+    if (!saved || !saved.archive()) {
+        const auto* failure = saved.failure();
+        if (failure) {
+            std::cerr << "archive stage " << static_cast<int>(failure->stage()) << '\n';
+            if (const auto* decoded = failure->payloadAs<SaveArchiveDocumentDecodeFailure>())
+                std::cerr << "decode " << static_cast<int>(decoded->error) << " "
+                          << decoded->path.view() << '\n';
+            if (const auto* reconstructed = failure->payloadAs<ReconstructionRejected>())
+                std::cerr << "reconstruct " << static_cast<int>(reconstructed->stage) << '\n';
+        }
         throw std::runtime_error("group archive");
+    }
     const auto bytes = saved.archive()->bytes();
     return {bytes.begin(), bytes.end()};
 }
@@ -105,7 +115,7 @@ void roundTripAndReopen() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 5 && !opened.roundTrip,
+    expect(opened.schemaMinor == 6 && !opened.roundTrip,
            "a grouped project is written and read as the current schema minor");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -156,10 +166,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 5");
+    const auto minor = documentText.find("\"minor\": 6");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 5").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 6").size(), "\"minor\": 1");
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");
 
@@ -185,7 +195,7 @@ void migrationFromSchema11() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 5 && !opened.roundTrip,
+    expect(opened.schemaMinor == 6 && !opened.roundTrip,
            "migration lands on the current editable schema");
     const auto snapshot = opened.document->snapshot();
     const auto& composition = snapshot.project().compositions().front();
@@ -248,10 +258,50 @@ void migrationDeterminismAndChain() {
                                   output),
            "the group step refuses its own output");
 }
+void multipleMergeRoundTrip() {
+    auto authored = authoredProject();
+    auto snapshot = authored.document->snapshot();
+    auto draft = authored.document->draft(snapshot);
+    auto& graph = draft.project().findComposition(authored.compositionId)->graph();
+    const auto nestedId = draft.ids().allocateNode();
+    const auto slotId = draft.ids().allocateLayerSlot();
+    const auto edgeId = draft.ids().allocateEdge();
+    if (!nestedId || !slotId || !edgeId)
+        throw std::logic_error("Merge ids");
+    const auto nested = *nestedId;
+    const auto slot = *slotId;
+    const auto edge = *edgeId;
+    expect(graph.addNode({nested, std::string(document::kLayerStackNodeType), {}, 1}),
+           "add nested Merge");
+    graph.merge(nested)->setEnabled(false);
+    expect(graph.layerStack().append({slot, {}}) &&
+               graph.addEdge(
+                   {edge,
+                    {nested, "image"},
+                    document::LayerStackInputRef{graph.layerStack().nodeId(), slot, "content"}}),
+           "connect nested Merge");
+    expect(authored.document->commit(snapshot.revision(), std::move(draft)).committed(),
+           "publish nested Merge");
+    snapshot = authored.document->snapshot();
+    const auto bytes = archiveOf(snapshot, neutralColorSettings());
+    auto result = openProjectArchive(bytes, {}, memory());
+    expect(result.outcome() == OpenArchiveOutcome::Opened, "multiple Merges reopen");
+    if (result.outcome() != OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto restored = opened.document->snapshot();
+    const auto& restoredGraph = restored.project().findComposition(authored.compositionId)->graph();
+    expect(restoredGraph.merges().size() == 2 && restoredGraph.merge(nested) &&
+               !restoredGraph.merge(nested)->enabled() && restoredGraph.layerStack().find(slot),
+           "Merge ownership and plain-image slot survive");
+    expect(archiveOf(restored, opened.colorSettings) == bytes,
+           "multiple Merge archive is byte stable");
+}
 } // namespace
 
 int main() {
     try {
+        multipleMergeRoundTrip();
         roundTripAndReopen();
         migrationFromSchema11();
         migrationDeterminismAndChain();

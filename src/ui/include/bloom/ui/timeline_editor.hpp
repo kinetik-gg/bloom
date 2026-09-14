@@ -57,6 +57,7 @@ struct TimelineLayerEntry final {
     document::ParameterId parameterId{};
     std::string role{};
     bool expanded = false;
+    document::NodeId imageNodeId{};
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,

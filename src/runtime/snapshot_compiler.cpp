@@ -513,6 +513,8 @@ class CompilePass final {
                 }
             }
 
+            if (const auto* merge = graph.merge(node->id); merge && !merge->enabled())
+                continue;
             const auto& layerSlotInput = definition->second->layerSlotInput;
             if (!layerSlotInput.has_value()) {
                 continue;
@@ -521,7 +523,7 @@ class CompilePass final {
             if (!slotInputDefinition.requiredPerSlot) {
                 continue;
             }
-            for (const auto& entry : graph.layerStack().entries()) {
+            for (const auto& entry : graph.merge(node->id)->entries()) {
                 if (mutedLayer(entry))
                     continue;
                 if (cancelled()) {

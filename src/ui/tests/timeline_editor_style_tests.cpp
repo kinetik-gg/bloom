@@ -5,6 +5,7 @@
 // every other widget test in this suite.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -27,6 +28,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
@@ -1822,6 +1824,56 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+void testOutputMergeRows(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Merge Timeline"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("Nested layer"), core::Color4d{1, 0, 0, 1});
+    const auto nested = fixture.session.composition()->graph().layerStack().nodeId();
+    const auto endpoint = fixture.session.composition()->graph().compositionOutput();
+    if (!endpoint) {
+        finishFixture(fixture);
+        return;
+    }
+    const auto output = endpoint->nodeId;
+    commands::Transaction add("Add Merge", fixture.session.snapshot().revision());
+    add.emplace<commands::AddNode>(fixture.session.compositionId(),
+                                   std::string(document::kLayerStackNodeType), document::Vec2d{});
+    const auto added = fixture.session.executeTransaction(std::move(add));
+    const auto outer = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!outer) {
+        expectations.expect(false, "new Merge authors");
+        finishFixture(fixture);
+        return;
+    }
+    commands::Transaction wire("Wire Merges", fixture.session.snapshot().revision());
+    wire.emplace<commands::ConnectPorts>(fixture.session.compositionId(),
+                                         document::OutputPortRef{nested, "image"},
+                                         document::LayerStackInputRef{*outer, {}, "content"});
+    wire.emplace<commands::ConnectPorts>(fixture.session.compositionId(),
+                                         document::OutputPortRef{*outer, "image"},
+                                         document::NodeInputRef{output, "image"});
+    (void)fixture.session.executeTransaction(std::move(wire));
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    const auto& rows = editor.layerStackForTest()->entries();
+    expectations.expect(rows.size() == 1 && rows.front().imageNodeId == nested &&
+                            rows.front().clipColor == ui::kit::Color::DataComposition &&
+                            !rows.front().expanded,
+                        "nested Merge appears as one collapsed composition-colored row");
+    fixture.session.selectNode(*outer);
+    ui::PropertiesEditor properties(fixture.session);
+    const auto names = properties.findChildren<QLabel*>("mergeInputName");
+    const auto modes = properties.findChildren<ui::kit::KDropdown*>("mergeInputBlendMode");
+    expectations.expect(names.size() == 1 && names.front()->text() == rows.front().name &&
+                            modes.size() == 1 && !modes.front()->isEnabled(),
+                        "Merge Properties list ordered plain-image inputs read-only");
+    commands::Transaction disable("Disable nested Merge", fixture.session.snapshot().revision());
+    disable.emplace<commands::SetMergeEnabled>(fixture.session.compositionId(), nested, false);
+    (void)fixture.session.executeTransaction(std::move(disable));
+    expectations.expect(!fixture.session.composition()->graph().merge(nested)->enabled(),
+                        "collapsed Merge has an authored enabled toggle");
+    finishFixture(fixture);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1834,6 +1886,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     try {
+        testOutputMergeRows(expectations);
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);

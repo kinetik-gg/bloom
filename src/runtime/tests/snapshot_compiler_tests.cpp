@@ -478,6 +478,54 @@ void testValueGraphCycleRefusal(Expectations& expectations) {
                         "a parameter driven by its own node is refused as a graph cycle");
 }
 
+void testNestedMergeCompilation(Expectations& expectations) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto& graph = project.findComposition(kCompositionId)->graph();
+    const auto nested = NodeId::fromRaw(900);
+    const auto slot = LayerSlotId::fromRaw(900);
+    require(graph.addNode({nested, std::string(kLayerStackNodeType), {}, 1}), "nested Merge node");
+    require(graph.merge(nested)->append({slot, {}}), "plain image slot");
+    require(graph.addEdge({EdgeId::fromRaw(900),
+                           {kFirstSolidNode, "image"},
+                           LayerStackInputRef{nested, slot, "content"}}),
+            "plain source edge");
+    require(graph.layerStack().append({LayerSlotId::fromRaw(901), {}}), "nested slot");
+    require(graph.addEdge({EdgeId::fromRaw(901),
+                           {nested, "image"},
+                           LayerStackInputRef{kStackNode, LayerSlotId::fromRaw(901), "content"}}),
+            "nested edge");
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto direct = project;
+    auto& directGraph = direct.findComposition(kCompositionId)->graph();
+    require(directGraph.eraseEdge(kOutputEdge) &&
+                directGraph.addEdge(
+                    {kOutputEdge, {kFirstLayerNode, "image"}, NodeInputRef{kOutputNode, "image"}}),
+            "direct Layer output fixture");
+    const auto directResult = compile(std::move(direct), registry);
+    expectations.expect(
+        directResult.plan &&
+            std::holds_alternative<runtime::CompiledMerge>(
+                directResult.plan->operations()[directResult.plan->output().value() - 1]),
+        "direct image Output is normalized to a full composition image");
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.plan && result.diagnostics.empty(),
+                        "nested Merges compile without diagnostics");
+    if (!result.plan)
+        return;
+    const auto operations = result.plan->operations();
+    std::size_t merges = 0;
+    for (std::size_t index = 0; index < operations.size(); ++index)
+        if (const auto* merge = std::get_if<runtime::CompiledMerge>(&operations[index])) {
+            ++merges;
+            for (const auto& input : merge->entries)
+                expectations.expect(input.input.value() < index, "Merge inputs are topological");
+        }
+    expectations.expect(merges == 2, "both reachable Merges lower");
+}
+
 void testRegistryMustBeFrozen(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -539,7 +587,7 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     const auto* solid = std::get_if<runtime::CompiledSolid>(&first.plan->operations()[0]);
     const auto* firstLayer =
         std::get_if<runtime::CompiledLayerOutput>(&first.plan->operations()[1]);
-    const auto* stack = std::get_if<runtime::CompiledLayerStack>(&first.plan->operations()[4]);
+    const auto* stack = std::get_if<runtime::CompiledMerge>(&first.plan->operations()[4]);
     const auto* output =
         std::get_if<runtime::CompiledCompositionOutput>(&first.plan->operations()[5]);
     const auto* firstPosition = firstLayer == nullptr
@@ -570,14 +618,13 @@ void testDeterministicTypedPlan(Expectations& expectations) {
     expectations.expect(firstLayer != nullptr &&
                             firstLayer->blendMode == bloom::core::kDefaultBlendMode,
                         "a layer with the schema default lowers to Normal");
-    expectations.expect(stack != nullptr && stack->entries.size() == 2 &&
-                            stack->entries[0] ==
-                                runtime::CompiledLayerStackEntry{
-                                    kFirstSlot, kFirstLayer, runtime::OperationIndex::fromRaw(1)} &&
-                            stack->entries[1] ==
-                                runtime::CompiledLayerStackEntry{
-                                    kSecondSlot, kSecondLayer, runtime::OperationIndex::fromRaw(3)},
-                        "Layer Stack preserves explicit top-to-bottom stable slot order");
+    expectations.expect(
+        stack != nullptr && stack->entries.size() == 2 &&
+            stack->entries[0] == runtime::CompiledMergeInput{kFirstSlot, kFirstLayer,
+                                                             runtime::OperationIndex::fromRaw(1)} &&
+            stack->entries[1] == runtime::CompiledMergeInput{kSecondSlot, kSecondLayer,
+                                                             runtime::OperationIndex::fromRaw(3)},
+        "Layer Stack preserves explicit top-to-bottom stable slot order");
     expectations.expect(output != nullptr && output->input.value() == 4,
                         "Composition Output names the final dependency explicitly");
 
@@ -588,7 +635,7 @@ void testDeterministicTypedPlan(Expectations& expectations) {
                         "one-solid topology lowers to the minimal four-operation plan");
     if (single.plan) {
         const auto* singleStack =
-            std::get_if<runtime::CompiledLayerStack>(&single.plan->operations()[2]);
+            std::get_if<runtime::CompiledMerge>(&single.plan->operations()[2]);
         expectations.expect(singleStack != nullptr && singleStack->entries.size() == 1 &&
                                 singleStack->entries.front().input ==
                                     runtime::OperationIndex::fromRaw(1),
@@ -1266,6 +1313,7 @@ int main() {
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
+        testNestedMergeCompilation(expectations);
         testRegistryMustBeFrozen(expectations);
         testValueGraphDriverResolution(expectations);
         testValueGraphCycleRefusal(expectations);

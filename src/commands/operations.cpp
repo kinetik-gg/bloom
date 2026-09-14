@@ -73,13 +73,14 @@ allocateCompositionCloneIds(document::Draft& draft, const document::Composition&
         }
         ids.layers.emplace(boundary.layerId, *id);
     }
-    for (const auto& entry : source.graph().layerStack().entries()) {
-        const auto id = draft.ids().allocateLayerSlot();
-        if (!id) {
-            return std::nullopt;
+    for (const auto& stack : source.graph().merges())
+        for (const auto& entry : stack.entries()) {
+            const auto id = draft.ids().allocateLayerSlot();
+            if (!id) {
+                return std::nullopt;
+            }
+            ids.slots.emplace(entry.slotId, *id);
         }
-        ids.slots.emplace(entry.slotId, *id);
-    }
     for (const auto& parameter : source.parameters().records()) {
         const auto id = draft.ids().allocateParameter();
         if (!id) {
@@ -137,7 +138,9 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         return std::nullopt;
     }
 
-    const auto newLayerStackId = remap(ids->nodes, source.graph().layerStack().nodeId());
+    const auto newLayerStackId = source.graph().merges().empty()
+                                     ? document::NodeId{}
+                                     : remap(ids->nodes, source.graph().merges().front().nodeId());
     document::CanonicalGraph graph(newLayerStackId);
     for (const auto& sourceNode : source.graph().nodes()) {
         auto node = sourceNode;
@@ -157,12 +160,18 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             return std::nullopt;
         }
     }
-    for (const auto& sourceEntry : source.graph().layerStack().entries()) {
-        if (!graph.layerStack().append(
-                {remap(ids->slots, sourceEntry.slotId), remap(ids->layers, sourceEntry.layerId)})) {
-            return std::nullopt;
+    for (const auto& stack : source.graph().merges())
+        graph.merge(remap(ids->nodes, stack.nodeId()))->setEnabled(stack.enabled());
+    for (const auto& stack : source.graph().merges())
+        for (const auto& sourceEntry : stack.entries()) {
+            if (!graph.merge(remap(ids->nodes, stack.nodeId()))
+                     ->append({remap(ids->slots, sourceEntry.slotId),
+                               sourceEntry.layerId.isValid()
+                                   ? remap(ids->layers, sourceEntry.layerId)
+                                   : document::LayerId{}})) {
+                return std::nullopt;
+            }
         }
-    }
     for (const auto& sourceEdge : source.graph().edges()) {
         auto edge = sourceEdge;
         edge.id = remap(ids->edges, sourceEdge.id);

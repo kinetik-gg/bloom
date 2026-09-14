@@ -89,7 +89,7 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat = format
         CompiledScalarParameter{kOpacityParam, 1.0}, kBlendModeParam,
         bloom::core::kDefaultBlendMode});
     operations.emplace_back(
-        CompiledLayerStack{kStackNode, {{kSlot, kLayer, OperationIndex::fromRaw(1)}}});
+        CompiledMerge{kStackNode, {{kSlot, kLayer, OperationIndex::fromRaw(1)}}});
     operations.emplace_back(CompiledCompositionOutput{kOutputNode, OperationIndex::fromRaw(2)});
     return std::make_shared<const CompiledCompositionPlan>(CompiledCompositionPlanDefinition{
         bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,

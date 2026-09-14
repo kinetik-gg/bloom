@@ -98,6 +98,7 @@ namespace bloom::project {
 // live-document invariants (duplicate slot/layer rejection) that are a later
 // document-construction concern, not this package's wire-shape decode.
 struct DecodedLayerStack final {
+    bool enabled = true;
     document::NodeId nodeId;
     std::vector<document::LayerStackEntry> entries;
 
@@ -116,6 +117,7 @@ struct DecodedGraph final {
     std::vector<document::EdgeRecord> edges;
     std::vector<document::LayerOutputBoundary> layerOutputs;
     DecodedLayerStack layerStack;
+    std::vector<DecodedLayerStack> merges;
     document::OutputPortRef compositionOutput;
 
     friend bool operator==(const DecodedGraph&, const DecodedGraph&) = default;

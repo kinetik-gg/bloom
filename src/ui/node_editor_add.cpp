@@ -48,6 +48,14 @@ commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
     }
     if (output_) {
         const auto kind = graph.outputKind(*output_);
+        if (definition->layerSlotInput && kind == definition->layerSlotInput->valueKind) {
+            const auto connected =
+                commands::ConnectPorts(
+                    composition_, *output_,
+                    document::LayerStackInputRef{*node, {}, definition->layerSlotInput->role})
+                    .apply(draft);
+            return connected.status == commands::OperationStatus::Rejected ? connected : result;
+        }
         for (const auto& port : definition->inputs) {
             if (port.valueKind != kind)
                 continue;

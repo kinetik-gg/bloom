@@ -138,7 +138,7 @@ constexpr auto kShellBlendModeParameterId = document::ParameterId::fromRaw(0x6a)
                                          document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}, kShellBlendModeParameterId,
         core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});

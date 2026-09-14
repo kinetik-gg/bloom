@@ -169,7 +169,16 @@ dims, and the wire turns `Error` red over a socket whose kind the connect rule w
 it previews is the same one the command applies, promotions included, so the preview is never a second
 opinion.
 
+Merge is available in Add menus and search. Drop any image output on its pill to insert at the
+caret; drop on the body to append. Drag an existing link end within the pill to reorder its stable
+slot, or away to disconnect. Only Output and its directly connected Merge are protected from Delete.
+
 ## Timeline
+
+The timeline follows the Merge directly feeding Output. Direct Layer inputs remain editable;
+nested Merges appear as one collapsed composition-colored row, with enabled as the only editable
+layer toggle. Properties on a Merge lists its own inputs in order, with Layer blend/opacity editable
+and plain-image values read-only. Solo on a Layer applies composition-wide, including nested Merges.
 
 Space uses the shared window transport, even with no Timeline panel open. Middle-drag pans the
 Viewer and Nodes; Space no longer arms a pan gesture.

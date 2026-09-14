@@ -328,7 +328,7 @@ shellPlan(const std::uint32_t width, const std::uint32_t height) {
                                          document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kShellOpacityParameterId, 1.0}, kShellBlendModeParameterId,
         core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kShellStackNodeId, {{kShellSlotId, kShellLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});

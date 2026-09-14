@@ -46,20 +46,19 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
                               .animationCurveId = std::nullopt,
                               .keyframeId = std::nullopt,
                               .field = {}};
-    std::visit(
-        Overloaded{
-            [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
-            [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
-            [&subject](const CompiledLayerOutput& layer) {
-                subject.nodeId = layer.sourceNodeId;
-                subject.layerId = layer.layerId;
-            },
-            [&subject](const CompiledLayerStack& stack) { subject.nodeId = stack.sourceNodeId; },
-            [&subject](const CompiledCompositionOutput& output) {
-                subject.nodeId = output.sourceNodeId;
-            },
-        },
-        operation);
+    std::visit(Overloaded{
+                   [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+                   [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
+                   [&subject](const CompiledLayerOutput& layer) {
+                       subject.nodeId = layer.sourceNodeId;
+                       subject.layerId = layer.layerId;
+                   },
+                   [&subject](const CompiledMerge& stack) { subject.nodeId = stack.sourceNodeId; },
+                   [&subject](const CompiledCompositionOutput& output) {
+                       subject.nodeId = output.sourceNodeId;
+                   },
+               },
+               operation);
     return subject;
 }
 
@@ -316,13 +315,15 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
-                           std::holds_alternative<CompiledText>(input);
+                           std::holds_alternative<CompiledText>(input) ||
+                           std::holds_alternative<CompiledLayerOutput>(input) ||
+                           std::holds_alternative<CompiledMerge>(input);
                 };
                 if (!sourcesAnImage()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer Output has an invalid image input",
-                        "The input must name an earlier Solid or Text operation.",
+                        "The input must name an earlier image-producing operation.",
                         subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
@@ -368,7 +369,7 @@ enum class ScalarDomain : std::uint8_t {
                 }
                 return true;
             },
-            [&plan, index, &failure](const CompiledLayerStack& stack) {
+            [&plan, index, &failure](const CompiledMerge& stack) {
                 for (const auto& entry : stack.entries) {
                     if (entry.input.value() >= index) {
                         failure = diagnostic(
@@ -379,7 +380,8 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto* layer =
                         std::get_if<CompiledLayerOutput>(&plan.operations()[entry.input.value()]);
-                    if (layer == nullptr || layer->layerId != entry.layerId) {
+                    if (entry.layerId.isValid() &&
+                        (layer == nullptr || layer->layerId != entry.layerId)) {
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack entry does not match its layer output", {},
@@ -390,7 +392,7 @@ enum class ScalarDomain : std::uint8_t {
                 return true;
             },
             [&plan, index, &failure](const CompiledCompositionOutput& output) {
-                if (output.input.value() >= index || !std::holds_alternative<CompiledLayerStack>(
+                if (output.input.value() >= index || !std::holds_alternative<CompiledMerge>(
                                                          plan.operations()[output.input.value()])) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
@@ -906,7 +908,7 @@ template <typename Value>
                                registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
                                               operationSubject));
                        },
-                       [](const CompiledLayerStack&) {},
+                       [](const CompiledMerge&) {},
                        [](const CompiledCompositionOutput&) {},
                    },
                    plan->operations()[index]);
@@ -1426,6 +1428,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 detail::parameterSubject(operationSubject, *position, "position"));
                             return;
                         }
+                        if (!slots[layer.input.value()])
+                            return;
                         auto sourceView = slots[layer.input.value()]->view();
                         if (!sourceView) {
                             operationFailure =
@@ -1536,7 +1540,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         }
                         produced.emplace(std::move(*frozen.value()));
                     },
-                    [&](const CompiledLayerStack& stack) {
+                    [&](const CompiledMerge& stack) {
                         auto builder = render::Rgba32fImageBuilder::create(
                             resolved.imageDescriptor, resolved.imageBytes,
                             render::Rgba32f::transparent());
@@ -1567,22 +1571,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                 .total = totalRows});
                                 continue;
                             }
-                            // The mode comes off the Layer Output the entry names, which is where
-                            // the layer's own blend mode lives. hasExpectedInputKinds() has already
-                            // proven that operation is a CompiledLayerOutput whose layerId matches
-                            // this entry, so the lookup cannot legitimately fail; the check stays
-                            // because a silent fall back to Normal would composite the wrong
-                            // picture rather than report anything.
+                            // Only a direct Layer input contributes its blend mode. An elided
+                            // reroute can resolve to a Layer operation while remaining a plain
+                            // image input, so the slot identity also participates in this choice.
                             const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                 &plan->operations()[entry->input.value()]);
-                            if (layerOutput == nullptr) {
-                                operationFailure =
-                                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
-                                               "Layer Stack entry does not name a Layer Output", {},
-                                               operationSubject);
-                                return;
-                            }
-                            const auto blendMode = layerOutput->blendMode;
+                            const auto blendMode = layerOutput && entry->layerId.isValid()
+                                                       ? layerOutput->blendMode
+                                                       : core::BlendMode::Normal;
                             auto sourceView = slots[entry->input.value()]->view();
                             if (!sourceView) {
                                 operationFailure =

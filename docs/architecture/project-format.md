@@ -37,18 +37,17 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.5`.
-The earlier document `1.0`, `1.1`, `1.2`, and `1.3` artifacts are retained for migration fixtures.
+The container version remains `1.0`; the current document schema is `1.6`.
+The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.5.schema.json` and `schemas/project/document-1.5.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.5` and
-`urn:kinetik:bloom:schema:project-document:1.5`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.5`. Every historical artifact -- `1.0`, `1.1`, `1.2`, and
-`1.3`, manifest and
-document -- remains checked, and each version's checker validates what its own minor adds and then
+`schemas/project/manifest-1.6.schema.json` and `schemas/project/document-1.6.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.6` and
+`urn:kinetik:bloom:schema:project-document:1.6`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.6`. Every historical artifact from `1.0` through `1.5`, manifest and
+document, remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
 
 Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
@@ -1087,3 +1086,15 @@ rational objects. Absence means `[0,duration)`; a present range satisfies
 sentinel. Invalid ranges are refused during trusted document construction. The writer preserves
 explicit ranges and work areas through close/reopen verification; old document pixels and output
 identity goldens do not change.
+
+## Merge Collections In Document 1.6
+
+The `1.5` → `1.6` ladder step changes only the root version. The original `graph.layerStack`
+record retains its node ID and ordered slots; it is `null` only when no Merge exists. Optional
+trailing `graph.merges` records carry additional Merges, each with `nodeId`, ordered `entries`, and
+optional `enabled` (default true). Every Merge node owns one collection. Entries retain `slotId`
+and `layerId`; `layerId: null` denotes a plain image input, whose node and port come from its edge.
+An absent `merges` field means no additional Merges. Slot IDs remain project-unique and participate
+in allocator high-water validation. Output wiring determines the timeline Merge independently of
+the primary persistence record. Historical schema artifacts remain unchanged; 1.6 checkers reduce
+the new artifacts to 1.5 and run the complete historical ladder.

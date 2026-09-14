@@ -147,7 +147,7 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x2010);
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
         bloom::core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNodeId, {{kSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});

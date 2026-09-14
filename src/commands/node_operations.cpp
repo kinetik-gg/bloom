@@ -104,7 +104,7 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         if (detail::protectedNode(composition->graph(), id))
             return OperationResult::rejected(
                 OperationIssueCode::Unsupported,
-                "The Layer Stack and composition output cannot be removed");
+                "Output and its directly connected Merge cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
     }
@@ -187,30 +187,22 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     // find.
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&destination_);
         slot != nullptr && !slot->slotId.isValid()) {
-        if (slot->stackNodeId != graph.layerStack().nodeId())
+        auto* stack = graph.merge(slot->stackNodeId);
+        if (!stack)
             return detail::invalidTarget();
         const auto boundaries = graph.layerOutputs();
         const auto boundary = std::ranges::find_if(boundaries, [this](const auto& candidate) {
             return candidate.nodeId == source_.nodeId;
         });
-        if (boundary == boundaries.end())
-            return OperationResult::rejected(
-                OperationIssueCode::Unsupported,
-                "Only a Layer node's output can take a slot in the layer stack");
-        const auto entries = graph.layerStack().entries();
-        if (std::ranges::any_of(entries, [&boundary](const auto& entry) {
-                return entry.layerId == boundary->layerId;
-            }))
-            return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                             "This layer already has a slot in the layer stack");
+        const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
         const auto slotId = draft.ids().allocateLayerSlot();
         const auto edgeId = draft.ids().allocateEdge();
         if (!slotId || !edgeId)
             return detail::exhaustedIds();
-        if (!graph.layerStack().append({*slotId, boundary->layerId}))
+        if (!stack->append({*slotId, layerId}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack slot could not be inserted");
-        if (insertBefore_.has_value() && !graph.layerStack().moveBefore(*slotId, insertBefore_))
+        if (insertBefore_.has_value() && !stack->moveBefore(*slotId, insertBefore_))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack slot could not be ordered");
         if (!graph.addEdge({*edgeId, source_,
@@ -231,12 +223,62 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         return detail::exhaustedIds();
     if (previous)
         (void)graph.eraseEdge(*edgeId);
+    if (const auto* slot = std::get_if<document::LayerStackInputRef>(&destination_)) {
+        auto* stack = graph.merge(slot->stackNodeId);
+        if (!stack || !stack->find(slot->slotId))
+            return detail::invalidTarget();
+        const auto entries = stack->entries();
+        const auto found =
+            std::ranges::find(entries, slot->slotId, &document::LayerStackEntry::slotId);
+        const auto next = std::next(found) == entries.end()
+                              ? std::nullopt
+                              : std::optional(std::next(found)->slotId);
+        const auto boundaries = graph.layerOutputs();
+        const auto boundary =
+            std::ranges::find(boundaries, source_.nodeId, &document::LayerOutputBoundary::nodeId);
+        const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
+        (void)stack->erase(slot->slotId);
+        if (!stack->append({slot->slotId, layerId}) || !stack->moveBefore(slot->slotId, next))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Merge slot source cannot be replaced");
+    }
     if (!graph.addEdge({*edgeId, source_, destination_}, registry_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Connection could not be inserted");
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
     return OperationResult::applied({{"edge", *edgeId}});
+}
+
+std::string_view SetMergeEnabled::typeId() const noexcept { return "bloom.merge.set-enabled"; }
+OperationResult SetMergeEnabled::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    auto* merge = composition ? composition->graph().merge(mergeId_) : nullptr;
+    if (!merge)
+        return detail::invalidTarget();
+    if (merge->enabled() == enabled_)
+        return OperationResult::noChange();
+    merge->setEnabled(enabled_);
+    return OperationResult::applied();
+}
+
+std::string_view ReorderMergeInput::typeId() const noexcept { return "bloom.merge.reorder-input"; }
+OperationResult ReorderMergeInput::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    auto* stack = composition ? composition->graph().merge(mergeId_) : nullptr;
+    if (!stack || !stack->find(slotId_) || newIndex_ >= stack->entries().size())
+        return detail::invalidTarget();
+    const auto entries = stack->entries();
+    const auto found = std::ranges::find(entries, slotId_, &document::LayerStackEntry::slotId);
+    const auto oldIndex = static_cast<std::size_t>(std::distance(entries.begin(), found));
+    if (oldIndex == newIndex_)
+        return OperationResult::noChange();
+    const auto beforeIndex = newIndex_ + (oldIndex < newIndex_ ? 1U : 0U);
+    const auto before =
+        beforeIndex == entries.size() ? std::nullopt : std::optional(entries[beforeIndex].slotId);
+    if (!stack->moveBefore(slotId_, before))
+        return detail::invalidTarget();
+    return OperationResult::applied();
 }
 
 std::string_view DisconnectInput::typeId() const noexcept { return "bloom.node.disconnect-input"; }
@@ -248,8 +290,8 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     if (!graph.inputKind(input_, registry_))
         return detail::invalidTarget();
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_); slot != nullptr) {
-        if (slot->stackNodeId != graph.layerStack().nodeId() ||
-            graph.layerStack().find(slot->slotId) == nullptr)
+        auto* stack = graph.merge(slot->stackNodeId);
+        if (!stack || stack->find(slot->slotId) == nullptr)
             return detail::invalidTarget();
         // Detaching a stack slot's content REMOVES the slot (task FIX1, item B). A slot with
         // nothing in it is not a shape the canonical graph admits -- every visible slot requires
@@ -259,7 +301,7 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         const auto* edge = detail::inputEdge(graph, input_);
         if (edge != nullptr)
             (void)graph.eraseEdge(edge->id);
-        if (!graph.layerStack().erase(slot->slotId))
+        if (!stack->erase(slot->slotId))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack slot could not be removed");
         if (const auto failure = detail::validateGraph(*composition, registry_))
@@ -319,7 +361,7 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     if (detail::protectedNode(graph, nodeId_))
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,
-            "The Layer Stack and composition output cannot be dissolved");
+            "Output and its directly connected Merge cannot be dissolved");
     const auto* definition = registry_.find(node->typeId, node->schemaVersion);
     if (!definition)
         return OperationResult::rejected(OperationIssueCode::Unsupported,
