@@ -33,6 +33,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -257,6 +258,11 @@ void PropertiesEditor::commitRotationFromControls() {
 }
 
 bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::FocusOut && watched->objectName() == "propertiesTextMultiline" &&
+        !rebuilding_) {
+        if (auto* text = qobject_cast<QPlainTextEdit*>(watched))
+            (void)session_.setSelectedTextContent(text->toPlainText());
+    }
     if (event->type() == QEvent::MouseButtonRelease && !rebuilding_) {
         if (watched == opacitySlider_) {
             commitOpacityFromControls();
@@ -280,6 +286,7 @@ void PropertiesEditor::rebuild() {
     configureTextSource();
     configureDocumentProperties();
     configureMergeInputs();
+    configureRegistryRows();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
     const auto context = session_.selection().contextualLayer;

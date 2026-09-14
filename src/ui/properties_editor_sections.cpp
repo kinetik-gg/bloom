@@ -41,6 +41,7 @@
 
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -349,6 +350,26 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     addRow(rows, body, makeRowLabel(tr("Font"), body), nullptr, textFontName_);
 
     layout->addWidget(textSourcePanel_);
+    auto* multiline = new QPlainTextEdit(body);
+    multiline->setObjectName("propertiesTextMultiline");
+    multiline->setFixedHeight(kit::px(kit::Size::Control) * 3);
+    multiline->installEventFilter(this);
+    auto* expand = new kit::KButton(body);
+    expand->setObjectName("propertiesTextExpand");
+    expand->setText(tr("Edit multiple lines"));
+    expand->setCheckable(true);
+    rows->addWidget(expand);
+    rows->addWidget(multiline);
+    multiline->hide();
+    connect(expand, &kit::KButton::toggled, multiline, &QWidget::setVisible);
+    connect(&session_, &CompositionSession::snapshotChanged, multiline, [this, multiline] {
+        if (!multiline->hasFocus())
+            multiline->setPlainText(textContent_->text());
+    });
+    connect(expand, &kit::KButton::toggled, multiline, [this, multiline](bool expanded) {
+        if (expanded)
+            multiline->setPlainText(textContent_->text());
+    });
 }
 
 void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
