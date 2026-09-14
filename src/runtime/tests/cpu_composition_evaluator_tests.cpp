@@ -1803,6 +1803,7 @@ int main() {
     try {
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);
+        testOperationDirtyPropagation(expectations);
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);

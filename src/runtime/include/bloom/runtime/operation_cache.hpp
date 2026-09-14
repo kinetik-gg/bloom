@@ -29,6 +29,16 @@ class OperationCache final {
     void setByteBudget(std::size_t budget);
     [[nodiscard]] std::size_t retainedBytes() const;
   private:
+    struct Address {
+        document::Revision revision;
+        std::string content;
+        friend bool operator==(const Address&, const Address&) = default;
+    };
+    struct AddressHash {
+        std::size_t operator()(const Address& address) const noexcept {
+            return std::hash<std::string>{}(address.content) ^ std::hash<std::uint64_t>{}(address.revision.value());
+        }
+    };
     struct Entry {
         std::string content;
         document::Revision revision;
@@ -41,5 +51,6 @@ class OperationCache final {
     std::size_t bytes_ = 0;
     std::list<Entry> entries_;
     std::unordered_map<std::string, std::list<Entry>::iterator> index_;
+    std::unordered_map<Address, std::list<Entry>::iterator, AddressHash> addresses_;
 };
 } // namespace bloom::runtime

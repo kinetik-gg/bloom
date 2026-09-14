@@ -94,3 +94,49 @@ void testOperationTimeInvariance(Expectations& expectations) {
     expectations.expect(first.frame() && next.frame() && statistics.hits == 2 && statistics.misses == 5,
                         "Time and its driver rerun; constant value and solid hit");
 }
+
+void testOperationDirtyPropagation(Expectations& expectations) {
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = memoizationFixture();
+    const auto first = evaluator.evaluate(plan, requestFor(*plan), {});
+    auto definition = plan->copyDefinition();
+    definition.sourceRevision = document::Revision::fromRaw(8);
+    std::get<runtime::CompiledSolid>(definition.operations[0]).color.source = core::Color4d{0, 1, 0, 1};
+    const auto edited = publishPlan(std::move(definition));
+    runtime::OperationCacheStatistics statistics;
+    auto request = requestFor(*edited);
+    const auto result = evaluator.evaluate(edited, request, {}, {}, nullptr, &statistics);
+    expectations.expect(first.frame() && result.frame() && statistics.hits == 2 && statistics.misses == 4,
+                        "color edit reruns solid, its transform, merge and output; text and its transform hit");
+    expectations.expect(statistics.evaluatedNodes == std::vector{kSolidNodeA, kLayerNodeA, kStackNode, kOutputNode},
+                        "dirty propagation identifies exactly the changed branch and its downstream");
+    request.bypassOperationCache = true;
+    const auto serial = evaluator.evaluate(edited, request, {});
+    if (result.frame() && serial.frame()) expectations.expect(
+        std::memcmp(result.frame()->processImage().pixels().data(), serial.frame()->processImage().pixels().data(),
+                    result.frame()->processImage().pixels().size_bytes()) == 0,
+        "edited cached image equals uncached serial pixels");
+    auto unrelatedDefinition = edited->copyDefinition();
+    unrelatedDefinition.sourceRevision = document::Revision::fromRaw(9);
+    const auto unrelated = publishPlan(std::move(unrelatedDefinition));
+    const auto unchanged = evaluator.evaluate(unrelated, requestFor(*unrelated), {}, {}, nullptr, &statistics);
+    expectations.expect(unchanged.frame() && statistics.hits == 6 && statistics.misses == 0,
+                        "unrelated revision edit reuses all operation content");
+    auto trimDefinition = unrelated->copyDefinition();
+    auto& layer = std::get<runtime::CompiledLayerOutput>(trimDefinition.operations[3]);
+    layer.inPoint = core::RationalTime::fromInteger(1);
+    layer.outPoint = core::RationalTime::fromInteger(2);
+    const auto trimmed = publishPlan(std::move(trimDefinition));
+    for (const auto frame : {0, 1, 2, 1}) {
+        auto trimRequest = requestFor(*trimmed);
+        trimRequest.time = core::RationalTime::fromInteger(frame);
+        const auto cached = evaluator.evaluate(trimmed, trimRequest, {});
+        trimRequest.bypassOperationCache = true;
+        const auto reference = evaluator.evaluate(trimmed, trimRequest, {});
+        expectations.expect(cached.frame() && reference.frame(), "trim boundary evaluates");
+        if (cached.frame() && reference.frame()) expectations.expect(
+            std::memcmp(cached.frame()->processImage().pixels().data(), reference.frame()->processImage().pixels().data(),
+                        cached.frame()->processImage().pixels().size_bytes()) == 0,
+            "cached absence and presence respect both trim boundaries");
+    }
+}
