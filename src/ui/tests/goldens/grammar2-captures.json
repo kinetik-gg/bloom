@@ -1,0 +1,24 @@
+{
+  "fixture": "src/ui/tests/window_fixture.hpp",
+  "logicalWidth": 1920,
+  "logicalHeight": 1200,
+  "platform": "offscreen",
+  "reducedMotion": true,
+  "captures": [
+    {
+      "path": "build/grammar2-window-dpr1.png",
+      "devicePixelRatio": 1,
+      "physicalWidth": 1920,
+      "physicalHeight": 1200,
+      "sha256": "9d73d2b1b19031ee4457e4f7ef19d5c06051a65ad995be62ea9f3df52422bc8d"
+    },
+    {
+      "path": "build/grammar2-window-dpr15.png",
+      "devicePixelRatio": 1.5,
+      "physicalWidth": 2880,
+      "physicalHeight": 1800,
+      "sha256": "2f0e306065b1e9d1be8b54fdb69708f81fabff686ce3101d8dda4d9a50bdaea7"
+    }
+  ],
+  "generation": "Run bloom_window_golden_test at QT_SCALE_FACTOR=1 and 1.5, QT_QPA_PLATFORM=offscreen, BLOOM_REDUCED_MOTION=1. Generated captures remain under ignored build/; references are tracked beside this manifest."
+}
