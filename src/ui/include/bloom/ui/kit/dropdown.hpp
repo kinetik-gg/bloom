@@ -37,6 +37,7 @@ class KDropdown final : public QWidget {
     ~KDropdown() override;
 
     int addItem(const QString& text, const QVariant& data = {});
+    void clearItems();
     [[nodiscard]] int count() const;
     [[nodiscard]] QString itemText(int index) const;
     [[nodiscard]] QVariant itemData(int index) const;

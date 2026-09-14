@@ -57,6 +57,13 @@ int KDropdown::addItem(const QString& text, const QVariant& data) {
 
 int KDropdown::count() const { return model_->rowCount(); }
 
+void KDropdown::clearItems() {
+    model_->clear();
+    currentIndex_ = -1;
+    updateGeometry();
+    update();
+}
+
 QString KDropdown::itemText(const int index) const {
     const auto* item = model_->item(index);
     return item == nullptr ? QString{} : item->text();

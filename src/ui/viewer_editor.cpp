@@ -2,6 +2,7 @@
 
 #include "composition_editor_support.hpp"
 
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -30,6 +31,8 @@
 #include <QImage>
 #include <QIntValidator>
 #include <QKeyEvent>
+#include <QKeySequence>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -49,8 +52,10 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -316,6 +321,87 @@ class ViewerFooter final : public QWidget {
 
   private:
     std::vector<QWidget*> controls_;
+};
+
+// Header menus follow the Nodes header idiom: the selectors remain in one horizontal row while
+// the two text menus move into one trailing overflow menu when the area is too narrow. A menu is
+// never clipped or wrapped, and the overflow action reuses the same QMenu/actions.
+class ViewerHeaderMenuBar final : public QWidget {
+  public:
+    explicit ViewerHeaderMenuBar(QWidget* parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("viewerHeaderMenuBar"));
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        layout_ = new QHBoxLayout(this);
+        layout_->setContentsMargins(kit::px(kit::Spacing::XS), 0, kit::px(kit::Spacing::XS), 0);
+        layout_->setSpacing(kit::px(kit::Spacing::XS));
+    }
+
+    void addWidget(QWidget* widget) { layout_->addWidget(widget); }
+
+    QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& objectName) {
+        auto* button = new QToolButton(this);
+        button->setObjectName(objectName);
+        button->setText(title);
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::InstantPopup);
+        button->setAutoRaise(true);
+        button->setProperty("headerMenuButton", true);
+        button->setAccessibleName(title);
+        layout_->addWidget(button);
+        menuButtons_.push_back(button);
+        menus_.push_back(menu);
+        return button;
+    }
+
+    void finish() {
+        overflowButton_ = new QToolButton(this);
+        overflowButton_->setObjectName(QStringLiteral("viewerHeaderOverflowButton"));
+        overflowButton_->setText(QStringLiteral("…"));
+        overflowButton_->setToolTip(tr("More viewer menus"));
+        overflowButton_->setAccessibleName(tr("More viewer menus"));
+        overflowButton_->setPopupMode(QToolButton::InstantPopup);
+        overflowButton_->setAutoRaise(true);
+        overflowMenu_ = new QMenu(overflowButton_);
+        overflowMenu_->setObjectName(QStringLiteral("viewerHeaderOverflowMenu"));
+        for (auto* menu : menus_) {
+            overflowMenu_->addMenu(menu);
+        }
+        overflowButton_->setMenu(overflowMenu_);
+        layout_->addWidget(overflowButton_);
+        overflowButton_->hide();
+        updateCollapse();
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        updateCollapse();
+    }
+
+  private:
+    void updateCollapse() {
+        if (overflowButton_ == nullptr) {
+            return;
+        }
+        for (auto* button : menuButtons_) {
+            button->show();
+        }
+        overflowButton_->hide();
+        const bool fits = layout_->sizeHint().width() <= width();
+        if (fits) {
+            return;
+        }
+        for (auto* button : menuButtons_) {
+            button->hide();
+        }
+        overflowButton_->show();
+    }
+
+    QHBoxLayout* layout_ = nullptr;
+    std::vector<QToolButton*> menuButtons_;
+    std::vector<QMenu*> menus_;
+    QToolButton* overflowButton_ = nullptr;
+    QMenu* overflowMenu_ = nullptr;
 };
 
 } // namespace
@@ -603,6 +689,327 @@ ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& avail
         .fitToWindow = false, .zoom = newZoom, .pan = newTopLeft - centeredTopLeft};
 }
 
+void ViewerEditor::buildHeader() {
+    auto* bar = new ViewerHeaderMenuBar(this);
+    headerMenuWidget_ = bar;
+
+    compositionSelector_ = new kit::KDropdown(bar);
+    compositionSelector_->setObjectName(QStringLiteral("viewerCompositionSelector"));
+    compositionSelector_->setAccessibleName(tr("Composition"));
+    compositionSelector_->setToolTip(tr("Choose the composition shown in the viewer"));
+    compositionSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    compositionSelector_->setMinimumWidth(120);
+    compositionSelector_->setMaximumWidth(240);
+    connect(compositionSelector_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) {
+                if (index < 0) {
+                    return;
+                }
+                const auto id = document::CompositionId::fromRaw(
+                    compositionSelector_->itemData(index).toULongLong());
+                if (id.isValid()) {
+                    (void)session_.setComposition(id);
+                }
+            });
+    bar->addWidget(compositionSelector_);
+
+    compositionMenuButton_ = new QToolButton(bar);
+    compositionMenuButton_->setObjectName(QStringLiteral("viewerCompositionMenuButton"));
+    compositionMenuButton_->setIcon(kit::icon(kit::IconId::ContextMenu, kit::IconRole::Chrome));
+    compositionMenuButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
+                                              kit::px(kit::iconSize(kit::IconRole::Chrome))));
+    compositionMenuButton_->setToolTip(tr("Composition commands"));
+    compositionMenuButton_->setAccessibleName(tr("Composition commands"));
+    compositionMenuButton_->setAutoRaise(true);
+    compositionMenuButton_->setFixedSize(
+        QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
+    auto* compositionMenu = new QMenu(bar);
+    compositionMenu->setObjectName(QStringLiteral("viewerCompositionMenu"));
+    compositionMenuButton_->setMenu(compositionMenu);
+    compositionMenuButton_->setPopupMode(QToolButton::InstantPopup);
+    bar->addWidget(compositionMenuButton_);
+
+    viewerCompositionNewAction_ = compositionMenu->addAction(tr("New Composition…"));
+    viewerCompositionNewAction_->setObjectName(QStringLiteral("viewerNewCompositionAction"));
+    connect(viewerCompositionNewAction_, &QAction::triggered, this, [this] {
+        if (const auto id = showNewCompositionDialog(session_, this); id.has_value()) {
+            (void)session_.setComposition(*id);
+        }
+    });
+    viewerCompositionDuplicateAction_ = compositionMenu->addAction(tr("Duplicate Composition"));
+    viewerCompositionDuplicateAction_->setObjectName(
+        QStringLiteral("viewerDuplicateCompositionAction"));
+    connect(viewerCompositionDuplicateAction_, &QAction::triggered, this, [this] {
+        if (const auto id = duplicateComposition(session_, session_.compositionId()); id.has_value()) {
+            (void)session_.setComposition(*id);
+        }
+    });
+    viewerCompositionRenameAction_ = compositionMenu->addAction(tr("Rename Composition…"));
+    viewerCompositionRenameAction_->setObjectName(QStringLiteral("viewerRenameCompositionAction"));
+    connect(viewerCompositionRenameAction_, &QAction::triggered, this, [this] {
+        (void)renameComposition(session_, session_.compositionId(), this);
+    });
+    viewerCompositionDeleteAction_ = compositionMenu->addAction(tr("Delete Composition"));
+    viewerCompositionDeleteAction_->setObjectName(QStringLiteral("viewerDeleteCompositionAction"));
+    connect(viewerCompositionDeleteAction_, &QAction::triggered, this, [this] {
+        (void)deleteComposition(session_, session_.compositionId());
+    });
+
+    objectSelector_ = new kit::KDropdown(bar);
+    objectSelector_->setObjectName(QStringLiteral("viewerObjectSelector"));
+    objectSelector_->setAccessibleName(tr("Object"));
+    objectSelector_->setToolTip(tr("Choose a layer in the current composition"));
+    objectSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    objectSelector_->setMinimumWidth(110);
+    objectSelector_->setMaximumWidth(220);
+    connect(objectSelector_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
+        if (index <= 0) {
+            session_.clearSelection();
+            return;
+        }
+        const auto id = document::LayerId::fromRaw(objectSelector_->itemData(index).toULongLong());
+        if (id.isValid()) {
+            session_.selectLayer(id);
+        }
+    });
+    bar->addWidget(objectSelector_);
+
+    viewerViewMenu_ = new QMenu(tr("View"), bar);
+    viewerViewMenu_->setObjectName(QStringLiteral("viewerViewMenu"));
+    viewerFitAction_ = viewerViewMenu_->addAction(tr("Fit"));
+    viewerFitAction_->setObjectName(QStringLiteral("viewerFitAction"));
+    viewerFitAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    viewerFitAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    viewerActualSizeAction_ = viewerViewMenu_->addAction(tr("Actual Size"));
+    viewerActualSizeAction_->setObjectName(QStringLiteral("viewerActualSizeAction"));
+    viewerActualSizeAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
+    viewerActualSizeAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    viewerZoomInAction_ = viewerViewMenu_->addAction(tr("Zoom In"));
+    viewerZoomInAction_->setObjectName(QStringLiteral("viewerZoomInAction"));
+    viewerZoomInAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Plus));
+    viewerZoomInAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    viewerZoomOutAction_ = viewerViewMenu_->addAction(tr("Zoom Out"));
+    viewerZoomOutAction_->setObjectName(QStringLiteral("viewerZoomOutAction"));
+    viewerZoomOutAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
+    viewerZoomOutAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(viewerFitAction_);
+    addAction(viewerActualSizeAction_);
+    addAction(viewerZoomInAction_);
+    addAction(viewerZoomOutAction_);
+    connect(viewerFitAction_, &QAction::triggered, this, &ViewerEditor::setZoomFit);
+    connect(viewerActualSizeAction_, &QAction::triggered, this, &ViewerEditor::setZoomActualSize);
+    connect(viewerZoomInAction_, &QAction::triggered, this, &ViewerEditor::zoomInAtCenter);
+    connect(viewerZoomOutAction_, &QAction::triggered, this, &ViewerEditor::zoomOutAtCenter);
+
+    auto* channelMenu = viewerViewMenu_->addMenu(tr("Channel"));
+    channelMenu->setObjectName(QStringLiteral("viewerChannelMenu"));
+    auto* channelGroup = new QActionGroup(channelMenu);
+    channelGroup->setExclusive(true);
+    for (int index = 0; index < static_cast<int>(kChannelNames.size()); ++index) {
+        auto* action = channelMenu->addAction(tr(kChannelNames[static_cast<std::size_t>(index)]));
+        action->setObjectName(QStringLiteral("viewerChannel%1Action").arg(index));
+        action->setCheckable(true);
+        action->setData(index);
+        channelGroup->addAction(action);
+    }
+    channelGroup->actions().front()->setChecked(true);
+    connect(channelGroup, &QActionGroup::triggered, this,
+            [this](QAction* action) { setChannel(static_cast<ViewerChannel>(action->data().toInt())); });
+
+    auto* backgroundMenu = viewerViewMenu_->addMenu(tr("Background"));
+    backgroundMenu->setObjectName(QStringLiteral("viewerBackgroundMenu"));
+    auto* backgroundGroup = new QActionGroup(backgroundMenu);
+    backgroundGroup->setExclusive(true);
+    for (int index = 0; index < static_cast<int>(kBackgroundNames.size()); ++index) {
+        auto* action = backgroundMenu->addAction(
+            tr(kBackgroundNames[static_cast<std::size_t>(index)]));
+        action->setObjectName(QStringLiteral("viewerBackground%1Action").arg(index));
+        action->setCheckable(true);
+        action->setData(index);
+        backgroundGroup->addAction(action);
+    }
+    backgroundGroup->actions().front()->setChecked(true);
+    connect(backgroundGroup, &QActionGroup::triggered, this, [this](QAction* action) {
+        setBackground(static_cast<ViewerBackground>(action->data().toInt()));
+    });
+
+    viewerSelectMenu_ = new QMenu(tr("Select"), bar);
+    viewerSelectMenu_->setObjectName(QStringLiteral("viewerSelectMenu"));
+    auto* selectAll = viewerSelectMenu_->addAction(tr("All"));
+    selectAll->setObjectName(QStringLiteral("viewerSelectAllAction"));
+    selectAll->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_A));
+    selectAll->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    auto* selectNone = viewerSelectMenu_->addAction(tr("None"));
+    selectNone->setObjectName(QStringLiteral("viewerSelectNoneAction"));
+    selectNone->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+    selectNone->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    auto* invert = viewerSelectMenu_->addAction(tr("Invert"));
+    invert->setObjectName(QStringLiteral("viewerInvertSelectionAction"));
+    invert->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
+    invert->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(selectAll);
+    addAction(selectNone);
+    addAction(invert);
+    connect(selectAll, &QAction::triggered, this, &ViewerEditor::selectAllObjects);
+    connect(selectNone, &QAction::triggered, this, &ViewerEditor::selectNoObjects);
+    connect(invert, &QAction::triggered, this, &ViewerEditor::invertObjectSelection);
+
+    bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
+    bar->addMenuButton(tr("Select"), viewerSelectMenu_,
+                       QStringLiteral("viewerSelectMenuButton"));
+    bar->finish();
+    bar->addWidget(new QWidget(bar));
+    bar->layout()->itemAt(bar->layout()->count() - 1)->widget()->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    fullscreenButton_ = new QToolButton(bar);
+    fullscreenButton_->setObjectName(QStringLiteral("viewerFullscreenButton"));
+    fullscreenButton_->setIcon(kit::icon(kit::IconId::Maximize, kit::IconRole::Chrome));
+    fullscreenButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
+                                         kit::px(kit::iconSize(kit::IconRole::Chrome))));
+    fullscreenButton_->setToolTip(tr("Full Screen (F11)"));
+    fullscreenButton_->setAccessibleName(tr("Full Screen (F11)"));
+    fullscreenButton_->setAutoRaise(true);
+    fullscreenButton_->setCheckable(true);
+    fullscreenButton_->setChecked(window() != nullptr && window()->isFullScreen());
+    fullscreenButton_->setFixedSize(QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
+    connect(fullscreenButton_, &QToolButton::clicked, this, [this] {
+        if (window() == nullptr) {
+            return;
+        }
+        if (auto* action = window()->findChild<QAction*>(QStringLiteral("viewFullScreenAction"))) {
+            action->trigger();
+            fullscreenButton_->setChecked(window()->isFullScreen());
+        }
+    });
+    bar->addWidget(fullscreenButton_);
+
+    rebuildCompositionSelector();
+    rebuildObjectSelector();
+    updateCompositionActions();
+}
+
+void ViewerEditor::rebuildCompositionSelector() {
+    if (compositionSelector_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker blocker(compositionSelector_);
+    compositionSelector_->clearItems();
+    const auto compositions = session_.snapshot().project().compositions();
+    if (compositions.empty()) {
+        compositionSelector_->addItem(tr("None"));
+        return;
+    }
+    int selectedIndex = 0;
+    int index = 0;
+    for (const auto& composition : compositions) {
+        compositionSelector_->addItem(QString::fromStdString(composition.name()),
+                                      QVariant::fromValue<qulonglong>(composition.id().value()));
+        if (composition.id() == session_.compositionId()) {
+            selectedIndex = index;
+        }
+        ++index;
+    }
+    compositionSelector_->setCurrentIndex(selectedIndex);
+}
+
+void ViewerEditor::rebuildObjectSelector() {
+    if (objectSelector_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker blocker(objectSelector_);
+    objectSelector_->clearItems();
+    objectSelector_->addItem(tr("None"), QVariant::fromValue<qulonglong>(0));
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        objectSelector_->setCurrentIndex(0);
+        return;
+    }
+    const auto selectedLayer = session_.selection().contextualLayer;
+    int selectedIndex = 0;
+    int index = 1;
+    for (const auto& boundary : composition->graph().layerOutputs()) {
+        objectSelector_->addItem(layerName(*composition, boundary.layerId),
+                                 QVariant::fromValue<qulonglong>(boundary.layerId.value()));
+        if (selectedLayer.has_value() && *selectedLayer == boundary.layerId) {
+            selectedIndex = index;
+        }
+        ++index;
+    }
+    objectSelector_->setCurrentIndex(selectedIndex);
+}
+
+void ViewerEditor::updateCompositionActions() {
+    if (viewerCompositionNewAction_ == nullptr) {
+        return;
+    }
+    const auto* composition = session_.composition();
+    const bool hasComposition = composition != nullptr;
+    const bool hasSeveral = session_.snapshot().project().compositions().size() > 1;
+    viewerCompositionDuplicateAction_->setEnabled(hasComposition);
+    viewerCompositionRenameAction_->setEnabled(hasComposition);
+    viewerCompositionDeleteAction_->setEnabled(hasComposition && hasSeveral);
+}
+
+void ViewerEditor::selectAllObjects() {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return;
+    }
+    std::set<document::NodeId> nodes;
+    for (const auto& boundary : composition->graph().layerOutputs()) {
+        if (boundary.nodeId.isValid()) {
+            nodes.insert(boundary.nodeId);
+        }
+    }
+    if (!nodes.empty()) {
+        session_.selectNodes(nodes, *nodes.begin());
+    }
+}
+
+void ViewerEditor::selectNoObjects() { session_.clearSelection(); }
+
+void ViewerEditor::invertObjectSelection() {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return;
+    }
+    std::set<document::NodeId> all;
+    for (const auto& boundary : composition->graph().layerOutputs()) {
+        if (boundary.nodeId.isValid()) {
+            all.insert(boundary.nodeId);
+        }
+    }
+    std::set<document::NodeId> remaining;
+    std::ranges::set_difference(all, session_.selectedNodes(),
+                                std::inserter(remaining, remaining.end()));
+    if (remaining.empty()) {
+        session_.clearSelection();
+    } else {
+        session_.selectNodes(remaining, *remaining.begin());
+    }
+}
+
+void ViewerEditor::zoomInAtCenter() {
+    if (const auto geometry = currentDisplayGeometry(); geometry.has_value()) {
+        const QRectF frame = canvasRect();
+        transform_ = zoomAboutPoint(transform_, frame, geometry->extent, geometry->pixelAspect,
+                                    frame.center(), kZoomStepFactor);
+        refreshZoomDropdown();
+        update();
+    }
+}
+
+void ViewerEditor::zoomOutAtCenter() {
+    if (const auto geometry = currentDisplayGeometry(); geometry.has_value()) {
+        const QRectF frame = canvasRect();
+        transform_ = zoomAboutPoint(transform_, frame, geometry->extent, geometry->pixelAspect,
+                                    frame.center(), 1.0 / kZoomStepFactor);
+        refreshZoomDropdown();
+        update();
+    }
+}
+
 // Builds the footer row and everything in it (task VIEW-1). Called once, from the constructor.
 void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     auto* footer = new ViewerFooter(this);
@@ -780,6 +1187,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     setFocusPolicy(Qt::StrongFocus);
 
     playback_ = &previewController.playbackController();
+    buildHeader();
     buildFooter(ramPreview);
     wireTransport();
 
@@ -788,6 +1196,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // out into its own widget by also nudging statusBarFooter_ (a no-op update() call until then,
     // since it starts null).
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        rebuildCompositionSelector();
+        rebuildObjectSelector();
+        updateCompositionActions();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -795,6 +1206,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         }
     });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        rebuildCompositionSelector();
+        rebuildObjectSelector();
+        updateCompositionActions();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -802,6 +1216,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         }
     });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
+        rebuildObjectSelector();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
@@ -857,6 +1272,15 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 }
 
 ViewerEditor::~ViewerEditor() { QObject::disconnect(focusConnection_); }
+
+QWidget* ViewerEditor::takeHeaderMenuWidget() {
+    if (headerMenuWidgetTaken_) {
+        return nullptr;
+    }
+    headerMenuWidgetTaken_ = true;
+    headerMenuWidget_->setParent(nullptr);
+    return headerMenuWidget_;
+}
 
 // Everything the transport needs that is not the construction of its buttons: the shared
 // PlaybackController, the RAM preview command, the four frame-stepping QActions, and the
@@ -1071,6 +1495,18 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
     // away from should not keep a whole frame resident.
     channelView_ = QImage();
     channelViewFrame_.reset();
+    if (channelDropdown_ != nullptr && channelDropdown_->currentIndex() != static_cast<int>(channel)) {
+        const QSignalBlocker blocker(channelDropdown_);
+        channelDropdown_->setCurrentIndex(static_cast<int>(channel));
+    }
+    if (viewerViewMenu_ != nullptr) {
+        for (auto* action : viewerViewMenu_->findChildren<QAction*>()) {
+            if (action->data().toInt() == static_cast<int>(channel) &&
+                action->objectName().startsWith(QStringLiteral("viewerChannel"))) {
+                action->setChecked(true);
+            }
+        }
+    }
     update();
 }
 
@@ -1082,6 +1518,19 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
     QSettings().setValue(
         kBackgroundSetting,
         QString::fromLatin1(kBackgroundNames[static_cast<std::size_t>(background)]));
+    if (backgroundDropdown_ != nullptr &&
+        backgroundDropdown_->currentIndex() != static_cast<int>(background)) {
+        const QSignalBlocker blocker(backgroundDropdown_);
+        backgroundDropdown_->setCurrentIndex(static_cast<int>(background));
+    }
+    if (viewerViewMenu_ != nullptr) {
+        for (auto* action : viewerViewMenu_->findChildren<QAction*>()) {
+            if (action->data().toInt() == static_cast<int>(background) &&
+                action->objectName().startsWith(QStringLiteral("viewerBackground"))) {
+                action->setChecked(true);
+            }
+        }
+    }
     update();
 }
 
