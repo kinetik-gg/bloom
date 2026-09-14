@@ -94,6 +94,38 @@ the first slice's operands are. An inline SELECTOR -- a rounding mode, a radix -
 the reason the existing Math operation has none: it decides which computation the plan performs, so
 it is known when the plan is built rather than delivered per frame.
 
+## The Catalogue At A Glance
+
+Sixty-two node types, in five groups. Each group has its own section below with the full shape and
+the edge behaviour of every row.
+
+| Group | Count | Category | What it is for |
+| --- | --- | --- | --- |
+| [Conversions](#conversions) | 20 | `Utilities` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
+| [Time conversions](#time-conversions) | 4 | `Utilities` | Seconds, frames and non-drop timecode, at the composition's own rate |
+| [String utilities](#string-utilities) | 15 | `Utilities` | Building, measuring, cutting and comparing text |
+| [Math](#math) | 16 | `Math` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
+| [Logic](#logic) | 3 | `Utilities` | Boolean combination and a range predicate |
+| [Readouts](#readouts) | 4 | `Values` | What the composition and the frame are, as numbers |
+
+Every node's socket names, its inline selectors and its outputs come from ONE record --
+`document::valueUtilityDescriptors()` -- so the tables below describe the same table the registry,
+the compiler and the evaluator read.
+
+### What this slice did NOT change
+
+- **No identity or semantics version moved.** These are new node TYPES only. The compiled plan, the
+  evaluator, the image primitives, the scalar primitives and the animation sampler all keep their
+  versions, and no golden pixel or output digest shifted.
+- **No persistence step.** A new node type is not a stored-shape change. `NodeCategory` is not
+  persisted either, so moving the arithmetic into `Math` needed no migration.
+- **One UI change, and only one.** The Add search popup and the Add Node menu gained a **Math**
+  section header, and the section order became Sources, Layers, Compositing, Values, Math,
+  Utilities, Output. Node cards render every new node through the registry-driven generic path that
+  already existed (`nodeOperandSelector`, `nodeOperandEditor`, `nodeOperandToggle`,
+  `nodeOperandTextEditor`, `nodeOperandColorChip`); NO new `objectName` was introduced and none was
+  renamed.
+
 ## Conversions
 
 Category `Utilities`. Every row's inputs are listed in socket order; a **selector** is inline and
