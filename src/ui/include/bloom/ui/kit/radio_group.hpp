@@ -39,6 +39,7 @@ class KRadioGroup final : public QWidget {
     [[nodiscard]] int currentIndex() const noexcept;
     void setCurrentIndex(int index);
 
+    void setIconsOnly(bool enabled);
     void setPresentation(Presentation presentation);
     [[nodiscard]] Presentation presentation() const noexcept;
 
@@ -78,6 +79,7 @@ class KRadioGroup final : public QWidget {
     void paintSegmented(QPainter& painter);
     void paintDiscrete(QPainter& painter);
 
+    bool iconsOnly_ = false;
     QVector<Option> options_;
     int currentIndex_ = -1;
     int hoveredIndex_ = -1;

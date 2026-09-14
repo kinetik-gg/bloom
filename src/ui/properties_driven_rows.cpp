@@ -3,6 +3,7 @@
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include <QAction>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QVBoxLayout>
@@ -65,7 +66,7 @@ void PropertiesEditor::configureDrivenRows() {
          {"scaleXEditor", document::kScaleParameterRole},
          {"rotationEditor", document::kRotationParameterRole},
          {"opacityEditor", document::kOpacityParameterRole},
-         {"solidColorRedEditor", document::kSolidColorParameterRole},
+         {"propertiesSolidColorChip", document::kSolidColorParameterRole},
          {"textContentEditor", document::kTextParameterRole},
          {"textSizeEditor", document::kTextSizeParameterRole},
          {"textColorChip", document::kTextColorParameterRole},
@@ -150,23 +151,29 @@ void PropertiesEditor::configureDrivenRows() {
             display->setObjectName("propertiesDrivenDisplay");
             auto* layout = new QVBoxLayout(display);
             layout->setContentsMargins(0, 0, 0, 0);
-            if (row->objectName() == "propertiesRegistryRow") {
-                auto* label =
-                    properties::makeRowLabel(row->property("rowLabel").toString(), display);
-                label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-                layout->addWidget(label);
-            }
             auto* jump = new kit::KButton(display);
             jump->setObjectName("propertiesDriverLink");
             jump->setVariant(kit::KButton::Variant::Ghost);
             jump->setIconId(kit::IconId::Link);
+            jump->setFixedHeight(kit::px(kit::Size::ControlCompact));
             layout->addWidget(jump);
             auto* value = new QLabel(display);
             value->setObjectName("propertiesDrivenValue");
+            value->setFont(kit::font(kit::TypeRole::Value));
             value->setTextFormat(Qt::PlainText);
             value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
             layout->addWidget(value);
-            row->layout()->addWidget(display);
+            if (auto* horizontal = qobject_cast<QHBoxLayout*>(row->layout()))
+                horizontal->insertWidget(horizontal->count() - 1, display, 1);
+            else {
+                auto* originalDisplay = display;
+                display = properties::addRow(
+                    qobject_cast<QVBoxLayout*>(row->layout()), row,
+                    properties::makeRowLabel(row->property("rowLabel").toString(), row), nullptr,
+                    originalDisplay);
+                originalDisplay->setObjectName("propertiesDrivenControls");
+                display->setObjectName("propertiesDrivenDisplay");
+            }
             connect(jump, &kit::KButton::clicked, this, [this, jump] {
                 jumpToPropertiesNode(
                     session_, document::NodeId::fromRaw(jump->property("nodeId").toULongLong()),
@@ -175,7 +182,9 @@ void PropertiesEditor::configureDrivenRows() {
         }
         // Restore only controls this decoration hid. Their enabled state remains session-owned.
         for (auto* child : row->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
-            if (child == display || child->objectName() == "propertiesRowLabel")
+            if (child == display || child->objectName() == "propertiesRowLabel" ||
+                (child->sizePolicy().retainSizeWhenHidden() &&
+                 child->width() == kit::px(kit::Size::PropertiesDiamondColumn)))
                 continue;
             if (driver) {
                 if (!child->isHidden()) {

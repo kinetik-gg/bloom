@@ -335,11 +335,16 @@ layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
 | Type in header search | Filter labels by case-insensitive substring; hide empty sections |
 | Escape in search | Clear query, restore rows and return focus to the panel |
 | Scrub a numeric row | Preview locally; commit once on release; cancellation writes nothing |
-| Expand RGBA / multiline content | Reveal detailed color components / multiline text editing |
+| Click color / text disclosure chevron | Reveal detailed color components / multiline text editing |
 | Leave a multiline editor | Commit the complete text as one parameter edit |
-| Jump to node / click driver link | Select the target and frame it in the node canvas |
+| Click section-header jump icon / driver link | Select the target and frame it in the node canvas |
 | Right-click parameter row or control | Reset to its registered default; driven reset disconnects with Undo support |
-| Wheel over the body | Scroll rows beneath the fixed search header |
+| Wheel over the body | Scroll cards beneath the panel header search |
+| Click an anchor grid dot | Set anchor offset from evaluated local bounds, one undoable command |
+| Edit Anchor X/Y | Highlight a matching grid point; clear highlight for a custom offset |
+| Arrow keys on the anchor grid | Move to a neighbouring grid point |
+| Click text stepper arrow | Increase/decrease the field by one step |
+| Click alignment segment | Set Left / Center / Right through the registered parameter |
 
 Upstream rows target their own parameter IDs; editing or keying them preserves the current
 selection. Driver results update from cancellable background evaluation at the current session

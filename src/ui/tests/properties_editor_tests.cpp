@@ -307,8 +307,9 @@ void testRowNeverPaintsWholeRowHover(Expectations& expectations) {
     }
     row->resize(row->sizeHint());
 
-    const QColor hoverSurface =
-        ui::kit::color(ui::kit::surfaceForState(ui::kit::Color::Background, ui::kit::State::Hover));
+    row->clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(row, &leave);
     const QImage before = row->grab().toImage();
 
     QEnterEvent enter(QPointF(1.0, 1.0), QPointF(1.0, 1.0), QPointF(1.0, 1.0));
@@ -317,15 +318,8 @@ void testRowNeverPaintsWholeRowHover(Expectations& expectations) {
     const QImage hovered = row->grab().toImage();
     expectations.expect(before == hovered,
                         "entering the row repaints nothing -- no whole-row hover fill");
-    for (int y = 0; y < hovered.height(); ++y) {
-        for (int x = 0; x < hovered.width(); ++x) {
-            expectations.expect(!near(hovered.pixelColor(x, y), hoverSurface, 4),
-                                "no pixel in the hovered row matches the old whole-row hover fill");
-        }
-    }
-
-    QEvent leave(QEvent::Leave);
-    QCoreApplication::sendEvent(row, &leave);
+    // Card surfaces legitimately share the old row-hover token. Image equality above pins
+    // the behavior without forbidding that color in controls, antialiased text or card paint.
 }
 
 void testNoSelectionShowsDocumentProperties(Expectations& expectations) {
@@ -841,7 +835,7 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
     auto* content = properties.findChild<QLineEdit*>("textContentEditor");
     auto* size = properties.findChild<ui::kit::KValueField*>("textSizeEditor");
     auto* color = properties.findChild<ui::kit::KColorChip*>("textColorChip");
-    auto* font = properties.findChild<QLabel*>("textFontName");
+    auto* font = properties.findChild<ui::kit::KDropdown*>("textFontName");
     expectations.expect(textPanel != nullptr && solidPanel != nullptr && content != nullptr &&
                             size != nullptr && color != nullptr && font != nullptr,
                         "the Text Source group exposes content, size, color, and font rows");
@@ -861,8 +855,9 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
                         "and the swatch reads the authored color");
     expectations.expect(content->isEnabled() && size->isEnabled() && color->isEnabled(),
                         "all three are editable, because a command exists for each");
-    expectations.expect(font->text().contains(QStringLiteral("DejaVu Sans")) &&
-                            font->text().contains(QStringLiteral("embedded")),
+    expectations.expect(font->currentText() == QStringLiteral("DejaVu Sans") &&
+                            !font->isEnabled() &&
+                            font->toolTip().contains(QStringLiteral("embedded")),
                         "the font row names the one embedded face rather than offering a choice");
 
     const auto historyBefore = stack.size();
@@ -969,7 +964,7 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     // Narrow enough to force eliding, but wide enough to fit at least one glyph plus the ellipsis
     // itself -- narrower than that, Qt::elidedText() gives up and returns an empty string, which
     // would trivially (and wrongly) satisfy a "not equal to the full text" check on its own.
-    label->resize(24, label->height());
+    label->setFixedWidth(24);
     expectations.expect(
         label->text() != QStringLiteral("Position") &&
             label->text().endsWith(QString::fromUtf8("\xE2\x80\xA6")),

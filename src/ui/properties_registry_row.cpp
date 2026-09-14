@@ -13,6 +13,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <limits>
 
@@ -26,10 +27,19 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     setObjectName("propertiesRegistryRow");
     setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(parameter.value())));
     setProperty("role", QString::fromStdString(definition_.role));
-    const auto label = node_editor::displayTypeName(definition_.role);
+    const auto label =
+        definition_.schemaKey == document::kTextParameterSchemaKey            ? tr("Text")
+        : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
+        : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
+        : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
+            ? tr("Letter Spacing")
+        : definition_.schemaKey == document::kTextSizeParameterSchemaKey
+            ? tr("Font Size")
+            : node_editor::displayTypeName(definition_.role);
     setProperty("rowLabel", label);
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(kit::px(kit::Spacing::Gutter));
     auto* controls = new QWidget(this);
     auto* layout = new QHBoxLayout(controls);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -37,38 +47,71 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     diamond_ = new KeyframeDiamond(session_, definition_.role, this);
     diamond_->setObjectName("propertiesRegistryDiamond");
     diamond_->setParameterId(parameter_);
-    properties::addRow(outer, this, properties::makeRowLabel(label, this), diamond_, controls);
+
     const auto items = propertiesSelectorItems(definition_.schemaKey);
-    if (!items.empty()) {
+    if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
+        segments_ = new kit::KRadioGroup(controls);
+        segments_->setObjectName("propertiesRegistryEnum");
+        segments_->setAccessibleName(label);
+        segments_->setIconsOnly(true);
+        const std::array icons{kit::IconId::AlignLeft, kit::IconId::AlignCenter,
+                               kit::IconId::AlignRight};
+        for (int index = 0; index < items.size(); ++index)
+            segments_->addOption(items[index].first, icons[static_cast<std::size_t>(index)]);
+        segments_->setFixedSize(segments_->sizeHint());
+        layout->addWidget(segments_);
+        connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
+    } else if (!items.empty()) {
         selector_ = new kit::KDropdown(controls);
         selector_->setObjectName("propertiesRegistryEnum");
+        selector_->setControlSize(kit::KDropdown::ControlSize::Compact);
         for (const auto& [name, stored] : items)
             selector_->addItem(name, QVariant::fromValue(stored));
-        layout->addWidget(selector_, 1);
+        selector_->setFixedSize(kit::px(kit::Size::PropertiesDropdownWidth),
+                                kit::px(kit::Size::ControlCompact));
+        layout->addWidget(selector_);
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         integer_ = new QLineEdit(controls);
         integer_->setObjectName("propertiesRegistryInteger");
         integer_->setAccessibleName(label);
-        layout->addWidget(integer_, 1);
+        integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
+                               kit::px(kit::Size::ControlCompact));
+        integer_->setFont(kit::font(kit::TypeRole::Value));
+        layout->addWidget(integer_);
         connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
-        toggle_ = new kit::KSwitch(controls);
+        toggle_ = new kit::KCheckBox(controls);
         toggle_->setObjectName("propertiesRegistryBool");
         layout->addWidget(toggle_);
         connect(toggle_, &kit::KSwitch::toggled, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::String) {
+        text_ = new QLineEdit(controls);
+        text_->setObjectName("propertiesRegistryString");
+        text_->setFont(kit::font(kit::TypeRole::Value));
+        text_->setFixedHeight(kit::px(kit::Size::ControlCompact));
+        layout->addWidget(text_, 1);
+        connect(text_, &QLineEdit::editingFinished, this, [this] { commit(); });
         if (definition_.schemaKey == document::kTextParameterSchemaKey) {
-            multiline_ = new QPlainTextEdit(controls);
+            multiline_ = new QPlainTextEdit(this);
             multiline_->setObjectName("propertiesRegistryMultiline");
+            multiline_->setFont(kit::font(kit::TypeRole::Value));
             multiline_->setFixedHeight(kit::px(kit::Size::Control) * 3);
             multiline_->installEventFilter(this);
-            layout->addWidget(multiline_, 1);
-        } else {
-            text_ = new QLineEdit(controls);
-            text_->setObjectName("propertiesRegistryString");
-            layout->addWidget(text_, 1);
-            connect(text_, &QLineEdit::editingFinished, this, [this] { commit(); });
+            multiline_->hide();
+            auto* expand = new kit::KButton(controls);
+            expand->setObjectName("propertiesRegistryTextExpand");
+            expand->setIconId(kit::IconId::CaretRight);
+            expand->setVariant(kit::KButton::Variant::Ghost);
+            expand->setCheckable(true);
+            expand->setFixedSize(kit::px(kit::Size::ControlCompact),
+                                 kit::px(kit::Size::ControlCompact));
+            expand->setToolTip(tr("Edit multiple lines"));
+            layout->addWidget(expand);
+            connect(expand, &kit::KButton::toggled, this, [this, expand](bool on) {
+                multiline_->setVisible(on);
+                expand->setIconId(on ? kit::IconId::CaretDown : kit::IconId::CaretRight);
+            });
         }
     } else {
         int count = 1;
@@ -76,23 +119,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             count = 2;
         if (definition_.valueKind == document::ParameterValueKind::Vec3d)
             count = 3;
-        QVBoxLayout* channels = nullptr;
+
         if (definition_.valueKind == document::ParameterValueKind::Color4d) {
             count = 4;
             color_ = new kit::KColorChip(controls);
             color_->setObjectName("propertiesRegistryColor");
-            layout->addWidget(color_);
-            auto* expand = new kit::KButton(controls);
-            expand->setObjectName("propertiesRegistryColorExpand");
-            expand->setText(tr("RGBA"));
-            expand->setCheckable(true);
-            layout->addWidget(expand);
-            auto* details = new QWidget(this);
-            channels = new QVBoxLayout(details);
-            channels->setContentsMargins(0, 0, 0, 0);
-            outer->addWidget(details);
-            details->hide();
-            connect(expand, &kit::KButton::toggled, details, &QWidget::setVisible);
             connect(color_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
                 if (!refreshing_) {
                     (void)session_.setParameterValue(
@@ -110,14 +141,24 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             field->setObjectName("propertiesRegistryValue");
             field->setAccessibleName(label);
             field->setRange(-1e15, 1e15);
-            field->setDecimals(definition_.valueKind == document::ParameterValueKind::Integer ? 0
-                                                                                              : 3);
-            if (channels) {
-                properties::addRow(channels, this,
-                                   properties::makeRowLabel(QString("RGBA").mid(i, 1), this),
-                                   nullptr, field);
-            } else
-                layout->addWidget(field, 1);
+            field->setCompact(true);
+            if (count == 3)
+                field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
+            field->setDecimals(2);
+            field->setStepper(propertiesRowControl(definition_.schemaKey) ==
+                              PropertiesRowControl::Stepper);
+            if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
+                definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey)
+                field->setUnit("%");
+            if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
+                definition_.schemaKey == document::kTextSizeParameterSchemaKey)
+                field->setRange(0.01, 1e15);
+            if (definition_.schemaKey == document::kSolidWidthParameterSchemaKey ||
+                definition_.schemaKey == document::kSolidHeightParameterSchemaKey)
+                field->setRange(1, 1e15);
+            if (count > 1)
+                field->setLabel(QString(color_ ? "RGBA" : "XYZ").mid(i, 1));
+            layout->addWidget(field);
             connect(field, &kit::KValueField::valueChanged, this, [this] {
                 if (!scrubbing_)
                     commit();
@@ -130,12 +171,28 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             });
         }
     }
+    if (color_) {
+        (void)properties::addColorRow(
+            outer, this, color_, diamond_, {fields_[0], fields_[1], fields_[2], fields_[3]},
+            "propertiesRegistryColorExpand", "propertiesRegistryColorFields");
+        delete controls;
+    } else {
+        if (!text_ && !multiline_) {
+            const int preferred = controls->sizeHint().width();
+            controls->setMaximumWidth(preferred);
+        }
+        properties::addRow(outer, this, properties::makeRowLabel(label, this), diamond_, controls);
+    }
+    if (multiline_)
+        outer->addWidget(multiline_);
     refresh();
 }
 
 bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == multiline_ && event->type() == QEvent::FocusOut)
+    if (watched == multiline_ && event->type() == QEvent::FocusOut) {
+        text_->setText(multiline_->toPlainText());
         commit();
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -143,14 +200,20 @@ void PropertiesRegistryRow::refresh() {
     refreshing_ = true;
     const auto* composition = session_.composition();
     const auto* parameter = composition ? composition->parameters().find(parameter_) : nullptr;
-    const bool editable = parameter && !composition->nodeLocked(node_) &&
+    const bool editable = parameter && displayScale() != 0.0 && !composition->nodeLocked(node_) &&
                           !std::holds_alternative<document::DriverBindingSource>(parameter->source);
     for (auto* field : fields_)
-        if (field)
+        if (field) {
             field->setEnabled(editable);
-    for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(toggle_),
-                          static_cast<QWidget*>(color_), static_cast<QWidget*>(text_),
-                          static_cast<QWidget*>(multiline_), static_cast<QWidget*>(integer_)})
+            field->setToolTip(
+                displayScale() == 0.0
+                    ? tr("Font size must resolve before editing percentage letter spacing")
+                    : QString{});
+        }
+    for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(segments_),
+                          static_cast<QWidget*>(toggle_), static_cast<QWidget*>(color_),
+                          static_cast<QWidget*>(text_), static_cast<QWidget*>(multiline_),
+                          static_cast<QWidget*>(integer_)})
         if (control)
             control->setEnabled(editable);
     if (parameter) {
@@ -164,12 +227,15 @@ void PropertiesRegistryRow::refresh() {
         if (const auto color = session_.effectiveColorValue(parameter_))
             value = *color;
         if (auto* scalar = std::get_if<double>(&value); scalar && fields_[0])
-            fields_[0]->setValue(*scalar);
+            if (displayScale() != 0.0)
+                fields_[0]->setValue(*scalar * displayScale());
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
             if (integer_)
                 integer_->setText(QString::number(static_cast<qlonglong>(*integer)));
             if (fields_[0])
                 fields_[0]->setValue(static_cast<double>(*integer));
+            if (segments_)
+                segments_->setCurrentIndex(static_cast<int>(*integer));
             if (selector_) {
                 for (int index = 0; index < selector_->count(); ++index)
                     if (selector_->itemData(index).value<std::int64_t>() == *integer)
@@ -210,11 +276,29 @@ void PropertiesRegistryRow::reset() {
     refresh();
 }
 
+double PropertiesRegistryRow::displayScale() const {
+    if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey)
+        return 100.0;
+    if (definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey) {
+        const auto* composition = session_.composition();
+        const auto* node = composition ? composition->graph().findNode(node_) : nullptr;
+        if (node)
+            for (const auto& binding : node->parameters)
+                if (binding.role == document::kTextSizeParameterRole)
+                    if (const auto size = session_.effectiveScalarValue(binding.parameterId);
+                        size && *size > 0)
+                        return 100.0 / *size;
+    }
+    return definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey ? 0.0 : 1.0;
+}
+
 void PropertiesRegistryRow::commit() {
-    if (refreshing_ || !isEnabled())
+    if (refreshing_ || !isEnabled() || displayScale() == 0.0)
         return;
     document::ParameterValue value = definition_.defaultValue;
-    if (selector_)
+    if (segments_)
+        value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
+    else if (selector_)
         value = selector_->itemData(selector_->currentIndex()).value<std::int64_t>();
     else if (integer_) {
         bool valid = false;
@@ -240,7 +324,7 @@ void PropertiesRegistryRow::commit() {
     else if (definition_.valueKind == document::ParameterValueKind::Integer)
         value = static_cast<std::int64_t>(fields_[0]->value());
     else
-        value = fields_[0]->value();
+        value = fields_[0]->value() / displayScale();
     (void)session_.setParameterValue(parameter_, value, tr("Set Parameter"));
     refresh();
 }

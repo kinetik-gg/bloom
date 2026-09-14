@@ -283,7 +283,7 @@ QSize KValueField::sizeHint() const {
 
 QSize KValueField::minimumSizeHint() const {
     if (compact_)
-        return {px(Size::PropertiesFieldMinWidth), px(Size::ControlCompact)};
+        return {minimumWidth(), px(Size::ControlCompact)};
     // task WIDTH-1: sizeHint() above is this field's PREFERRED width, sized for the widest number
     // its own range can produce so the cell never resizes as digits change. minimumSizeHint() is a
     // different question -- the FLOOR this cell may shrink to when the panel hosting it (Properties
@@ -317,7 +317,7 @@ void KValueField::beginEdit() {
     }
     editing_ = true;
     layOutEditor();
-    editor_->setText(displayedValue());
+    editor_->setText(compact_ ? QString::number(value_, 'g', 17) : displayedValue());
     editor_->show();
     editor_->setFocus(Qt::MouseFocusReason);
     // Select all on entry: a click-to-edit that kept the caret where the pointer landed would make

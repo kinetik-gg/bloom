@@ -26,7 +26,6 @@ KButton* makeHeaderButton(QWidget* parent, const QString& objectName) {
     auto* button = new KButton(parent);
     button->setObjectName(objectName);
     button->setVariant(KButton::Variant::Ghost);
-    button->setControlSize(KButton::ControlSize::Compact);
     button->setFixedSize(px(Size::ControlCompact), px(Size::ControlCompact));
     button->setFocusPolicy(Qt::NoFocus);
     return button;
@@ -66,6 +65,8 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     title_->setTextFormat(Qt::PlainText);
     auto titleFont = kit::font(TypeRole::UiSmall);
     titleFont.setWeight(QFont::DemiBold);
+    titleFont.setCapitalization(QFont::MixedCase);
+    titleFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
     title_->setFont(titleFont);
     QPalette titlePalette = title_->palette();
     titlePalette.setColor(QPalette::WindowText, color(Color::Foreground));

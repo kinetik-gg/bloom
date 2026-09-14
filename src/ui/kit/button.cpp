@@ -281,7 +281,7 @@ void KButton::paintEvent(QPaintEvent* event) {
                    (state == State::Normal || state == State::Disabled)) {
             border = inkForVisualState(state);
         } else if (variant_ == Variant::Ghost && borderRole == Color::Border) {
-            border = {};
+            border = QColor{};
         }
     }
     fillRoundedSurface(painter, bounds, fill, border, Radius::Small);

@@ -171,6 +171,8 @@ enum class Size : int {
     PropertiesDiamondColumn = 20,
     PropertiesFieldWidth = 72,
     PropertiesFieldMinWidth = 64,
+    PropertiesColorMinWidth = 60,
+    PropertiesComponentMinWidth = 48,
     PropertiesDropdownWidth = 108,
     PropertiesSearchWidth = 180,
     PropertiesCheckBox = 12,

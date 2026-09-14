@@ -7,6 +7,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -136,6 +137,18 @@ void PropertiesEditor::configureUpstream() {
                 section->bodyLayout()->addWidget(row);
                 upstreamRows_.push_back(row);
                 connect(section, &kit::KSection::resetRequested, row, [row] { row->reset(); });
+            }
+            if (definition->lowering == document::NodeLoweringKind::Text) {
+                auto* font = new kit::KDropdown(section->body());
+                font->setObjectName("propertiesUpstreamFont");
+                font->addItem(tr("DejaVu Sans"));
+                font->setEnabled(false);
+                font->setToolTip(tr("The embedded DejaVu Sans face is the only supported font"));
+                auto* row = properties::addRow(
+                    section->bodyLayout(), section->body(),
+                    properties::makeRowLabel(tr("Font"), section->body()), nullptr, font);
+                section->bodyLayout()->removeWidget(row);
+                section->bodyLayout()->insertWidget(1, row);
             }
         }
         if (more) {

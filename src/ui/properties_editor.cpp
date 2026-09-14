@@ -2,6 +2,7 @@
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "properties_anchor_grid.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 
@@ -55,13 +56,6 @@ using properties::addRow;
 using properties::makeKeyframeDiamond;
 using properties::makeReadOnlyValueLabel;
 using properties::makeRowLabel;
-
-const document::NodeRecord* selectedPresentationSource(const CompositionSession& session) {
-    if (const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary)) {
-        return directSourceNode(session, *layerId);
-    }
-    return session.selectedNode();
-}
 
 // The layer whose Object flags and blending the panel authors: the selection may be the layer
 // itself, its Layer Output node, or one of its parameters, and all three mean the same layer.
@@ -171,7 +165,10 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     search_->setMaximumWidth(kit::px(kit::Size::PropertiesSearchWidth));
     search_->setMinimumWidth(kit::px(kit::Size::PropertiesFieldMinWidth));
     search_->setFixedHeight(kit::px(kit::Size::ControlCompact));
-    search_->setFont(kit::font(kit::TypeRole::UiSmall));
+    auto searchFont = kit::font(kit::TypeRole::UiSmall);
+    searchFont.setCapitalization(QFont::MixedCase);
+    searchFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
+    search_->setFont(searchFont);
     search_->addAction(kit::icon(kit::IconId::Zoom, kit::IconRole::Chrome),
                        QLineEdit::TrailingPosition);
     search_->hide();
@@ -198,7 +195,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     selectionSection_->setObjectName(QStringLiteral("propertiesSelectionSection"));
     auto* selectionLayout = new QVBoxLayout(selectionSection_);
     selectionLayout->setContentsMargins(0, 0, 0, 0);
-    selectionLayout->setSpacing(kit::px(kit::Spacing::XS));
+    selectionLayout->setSpacing(kit::px(kit::Spacing::S));
 
     buildObjectSection(selectionLayout);
     buildTransformSection(selectionLayout);
@@ -358,6 +355,10 @@ void PropertiesEditor::rebuild() {
         blendMode_->setEnabled(false);
         textContent_->setEnabled(false);
         textColor_->setEnabled(false);
+        solidColorChip_->setEnabled(false);
+        anchorGrid_->setEnabled(false);
+        for (auto* field : textColorFields_)
+            field->setEnabled(false);
         opacitySlider_->setEnabled(false);
         rotationSlider_->setEnabled(false);
     }
@@ -489,6 +490,7 @@ void PropertiesEditor::configurePosition() {
 }
 
 void PropertiesEditor::configureAnchor() {
+    anchorGrid_->refresh();
     const auto* anchor = session_.parameterForSelection(document::kAnchorParameterRole);
     const auto value = session_.effectiveVec2Value(document::kAnchorParameterRole);
     const bool editable = value.has_value();
@@ -570,107 +572,6 @@ void PropertiesEditor::configureBlendMode() {
     blendMode_->setToolTip(mode.has_value()
                                ? tr("How this layer combines with the layers beneath it")
                                : tr("Blending is not exposed by this selection"));
-}
-
-void PropertiesEditor::configureSolidColor() {
-    const auto* parameter = session_.parameterForSelection(document::kSolidColorParameterRole);
-    const auto* sourceNode = selectedPresentationSource(session_);
-    const bool isSolid = isKnownSource(sourceNode, document::kSolidSourceNodeType,
-                                       document::kSolidSourceNodeSchemaVersion) &&
-                         parameter != nullptr &&
-                         parameter->schemaKey == document::kSolidColorParameterSchemaKey;
-    solidColorPanel_->setVisible(isSolid);
-    if (!isSolid) {
-        return;
-    }
-
-    solidColorKeyframe_->refresh();
-    const auto value = session_.effectiveColorValue(document::kSolidColorParameterRole);
-    const bool canEditColor = value.has_value();
-    for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
-        field->setEnabled(canEditColor);
-    }
-    if (canEditColor) {
-        const QSignalBlocker blockRed(solidColorRed_);
-        const QSignalBlocker blockGreen(solidColorGreen_);
-        const QSignalBlocker blockBlue(solidColorBlue_);
-        const QSignalBlocker blockAlpha(solidColorAlpha_);
-        solidColorRed_->setValue(value->red);
-        solidColorGreen_->setValue(value->green);
-        solidColorBlue_->setValue(value->blue);
-        solidColorAlpha_->setValue(value->alpha);
-    }
-    // Mirrors Position/Opacity's own tooltip shape exactly.
-    const QString colorTip = parameterSourceDescription(*parameter);
-    for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
-        field->setToolTip(colorTip);
-    }
-    solidAlphaAssociation_->setText(tr("Straight (unassociated)"));
-    solidColorEncoding_->setText(
-        QString::fromUtf8(document::kSolidColorEncoding.data(),
-                          static_cast<qsizetype>(document::kSolidColorEncoding.size())));
-}
-
-void PropertiesEditor::configureTextSource() {
-    const auto* sourceNode = selectedPresentationSource(session_);
-    const bool isText = isKnownSource(sourceNode, document::kTextSourceNodeType,
-                                      document::kTextSourceNodeSchemaVersion);
-    const auto* content = session_.parameterForSelection(document::kTextParameterRole);
-    const auto* size = session_.parameterForSelection(document::kTextSizeParameterRole);
-    const auto* color = session_.parameterForSelection(document::kTextColorParameterRole);
-    const bool resolved = isText && content != nullptr && size != nullptr && color != nullptr &&
-                          content->schemaKey == document::kTextParameterSchemaKey &&
-                          size->schemaKey == document::kTextSizeParameterSchemaKey &&
-                          color->schemaKey == document::kTextColorParameterSchemaKey;
-    textSourcePanel_->setVisible(resolved);
-    if (!resolved) {
-        return;
-    }
-
-    const auto contentValue = session_.constantStringValue(content->id);
-    textContent_->setEnabled(contentValue.has_value());
-    if (contentValue.has_value() && textContent_->text() != *contentValue) {
-        const QSignalBlocker blocker(textContent_);
-        textContent_->setText(*contentValue);
-    }
-    textContent_->setPlaceholderText(tr("Type the layer's text"));
-    textContent_->setToolTip(parameterSourceDescription(*content));
-
-    const auto sizeValue = session_.effectiveScalarValue(document::kTextSizeParameterRole);
-    textSize_->setEnabled(sizeValue.has_value());
-    if (sizeValue.has_value()) {
-        const QSignalBlocker blocker(textSize_);
-        textSize_->setValue(*sizeValue);
-    }
-    textSize_->setToolTip(parameterSourceDescription(*size));
-
-    const auto colorValue = session_.effectiveColorValue(document::kTextColorParameterRole);
-    textColor_->setEnabled(colorValue.has_value());
-    if (colorValue.has_value()) {
-        const QSignalBlocker blocker(textColor_);
-        textColor_->setColor(kit::KColor::fromRgba(
-            static_cast<float>(colorValue->red), static_cast<float>(colorValue->green),
-            static_cast<float>(colorValue->blue), static_cast<float>(colorValue->alpha)));
-    }
-    // The chip's own value model is 8-bit-displayable straight RGBA in [0, 1], so an HDR or
-    // negative authored channel cannot be shown in the swatch or round-tripped through the picker.
-    // The exact stored value travels in the tooltip.
-    textColor_->setToolTip(
-        colorValue.has_value()
-            ? tr("%1\nEditing here commits a color inside the displayable [0, 1] range")
-                  .arg(exactColorText(*colorValue))
-            : parameterSourceDescription(*color));
-    textColorKeyframe_->refresh();
-    textSizeKeyframe_->refresh();
-
-    textFontName_->setText(
-        tr("%1 %2 (embedded)")
-            .arg(QString::fromUtf8(
-                render::kEmbeddedDejaVuSansFamilyName.data(),
-                static_cast<qsizetype>(render::kEmbeddedDejaVuSansFamilyName.size())))
-            .arg(QString::fromUtf8(
-                render::kEmbeddedDejaVuSansStyleName.data(),
-                static_cast<qsizetype>(render::kEmbeddedDejaVuSansStyleName.size()))));
 }
 
 void PropertiesEditor::configureDocumentProperties() {

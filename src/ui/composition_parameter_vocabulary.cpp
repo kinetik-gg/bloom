@@ -2,6 +2,16 @@
 #include "properties_registry_row.hpp"
 #include <bloom/core/scalar_primitives.hpp>
 namespace bloom::ui {
+PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
+    if (schemaKey == document::kTextAlignmentParameterSchemaKey)
+        return PropertiesRowControl::SegmentedEnum;
+    if (schemaKey == document::kTextSizeParameterSchemaKey ||
+        schemaKey == document::kTextLineHeightParameterSchemaKey ||
+        schemaKey == document::kTextLetterSpacingParameterSchemaKey)
+        return PropertiesRowControl::Stepper;
+    return PropertiesRowControl::Automatic;
+}
+
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey) {
     QList<std::pair<QString, std::int64_t>> items;
     const auto add = [&items](const QString& text, const std::int64_t stored) {

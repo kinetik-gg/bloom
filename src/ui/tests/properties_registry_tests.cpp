@@ -23,6 +23,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/node_editor.hpp>
@@ -329,8 +330,8 @@ void registryRows() {
     expect(alignment && row(panel, "line-height") && row(panel, "letter-spacing"),
            "registry adds every text layout parameter");
     if (alignment) {
-        auto* dropdown = alignment->findChild<ui::kit::KDropdown*>();
-        expect(dropdown && dropdown->count() == 3, "alignment is a closed dropdown");
+        auto* dropdown = alignment->findChild<ui::kit::KRadioGroup*>();
+        expect(dropdown && dropdown->count() == 3, "alignment is a closed segmented icon control");
         if (dropdown)
             dropdown->setCurrentIndex(2);
         expect(session.canUndo(), "enum edit uses command history");

@@ -201,10 +201,10 @@ Properties is the one hosted editor that is a *form* rather than a canvas, so `E
 inside a `QScrollArea` with `Qt::Ignored` on the horizontal axis (the scroll area's own minimum
 width never asks the panel's content layout for more room than it already has) and
 `widgetResizable` set, so the real `PropertiesEditor` widget is actually resized down to whatever
-width the panel currently has. Properties owns an inner body scroll area beneath its search
-header. At the 300-design-pixel minimum, row labels elide (`Qt::ElideRight`, with full names in
-tooltips), numeric cells retain `ValueCellMin`, short component prefixes claim their measured glyph
-width, and RGBA fields use two columns. The body scrolls vertically without requiring horizontal
+width the panel currently has. Properties offers its search through the panel header slot and
+owns an inner scroll area for its cards. At the 300-design-pixel minimum, row labels elide
+(`Qt::ElideRight`, with full names in tooltips), numeric cells use the compact Properties metrics
+below, component prefixes stay inside fields, and RGBA disclosures use one line. The body scrolls vertically without requiring horizontal
 scrolling. The node graph, timeline, and viewer retain their existing canvas and wrapper behavior;
 node cards retain their separate minimum-width rule.
 
@@ -248,17 +248,45 @@ Text Alignment uses the existing `nodeOperandSelector` in node cards and the new
 Spacing reuse generic scalar cells and animation diamonds. Existing object names are unchanged.
 ### Properties sections
 
-The Properties panel groups its rows into `kit::KSection` -- a header row of
-`[chevron][Title Case title][spring][Reset]["..." menu]` above a collapsible body. The title is
-Title Case rather than the uppercase `editorSectionTitle` micro-type used elsewhere, because this
-header carries controls of its own and uppercase beside two buttons reads as shouting.
+The Properties panel groups its rows into bordered `kit::KSection` cards. Each header contains a
+plain chevron, a semibold `UiSmall` title, an optional upstream jump icon, a reset arrow and a
+six-dot menu handle. Header actions use the Chrome icon role and have no resting button box.
+Cards use the panel surface radius and a `Border` hairline.
 
-A layer is grouped as **Object** (Visible / Solo / Locked switches, Blending, Opacity as a slider
-plus a value cell plus its keyframe diamond), **Transform** (Position X/Y with an axis-link toggle,
-Rotation as slider plus cell, Scale X/Y with a proportional-link toggle that is engaged by default,
-Anchor X/Y), and then one section per source (Solid Source, Text Source). The timeline's twirl-down
-rows use the same group names, so the two surfaces name the same things identically. With nothing
-selected the panel shows only the read-only Composition section.
+| Metric | Design pixels / behavior |
+| --- | --- |
+| Row pitch | `PropertiesRowPitch` = 28; 22 px controls, 6 px between rows |
+| Card body padding / card gap | `Spacing::S` = 8 / 8 |
+| Label column | `PropertiesLabelWidth` = 96, right-aligned `UiSmall` in `Muted` |
+| Narrow label column | `PropertiesLabelMinWidth` = 72 at the 300 px panel minimum; labels elide with full tooltips |
+| Keyframe column | Fixed trailing `PropertiesDiamondColumn` = 20; empty slots remain reserved |
+| Numeric fields | 64–72 px, monospaced values with at most two decimals, no trailing zeroes, muted unit suffix |
+| X/Y pairs | Internal axis prefixes; a 22 px square link between Position/Scale axes; Anchor has no link |
+| Dropdown | `PropertiesDropdownWidth` = 108, compact 22 px height |
+| Checkbox | `PropertiesCheckBox` = 12 square, accent fill and check when on |
+| Search | Up to `PropertiesSearchWidth` = 180 in the panel header between switcher and fullscreen |
+| Color | 72×20 swatch and small disclosure chevron; four RGBA fields on one line below, 60 px minimum per channel |
+| Anchor grid | Nine 8 px dots on a 12 px pitch, selected point in timeline `Keyframe` amber |
+| Sliders | 4 px accent track and 12 px round knob; remaining control-column width before the numeric field |
+
+A layer is grouped as **Object** (Visible / Solo / Locked checkboxes, disabled Parent `None`,
+Blending Mode, Opacity), **Transform** (Position, Rotation, Scale, Anchor and Anchor Point),
+and its source section. Parent explains that parenting is unavailable; audio is omitted.
+With nothing selected the panel shows only the read-only Composition section.
+
+Anchor Point uses the evaluated full-resolution local bounds, resolved by a cancellable background
+CPU proxy evaluation. Each dot writes the existing anchor-offset setter: centre is `(0,0)`, edges
+and corners use half the local width/height. Direct edits highlight a matching point or clear the
+highlight. Stale geometry cannot author a new selection or time; unresolved/unsupported bounds
+show a disabled grid with activity or diagnostic tooltip. Closing the panel cancels work and
+retires its worker off the UI thread.
+
+Text uses a monospaced line edit, a disabled DejaVu Sans dropdown, Font Size with steppers,
+three Chrome alignment segments, Line Height and Letter Spacing percentage steppers. Line Height
+maps to the stored ratio; Letter Spacing maps to the stored pixel advance relative to the current
+font size. When a driven font size cannot be resolved through the numeric read API, percentage
+letter spacing is disabled with an explanatory tooltip. Expanded multiline content still commits on focus loss. The supported face is explicit
+in the disabled font dropdown's tooltip.
 
 Collapsed state persists per section under `properties/sections/<id>/collapsed`. A section's Reset
 writes each of that group's parameters back to the value the node definition registry declares as
@@ -286,8 +314,9 @@ hand-crafted controls keep their identities and command paths.
 | Vec2 / Vec3 | Two / three numeric components sharing one parameter |
 | Color | Color chip opening the existing picker; expandable RGBA fields |
 | String | Text field; Text content also offers a multiline expander |
-| Integer / Boolean | Integer field / switch |
-| Closed enum | Dropdown carrying the schema's stored integer values |
+| Integer / Boolean | Exact integer field / square checkbox |
+| Closed enum | Dropdown, or icon segments when the schema row mapping requests them |
+| Stepper scalar | Numeric field with clickable up/down arrows; registered for text size and spacing |
 
 The header search filters row labels by case-insensitive substring. Unmatched rows and empty
 sections hide; clearing the query restores them. During a search, matching section bodies are
@@ -297,7 +326,7 @@ After the selection's own sections, upstream nodes appear once each in breadth-f
 image inputs and driver links, to depth three. Merge and Output terminate traversal. A layer's
 direct source is already represented by its source section and is not duplicated. One trailing
 “and N more upstream” row counts unique nodes beyond the limit. Upstream controls use the same
-registry rows and edit their exact parameters without changing selection. “Jump to node” selects
+registry rows and edit their exact parameters without changing selection. The section header’s jump icon selects
 that node and frames it in the existing node canvas in the same window.
 
 Driven rows replace editable values with a link glyph, the driver's display name, and its resolved
@@ -316,8 +345,8 @@ restores the registered default and keeps the binding undoable. Locked parameter
 information rows disable Reset.
 
 At the unchanged 300-design-pixel panel minimum, the header stays fixed and the body scrolls
-vertically. Labels and section titles elide, numeric fields retain their kit floor, and the
-hand-crafted RGBA fields use two columns. Content never requires horizontal scrolling. These Qt
+vertically. Labels and section titles elide, scalar/paired fields retain their compact floor,
+three-component vectors can shrink to 48 px per component, and RGBA disclosures keep one line. Content never requires horizontal scrolling. These Qt
 controls and command paths apply equally on Linux, macOS and Windows; platform qualification is
 separate from the layout contract.
 
@@ -330,6 +359,15 @@ New object names: `propertiesSearchField`, `propertiesScrollArea`, `propertiesSc
 `propertiesJumpToNode`, `propertiesMoreUpstream`, `propertiesDrivenDisplay`, `propertiesDriverLink`,
 `propertiesDrivenValue`, `propertiesRowContextMenu`, and `propertiesResetToDefault`. Existing object
 names are retained. Registry rows expose `parameterId` and `role`; upstream sections expose `nodeId`.
+
+The reusable square checkbox has the default kit name `kCheckBox`.
+New Properties automation names: `propertiesParentDropdown`, `propertiesAnchorGrid`, `propertiesUpstreamFont`,
+`propertiesSolidColorChip`, `propertiesSolidColorExpand`, `propertiesTextColorR`,
+`propertiesTextColorG`, `propertiesTextColorB`, `propertiesTextColorA`, `propertiesTextColorExpand`,
+`propertiesTextColorFields`, `propertiesRegistryColorFields`, `propertiesRegistryTextExpand` and `propertiesDrivenControls`.
+Existing names are retained; `textFontName` now identifies a dropdown and the alignment row's
+`propertiesRegistryEnum` identifies a segmented radio group.
+
 
 ### Viewer footer
 

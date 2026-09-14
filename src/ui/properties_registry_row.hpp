@@ -14,7 +14,10 @@ namespace kit {
 class KColorChip;
 class KDropdown;
 class KSwitch;
+class KRadioGroup;
 } // namespace kit
+enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Stepper };
+[[nodiscard]] PropertiesRowControl propertiesRowControl(std::string_view schemaKey);
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey);
 class PropertiesRegistryRow final : public QWidget {
   public:
@@ -26,12 +29,14 @@ class PropertiesRegistryRow final : public QWidget {
 
   private:
     void commit();
+    [[nodiscard]] double displayScale() const;
     bool eventFilter(QObject* watched, QEvent* event) override;
     CompositionSession& session_;
     document::NodeId node_;
     document::ParameterId parameter_;
     document::ParameterDefinition definition_;
     std::array<kit::KValueField*, 4> fields_{};
+    kit::KRadioGroup* segments_ = nullptr;
     kit::KDropdown* selector_ = nullptr;
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;

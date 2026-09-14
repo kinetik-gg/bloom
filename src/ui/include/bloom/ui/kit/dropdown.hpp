@@ -88,6 +88,8 @@ class KDropdown final : public QWidget {
 
   private:
     [[nodiscard]] int controlExtent() const;
+    [[nodiscard]] int horizontalPadding() const;
+    [[nodiscard]] int caretGap() const;
     void commitIndex(int index);
 
     QStandardItemModel* model_ = nullptr;

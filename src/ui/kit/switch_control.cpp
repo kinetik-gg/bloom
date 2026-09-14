@@ -165,7 +165,9 @@ void KCheckBox::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const auto state = visualState();
     fillRoundedSurface(painter, QRectF(rect()),
-                       inkForState(isChecked() ? Color::Accent : Color::Field, state),
+                       isEnabled() ? color(isChecked() ? Color::Accent : Color::Field)
+                                   : withOpacity(color(isChecked() ? Color::Accent : Color::Field),
+                                                 kDisabledOpacity),
                        isChecked() ? QColor{} : color(borderToken()), Radius::Small);
     if (isChecked())
         painter.drawPixmap(rect(), iconPixmap(IconId::Check, Size::IconSmall,

@@ -18,6 +18,7 @@
 #include <QPalette>
 #include <QResizeEvent>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,11 @@ class PropertyRowLabel final : public QLabel {
 class PropertyRow final : public QWidget {
   public:
     PropertyRow(QLabel* label, QWidget* parent) : QWidget(parent), label_(label) {}
+    [[nodiscard]] QSize minimumSizeHint() const override {
+        auto size = QWidget::minimumSizeHint();
+        size.setWidth(size.width() - label_->width() + kit::px(kit::Size::PropertiesLabelMinWidth));
+        return size;
+    }
 
   protected:
     void resizeEvent(QResizeEvent* event) override {
@@ -86,7 +92,10 @@ int labelColumnWidth() { return kit::px(kit::Size::PropertiesLabelWidth); }
 QLabel* makeRowLabel(const QString& text, QWidget* parent) {
     auto* label = new PropertyRowLabel(text, labelColumnWidth(), parent);
     label->setObjectName(QStringLiteral("propertiesRowLabel"));
-    label->setFont(kit::font(kit::TypeRole::UiSmall));
+    auto labelFont = kit::font(kit::TypeRole::UiSmall);
+    labelFont.setCapitalization(QFont::MixedCase);
+    labelFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
+    label->setFont(labelFont);
     QPalette palette = label->palette();
     palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
     label->setPalette(palette);
@@ -102,13 +111,16 @@ QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWi
     row->setMinimumHeight(kit::px(kit::Size::ControlCompact));
     row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* layout = new QHBoxLayout(row);
+    layout->setSizeConstraint(QLayout::SetNoConstraint);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(kit::px(kit::Spacing::XS));
+    layout->setSpacing(kit::px(kit::Spacing::XXS));
     label->setFixedWidth(labelColumnWidth());
     layout->addWidget(label);
     bool expanding = false;
     for (auto* value : values) {
         if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
+            dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
+            dropdown->setFont(label->font());
             dropdown->setFixedWidth(kit::px(kit::Size::PropertiesDropdownWidth));
             dropdown->setFixedHeight(kit::px(kit::Size::ControlCompact));
         }
@@ -180,7 +192,7 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     group->setObjectName(objectName);
     auto* layout = new QHBoxLayout(group);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(kit::px(kit::Spacing::XS));
+    layout->setSpacing(kit::px(kit::Spacing::XXS));
     for (auto* cell : cells) {
         layout->addWidget(cell);
     }
@@ -190,14 +202,55 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     return group;
 }
 
+QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, QWidget* diamond,
+                     const std::initializer_list<QWidget*> fields, const QString& expandName,
+                     const QString& groupName) {
+    auto* expand = new kit::KButton(parent);
+    expand->setObjectName(expandName);
+    expand->setIconId(kit::IconId::CaretRight);
+    expand->setVariant(kit::KButton::Variant::Ghost);
+    expand->setCheckable(true);
+    expand->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+    expand->setToolTip(QObject::tr("Show RGBA components"));
+    expand->setAccessibleName(QObject::tr("Show RGBA components"));
+    auto* row =
+        addRow(rows, parent, makeRowLabel(QObject::tr("Color"), parent), diamond, {chip, expand});
+    auto* details = makeCellGroup(groupName, fields, parent);
+    details->setProperty("disclosureFor", QObject::tr("Color"));
+    details->setProperty("expanded", false);
+    // Four channels share the full card width below the swatch.
+    for (auto* field : fields)
+        field->setMinimumWidth(kit::px(kit::Size::PropertiesColorMinWidth));
+    details->setProperty("colorOwner", QVariant::fromValue(static_cast<QObject*>(row)));
+    for (auto* field : fields) {
+        field->setContextMenuPolicy(Qt::CustomContextMenu);
+        field->setProperty("rowMenuForwarded", true);
+        QObject::connect(field, &QWidget::customContextMenuRequested, row,
+                         [row, field](const QPoint& point) {
+                             Q_EMIT row->customContextMenuRequested(
+                                 row->mapFromGlobal(field->mapToGlobal(point)));
+                         });
+    }
+    rows->addWidget(details);
+    details->hide();
+    QObject::connect(expand, &kit::KButton::toggled, details, [details, expand](bool on) {
+        details->setProperty("expanded", on);
+        details->setVisible(on);
+        expand->setIconId(on ? kit::IconId::CaretDown : kit::IconId::CaretRight);
+    });
+    return row;
+}
+
 QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip, QWidget* parent) {
     auto* toggle = new kit::KButton(parent);
     toggle->setObjectName(objectName);
     toggle->setVariant(kit::KButton::Variant::Ghost);
-    toggle->setControlSize(kit::KButton::ControlSize::Compact);
     toggle->setIconId(kit::IconId::Link);
     toggle->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
     toggle->setCheckable(true);
+    QObject::connect(toggle, &kit::KButton::toggled, toggle, [toggle](bool linked) {
+        toggle->setVariant(linked ? kit::KButton::Variant::Primary : kit::KButton::Variant::Ghost);
+    });
     toggle->setToolTip(tooltip);
     return toggle;
 }
