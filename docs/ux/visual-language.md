@@ -10,7 +10,8 @@ Bloom needs a coherent visual foundation for a dense professional interface. Ico
 must remain legible at small sizes, work across Linux, macOS, and Windows, and be usable without a
 web runtime or JavaScript toolchain.
 
-This document owns Bloom's current iconography, interface type, and design-token decisions. The
+The [UI grammar](ui-grammar.md) owns control, row and chrome metrics and supersedes historical
+component measurements below. This document owns palette, iconography and interaction recipes. The
 tables below are product truth and match `src/ui/include/bloom/ui/kit/tokens.hpp` exactly; the
 header is the single implementation of them, and `src/ui/tests/kit_tokens_tests.cpp` asserts each
 value listed here.
