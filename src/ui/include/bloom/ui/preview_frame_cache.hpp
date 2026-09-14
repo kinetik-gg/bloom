@@ -155,6 +155,7 @@ using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 // not Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
 // precedent -- nothing in src/ui constructs a QSettings of its own.
 [[nodiscard]] std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings);
+[[nodiscard]] std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings);
 void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

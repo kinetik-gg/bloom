@@ -1188,7 +1188,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     CpuRowBandExecutor* const rowBands, OperationCacheStatistics* statistics) const {
     OperationCacheStatistics frameStatistics;
     if (statistics) *statistics = {};
-    auto* cache = request.bypassOperationCache ? nullptr : cache_.get();
+    auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache())) ? nullptr : cache_.get();
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -1218,6 +1218,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             bool operationCancelled = false;
 
             detail::OperationKey key;
+            if (cache) {
             key.add(plan->projectId()); key.add(plan->compositionId());
             key.add(plan->format().width()); key.add(plan->format().height());
             key.add(plan->format().pixelAspect());
@@ -1253,6 +1254,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 key.add(contentHashes[input.value()]);
             });
             contentHashes[index] = key.digest();
+            }
             const auto hit = cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
             if (hit) {
                 ++frameStatistics.hits;
@@ -1782,7 +1784,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
         };
         auto frame = std::shared_ptr<const ProcessFrame>(
-            new ProcessFrame(std::move(identity), std::move(processImage)));
+            new ProcessFrame(std::move(identity), std::move(processImage), frameStatistics));
         if (statistics) *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame));
     } catch (const std::bad_alloc&) {

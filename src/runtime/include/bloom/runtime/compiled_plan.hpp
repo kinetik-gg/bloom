@@ -186,6 +186,8 @@ struct CompiledCompositionPlanDefinition final {
     std::uint32_t planSemanticsVersion = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
+    bool bypassOperationCache = false;
+
     friend bool operator==(const CompiledCompositionPlanDefinition&,
                            const CompiledCompositionPlanDefinition&) = default;
 };
@@ -202,6 +204,7 @@ class CompiledCompositionPlan final {
     CompiledCompositionPlan& operator=(CompiledCompositionPlan&&) = delete;
     ~CompiledCompositionPlan() = default;
 
+    [[nodiscard]] bool bypassOperationCache() const noexcept { return bypassOperationCache_; }
     [[nodiscard]] bool operationTimeDependent(OperationIndex index) const noexcept {
         return index.value() >= operationTimeDependent_.size() || operationTimeDependent_[index.value()] != 0;
     }
@@ -248,6 +251,7 @@ class CompiledCompositionPlan final {
                            const CompiledCompositionPlan&) = default;
 
   private:
+    bool bypassOperationCache_ = false;
     void analyzeTimeDependence();
     std::vector<std::uint8_t> operationTimeDependent_;
     std::vector<std::uint8_t> valueTimeDependent_;

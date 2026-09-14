@@ -140,3 +140,82 @@ void testOperationDirtyPropagation(Expectations& expectations) {
             "cached absence and presence respect both trim boundaries");
     }
 }
+
+void testOperationCacheLifecycle(Expectations& expectations) {
+    runtime::OperationCache cache;
+    const auto revision = document::Revision::fromRaw(1);
+    const runtime::OperationCacheValue value{.image = {}, .values = {runtime::CompiledValue{0.5}}};
+    cache.store("a", revision, value);
+    const auto cost = cache.retainedBytes();
+    cache.setByteBudget(cost * 2);
+    cache.store("b", revision, value);
+    expectations.expect(cache.find("a", revision).has_value(), "touch refreshes LRU recency");
+    cache.store("c", revision, value);
+    expectations.expect(!cache.find("b", revision) && cache.find("a", revision) && cache.find("c", revision),
+                        "LRU evicts the least recently used operation");
+    expectations.expect(cache.retainedBytes() <= cost * 2, "cache retention respects byte budget");
+    cache.store(std::string(cost * 3, 'x'), revision, value);
+    expectations.expect(cache.find("a", revision) && cache.find("c", revision),
+                        "oversized entry does not evict useful operations");
+    std::vector<std::thread> workers;
+    workers.reserve(3);
+    for (std::size_t i = 0; i < 3; ++i) workers.emplace_back([&cache, revision, value, i] {
+        for (std::size_t n = 0; n < 30; ++n) {
+            const auto key = std::to_string(i * 30 + n);
+            cache.store(key, revision, value);
+            (void)cache.find(key, document::Revision::fromRaw(2));
+        }
+    });
+    for (auto& worker : workers) worker.join();
+    expectations.expect(cache.retainedBytes() <= cost * 2, "concurrent cache adoption and eviction stay bounded");
+    runtime::CpuCompositionEvaluator evaluator;
+    auto definition = memoizationFixture()->copyDefinition();
+    definition.bypassOperationCache = true;
+    const auto overridePlan = publishPlan(std::move(definition));
+    const auto result = evaluator.evaluate(overridePlan, requestFor(*overridePlan), {});
+    expectations.expect(result.frame() && evaluator.operationCache()->retainedBytes() == 0,
+                        "override plans bypass cache even without a request flag");
+    if (result.frame()) expectations.expect(result.frame()->operationCacheStatistics().hits == 0 &&
+                                            result.frame()->operationCacheStatistics().misses == 6,
+                                            "per-frame statistics are exposed without UI state");
+}
+
+void benchmarkOperationMemoization(Expectations& expectations) {
+    auto definition = memoizationFixture()->copyDefinition();
+    definition.format = format(640, 360);
+    std::get<runtime::CompiledLayerOutput>(definition.operations[1]).position.source = document::Vec2d{320, 180};
+    std::get<runtime::CompiledLayerOutput>(definition.operations[3]).position.source = document::Vec2d{320, 180};
+    const auto plan = publishPlan(std::move(definition));
+    auto changed = plan->copyDefinition();
+    changed.sourceRevision = document::Revision::fromRaw(8);
+    std::get<runtime::CompiledSolid>(changed.operations[0]).color.source = core::Color4d{0, 1, 0, 1};
+    const auto edited = publishPlan(std::move(changed));
+    for (const bool bypass : {true, false}) {
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto start = std::chrono::steady_clock::now();
+        std::size_t misses = 0, hits = 0;
+        for (std::int64_t frame = 0; frame < 24; ++frame) {
+            auto request = requestFor(*plan, 256U << 20U);
+            const auto time = core::RationalTime::create(frame, 24);
+            if (!time) throw std::runtime_error("invalid benchmark time");
+            request.time = *time;
+            request.bypassOperationCache = bypass;
+            runtime::OperationCacheStatistics statistics;
+            const auto result = evaluator.evaluate(plan, request, {}, {}, nullptr, &statistics);
+            expectations.expect(result.frame() != nullptr, "benchmark frame evaluates");
+            misses += statistics.misses; hits += statistics.hits;
+        }
+        const auto rangeEnd = std::chrono::steady_clock::now();
+        auto request = requestFor(*edited, 256U << 20U);
+        request.bypassOperationCache = bypass;
+        runtime::OperationCacheStatistics statistics;
+        const auto result = evaluator.evaluate(edited, request, {}, {}, nullptr, &statistics);
+        const auto end = std::chrono::steady_clock::now();
+        expectations.expect(result.frame() != nullptr, "benchmark edit evaluates");
+        std::cout << "MEMO-1 benchmark 640x360 serial " << (bypass ? "uncached" : "cached")
+                  << " range24_ms=" << std::chrono::duration<double, std::milli>(rangeEnd - start).count()
+                  << " hits=" << hits << " evaluations=" << misses
+                  << " edit_ms=" << std::chrono::duration<double, std::milli>(end - rangeEnd).count()
+                  << " edit_hits=" << statistics.hits << " edit_evaluations=" << statistics.misses << '\n';
+    }
+}

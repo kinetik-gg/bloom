@@ -154,6 +154,8 @@ class ProcessFrame final {
     ProcessFrame& operator=(ProcessFrame&&) noexcept = default;
     ~ProcessFrame() = default;
 
+    [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const& noexcept { return statistics_; }
+    [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const&& = delete;
     [[nodiscard]] const ProcessFrameIdentity& identity() const& noexcept { return identity_; }
     [[nodiscard]] const ProcessFrameIdentity& identity() const&& = delete;
     [[nodiscard]] const render::Rgba32fImage& processImage() const& noexcept {
@@ -164,8 +166,10 @@ class ProcessFrame final {
   private:
     friend class CpuCompositionEvaluator;
 
-    ProcessFrame(ProcessFrameIdentity identity, std::shared_ptr<const render::Rgba32fImage> processImage) noexcept;
+    ProcessFrame(ProcessFrameIdentity identity, std::shared_ptr<const render::Rgba32fImage> processImage,
+                 OperationCacheStatistics statistics) noexcept;
 
+    OperationCacheStatistics statistics_;
     ProcessFrameIdentity identity_;
     std::shared_ptr<const render::Rgba32fImage> processImage_;
 };

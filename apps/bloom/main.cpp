@@ -96,6 +96,11 @@ int main(int argc, char* argv[]) {
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
+    {
+        const QSettings playbackSettings;
+        cpuEvaluator.operationCache()->setByteBudget(
+            bloom::ui::operationCacheByteBudgetFromSettings(playbackSettings));
+    }
     bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     // Issue #97 (task C3): resolved and built once, on the shared TaskScheduler's blocking-I/O
     // lane, at this same session/pipeline-construction point (design decision 3). Declared before

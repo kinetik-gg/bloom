@@ -6,7 +6,7 @@ namespace bloom::runtime {
 
 CompiledCompositionPlan::CompiledCompositionPlan(
     CompiledCompositionPlanDefinition definition)
-    : sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
+    : bypassOperationCache_(definition.bypassOperationCache), sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
       compositionId_(definition.compositionId), format_(definition.format),
       operations_(std::move(definition.operations)), output_(definition.output),
       scalarCurves_(std::move(definition.scalarCurves)),
@@ -32,7 +32,8 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .valueOperations = valueOperations_,
             .valueOutputCount = valueOutputCount_,
             .planSemanticsVersion = planSemanticsVersion_,
-            .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_};
+            .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_,
+            .bypassOperationCache = bypassOperationCache_};
 }
 
 } // namespace bloom::runtime

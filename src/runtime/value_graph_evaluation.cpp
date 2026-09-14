@@ -204,11 +204,13 @@ class Evaluator final {
                 return;
             }
             runtime::detail::OperationKey key;
+            bool valid = true;
+            const auto currentOperation = operationIndex++;
+            if (memoization_.cache) {
             key.add(std::string("value")); key.add(memoization_.project); key.add(memoization_.composition);
             key.add(operation.sourceNodeId); key.add(operation.kernel.index()); key.add(count);
-            const bool dependent = operationIndex >= memoization_.timeDependence.size() ||
-                memoization_.timeDependence[operationIndex] != 0;
-            ++operationIndex;
+            const bool dependent = currentOperation >= memoization_.timeDependence.size() ||
+                memoization_.timeDependence[currentOperation] != 0;
             key.add(dependent);
             if (dependent) key.add(time_); key.add(rate_);
             std::visit([&](const auto& kernel) {
@@ -224,11 +226,11 @@ class Evaluator final {
                     else key.add(kernel.components.size());
                 }
             }, operation.kernel);
-            bool valid = true;
             runtime::forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
                 const auto* value = operandOf(operand);
                 if (value) key.add(*value); else valid = false;
             });
+            }
             const auto hit = memoization_.cache && valid
                 ? memoization_.cache->find(key.bytes(), memoization_.revision) : std::nullopt;
             if (hit) {
