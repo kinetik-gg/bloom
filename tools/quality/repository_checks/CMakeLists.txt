@@ -4,6 +4,8 @@ add_library(
     bloom_repository_checks
     STATIC
     repository_checks.cpp
+    ui_grammar.cpp
+    ui_grammar.hpp
     repository_checks.hpp
 )
 target_include_directories(bloom_repository_checks PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -87,4 +89,26 @@ if(BUILD_TESTING)
         LABELS quality unit
         TIMEOUT 30
     )
+endif()
+
+add_executable(bloom_ui_grammar_check ui_grammar_main.cpp)
+target_link_libraries(bloom_ui_grammar_check PRIVATE bloom_repository_checker_main)
+bloom_enable_warnings(bloom_ui_grammar_check)
+add_custom_target(bloom-ui-grammar-check
+    COMMAND ${CMAKE_COMMAND}
+        "-DBLOOM_REPOSITORY_CHECKER=$<TARGET_FILE:bloom_ui_grammar_check>"
+        "-DBLOOM_REPOSITORY_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DBLOOM_REPOSITORY_FILE_MANIFEST=${PROJECT_BINARY_DIR}/quality/ui-grammar.files"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/RunRepositoryCheck.cmake"
+    DEPENDS bloom_ui_grammar_check VERBATIM)
+if(BUILD_TESTING)
+    add_executable(bloom_ui_grammar_checker_test tests/ui_grammar_tests.cpp)
+    target_link_libraries(bloom_ui_grammar_checker_test PRIVATE bloom_repository_checks)
+    bloom_enable_warnings(bloom_ui_grammar_checker_test)
+    bloom_add_test(NAME bloom.quality.ui_grammar_checker COMMAND bloom_ui_grammar_checker_test LABELS quality unit TIMEOUT 30)
+    bloom_add_test(NAME bloom.quality.ui_grammar COMMAND ${CMAKE_COMMAND}
+        "-DBLOOM_REPOSITORY_CHECKER=$<TARGET_FILE:bloom_ui_grammar_check>"
+        "-DBLOOM_REPOSITORY_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DBLOOM_REPOSITORY_FILE_MANIFEST=${PROJECT_BINARY_DIR}/quality/ui-grammar-test.files"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/RunRepositoryCheck.cmake" LABELS quality TIMEOUT 30)
 endif()

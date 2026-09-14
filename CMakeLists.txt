@@ -53,6 +53,7 @@ add_custom_target(
         bloom-format-check
         bloom-hygiene-check
         bloom-architecture-check
+        bloom-ui-grammar-check
         bloom-project-schema-check
         bloom-dependency-artifact-check
 )
