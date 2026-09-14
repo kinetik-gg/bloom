@@ -713,8 +713,7 @@ void testPngExportContainsRasterizedText(Expectations& expectations) {
     if (!fixture.setUp(expectations, "text export: fixture is available")) {
         return;
     }
-    // The text origin is the frame origin, so a layer centered in the frame puts the glyph's
-    // top-left corner at the frame's top-left corner.
+    // The glyph box is centred at the layer's default composition-centre anchor.
     expectations.expect(fixture.session.addTextLayer(QStringLiteral("Title"),
                                                      QString::fromUtf8("\xe2\x96\x88"), 24.0,
                                                      core::Color4d{1.0, 1.0, 1.0, 1.0}),
@@ -752,7 +751,7 @@ void testPngExportContainsRasterizedText(Expectations& expectations) {
     expectations.expect(decoded.width() == 64 && decoded.height() == 48,
                         "text export: the PNG carries the composition's own resolution");
     const QImage rgba = decoded.convertToFormat(QImage::Format_RGBA8888);
-    const QColor ink = rgba.pixelColor(4, 4);
+    const QColor ink = rgba.pixelColor(32, 24);
     expectations.expect(ink.alpha() == 255 && ink.red() == 255 && ink.green() == 255 &&
                             ink.blue() == 255,
                         "text export: a pixel under the glyph's fully covered interior is opaque "

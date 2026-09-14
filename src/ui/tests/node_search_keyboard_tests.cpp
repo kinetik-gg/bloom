@@ -182,7 +182,8 @@ void testSearchKeyboardAndMenus() {
     // surfaces.
     const auto addable = static_cast<int>(std::ranges::count_if(
         document::builtInNodeDefinitions().definitions(), [](const auto& definition) {
-            return !document::isRerouteNodeType(definition.key.typeId);
+            return !document::isRerouteNodeType(definition.key.typeId) &&
+                   definition.category != document::NodeCategory::Compatibility;
         }));
     expect(popup->isVisible() && resultRows(list->model()) == addable,
            "Tab opens every addable node kind at the cursor, and only those");
