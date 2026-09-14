@@ -228,6 +228,7 @@ template <typename Definition>
     case NodeLoweringKind::ValueCombine:
     case NodeLoweringKind::ValueRandom:
     case NodeLoweringKind::ValueReroute:
+    case NodeLoweringKind::ValueUtility:
         return bloom::document::detail::hasValidValueLoweringShape(definition);
     }
     return false;

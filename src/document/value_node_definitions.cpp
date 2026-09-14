@@ -2,6 +2,7 @@
 
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -429,6 +430,118 @@ struct KindVocabulary final {
 // Utilities
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Task UTIL-1's table-driven library
+// ---------------------------------------------------------------------------------------------
+
+// The inverse of socketKindForParameterValueKind(). Image has no authoring kind at all, which is
+// why it answers Float64 and the caller's own descriptor may never name it: a value-graph node
+// carries numbers, and the shape check refuses an Image socket on one.
+[[nodiscard]] ParameterValueKind parameterKindForSocketKind(const SocketValueKind kind) noexcept {
+    switch (kind) {
+    case SocketValueKind::Color:
+        return ParameterValueKind::Color4d;
+    case SocketValueKind::Vector2:
+        return ParameterValueKind::Vec2d;
+    case SocketValueKind::Vector3:
+        return ParameterValueKind::Vec3d;
+    case SocketValueKind::String:
+        return ParameterValueKind::String;
+    case SocketValueKind::Integer:
+        return ParameterValueKind::Integer;
+    case SocketValueKind::Boolean:
+        return ParameterValueKind::Boolean;
+    case SocketValueKind::Image:
+    case SocketValueKind::Scalar:
+        break;
+    }
+    return ParameterValueKind::Float64;
+}
+
+// The generic operand schema for a kind. One schema per KIND rather than one per node-and-role, for
+// the reason parameter.hpp's own comment gives: a Substring's `start` and a Repeat's `count` are
+// both an unconstrained integer, and two schema keys saying so would be two spellings of one
+// domain.
+[[nodiscard]] std::string_view operandSchemaKeyForSocketKind(const SocketValueKind kind) noexcept {
+    using namespace bloom::document;
+    switch (kind) {
+    case SocketValueKind::Color:
+        return kColorOperandParameterSchemaKey;
+    case SocketValueKind::Vector2:
+        return kVector2OperandParameterSchemaKey;
+    case SocketValueKind::Vector3:
+        return kVector3OperandParameterSchemaKey;
+    case SocketValueKind::String:
+        return kStringOperandParameterSchemaKey;
+    case SocketValueKind::Integer:
+        return kIntegerOperandParameterSchemaKey;
+    case SocketValueKind::Boolean:
+        return kBooleanOperandParameterSchemaKey;
+    case SocketValueKind::Image:
+    case SocketValueKind::Scalar:
+        break;
+    }
+    return kScalarOperandParameterSchemaKey;
+}
+
+[[nodiscard]] ParameterValue
+descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
+    using namespace bloom::document;
+    switch (operand.kind) {
+    case SocketValueKind::Color:
+        return kDefaultValueColor;
+    case SocketValueKind::Vector2:
+        return Vec2d{operand.number, operand.y};
+    case SocketValueKind::Vector3:
+        return Vec3d{operand.number, operand.y, operand.z};
+    case SocketValueKind::String:
+        return std::string(operand.text);
+    case SocketValueKind::Integer:
+        return operand.integer;
+    case SocketValueKind::Boolean:
+        return operand.flag;
+    case SocketValueKind::Image:
+    case SocketValueKind::Scalar:
+        break;
+    }
+    return operand.number;
+}
+
+// One descriptor as a registered definition. Operand sockets come first and in the descriptor's own
+// order, then the inline selectors as parameters with no socket -- which is exactly the order
+// hasValidValueLoweringShape() reads them back in.
+[[nodiscard]] NodeDefinition
+valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor) {
+    using namespace bloom::document;
+    std::vector<InputPortDefinition> inputs;
+    std::vector<ParameterDefinition> parameters;
+    std::vector<OutputPortDefinition> outputs;
+    inputs.reserve(descriptor.operands.size());
+    parameters.reserve(descriptor.operands.size() + descriptor.selectors.size());
+    outputs.reserve(descriptor.outputs.size());
+    for (const auto& declared : descriptor.operands) {
+        inputs.push_back(operand(declared.role, declared.kind));
+        parameters.push_back(parameter(declared.role, operandSchemaKeyForSocketKind(declared.kind),
+                                       parameterKindForSocketKind(declared.kind),
+                                       descriptorDefaultValue(declared)));
+    }
+    for (const auto& selector : descriptor.selectors) {
+        parameters.push_back(parameter(selector.role, selector.schemaKey,
+                                       ParameterValueKind::Integer, selector.defaultValue));
+    }
+    for (const auto& declared : descriptor.outputs) {
+        outputs.push_back(result(declared.name, declared.kind));
+    }
+    return {{std::string(descriptor.typeId), kValueNodeSchemaVersion},
+            NodeLoweringKind::ValueUtility,
+            std::move(inputs),
+            std::move(outputs),
+            std::move(parameters),
+            std::nullopt,
+            NodeCardinality::Many,
+            descriptor.category};
+}
+
 [[nodiscard]] NodeDefinition randomDefinition() {
     using namespace bloom::document;
     // Seeded and nothing else. The same seed is the same value on every machine and in every
@@ -473,6 +586,10 @@ struct KindVocabulary final {
 namespace bloom::document::detail {
 
 bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
+    if (schemaKey == kRoundingModeParameterSchemaKey ||
+        schemaKey == kNumberRadixParameterSchemaKey) {
+        return true;
+    }
     return schemaKey == kScalarOperationParameterSchemaKey ||
            schemaKey == kVectorOperationParameterSchemaKey ||
            schemaKey == kVectorReductionParameterSchemaKey ||
@@ -601,6 +718,40 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::ValueRandom:
         return inputs == 3 && outputs == 1 && definition.parameters.size() == 3 &&
                definition.outputs.front().valueKind == SocketValueKind::Scalar;
+    case NodeLoweringKind::ValueUtility: {
+        // Checked against the DESCRIPTOR rather than against a hand-written arity, because the
+        // descriptor is what the compiler and the kernel read: a definition that disagreed with it
+        // would lower operands the kernel does not expect, at every frame rather than at startup.
+        const auto* descriptor = findValueUtilityDescriptor(definition.key.typeId);
+        if (descriptor == nullptr || inputs != descriptor->operands.size() ||
+            outputs != descriptor->outputs.size() ||
+            definition.parameters.size() !=
+                descriptor->operands.size() + descriptor->selectors.size() ||
+            definition.category != descriptor->category) {
+            return false;
+        }
+        for (std::size_t index = 0; index < descriptor->operands.size(); ++index) {
+            if (definition.inputs[index].name != descriptor->operands[index].role ||
+                definition.inputs[index].valueKind != descriptor->operands[index].kind) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < descriptor->selectors.size(); ++index) {
+            const auto& declared = definition.parameters[descriptor->operands.size() + index];
+            if (declared.role != descriptor->selectors[index].role ||
+                declared.schemaKey != descriptor->selectors[index].schemaKey ||
+                declared.valueKind != ParameterValueKind::Integer) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < descriptor->outputs.size(); ++index) {
+            if (definition.outputs[index].name != descriptor->outputs[index].name ||
+                definition.outputs[index].valueKind != descriptor->outputs[index].kind) {
+                return false;
+            }
+        }
+        return true;
+    }
     case NodeLoweringKind::ValueReroute:
         return inputs == 1 && outputs == 1 && definition.parameters.empty() &&
                definition.inputs.front().valueKind == definition.outputs.front().valueKind &&
@@ -618,7 +769,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
 
 std::vector<NodeDefinition> valueNodeDefinitions() {
     std::vector<NodeDefinition> definitions;
-    definitions.reserve(40);
+    definitions.reserve(40 + valueUtilityDescriptors().size());
     definitions.push_back(valueConstantDefinition(
         kIntegerValueNodeType, kIntegerValueParameterSchemaKey, SocketValueKind::Integer,
         ParameterValueKind::Integer, std::int64_t{0}));
@@ -689,6 +840,11 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
     // what CanonicalGraph::outputKind()/inputKind() answer for this type and what every
     // connect-time and compile-time check therefore asks.
     definitions.push_back(rerouteDefinition(kRerouteNodeType, SocketValueKind::Image));
+
+    // Task UTIL-1: one definition per descriptor, in the table's own order.
+    for (const auto& descriptor : valueUtilityDescriptors()) {
+        definitions.push_back(valueUtilityDefinition(descriptor));
+    }
     return definitions;
 }
 

@@ -438,6 +438,36 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{runtime::CompiledValueRandom{
             *std::move(seed), *std::move(minimum), *std::move(maximum)}};
     }
+    case runtime::NodeLoweringKind::ValueUtility: {
+        // Wholly table-driven: the node's descriptor names its operands and its selectors, and this
+        // reads them in that order. There is no per-node branch here at all, which is the point --
+        // a new library node is a descriptor plus a kernel, never a third edit in the compiler.
+        const auto* descriptor = findValueUtilityDescriptor(node.typeId);
+        if (descriptor == nullptr) {
+            return std::nullopt;
+        }
+        std::vector<runtime::CompiledValueOperand> operands;
+        operands.reserve(descriptor->operands.size());
+        for (const auto& declared : descriptor->operands) {
+            auto value = operandOf(declared.role);
+            if (!value.has_value()) {
+                return std::nullopt;
+            }
+            operands.push_back(*std::move(value));
+        }
+        std::vector<std::int64_t> selectors;
+        selectors.reserve(descriptor->selectors.size());
+        for (const auto& declared : descriptor->selectors) {
+            const auto* stored = parameterConstant<std::int64_t>(
+                runtime::detail::findParameterBinding(node, declared.role));
+            if (stored == nullptr) {
+                return std::nullopt;
+            }
+            selectors.push_back(*stored);
+        }
+        return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
+            descriptor->kernel, std::move(operands), std::move(selectors)}};
+    }
     case runtime::NodeLoweringKind::Solid:
     case runtime::NodeLoweringKind::Text:
     case runtime::NodeLoweringKind::LayerOutput:

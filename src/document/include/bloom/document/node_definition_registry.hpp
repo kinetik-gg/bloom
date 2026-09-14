@@ -209,6 +209,12 @@ enum class NodeLoweringKind {
     ValueCombine,
     ValueRandom,
     ValueReroute,
+    // Task UTIL-1's conversion, string, logic, numeric and readout library. ONE lowering for all of
+    // it, because every one of those nodes has the same shape -- a fixed operand list in, a fixed
+    // output list out, and a kernel selected by the node's own TYPE rather than by a stored
+    // operation. The shape itself lives in document::valueUtilityDescriptors(), so the definition,
+    // the validation, the lowering and the kernel all read one table instead of four copies of it.
+    ValueUtility,
     Unsupported,
 };
 
@@ -232,6 +238,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueCombine:
     case NodeLoweringKind::ValueRandom:
     case NodeLoweringKind::ValueReroute:
+    case NodeLoweringKind::ValueUtility:
         return true;
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Text:

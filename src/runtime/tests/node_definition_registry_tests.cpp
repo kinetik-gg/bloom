@@ -112,9 +112,10 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    // ADAPTED (task S7, then FIX1 item I): the five structural node types plus the value library,
-    // which is thirty-three now -- the eight per-kind Reroutes became ONE.
-    expectations.expect(registry.definitions().size() == 42,
+    // ADAPTED (task S7, then FIX1 item I, then UTIL-1): the five structural node types, the seven
+    // compatibility schemas, the value library's first slice, and UTIL-1's twenty conversions. The
+    // number is pinned rather than computed so that adding a node type is a deliberate edit here.
+    expectations.expect(registry.definitions().size() == 62,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();

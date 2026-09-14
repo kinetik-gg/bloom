@@ -691,6 +691,11 @@ upstream of an operand -- and three of the kinds have no curve model at all.
 | Utilities | Random | Deterministic hash of its seed into `[min, max)`. No entropy source: a cached or exported frame has to agree with the frame that produced it, so a seeded value changes over time only when something wires a changing number into the seed |
 | Utilities | Reroute | One definition per kind, Image included. Pure pass-through; an Image Reroute is elided during image lowering and costs nothing at evaluation |
 
+Task UTIL-1's conversion, string, logic, numeric and readout nodes are a much longer catalogue than
+the rows above, and they share one lowering and one descriptor table rather than a builder each.
+They live in **[value-node-library.md](value-node-library.md)**, which also states the SAFE PARSE
+contract every node that reads a value out of text obeys.
+
 #### Fallbacks
 
 The `bloom_core` kernels report domain failures and never substitute a value, because only the caller

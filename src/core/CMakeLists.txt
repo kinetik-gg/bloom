@@ -10,6 +10,7 @@ target_sources(
         value_primitives.cpp
         sha256.cpp
         utf8.cpp
+        safe_parse.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -23,6 +24,7 @@ target_sources(
             include/bloom/core/pixel_aspect_ratio.hpp
             include/bloom/core/rational_interval.hpp
             include/bloom/core/rational_time.hpp
+            include/bloom/core/safe_parse.hpp
             include/bloom/core/scalar_primitives.hpp
             include/bloom/core/sha256.hpp
             include/bloom/core/utf8.hpp
@@ -99,4 +101,14 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_core_utf8_test PRIVATE bloom_core)
     bloom_enable_warnings(bloom_core_utf8_test)
     bloom_add_test(NAME bloom.core.utf8 COMMAND bloom_core_utf8_test LABELS unit text)
+
+    add_executable(bloom_core_safe_parse_test tests/safe_parse_tests.cpp)
+    target_link_libraries(bloom_core_safe_parse_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_safe_parse_test)
+    bloom_enable_strict_floating_point(bloom_core_safe_parse_test)
+    bloom_add_test(
+        NAME bloom.core.safe-parse
+        COMMAND bloom_core_safe_parse_test
+        LABELS unit text primitives
+    )
 endif()

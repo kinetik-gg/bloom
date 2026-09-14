@@ -335,6 +335,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueCombine:
     case NodeLoweringKind::ValueRandom:
     case NodeLoweringKind::ValueReroute:
+    case NodeLoweringKind::ValueUtility:
         break;
     }
     addTopologyFailure(node.id, "Unsupported lowering reached plan publication.");

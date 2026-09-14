@@ -3,6 +3,7 @@
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -119,6 +120,16 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kCompareOperationParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && compareOperationFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kRoundingModeParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kRoundingModes, *stored).has_value();
+    }
+    if (schemaKey == kNumberRadixParameterSchemaKey) {
+        // The radix itself, not an index: anything core::parseInteger() can actually read, so a
+        // document may carry base 36 even though the card offers four bases.
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && isValidStoredRadix(*stored);
     }
     if (schemaKey == kCompareEpsilonParameterSchemaKey) {
         // A negative tolerance is not a tolerance, and an infinite one makes every comparison true.

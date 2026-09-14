@@ -70,6 +70,9 @@ target_sources(
         qualified_display_processor_provider.cpp
         reference_display_preparation.cpp
         value_graph_evaluation.cpp
+        value_utility_support.hpp
+        value_utility_kernels.cpp
+        value_utility_conversions.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -83,6 +86,7 @@ target_sources(
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp
             include/bloom/runtime/value_graph_evaluation.hpp
+            include/bloom/runtime/value_utility_kernels.hpp
 )
 
 target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)

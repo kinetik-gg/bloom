@@ -129,6 +129,11 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
         return QCoreApplication::translate("node_editor", match->name);
+    // Task UTIL-1's library carries its own name in its descriptor, beside the shape that name
+    // belongs to, rather than in a second table here that could fall out of step with the first.
+    if (const auto* descriptor = document::findValueUtilityDescriptor(typeId))
+        return QString::fromUtf8(descriptor->displayName.data(),
+                                 static_cast<qsizetype>(descriptor->displayName.size()));
     return displayTypeName(typeId);
 }
 
