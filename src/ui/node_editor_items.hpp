@@ -1,3 +1,4 @@
+#include <bloom/ui/kit/controls.hpp>
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
@@ -70,16 +71,16 @@
 namespace bloom::ui::node_editor {
 inline constexpr qreal kCardPadding = kit::px(kit::Spacing::S);
 inline constexpr qreal kCardLabelGap = kit::px(kit::Spacing::S);
-inline constexpr qreal kCardRowGap = kit::px(kit::Spacing::XXS);
-inline constexpr qreal kCardHeaderHeight = kit::px(kit::Size::PanelHeader);
+inline constexpr qreal kCardRowGap = 0;
+inline constexpr qreal kCardHeaderHeight = kit::px(kit::Size::NodeTitleBand);
 inline constexpr auto kCardRadius = kit::Radius::Medium;
-inline constexpr qreal kCardMinimumWidth = kit::px(kit::Size::NodeCardMin);
+inline constexpr qreal kCardMinimumWidth = kit::px(kit::Size::NodeCardWidth);
 // Task FIX1, item I: a reroute is drawn as a DOT, not a card. It has no name to show, no parameter
 // to edit, and no header to grab -- it is a bend in a wire, and a card around one would be a box
 // the size of a Solid standing in for a single point.
-inline constexpr qreal kRerouteDiameter = 10.0;
-inline constexpr qreal kSocketDiameter = 8.0;
-inline constexpr qreal kSocketRowHeight = kit::px(kit::Size::ControlCompact);
+inline constexpr qreal kRerouteDiameter = kit::px(kit::Size::NodeRerouteDot);
+inline constexpr qreal kSocketDiameter = kit::px(kit::Size::NodeSocketDot);
+inline constexpr qreal kSocketRowHeight = kit::px(kit::Size::PropertyRow);
 // One ordered slot's worth of the Merge node's multi-input pill (task S1, item 7): the pill grows
 // by this much per layer it carries, so its length IS the stack's depth.
 inline constexpr qreal kStackSlotPitch = kit::px(kit::Spacing::M);
@@ -655,6 +656,7 @@ class NodeItem final : public QGraphicsObject {
         }
         valueRows_.clear();
         readOnlyRows_.clear();
+        readOnlyLabels_.clear();
         controlRoles_.clear();
         operandRows_.clear();
         positionX_ = nullptr;
@@ -774,7 +776,7 @@ class NodeItem final : public QGraphicsObject {
                 // its own, below), so its diamond is held directly rather than in valueRows_.
                 colorDiamond_ = makeCardDiamond(document::kSolidColorParameterRole);
             } else if (role == document::kTextParameterRole) {
-                textContent_ = new QLineEdit;
+                textContent_ = new kit::KLineEdit;
                 textContent_->setObjectName(QStringLiteral("nodeTextContentEditor"));
                 textContent_->setAccessibleName(tr("Text content"));
                 textContent_->setFont(kit::font(kit::TypeRole::Ui));
@@ -801,6 +803,11 @@ class NodeItem final : public QGraphicsObject {
                 // from: a painted read-only row is the honest answer, exactly as it was before task
                 // S7.
                 readOnlyRows_.push_back({displayTypeName(role), QString{}});
+                auto* label = new kit::KLabel(QString{}, nullptr, kit::TypeRole::Value);
+                label->setObjectName("nodeReadOnlyValue");
+                label->setMinimumWidth(0);
+                addProxy(label);
+                readOnlyLabels_.push_back(label);
             }
         }
         builtRoles_ = std::move(roles);
@@ -867,7 +874,7 @@ class NodeItem final : public QGraphicsObject {
             break;
         }
         case document::ParameterValueKind::String: {
-            row.text = new QLineEdit;
+            row.text = new kit::KLineEdit;
             row.text->setObjectName(QStringLiteral("nodeOperandTextEditor"));
             row.text->setAccessibleName(label);
             row.text->setFont(kit::font(kit::TypeRole::Ui));
@@ -1460,6 +1467,8 @@ class NodeItem final : public QGraphicsObject {
             }
             ++readOnlyIndex;
         }
+        for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
+            readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
         refreshOperandRows(composition);
         for (auto* child : childItems())
             if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child))
@@ -1532,9 +1541,7 @@ class NodeItem final : public QGraphicsObject {
             controlColumn = std::max(controlColumn, valueMetrics.horizontalAdvance(value));
             rowHeight = std::max(rowHeight, valueMetrics.height());
         }
-        if (rowHeight <= 0.0) {
-            rowHeight = kit::px(kit::Size::Control);
-        }
+        rowHeight = kit::px(kit::Size::PropertyRow);
 
         const auto rowCount = static_cast<qreal>(valueRows_.size() + readOnlyRows_.size() +
                                                  (colorChip_ != nullptr ? 1 : 0));
@@ -1556,15 +1563,30 @@ class NodeItem final : public QGraphicsObject {
             minimumWidth_ = std::max(minimumWidth_, 2.0 * kCardPadding + socketColumn);
         }
         const qreal width = std::max(layout_.width, minimumWidth_);
-        qreal socketHeight = 0.0;
-        for (const auto* socket : sockets_) {
-            socketHeight += socket->rowHeight();
-        }
+        // Parameter sockets share the row of their kit control. Only transport-only inputs
+        // and outputs require their own rows; they retain ordered multi-input hit semantics.
+        parameterSocketY_.clear();
+        std::set<QString> parameterRoles;
+        for (const auto& row : valueRows_)
+            if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
+                parameterRoles.insert(role->second);
+        if (colorChip_)
+            if (const auto role = controlRoles_.find(colorChip_); role != controlRoles_.end())
+                parameterRoles.insert(role->second);
+        qreal socketHeight = 0.0, outputHeight = 0.0;
+        for (const auto* socket : sockets_)
+            if (!parameterRoles.contains(socket->name)) {
+                if (socket->input)
+                    socketHeight += socket->rowHeight();
+                else
+                    outputHeight += socket->rowHeight();
+            }
+        parameterRowsTop_ = kCardHeaderHeight + socketHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
         const qreal height = layout_.collapsed
                                  ? kCardHeaderHeight
-                                 : kCardHeaderHeight + socketHeight +
+                                 : kCardHeaderHeight + socketHeight + outputHeight +
                                        (rowCount > 0.0 ? rowCount * (rowHeight + kCardRowGap) -
                                                              kCardRowGap + kCardPadding
                                                        : 0.0);
@@ -1583,8 +1605,11 @@ class NodeItem final : public QGraphicsObject {
         // the card's own padding, and at a fractional row pitch that gap is exactly the sliver of
         // card surface that made a full-width field look inset.
         const qreal controlSpan = std::max(1.0, std::ceil(width_ - kCardPadding - controlLeft));
-        qreal y = kCardHeaderHeight + socketHeight;
+        qreal y = parameterRowsTop_;
         for (const auto& row : valueRows_) {
+            if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
+                parameterSocketY_.try_emplace(role->second, y + rowHeight / 2.0);
+            row.widget->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
             row.widget->resize(static_cast<int>(controlSpan), row.widget->sizeHint().height());
             positionProxy(row.widget, controlLeft, y + (rowHeight - row.widget->height()) / 2.0);
             if (row.diamond != nullptr) {
@@ -1595,6 +1620,9 @@ class NodeItem final : public QGraphicsObject {
             y += rowHeight + kCardRowGap;
         }
         if (colorChip_ != nullptr) {
+            if (const auto role = controlRoles_.find(colorChip_); role != controlRoles_.end())
+                parameterSocketY_.try_emplace(role->second, y + rowHeight / 2.0);
+            colorChip_->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
             colorChip_->resize(colorChip_->sizeHint());
             // The color row is the last row carrying a real widget -- read-only rows below it are
             // painted, not positioned -- so `y` is deliberately not advanced again here.
@@ -1604,6 +1632,13 @@ class NodeItem final : public QGraphicsObject {
                 positionProxy(colorDiamond_, diamondLeft,
                               y + (rowHeight - colorDiamond_->height()) / 2.0);
             }
+        }
+        if (colorChip_)
+            y += rowHeight;
+        for (auto* label : readOnlyLabels_) {
+            label->resize(static_cast<int>(controlSpan), kit::px(kit::Size::Control));
+            positionProxy(label, controlLeft, y + (rowHeight - label->height()) / 2.0);
+            y += rowHeight;
         }
         for (auto* child : childItems()) {
             auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
@@ -1629,17 +1664,22 @@ class NodeItem final : public QGraphicsObject {
         const auto outputCount = static_cast<std::ptrdiff_t>(sockets_.size()) - inputCount;
         int inputIndex = 0;
         int outputIndex = 0;
-        qreal socketY = kCardHeaderHeight;
+        qreal inputY = kCardHeaderHeight, outputY = y;
         for (auto* socket : sockets_) {
             const bool input = socket->input.has_value();
             const int edgeIndex = input ? inputIndex++ : outputIndex++;
             const qreal rowExtent = socket->rowHeight();
+            auto& socketY = input ? inputY : outputY;
+            const auto parameter = parameterSocketY_.find(socket->name);
+            const qreal center = parameter != parameterSocketY_.end() ? parameter->second
+                                                                      : socketY + rowExtent / 2.0;
             socket->setPos(input ? 0 : width_,
                            layout_.collapsed
                                ? kCardHeaderHeight * static_cast<qreal>(edgeIndex + 1) /
                                      static_cast<qreal>((input ? inputCount : outputCount) + 1)
-                               : socketY + rowExtent / 2.0);
-            socketY += rowExtent;
+                               : center);
+            if (parameter == parameterSocketY_.end())
+                socketY += rowExtent;
         }
         update();
     }
@@ -1661,7 +1701,10 @@ class NodeItem final : public QGraphicsObject {
     qreal width_ = kCardMinimumWidth;
     qreal height_ = kCardHeaderHeight + kCardPadding;
     qreal labelColumnWidth_ = 0.0;
-    qreal rowHeight_ = kit::px(kit::Size::Control);
+    qreal rowHeight_ = kit::px(kit::Size::PropertyRow);
+    qreal parameterRowsTop_ = kCardHeaderHeight;
+    std::map<QString, qreal> parameterSocketY_;
+    std::vector<kit::KLabel*> readOnlyLabels_;
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;

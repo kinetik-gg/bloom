@@ -72,8 +72,11 @@ QString displayTypeName(const std::string_view typeId) {
         name.remove(0, 6);
     }
     name.replace('-', ' ');
-    if (!name.isEmpty()) {
-        name[0] = name[0].toUpper();
+    bool first = true;
+    for (auto& character : name) {
+        if (first)
+            character = character.toUpper();
+        first = character.isSpace();
     }
     return name;
 }
@@ -182,7 +185,9 @@ QString nodeEyebrow(const document::Composition& composition, const document::No
         return nodeTypeDisplayName(document::kLayerOutputNodeType) + QStringLiteral(" · ") +
                blendModeDisplayName(*mode);
     }
-    return {};
+    const auto* definition =
+        document::builtInNodeDefinitions().find(node.typeId, node.schemaVersion);
+    return definition ? nodeCategoryName(definition->category) : QString{};
 }
 
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
@@ -269,9 +274,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         const auto kind =
             sockets_.empty() ? document::SocketValueKind::Image : sockets_.front()->kind;
         painter->setPen(
-            QPen(kit::color(option->state.testFlag(QStyle::State_Selected)
-                                ? (primary_ ? kit::Color::Foreground : kit::Color::Accent)
-                                : kit::Color::Surface),
+            QPen(kit::color(option->state.testFlag(QStyle::State_Selected) ? kit::Color::Accent
+                                                                           : kit::Color::Surface),
                  kSelectionEdgeWidth));
         painter->setBrush(kit::color(socketColorToken(kind)));
         painter->drawEllipse(bounds.center(), kRerouteDiameter / 2.0, kRerouteDiameter / 2.0);
@@ -292,8 +296,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         painter->setOpacity(1.0);
         const qreal inset = kSelectionEdgeWidth / 2.0;
         painter->setBrush(Qt::NoBrush);
-        painter->setPen(QPen(kit::color(primary_ ? kit::Color::Foreground : kit::Color::Accent),
-                             kSelectionEdgeWidth));
+        painter->setPen(QPen(kit::color(kit::Color::Accent), kSelectionEdgeWidth));
         const auto radius = static_cast<qreal>(kit::radiusPx(
             radiusToken, static_cast<int>(std::min(bounds.width(), bounds.height()))));
         painter->drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset), radius, radius);
@@ -359,24 +362,26 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
     for (const auto* socket : sockets_) {
+        if (parameterSocketY_.contains(socket->name))
+            continue;
         const qreal rowExtent = socket->rowHeight();
         const QRectF row(kCardPadding, socket->pos().y() - rowExtent / 2,
                          std::max(0.0, width_ - (kCardPadding + kCardPadding)), rowExtent);
         painter->drawText(
             row,
             static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
-            painter->fontMetrics().elidedText(socket->multiInput()
-                                                  ? QStringLiteral("%1 (%2)")
-                                                        .arg(socket->name)
-                                                        .arg(socket->orderedInputs().size())
-                                                  : socket->name,
-                                              Qt::ElideRight, static_cast<int>(row.width())));
+            painter->fontMetrics().elidedText(
+                socket->multiInput() ? QStringLiteral("%1 (%2)")
+                                           .arg(displayTypeName(socket->name.toStdString()))
+                                           .arg(socket->orderedInputs().size())
+                                     : displayTypeName(socket->name.toStdString()),
+                Qt::ElideRight, static_cast<int>(row.width())));
     }
 
     // Row labels. The controls themselves are real kit widgets in proxies; only their names are
     // painted here, in the shared right-aligned label column.
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
-    qreal y = kCardHeaderHeight + static_cast<qreal>(sockets_.size()) * kSocketRowHeight;
+    qreal y = parameterRowsTop_;
     const QRectF labelColumn(kCardPadding, 0.0, labelColumnWidth_, rowHeight_);
     const auto drawLabel = [&](const QString& text, const qreal top) {
         painter->setPen(kit::color(kit::Color::Muted));
@@ -393,15 +398,6 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     }
     for (const auto& [label, value] : readOnlyRows_) {
         drawLabel(label, y);
-        painter->setFont(kit::font(kit::TypeRole::Value));
-        painter->setPen(kit::color(kit::Color::Foreground));
-        const QRectF valueRect(
-            kCardPadding + labelColumnWidth_ + kCardLabelGap, y,
-            bounds.width() - kCardPadding * 2.0 - labelColumnWidth_ - kCardLabelGap, rowHeight_);
-        painter->drawText(
-            valueRect, Qt::AlignVCenter | Qt::AlignLeft,
-            QFontMetricsF(painter->font()).elidedText(value, Qt::ElideRight, valueRect.width()));
-        painter->setFont(kit::font(kit::TypeRole::UiSmall));
         y += rowHeight_ + kCardRowGap;
     }
     selectionOutline();
@@ -492,7 +488,8 @@ QPainterPath linkPath(const QPointF start, const QPointF end, const LinkStyle st
     case LinkStyle::Spline:
         break;
     }
-    const qreal handle = std::max(64.0, std::abs(end.x() - start.x()) / 2.0);
+    const qreal handle = std::max(static_cast<qreal>(kit::px(kit::Size::NodeLinkHandleMin)),
+                                  std::abs(end.x() - start.x()) / 2.0);
     QPainterPath path(start);
     path.cubicTo(start + QPointF(handle, 0), end - QPointF(handle, 0), end);
     return path;

@@ -174,8 +174,8 @@ QFont font(const TypeRole role) {
         // transform and +0.07em tracking below are unchanged.
         value.setPointSizeF(pointSizeForDesignPixels(10.5));
         value.setWeight(QFont::Medium);
-        value.setCapitalization(QFont::AllUppercase);
-        value.setLetterSpacing(QFont::PercentageSpacing, 107.0);
+        value.setCapitalization(QFont::MixedCase);
+        value.setLetterSpacing(QFont::PercentageSpacing, 100.0);
         break;
     case TypeRole::Value:
         value.setStyleHint(QFont::Monospace);
