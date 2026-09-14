@@ -177,6 +177,8 @@ enum class Size : int {
     TimelineBar = 20,
     TimelineToggleColumn = 4 * ToggleCell,
     TimelineNameMin = 120,
+    TimelineNameDefault = 280,
+    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
     TimelineColumn = 100,
     TimelineWorkArea = 6,
     TimelineWorkAreaHandle = 6,
@@ -216,6 +218,15 @@ enum class Size : int {
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }
 [[nodiscard]] constexpr int px(const Size token) noexcept { return static_cast<int>(token); }
+
+// Default Compositing split fractions, independent of physical DPI.
+namespace Layout {
+inline constexpr double SidebarShare = 0.1875;
+inline constexpr double TimelineShare = 0.48;
+inline constexpr double NodesShare = 0.50;
+inline constexpr double PropertiesShare = 0.68;
+inline constexpr int WorkspaceVersion = 2;
+} // namespace Layout
 
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.

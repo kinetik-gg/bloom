@@ -13,6 +13,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
+#include <QTimer>
 
 #include <QString>
 #include <QVBoxLayout>
@@ -28,7 +29,7 @@
 namespace {
 
 constexpr auto layoutFormat = "bloom.workspace-layout";
-constexpr int layoutSchema = 1;
+constexpr int layoutSchema = bloom::ui::kit::Layout::WorkspaceVersion;
 constexpr int maximumLayoutDepth = 64;
 constexpr int maximumAreaCount = 64;
 constexpr int defaultSplitWeight = 1000;
@@ -325,6 +326,15 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
     area.show();
     const int newSize = static_cast<int>(std::lround(defaultSplitWeight * newAreaFraction));
     newSplitter->setSizes({defaultSplitWeight - newSize, newSize});
+    // The complete tree must have its window extent before minima can be applied.
+    // Otherwise constructing a sidebar in an unshown 640px shell clamps it to half the window.
+    QTimer::singleShot(0, newSplitter, [newSplitter, newAreaFraction] {
+        const int extent = newSplitter->orientation() == Qt::Horizontal ? newSplitter->width()
+                                                                        : newSplitter->height();
+        const int available = std::max(0, extent - newSplitter->handleWidth());
+        const int trailing = static_cast<int>(std::lround(available * newAreaFraction));
+        newSplitter->setSizes({available - trailing, trailing});
+    });
 
     setActiveArea(newArea);
     updateAreaControls();
@@ -437,7 +447,8 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutState(const QByteArray&
     if (serializedSchema > layoutSchema) {
         return WorkspaceLayoutRestoreResult::UnsupportedVersion;
     }
-    if (serializedSchema != layoutSchema || !documentRoot.value("root").isObject()) {
+    if ((serializedSchema != 1 && serializedSchema != layoutSchema) ||
+        !documentRoot.value("root").isObject()) {
         return WorkspaceLayoutRestoreResult::Invalid;
     }
 

@@ -1,3 +1,5 @@
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <memory>
@@ -184,6 +186,14 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
     }
 
     const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
+    // Version 1 predates the required Assets sidebar and full-height right column.
+    // Migrate only a validated legacy layout; future versions remain untouched.
+    const int version = QJsonDocument::fromJson(settings.value(workspaceLayoutKey).toByteArray())
+                            .object()
+                            .value("schema")
+                            .toInt();
+    if (result == WorkspaceLayoutRestoreResult::Restored && version < kit::Layout::WorkspaceVersion)
+        resetCompositingLayout();
     workspaceLayoutWritable_ = result != WorkspaceLayoutRestoreResult::UnsupportedVersion;
     updateWorkspaceActions();
     return result;
@@ -586,10 +596,14 @@ QWidget* MainWindow::createReadOnlyPlaceholderPage() {
 void MainWindow::resetCompositingLayout() {
     workspaceHost_->resetToSingleArea("bloom.viewer");
     auto* viewer = workspaceHost_->activeArea();
-    (void)workspaceHost_->splitArea(*viewer, Qt::Vertical, "bloom.timeline", 0.32);
-    auto* nodes = workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.nodes", 0.50);
-    auto* assets = workspaceHost_->splitArea(*nodes, Qt::Horizontal, "bloom.assets", 0.28);
-    (void)workspaceHost_->splitArea(*assets, Qt::Vertical, "bloom.properties", 0.65);
+    auto* assets = workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.assets",
+                                             kit::Layout::SidebarShare);
+    (void)workspaceHost_->splitArea(*assets, Qt::Vertical, "bloom.properties",
+                                    kit::Layout::PropertiesShare);
+    (void)workspaceHost_->splitArea(*viewer, Qt::Vertical, "bloom.timeline",
+                                    kit::Layout::TimelineShare);
+    (void)workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.nodes",
+                                    kit::Layout::NodesShare);
     workspaceHost_->setActiveArea(viewer);
     workspaceLayoutWritable_ = true;
 }

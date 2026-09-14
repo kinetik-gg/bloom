@@ -10,6 +10,7 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -208,7 +209,8 @@ int testMaximizeAndPersistence(const EditorRegistry& registry) {
     const QByteArray beforeMaximize = source.saveLayoutState();
     const auto serialized = QJsonDocument::fromJson(beforeMaximize).object();
     if (!require(serialized.value("format").toString() == "bloom.workspace-layout" &&
-                     serialized.value("schema").toInt() == 1 &&
+                     serialized.value("schema").toInt() ==
+                         bloom::ui::kit::Layout::WorkspaceVersion &&
                      isBinaryLayoutNode(serialized.value("root").toObject()),
                  19)) {
         return 19;

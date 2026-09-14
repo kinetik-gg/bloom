@@ -82,9 +82,7 @@ constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
 
 constexpr int kToggleStripX = 0;
 constexpr int kNameCellX = kToggleColumnWidth;
-constexpr int kBlendingCellX = kNameCellX + kNameCellMinWidth;
-constexpr int kParentCellX = kBlendingCellX + kColumnWidth;
-constexpr int kLayerColumnWidthPx = kParentCellX + kColumnWidth;
+constexpr int kLayerColumnWidthPx = kit::px(kit::Size::TimelineLeftColumn);
 
 // The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent,
 // not its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar
