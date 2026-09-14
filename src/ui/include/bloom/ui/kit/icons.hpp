@@ -47,6 +47,7 @@ enum class IconId : std::uint8_t {
     Hidden,
     AudioOn,
     AudioOff,
+    Solo,
     Locked,
     Unlocked,
     // Editing and tools.
@@ -85,7 +86,7 @@ enum class IconId : std::uint8_t {
     AlignLeft,
     AlignCenter,
     AlignRight,
-
+    Snap,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add
