@@ -139,6 +139,7 @@ struct DecodedComposition final {
     DecodedGraph graph;
     document::NodeLayout nodeLayout;
     document::NodeGroups nodeGroups;
+    document::SafeAreaSettings safeAreas{};
     std::optional<document::WorkArea> workArea{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;

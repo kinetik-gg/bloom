@@ -1,6 +1,7 @@
 #include <bloom/ui/main_window.hpp>
 
 #include <bloom/host/project_session.hpp>
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
@@ -259,6 +260,42 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
 }
 
 void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
+    newCompositionAction_ = compositionMenu.addAction("New Composition…");
+    newCompositionAction_->setObjectName("compositionNewAction");
+    newCompositionAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N));
+    newCompositionAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(newCompositionAction_, &QAction::triggered, this, [this] {
+        if (const auto id = showNewCompositionDialog(compositionSession_, this); id.has_value()) {
+            (void)compositionSession_.setComposition(*id);
+        }
+    });
+    duplicateCompositionAction_ = compositionMenu.addAction("Duplicate Composition");
+    duplicateCompositionAction_->setObjectName("compositionDuplicateAction");
+    connect(duplicateCompositionAction_, &QAction::triggered, this, [this] {
+        if (const auto id =
+                duplicateComposition(compositionSession_, compositionSession_.compositionId());
+            id.has_value()) {
+            (void)compositionSession_.setComposition(*id);
+        }
+    });
+    renameCompositionAction_ = compositionMenu.addAction("Rename Composition…");
+    renameCompositionAction_->setObjectName("compositionRenameAction");
+    connect(renameCompositionAction_, &QAction::triggered, this, [this] {
+        (void)renameComposition(compositionSession_, compositionSession_.compositionId(), this);
+    });
+    deleteCompositionAction_ = compositionMenu.addAction("Delete Composition");
+    deleteCompositionAction_->setObjectName("compositionDeleteAction");
+    connect(deleteCompositionAction_, &QAction::triggered, this, [this] {
+        (void)deleteComposition(compositionSession_, compositionSession_.compositionId());
+    });
+    compositionMenu.addSeparator();
+
+    connect(&compositionSession_, &CompositionSession::snapshotChanged, this,
+            &MainWindow::updateCompositionActions);
+    connect(&compositionSession_, &CompositionSession::compositionChanged, this,
+            &MainWindow::updateCompositionActions);
+    updateCompositionActions();
+
     // RAM Preview (task PERF1, item 3). Same command the Timeline transport's own button and
     // Ctrl+Shift+Space reach -- one named method called by all three, never a menu item
     // synthesizing a key press (docs/ux/interaction-model.md, "Ownership Boundary"). The shortcut
@@ -287,6 +324,17 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
                                                                 : "&RAM Preview");
         });
     }
+}
+
+void MainWindow::updateCompositionActions() {
+    if (newCompositionAction_ == nullptr) {
+        return;
+    }
+    const bool hasComposition = compositionSession_.composition() != nullptr;
+    const bool hasSeveral = compositionSession_.snapshot().project().compositions().size() > 1;
+    duplicateCompositionAction_->setEnabled(hasComposition);
+    renameCompositionAction_->setEnabled(hasComposition);
+    deleteCompositionAction_->setEnabled(hasComposition && hasSeveral);
 }
 
 void MainWindow::createViewMenu(QMenu& viewMenu) {

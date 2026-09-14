@@ -51,6 +51,8 @@ class Composition final {
 
     [[nodiscard]] const std::optional<WorkArea>& workArea() const noexcept { return workArea_; }
     void setWorkArea(std::optional<WorkArea> area) noexcept { workArea_ = area; }
+    [[nodiscard]] SafeAreaSettings safeAreas() const noexcept { return safeAreas_; }
+    void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
     [[nodiscard]] bool nodeLocked(NodeId node) const;
     [[nodiscard]] bool parameterLocked(ParameterId parameter) const;
     void setName(std::string name) { name_ = std::move(name); }
@@ -61,6 +63,7 @@ class Composition final {
 
   private:
     std::optional<WorkArea> workArea_{};
+    SafeAreaSettings safeAreas_{};
     CompositionId id_;
     std::string name_;
     core::RationalTime duration_;

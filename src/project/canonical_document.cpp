@@ -1357,6 +1357,17 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endArray());
 }
 
+[[nodiscard]] bool emitSafeAreas(EmitState& state, const Composition& composition) noexcept {
+    auto& writer = state.writer;
+    const auto settings = composition.safeAreas();
+    const PathScope scope(state, "safeAreas");
+    return state.ok(writer.memberName("safeAreas")) && state.ok(writer.beginObject()) &&
+           state.ok(writer.memberName("action")) &&
+           state.ok(writer.float64Value(settings.action)) && state.ok(writer.memberName("title")) &&
+           state.ok(writer.float64Value(settings.title)) && emitRetainedTrailing(state) &&
+           state.ok(writer.endObject());
+}
+
 [[nodiscard]] bool emitComposition(EmitState& state, const Composition& composition,
                                    const std::size_t compositionIndex) noexcept {
     auto& writer = state.writer;
@@ -1433,6 +1444,14 @@ emitInterpolation(EmitState& state,
     }
     if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition) ||
         !emitNodeGroups(state, composition)) {
+        return false;
+    }
+    // The default safe-area pair is part of the 1.8 contract's implicit composition defaults. It
+    // is omitted from canonical output until a composition carries a non-default value, keeping
+    // newly written documents compact while still making every authored per-composition setting
+    // durable. Older documents decode the same implicit pair through Composition's default.
+    if (composition.safeAreas() != bloom::document::SafeAreaSettings{} &&
+        !emitSafeAreas(state, composition)) {
         return false;
     }
     if (const auto area = composition.workArea()) {

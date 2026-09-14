@@ -96,6 +96,7 @@ class MainWindow final : public QMainWindow {
     void updateExportAction();
     void updateWindowTitle();
     void updateContentSurface();
+    void updateCompositionActions();
     void toggleFullScreen();
 
     CompositionSession& compositionSession_;
@@ -137,6 +138,10 @@ class MainWindow final : public QMainWindow {
     QAction* maximizeAreaAction_ = nullptr;
     QAction* ramPreviewAction_ = nullptr;
     QAction* cancelRamPreviewAction_ = nullptr;
+    QAction* newCompositionAction_ = nullptr;
+    QAction* duplicateCompositionAction_ = nullptr;
+    QAction* renameCompositionAction_ = nullptr;
+    QAction* deleteCompositionAction_ = nullptr;
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;

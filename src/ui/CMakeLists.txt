@@ -309,6 +309,8 @@ target_sources(
         timeline_keyframe_gestures.cpp
         timeline_work_area.cpp
         timeline_navigation.cpp
+        composition_commands.cpp
+        viewer_overlays.cpp
         viewer_editor.cpp
         window_status_bar.cpp
         workspace_host.cpp
@@ -346,6 +348,8 @@ target_sources(
             include/bloom/ui/timeline_editor.hpp
             include/bloom/ui/timeline_frame_math.hpp
             include/bloom/ui/timeline_ruler.hpp
+            include/bloom/ui/composition_commands.hpp
+            include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp

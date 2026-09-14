@@ -16,6 +16,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -34,8 +35,10 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMetaObject>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPoint>
 #include <QRectF>
 #include <QSettings>
@@ -1347,6 +1350,144 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
+void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/overlay");
+    ViewerFixture fixture(makeTestProject("Viewer Header Test"));
+
+    auto* compositions =
+        fixture.viewer.findChild<ui::kit::KDropdown*>(QStringLiteral("viewerCompositionSelector"));
+    auto* objects =
+        fixture.viewer.findChild<ui::kit::KDropdown*>(QStringLiteral("viewerObjectSelector"));
+    auto* viewMenu =
+        dynamic_cast<QMenu*>(fixture.viewer.findChild<QObject*>(QStringLiteral("viewerViewMenu")));
+    auto* selectMenu = dynamic_cast<QMenu*>(
+        fixture.viewer.findChild<QObject*>(QStringLiteral("viewerSelectMenu")));
+    auto* fullscreen =
+        fixture.viewer.findChild<QToolButton*>(QStringLiteral("viewerFullscreenButton"));
+    expectations.expect(compositions != nullptr && objects != nullptr && viewMenu != nullptr &&
+                            selectMenu != nullptr && fullscreen != nullptr,
+                        "the Viewer header exposes both selectors, both menus, and fullscreen");
+    if (compositions == nullptr || objects == nullptr || viewMenu == nullptr ||
+        selectMenu == nullptr || fullscreen == nullptr) {
+        fixture.controller.beginShutdown();
+        fixture.bridge.beginShutdown();
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    expectations.expect(compositions->count() == 1 && compositions->itemText(0) == "Main" &&
+                            objects->count() == 1 && objects->currentText() == "None",
+                        "selectors start with the document composition and an honest None object");
+
+    auto* safeAreas = fixture.viewer.findChild<QAction*>("viewerSafeAreasAction");
+    auto* centreCross = fixture.viewer.findChild<QAction*>("viewerCentreCrossAction");
+    auto* thirds = fixture.viewer.findChild<QAction*>("viewerThirdsAction");
+    auto* rulers = fixture.viewer.findChild<QAction*>("viewerRulers");
+    auto* pixelGrid = fixture.viewer.findChild<QAction*>("viewerPixelGridAction");
+    expectations.expect(safeAreas != nullptr && centreCross != nullptr && thirds != nullptr &&
+                            rulers != nullptr && pixelGrid != nullptr && !safeAreas->isChecked() &&
+                            !centreCross->isChecked() && !thirds->isChecked() &&
+                            !rulers->isChecked() && !pixelGrid->isChecked(),
+                        "all viewer guides start disabled and are present in View");
+    if (safeAreas != nullptr && centreCross != nullptr && thirds != nullptr && rulers != nullptr &&
+        pixelGrid != nullptr) {
+        expectations.expect(!safeAreas->shortcut().isEmpty() &&
+                                !centreCross->shortcut().isEmpty() &&
+                                !thirds->shortcut().isEmpty() && !rulers->shortcut().isEmpty() &&
+                                !pixelGrid->shortcut().isEmpty(),
+                            "guide actions expose their shortcuts for menu rendering");
+    }
+
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Layer One"), {0, 0, 0, 1}),
+                        "the header fixture adds a selectable layer");
+    expectations.expect(objects->count() == 2 && objects->currentText() == "Layer One",
+                        "the object selector follows the current composition's layer display name");
+    fixture.session.clearSelection();
+    expectations.expect(objects->currentText() == "None", "clearing selection restores None");
+
+    const auto copyId = ui::duplicateComposition(fixture.session, fixture.session.compositionId());
+    expectations.expect(copyId.has_value() && compositions->count() == 2,
+                        "the document composition selector refreshes after duplication");
+    if (copyId.has_value()) {
+        compositions->setCurrentIndex(1);
+        expectations.expect(fixture.session.compositionId() == *copyId,
+                            "choosing a composition selector item switches the shared session");
+    }
+
+    auto* header = fixture.viewer.findChild<QWidget*>("viewerHeaderMenuBar");
+    auto* overflow = fixture.viewer.findChild<QToolButton*>("viewerHeaderOverflowButton");
+    expectations.expect(header != nullptr && overflow != nullptr,
+                        "the Viewer header has a dedicated overflow affordance");
+    if (header != nullptr && overflow != nullptr) {
+        header->resize(160, header->sizeHint().height());
+        QCoreApplication::processEvents();
+        expectations.expect(!overflow->isHidden(),
+                            "narrow Viewer headers collapse menus into the ellipsis affordance");
+    }
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectations) {
+    using namespace bloom;
+    const auto background = ui::kit::color(ui::kit::Color::Background);
+    const auto brightness = [](const QColor color) {
+        return color.red() + color.green() + color.blue();
+    };
+    ui::ViewerOverlayOptions options;
+    options.safeAreas = true;
+    options.centreCross = true;
+    options.safeAreaSettings = {.action = 0.90, .title = 0.80};
+
+    QImage first(420, 320, QImage::Format_ARGB32);
+    first.fill(background);
+    {
+        QPainter painter(&first);
+        const QRectF display(40.0, 30.0, 320.0, 240.0);
+        ui::paintViewerOverlays(painter, QRectF(first.rect()), display, QSize(160, 120), 2.0,
+                                options, {});
+    }
+    const QPoint firstCentre(200, 150);
+    expectations.expect(brightness(first.pixelColor(firstCentre)) >
+                            brightness(first.pixelColor(firstCentre + QPoint(11, 11))) + 30,
+                        "centre-cross brightness is detectable relative to the transformed canvas");
+
+    QImage second(700, 520, QImage::Format_ARGB32);
+    second.fill(background);
+    {
+        QPainter painter(&second);
+        const QRectF display(10.0, 5.0, 640.0, 480.0);
+        ui::paintViewerOverlays(painter, QRectF(second.rect()), display, QSize(160, 120), 4.0,
+                                options, {});
+    }
+    const QPoint secondCentre(330, 245);
+    expectations.expect(brightness(second.pixelColor(secondCentre)) >
+                            brightness(second.pixelColor(secondCentre + QPoint(17, 17))) + 30,
+                        "the same guide remains readable after zoom and pan transformation");
+
+    ui::ViewerOverlayOptions gridOnly;
+    QImage below(180, 140, QImage::Format_ARGB32);
+    below.fill(background);
+    {
+        QPainter painter(&below);
+        ui::paintViewerOverlays(painter, QRectF(below.rect()), QRectF(0, 0, 160, 120),
+                                QSize(160, 120), 3.0, gridOnly, {});
+    }
+    QImage atThreshold(180, 140, QImage::Format_ARGB32);
+    atThreshold.fill(background);
+    gridOnly.pixelGrid = true;
+    {
+        QPainter painter(&atThreshold);
+        ui::paintViewerOverlays(painter, QRectF(atThreshold.rect()), QRectF(0, 0, 160, 120),
+                                QSize(160, 120), 4.0, gridOnly, {});
+    }
+    expectations.expect(brightness(atThreshold.pixelColor(32, 60)) >
+                            brightness(below.pixelColor(32, 60)) + 10,
+                        "pixel grid is suppressed below 400% and appears at the threshold");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1383,6 +1524,8 @@ int main(int argc, char** argv) {
     testChannelDropdownRemapsOnlyThePresentedImage(expectations);
     testBackgroundDropdownChoosesTheSurroundAndPersists(expectations);
     testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
+    testViewerHeaderSelectorsMenusAndOverflow(expectations);
+    testViewerOverlayPixelsFollowTransformAndThreshold(expectations);
     testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);

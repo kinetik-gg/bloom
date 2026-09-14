@@ -5,6 +5,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 #include <QAction>
@@ -38,20 +39,6 @@ constexpr int kCompositionIdRole = Qt::UserRole + 1;
         return {};
     }
     return document::CompositionId::fromRaw(item->data(0, kCompositionIdRole).toULongLong());
-}
-
-[[nodiscard]] document::CompositionId lowestCompositionId(const document::Project& project) {
-    const auto compositions = project.compositions();
-    if (compositions.empty()) {
-        return {};
-    }
-    auto lowest = compositions.front().id();
-    for (const auto& composition : compositions) {
-        if (composition.id().value() < lowest.value()) {
-            lowest = composition.id();
-        }
-    }
-    return lowest;
 }
 
 void setDisabledReason(QWidget* widget, const QString& reason) {
@@ -211,99 +198,17 @@ void AssetsEditor::showContextMenu(const QPoint position) {
 }
 
 void AssetsEditor::duplicateComposition(const document::CompositionId id) {
-    if (!id.isValid()) {
-        return;
-    }
-    commands::Transaction transaction("Duplicate Composition", session_.snapshot().revision());
-    transaction.emplace<commands::DuplicateComposition>(id);
-    const auto result = session_.executeTransaction(std::move(transaction));
-    const auto copyId =
-        result.outputId<document::CompositionId>(commands::kDuplicateCompositionOutput);
-    if (result.succeeded() && copyId.has_value()) {
+    if (const auto copyId = bloom::ui::duplicateComposition(session_, id); copyId.has_value()) {
         openComposition(*copyId);
     }
 }
 
 void AssetsEditor::deleteComposition(const document::CompositionId id) {
-    if (!id.isValid()) {
-        return;
-    }
-    const bool wasActive = session_.compositionId() == id;
-    commands::Transaction transaction("Delete Composition", session_.snapshot().revision());
-    transaction.emplace<commands::DeleteComposition>(id);
-    const auto result = session_.executeTransaction(std::move(transaction));
-    if (!result.succeeded() || !wasActive) {
-        return;
-    }
-    openComposition(lowestCompositionId(session_.snapshot().project()));
+    (void)bloom::ui::deleteComposition(session_, id);
 }
 
 void AssetsEditor::showNewCompositionDialog() {
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("newCompositionDialog"));
-    dialog.setWindowTitle(tr("New Composition"));
-
-    auto* form = new QFormLayout(&dialog);
-    auto* name = new QLineEdit(&dialog);
-    name->setObjectName(QStringLiteral("assetsNameField"));
-    name->setText(
-        tr("Composition %1").arg(session_.snapshot().project().compositions().size() + 1));
-    form->addRow(tr("Name"), name);
-
-    const auto* const current = session_.composition();
-    const auto currentFormat =
-        current == nullptr ? document::CompositionFormat{} : current->format();
-    auto* width = new QSpinBox(&dialog);
-    width->setObjectName(QStringLiteral("assetsWidthField"));
-    width->setRange(1, static_cast<int>(document::CompositionFormat::kMaximumDimension));
-    width->setValue(static_cast<int>(currentFormat.width()));
-    form->addRow(tr("Width"), width);
-    auto* height = new QSpinBox(&dialog);
-    height->setObjectName(QStringLiteral("assetsHeightField"));
-    height->setRange(1, static_cast<int>(document::CompositionFormat::kMaximumDimension));
-    height->setValue(static_cast<int>(currentFormat.height()));
-    form->addRow(tr("Height"), height);
-    auto* frameRate = new QSpinBox(&dialog);
-    frameRate->setObjectName(QStringLiteral("assetsFrameRateField"));
-    frameRate->setRange(1, 1000);
-    frameRate->setValue(static_cast<int>(currentFormat.frameRate().numerator() /
-                                         currentFormat.frameRate().denominator()));
-    form->addRow(tr("Frame rate (fps)"), frameRate);
-    auto* duration = new QSpinBox(&dialog);
-    duration->setObjectName(QStringLiteral("assetsDurationField"));
-    duration->setRange(1, 1'000'000);
-    duration->setValue(current == nullptr ? 10
-                                          : static_cast<int>(current->duration().numerator() /
-                                                             current->duration().denominator()));
-    form->addRow(tr("Duration (frames)"), duration);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->setObjectName(QStringLiteral("assetsDialogButtons"));
-    form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const auto rate =
-        document::FrameRate::create(static_cast<std::uint32_t>(frameRate->value()), 1);
-    const auto format =
-        rate.has_value()
-            ? document::CompositionFormat::create(static_cast<std::uint32_t>(width->value()),
-                                                  static_cast<std::uint32_t>(height->value()),
-                                                  currentFormat.pixelAspect(), *rate)
-            : std::nullopt;
-    if (!format.has_value()) {
-        return;
-    }
-    commands::Transaction transaction("Add Composition", session_.snapshot().revision());
-    transaction.emplace<commands::AddComposition>(
-        name->text().toStdString(), *format, *rate,
-        core::RationalTime::fromInteger(duration->value()));
-    const auto result = session_.executeTransaction(std::move(transaction));
-    const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput);
-    if (result.succeeded() && id.has_value()) {
+    if (const auto id = bloom::ui::showNewCompositionDialog(session_, this); id.has_value()) {
         openComposition(*id);
     }
 }

@@ -572,20 +572,62 @@ using document::SchemaVersion;
 }
 
 // A composition object is closed: exactly id/name/duration/format/parameters/animationCurves/
-// graph/nodeLayout/nodeGroups in exact order (see docs/architecture/project-format.md, "Project And
-// Composition"); legacy 1.0 stops after graph and 1.1 after nodeLayout. The
+// graph/nodeLayout/nodeGroups, with an optional 1.8 safeAreas member, in exact order (see
+// docs/architecture/project-format.md, "Project And Composition"); legacy 1.0 stops after graph
+// and 1.1 after nodeLayout. The
 // composition interior -- parameters, animationCurves, and the graph, plus the cross-reference
 // checks that span them -- is decoded by detail::decodeCompositionInterior in
 // document_decode_composition.cpp.
+[[nodiscard]] bool decodeSafeAreas(const JsonValue& node, DecodeState& state,
+                                   const std::string& path, document::SafeAreaSettings& out) {
+    constexpr std::array<std::string_view, 2> keys{"action", "title"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+        return false;
+    }
+    const auto decode = [&](const JsonValue& value, const std::string& memberPath,
+                            double& destination) {
+        if (value.kind() != JsonValueKind::Number) {
+            state.fail(DocumentDecodeError::WrongValueKind, memberPath);
+            return false;
+        }
+        const auto token = value.asNumberToken();
+        if (!token.has_value()) {
+            state.fail(DocumentDecodeError::WrongValueKind, memberPath);
+            return false;
+        }
+        const auto parsed = parseKnownFloat64(*token);
+        if (!parsed) {
+            state.fail(DocumentDecodeError::InvalidFloat64, memberPath);
+            return false;
+        }
+        destination = *parsed.value();
+        return true;
+    };
+    if (!decode(*members[0], joinPath(path, "action"), out.action) ||
+        !decode(*members[1], joinPath(path, "title"), out.title)) {
+        return false;
+    }
+    if (!out.isValid()) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool decodeComposition(const JsonValue& node, DecodeState& state,
                                      const std::string& path, DecodedComposition& out) {
-    static constexpr std::array<std::string_view, 9> kKeys{
-        "id",    "name",       "duration",  "format", "parameters", "animationCurves",
-        "graph", "nodeLayout", "nodeGroups"};
+    static constexpr std::array<std::string_view, 10> kKeys{
+        "id",    "name",       "duration",   "format",   "parameters", "animationCurves",
+        "graph", "nodeLayout", "nodeGroups", "safeAreas"};
     const auto baseKeys = std::span(kKeys).first(state.documentMinor == 0   ? 7U
                                                  : state.documentMinor == 1 ? 8U
                                                                             : 9U);
     std::vector<std::string_view> keys(baseKeys.begin(), baseKeys.end());
+    const bool hasSafeAreas = state.documentMinor >= 8 && node.findMember("safeAreas") != nullptr;
+    if (hasSafeAreas) {
+        keys.push_back("safeAreas");
+    }
     if (state.documentMinor >= 5 && node.findMember("workArea"))
         keys.push_back("workArea");
     std::vector<const JsonValue*> members;
@@ -645,6 +687,19 @@ using document::SchemaVersion;
     if (state.documentMinor == 1) {
         return true;
     }
+    {
+        const AttachmentScope groupsScope(state, "nodeGroups");
+        if (!detail::decodeNodeGroups(*members[8], state, joinPath(path, "nodeGroups"),
+                                      out.nodeGroups)) {
+            return false;
+        }
+    }
+    if (hasSafeAreas) {
+        const AttachmentScope scope(state, "safeAreas");
+        if (!decodeSafeAreas(*members[9], state, joinPath(path, "safeAreas"), out.safeAreas)) {
+            return false;
+        }
+    }
     if (const auto* area = node.findMember("workArea"); area && state.documentMinor >= 5) {
         const AttachmentScope scope(state, "workArea");
         std::vector<const JsonValue*> range;
@@ -672,9 +727,7 @@ using document::SchemaVersion;
         }
         out.workArea = value;
     }
-    const AttachmentScope groupsScope(state, "nodeGroups");
-    return detail::decodeNodeGroups(*members[8], state, joinPath(path, "nodeGroups"),
-                                    out.nodeGroups);
+    return true;
 }
 
 [[nodiscard]] bool decodeLocator(const JsonValue& node, DecodeState& state, const std::string& path,

@@ -4,6 +4,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QCursor>
 #include <QImage>
@@ -34,6 +35,7 @@ class QToolButton;
 
 class QContextMenuEvent;
 class QKeyEvent;
+class QMenu;
 class QMouseEvent;
 class QResizeEvent;
 class QWheelEvent;
@@ -159,7 +161,9 @@ struct ViewTransform final {
 // (viewer_editor_tests.cpp, direct_manipulation_tests.cpp, composition_session_position_
 // interaction_tests.cpp) never calls it, so their pinned canvasRect()-derived math is completely
 // unaffected by this amendment.
-class ViewerEditor final : public QWidget, public EditorFooterProvider {
+class ViewerEditor final : public QWidget,
+                           public EditorHeaderMenuProvider,
+                           public EditorFooterProvider {
     Q_OBJECT
 
   public:
@@ -174,6 +178,10 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // focus re-enters that subscription, which reads sibling widgets deleteChildren() may already
     // have destroyed.
     ~ViewerEditor() override;
+
+    // EditorHeaderMenuProvider: the Viewer owns its selectors and menus so EditorArea can place
+    // them immediately after the panel switcher in the shared editor header.
+    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
     // EditorFooterProvider (task C1, FORMAL AMENDMENT 1): the first call reparents the status bar
     // widget away from this ViewerEditor and returns it -- the caller (EditorArea) takes ownership
@@ -254,6 +262,20 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     void seekToFrame(std::uint64_t frameIndex);
     void setChannel(ViewerChannel channel);
     void setBackground(ViewerBackground background);
+    void buildHeader();
+    void rebuildCompositionSelector();
+    void rebuildObjectSelector();
+    void updateCompositionActions();
+    void selectAllObjects();
+    void selectNoObjects();
+    void invertObjectSelection();
+    void zoomInAtCenter();
+    void zoomOutAtCenter();
+    void applySafeAreaPreset(ViewerSafeAreaPreset preset);
+    void showCustomSafeAreaDialog();
+    void updateOverlayActions();
+    [[nodiscard]] double effectiveZoom(const QRectF& displayRect,
+                                       const DisplayGeometry& geometry) const;
     // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
     // state (issue #105, design decision 4: "button/icon state reflects transport state via a
     // signal"), unchanged except for which panel hosts the button.
@@ -343,6 +365,31 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // reference the signal handlers repaint through.
     QWidget* statusBarFooter_ = nullptr;
     bool statusBarFooterTaken_ = false;
+
+    QWidget* headerMenuWidget_ = nullptr;
+    bool headerMenuWidgetTaken_ = false;
+    kit::KDropdown* compositionSelector_ = nullptr;
+    kit::KDropdown* objectSelector_ = nullptr;
+    QToolButton* compositionMenuButton_ = nullptr;
+    QToolButton* fullscreenButton_ = nullptr;
+    QMenu* viewerViewMenu_ = nullptr;
+    QMenu* viewerSelectMenu_ = nullptr;
+    QAction* viewerFitAction_ = nullptr;
+    QAction* viewerActualSizeAction_ = nullptr;
+    QAction* viewerZoomInAction_ = nullptr;
+    QAction* viewerZoomOutAction_ = nullptr;
+    QAction* viewerCompositionNewAction_ = nullptr;
+    QAction* viewerCompositionDuplicateAction_ = nullptr;
+    QAction* viewerCompositionDeleteAction_ = nullptr;
+    QAction* viewerCompositionRenameAction_ = nullptr;
+    QAction* safeAreasAction_ = nullptr;
+    QAction* centreCrossAction_ = nullptr;
+    QAction* thirdsAction_ = nullptr;
+    QAction* rulersAction_ = nullptr;
+    QAction* pixelGridAction_ = nullptr;
+    QMenu* safeAreaPresetMenu_ = nullptr;
+    std::array<QAction*, 5> safeAreaPresetActions_{};
+    ViewerOverlayOptions overlayOptions_{};
 };
 
 } // namespace bloom::ui
