@@ -513,6 +513,8 @@ class CompilePass final {
                 }
             }
 
+            if (const auto* merge = graph.merge(node->id); merge && !merge->enabled())
+                continue;
             const auto& layerSlotInput = definition->second->layerSlotInput;
             if (!layerSlotInput.has_value()) {
                 continue;

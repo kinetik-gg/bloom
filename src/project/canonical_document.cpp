@@ -1238,6 +1238,9 @@ emitInterpolation(EmitState& state,
         if (!state.ok(writer.endArray())) {
             return false;
         }
+        if (!stack.enabled() &&
+            (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false))))
+            return false;
         if (!emitRetainedTrailing(state)) {
             return false;
         }

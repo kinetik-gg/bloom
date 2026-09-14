@@ -168,6 +168,7 @@ struct InjectedLayerOutputParameter final {
                                         layerId.value());
         }
     }
+    graph.layerStack().setEnabled(decodedGraph.layerStack.enabled);
     for (const auto& entry : decodedGraph.layerStack.entries) {
         if (!graph.layerStack().append(entry)) {
             return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
@@ -179,6 +180,7 @@ struct InjectedLayerOutputParameter final {
         if (!target)
             return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
                                         stack.nodeId.value());
+        target->setEnabled(stack.enabled);
         for (const auto& entry : stack.entries) {
             if (!target->append(entry))
                 return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,

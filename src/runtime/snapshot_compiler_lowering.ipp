@@ -418,6 +418,8 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         addTopologyFailure(node.id, "Layer Stack definition has no slot-input contract.");
         return std::nullopt;
     }
+    if (!composition_->graph().merge(node.id)->enabled())
+        return runtime::CompiledMerge{node.id, {}};
     const auto& layerSlotInput = *definition.layerSlotInput;
     std::vector<runtime::CompiledMergeInput> entries;
     entries.reserve(composition_->graph().merge(node.id)->entries().size());

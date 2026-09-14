@@ -47,6 +47,8 @@ firstImageInput(const document::NodeRecord& node) const {
 
 [[nodiscard]] bool consumesEdge(const document::NodeRecord& node,
                                 const document::EdgeRecord& edge) const {
+    if (const auto* merge = composition_->graph().merge(node.id); merge && !merge->enabled())
+        return false;
     if (isMuted(node.id)) {
         const auto input = firstImageInput(node);
         if (!input || *input != edge.destination)

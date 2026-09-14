@@ -250,6 +250,18 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     return OperationResult::applied({{"edge", *edgeId}});
 }
 
+std::string_view SetMergeEnabled::typeId() const noexcept { return "bloom.merge.set-enabled"; }
+OperationResult SetMergeEnabled::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    auto* merge = composition ? composition->graph().merge(mergeId_) : nullptr;
+    if (!merge)
+        return detail::invalidTarget();
+    if (merge->enabled() == enabled_)
+        return OperationResult::noChange();
+    merge->setEnabled(enabled_);
+    return OperationResult::applied();
+}
+
 std::string_view ReorderMergeInput::typeId() const noexcept { return "bloom.merge.reorder-input"; }
 OperationResult ReorderMergeInput::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);

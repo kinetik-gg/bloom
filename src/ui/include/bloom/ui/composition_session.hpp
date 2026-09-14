@@ -157,6 +157,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setCurrentTime(core::RationalTime time);
     void clearSelection();
     void selectLayer(document::LayerId layerId);
+    [[nodiscard]] const document::LayerStack* timelineMerge() const noexcept;
     void selectNode(document::NodeId nodeId);
     [[nodiscard]] document::WorkArea workArea() const noexcept;
     [[nodiscard]] const std::set<document::NodeId>& selectedNodes() const noexcept {

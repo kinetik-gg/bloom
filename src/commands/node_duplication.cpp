@@ -133,6 +133,8 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         const bool copyStack = nodeIds.contains(stack.nodeId());
         const auto targetId = copyStack ? nodeIds.at(stack.nodeId()) : stack.nodeId();
         auto& target = *graph.merge(targetId);
+        if (copyStack)
+            target.setEnabled(stack.enabled());
         const auto entries = stack.entries();
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const auto& entry = entries[index];

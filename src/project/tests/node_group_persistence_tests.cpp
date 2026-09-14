@@ -263,6 +263,7 @@ void multipleMergeRoundTrip() {
     const auto edge = *edgeId;
     expect(graph.addNode({nested, std::string(document::kLayerStackNodeType), {}, 1}),
            "add nested Merge");
+    graph.merge(nested)->setEnabled(false);
     expect(graph.layerStack().append({slot, {}}) &&
                graph.addEdge(
                    {edge,

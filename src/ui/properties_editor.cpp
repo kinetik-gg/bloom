@@ -1,3 +1,4 @@
+#include "node_editor_items.hpp"
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
@@ -556,6 +557,12 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                    textFontName_);
 
     selectionLayout->addWidget(textSourcePanel_);
+    mergeInputsPanel_ = new QWidget(selectionSection_);
+    mergeInputsPanel_->setObjectName(QStringLiteral("mergeInputsPanel"));
+    auto* mergeLayout = new QVBoxLayout(mergeInputsPanel_);
+    mergeLayout->setContentsMargins(0, 0, 0, 0);
+    mergeLayout->setSpacing(kit::px(kit::Spacing::XS));
+    selectionLayout->addWidget(mergeInputsPanel_);
     selectionLayout->addStretch(1);
     layout->addWidget(selectionSection_);
 
@@ -689,6 +696,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &PropertiesEditor::configureMergeInputs);
 
     rebuild();
 }
@@ -704,6 +713,7 @@ void PropertiesEditor::rebuild() {
     configureSolidColor();
     configureTextSource();
     configureDocumentProperties();
+    configureMergeInputs();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
     const auto context = session_.selection().contextualLayer;
@@ -720,6 +730,80 @@ void PropertiesEditor::rebuild() {
         textColor_->setEnabled(false);
     }
     rebuilding_ = false;
+}
+
+void PropertiesEditor::configureMergeInputs() {
+    auto* layout = static_cast<QVBoxLayout*>(mergeInputsPanel_->layout());
+    while (auto* item = layout->takeAt(0)) {
+        if (auto* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
+        delete item;
+    }
+    const auto* composition = session_.composition();
+    const auto* node = session_.selectedNode();
+    const auto* merge = composition && node ? composition->graph().merge(node->id) : nullptr;
+    mergeInputsPanel_->setVisible(merge != nullptr);
+    if (!merge)
+        return;
+    addSectionHeader(layout, mergeInputsPanel_, tr("Inputs · topmost first"));
+    for (const auto& entry : merge->entries()) {
+        const auto edges = composition->graph().edges();
+        const auto edge = std::ranges::find_if(edges, [&](const auto& candidate) {
+            const auto* input = std::get_if<document::LayerStackInputRef>(&candidate.destination);
+            return input && input->stackNodeId == merge->nodeId() && input->slotId == entry.slotId;
+        });
+        const auto* source =
+            edge == edges.end() ? nullptr : composition->graph().findNode(edge->source.nodeId);
+        if (!source)
+            continue;
+        auto* row = new QWidget(mergeInputsPanel_);
+        row->setObjectName(QStringLiteral("mergeInputRow"));
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        auto* name = new QLabel(node_editor::nodeDisplayName(*composition, *source), row);
+        name->setTextFormat(Qt::PlainText);
+        name->setObjectName(QStringLiteral("mergeInputName"));
+        rowLayout->addWidget(name, 1);
+        auto* blend = new kit::KDropdown(row);
+        blend->setObjectName(QStringLiteral("mergeInputBlendMode"));
+        for (const auto mode : core::kBlendModes)
+            blend->addItem(blendModeDisplayName(mode));
+        const auto mode =
+            session_.blendModeForLayer(entry.layerId).value_or(core::BlendMode::Normal);
+        blend->setCurrentIndex(static_cast<int>(
+            std::distance(core::kBlendModes.begin(), std::ranges::find(core::kBlendModes, mode))));
+        const auto* boundary = composition->graph().findLayer(entry.layerId);
+        blend->setEnabled(boundary && !boundary->locked);
+        rowLayout->addWidget(blend);
+        const auto layerId = entry.layerId;
+        connect(blend, &kit::KDropdown::currentIndexChanged, row, [this, layerId](int index) {
+            if (index >= 0 && static_cast<std::size_t>(index) < core::kBlendModes.size())
+                (void)session_.setLayerBlendMode(
+                    layerId, core::kBlendModes[static_cast<std::size_t>(index)]);
+        });
+        auto* opacity = new kit::KValueField(row);
+        opacity->setObjectName(QStringLiteral("mergeInputOpacity"));
+        opacity->setRange(0, 100);
+        opacity->setUnit(QStringLiteral("%"));
+        document::ParameterId opacityId;
+        if (boundary)
+            for (const auto& binding : source->parameters)
+                if (binding.role == document::kOpacityParameterRole)
+                    opacityId = binding.parameterId;
+        const auto value = opacityId.isValid() ? session_.effectiveScalarValue(opacityId)
+                                               : std::optional<double>{1.0};
+        opacity->setValue(value.value_or(1.0) * 100);
+        opacity->setEnabled(boundary && !boundary->locked && value.has_value());
+        rowLayout->addWidget(opacity);
+        connect(opacity, &kit::KValueField::valueChanged, row, [this, opacityId](double newValue) {
+            if (opacityId.isValid())
+                (void)session_.setParameterValue(opacityId, newValue / 100.0,
+                                                 tr("Set Layer Opacity"));
+        });
+        layout->addWidget(row);
+    }
 }
 
 void PropertiesEditor::configurePosition() {

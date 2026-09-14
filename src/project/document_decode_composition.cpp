@@ -1364,7 +1364,9 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
 
 [[nodiscard]] bool decodeLayerStack(const JsonValue& node, DecodeState& state,
                                     const std::string& path, DecodedLayerStack& out) {
-    static constexpr std::array<std::string_view, 2> keys{"nodeId", "entries"};
+    std::vector<std::string_view> keys{"nodeId", "entries"};
+    if (state.documentMinor >= 6 && node.findMember("enabled"))
+        keys.push_back("enabled");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1376,6 +1378,13 @@ checkLayerOutputNodeReferences(DecodeState& state, const std::string& layerOutpu
     std::vector<LayerStackEntry> entries;
     if (!decodeLayerStackEntries(*members[1], state, joinPath(path, "entries"), entries)) {
         return false;
+    }
+    if (const auto* enabled = node.findMember("enabled"); enabled && state.documentMinor >= 6) {
+        if (enabled->kind() != JsonValueKind::Boolean) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "enabled"));
+            return false;
+        }
+        out.enabled = enabled->asBoolean().value_or(true);
     }
     out.nodeId = nodeId;
     out.entries = std::move(entries);

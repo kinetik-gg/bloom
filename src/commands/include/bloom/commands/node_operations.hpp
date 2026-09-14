@@ -106,6 +106,19 @@ class ConnectPorts final : public Operation {
     std::optional<document::LayerSlotId> insertBefore_;
 };
 
+class SetMergeEnabled final : public Operation {
+  public:
+    SetMergeEnabled(document::CompositionId compositionId, document::NodeId mergeId, bool enabled)
+        : compositionId_(compositionId), mergeId_(mergeId), enabled_(enabled) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeId mergeId_;
+    bool enabled_;
+};
+
 class ReorderMergeInput final : public Operation {
   public:
     ReorderMergeInput(document::CompositionId compositionId, document::NodeId mergeId,

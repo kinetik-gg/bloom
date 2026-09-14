@@ -161,6 +161,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         }
     }
     for (const auto& stack : source.graph().merges())
+        graph.merge(remap(ids->nodes, stack.nodeId()))->setEnabled(stack.enabled());
+    for (const auto& stack : source.graph().merges())
         for (const auto& sourceEntry : stack.entries()) {
             if (!graph.merge(remap(ids->nodes, stack.nodeId()))
                      ->append({remap(ids->slots, sourceEntry.slotId),

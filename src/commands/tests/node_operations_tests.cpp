@@ -808,6 +808,7 @@ void testNodeGroups(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testMultipleMergeCommands(test);
         bloom::commands::test::testLayerToggles(test);
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
