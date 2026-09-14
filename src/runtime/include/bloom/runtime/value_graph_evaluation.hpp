@@ -1,4 +1,6 @@
 #pragma once
+#include <bloom/runtime/operation_cache.hpp>
+#include <bloom/runtime/cancellation.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -64,11 +66,21 @@ struct ValueGraphCurves final {
     std::span<const CompiledColor4Curve> color4;
 };
 
+struct ValueGraphMemoization final {
+    OperationCache* cache = nullptr;
+    OperationCacheStatistics* statistics = nullptr;
+    document::Revision revision;
+    document::ProjectId project;
+    document::CompositionId composition;
+    const CancellationToken* cancellation = nullptr;
+};
+
 // Evaluates every operation in order. `operations` must already be topologically ordered (the
 // compiler emits them that way), so one linear sweep is enough and no operand can name an output
 // that has not been written yet.
 [[nodiscard]] ValueGraphEvaluation
 evaluateValueGraph(std::span<const CompiledValueOperation> operations, std::size_t outputCount,
-                   core::RationalTime time, document::FrameRate rate, ValueGraphCurves curves = {});
+                   core::RationalTime time, document::FrameRate rate, ValueGraphCurves curves = {},
+                   ValueGraphMemoization memoization = {});
 
 } // namespace bloom::runtime

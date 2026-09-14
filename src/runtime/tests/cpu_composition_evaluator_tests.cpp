@@ -1794,10 +1794,13 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
     }
 }
 
+#include "operation_memoization_tests.ipp"
+
 } // namespace
 
 int main() {
     Expectations expectations;
+    testOperationMemoization(expectations);
     try {
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);

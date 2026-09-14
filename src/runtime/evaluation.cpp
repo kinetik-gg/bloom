@@ -44,7 +44,7 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
 }
 
 ProcessFrame::ProcessFrame(ProcessFrameIdentity identity,
-                           render::Rgba32fImage processImage) noexcept
+                           std::shared_ptr<const render::Rgba32fImage> processImage) noexcept
     : identity_(std::move(identity)), processImage_(std::move(processImage)) {}
 
 EvaluationResult EvaluationResult::evaluated(std::shared_ptr<const ProcessFrame> frame,

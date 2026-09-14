@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "operation_key.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/text_raster.hpp>
@@ -550,7 +551,8 @@ template <typename Value>
 [[nodiscard]] PreflightOutcome preflight(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                          const EvaluationRequest& request,
                                          const CancellationToken& cancellation,
-                                         const EvaluationProgressCallback& progress) {
+                                         const EvaluationProgressCallback& progress, OperationCache* cache,
+                                         OperationCacheStatistics* statistics) {
     if (plan == nullptr) {
         return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                                                     "Evaluation has no compiled plan"));
@@ -1141,7 +1143,8 @@ template <typename Value>
     // preflight failure.
     auto valueGraph = evaluateValueGraph(
         plan->valueOperations(), plan->valueOutputCount(), request.time, plan->format().frameRate(),
-        ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves()});
+        ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves()},
+        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(), &cancellation});
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
     }
@@ -1182,9 +1185,12 @@ using detail::unexpectedAllocationFailure;
 EvaluationResult CpuCompositionEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
-    CpuRowBandExecutor* const rowBands) const {
+    CpuRowBandExecutor* const rowBands, OperationCacheStatistics* statistics) const {
+    OperationCacheStatistics frameStatistics;
+    if (statistics) *statistics = {};
+    auto* cache = request.bypassOperationCache ? nullptr : cache_.get();
     try {
-        auto checked = preflight(plan, request, cancellation, progress);
+        auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
             return EvaluationResult::cancelled();
         }
@@ -1197,8 +1203,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                            "Evaluation preflight produced no result or diagnostic"));
         }
         auto resolved = std::move(*checked.resolved);
-        std::vector<std::optional<render::Rgba32fImage>> slots(plan->operations().size());
-        std::optional<render::Rgba32fImage> processImage;
+        std::vector<std::shared_ptr<const render::Rgba32fImage>> slots(plan->operations().size());
+        std::shared_ptr<const render::Rgba32fImage> processImage;
+        std::vector<std::string> contentHashes(plan->operations().size());
 
         for (std::size_t index = 0; index < plan->operations().size(); ++index) {
             if (cancellation.isCancellationRequested()) {
@@ -1210,6 +1217,50 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
 
+            detail::OperationKey key;
+            key.add(plan->projectId()); key.add(plan->compositionId());
+            key.add(plan->format().width()); key.add(plan->format().height());
+            key.add(plan->format().pixelAspect());
+            key.add(request.resolution.index());
+            if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
+                key.add(proxy->extent.width()); key.add(proxy->extent.height());
+            }
+            key.add(request.time);
+            key.add(plan->operations()[index].index());
+            const auto parameter = [&](const auto& operand) {
+                const auto value = detail::resolveParameter(operand, *plan, resolved);
+                key.add(value.has_value());
+                if (value) key.add(value->value);
+            };
+            std::visit([&](const auto& step) {
+                key.add(step.sourceNodeId);
+                using Step = std::decay_t<decltype(step)>;
+                if constexpr (std::is_same_v<Step, CompiledSolid>) parameter(step.color);
+                else if constexpr (std::is_same_v<Step, CompiledText>) {
+                    key.add(step.content); parameter(step.size); parameter(step.color);
+                } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
+                    parameter(step.position); parameter(step.anchor); parameter(step.scale);
+                    parameter(step.rotation); parameter(step.opacity); key.add(step.blendMode);
+                    key.add(request.time >= step.inPoint && (!step.outPoint || request.time < *step.outPoint));
+                } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
+                    key.add(step.entries.size());
+                    for (const auto& entry : step.entries) key.add(entry.layerId.isValid());
+                }
+            }, plan->operations()[index]);
+            forEachInput(plan->operations()[index], [&](OperationIndex input) {
+                key.add(contentHashes[input.value()]);
+            });
+            contentHashes[index] = key.digest();
+            const auto hit = cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
+            if (hit) {
+                ++frameStatistics.hits;
+                slots[index] = hit->image;
+                if (index == request.output.value()) processImage = hit->image;
+                reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                    .operation = operationIndex, .completed = 1, .total = 1});
+            } else {
+                ++frameStatistics.misses;
+                frameStatistics.evaluatedNodes.push_back(operationSubject.nodeId.value_or(document::NodeId{}));
             std::visit(
                 Overloaded{
                     [&](const CompiledSolid& solid) {
@@ -1562,7 +1613,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // pixels -- carried entirely off the frame, or collapsed by a zero
                             // scale. Compositing nothing over the accumulation is exactly right, so
                             // the entry is skipped rather than treated as a missing input.
-                            if (!slots[entry->input.value()].has_value()) {
+                            if (!slots[entry->input.value()]) {
                                 completedRows += height;
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,
@@ -1675,7 +1726,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         produced.emplace(std::move(*frozen.value()));
                     },
                     [&](const CompiledCompositionOutput& output) {
-                        processImage.emplace(std::move(*slots[output.input.value()]));
+                        processImage = slots[output.input.value()];
                         slots[output.input.value()].reset();
                         reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
                                                   .operation = operationIndex,
@@ -1692,7 +1743,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 return EvaluationResult::failed(std::move(*operationFailure));
             }
             if (produced.has_value()) {
-                slots[index].emplace(std::move(*produced));
+                slots[index] = std::make_shared<const render::Rgba32fImage>(std::move(*produced));
+            }
+            if (cache) cache->store(key.bytes(), plan->sourceRevision(),
+                {.image = index == request.output.value() ? processImage : slots[index], .values = {}});
             }
             if (index != request.output.value()) {
                 forEachInput(plan->operations()[index], [&](const OperationIndex input) {
@@ -1705,7 +1759,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
         }
 
-        if (!processImage.has_value() || cancellation.isCancellationRequested()) {
+        if (!processImage || cancellation.isCancellationRequested()) {
             return cancellation.isCancellationRequested()
                        ? EvaluationResult::cancelled()
                        : EvaluationResult::failed(
@@ -1726,7 +1780,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
         };
         auto frame = std::shared_ptr<const ProcessFrame>(
-            new ProcessFrame(std::move(identity), std::move(*processImage)));
+            new ProcessFrame(std::move(identity), std::move(processImage)));
+        if (statistics) *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame));
     } catch (const std::bad_alloc&) {
         return unexpectedAllocationFailure();

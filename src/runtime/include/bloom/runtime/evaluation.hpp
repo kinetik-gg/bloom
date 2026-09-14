@@ -5,6 +5,7 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/task_types.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -64,6 +65,7 @@ struct EvaluationRequest final {
     EvaluationQuality quality = EvaluationQuality::Reference;
     EvaluationColorIntent colorIntent = EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = 0;
+    bool bypassOperationCache = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative
@@ -155,17 +157,17 @@ class ProcessFrame final {
     [[nodiscard]] const ProcessFrameIdentity& identity() const& noexcept { return identity_; }
     [[nodiscard]] const ProcessFrameIdentity& identity() const&& = delete;
     [[nodiscard]] const render::Rgba32fImage& processImage() const& noexcept {
-        return processImage_;
+        return *processImage_;
     }
     [[nodiscard]] const render::Rgba32fImage& processImage() const&& = delete;
 
   private:
     friend class CpuCompositionEvaluator;
 
-    ProcessFrame(ProcessFrameIdentity identity, render::Rgba32fImage processImage) noexcept;
+    ProcessFrame(ProcessFrameIdentity identity, std::shared_ptr<const render::Rgba32fImage> processImage) noexcept;
 
     ProcessFrameIdentity identity_;
-    render::Rgba32fImage processImage_;
+    std::shared_ptr<const render::Rgba32fImage> processImage_;
 };
 
 class EvaluationResult final {
