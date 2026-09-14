@@ -32,7 +32,7 @@ constexpr int kTransientMessageMs = 5'000;
 
 class StatusColorChip final : public kit::KLabel {
   public:
-    explicit StatusColorChip(QWidget* parent) : KLabel(parent) {
+    explicit StatusColorChip(QWidget* parent) : KLabel(QString{}, parent, kit::TypeRole::UiSmall) {
         setObjectName("windowStatusBarColorChip");
     }
     void setState(const PreviewColorState& state) {
@@ -149,13 +149,13 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
 
     auto* chip = new StatusColorChip(this);
     colorChip_ = chip;
-    previewState_ = makeCell(QStringLiteral("windowStatusBarPreviewState"), kit::TypeRole::Ui,
+    previewState_ = makeCell(QStringLiteral("windowStatusBarPreviewState"), kit::TypeRole::UiSmall,
                              kit::Color::Muted, this);
-    droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"), kit::TypeRole::Value,
-                              kit::Color::Warn, this);
-    cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::Value,
-                      kit::Color::Accent, this);
-    message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::Ui,
+    droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"),
+                              kit::TypeRole::UiSmall, kit::Color::Warn, this);
+    cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::UiSmall,
+                      kit::Color::Muted, this);
+    message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
                         kit::Color::Foreground, this);
     message_->setAccessibleName(tr("Status message"));
     version_ = makeCell(QStringLiteral("windowStatusBarVersion"), kit::TypeRole::UiSmall,
@@ -163,12 +163,12 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     version_->setAccessibleName(tr("Bloom version"));
     version_->setText(QCoreApplication::applicationVersion());
 
+    layout->addWidget(version_);
     layout->addWidget(colorChip_);
     layout->addWidget(previewState_);
     layout->addWidget(droppedFrames_);
     layout->addWidget(cache_);
     layout->addWidget(message_, 1);
-    layout->addWidget(version_, 0, Qt::AlignRight);
 
     transientTimer_ = new QTimer(this);
     transientTimer_->setSingleShot(true);
@@ -198,6 +198,8 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
 
 void WindowStatusBar::refreshPreviewCells() {
     if (previewController_ == nullptr) {
+        static_cast<StatusColorChip*>(colorChip_)
+            ->setState({tr("Color state unavailable"), kit::Color::Warn});
         return;
     }
     const auto& preview = previewController_->state();
@@ -205,7 +207,7 @@ void WindowStatusBar::refreshPreviewCells() {
 
     previewState_->setText(previewActivityText(preview));
     QPalette statePalette = previewState_->palette();
-    statePalette.setColor(QPalette::WindowText, kit::color(previewActivityColor(preview)));
+    statePalette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
     previewState_->setPalette(statePalette);
 
     const QString dropped = droppedFrameText(*previewController_);
