@@ -1802,20 +1802,24 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             geometry.anchor =
                                 map({centre.x + anchor->value.x, centre.y + anchor->value.y});
                             if (layer.localBounds) {
-                                const auto& output = geometry.output;
-                                constexpr double limit = 16777212.0;
-                                if (!std::isfinite(output.left) || !std::isfinite(output.top) ||
-                                    !std::isfinite(output.right) || !std::isfinite(output.bottom) ||
-                                    output.left * resolved.horizontalScale < -limit ||
-                                    output.top * resolved.verticalScale < -limit ||
-                                    output.right * resolved.horizontalScale > limit ||
-                                    output.bottom * resolved.verticalScale > limit) {
-                                    operationFailure =
-                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                                   "Transformed content exceeds the supported "
-                                                   "coordinate range",
-                                                   {}, operationSubject);
-                                    return;
+                                constexpr double limit = 16777214.0;
+                                const double right = sourceWindow.extent().width();
+                                const double bottom = sourceWindow.extent().height();
+                                const std::array support{
+                                    transform.value()->forwardMap(-1.0, -1.0),
+                                    transform.value()->forwardMap(right, -1.0),
+                                    transform.value()->forwardMap(right, bottom),
+                                    transform.value()->forwardMap(-1.0, bottom)};
+                                for (const auto point : support) {
+                                    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+                                        std::abs(point.x) > limit || std::abs(point.y) > limit) {
+                                        operationFailure =
+                                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                       "Transformed content exceeds the supported "
+                                                       "coordinate range",
+                                                       {}, operationSubject);
+                                        return;
+                                    }
                                 }
                             }
                             const auto compositionWindow = resolved.imageDescriptor.dataWindow();

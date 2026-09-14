@@ -1325,14 +1325,15 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                 displayRect.top() + point.y * displayRect.height() /
                                                         static_cast<double>(format.height()));
                         };
-                        painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
                         for (const auto& bounds : previewController_.selectedLayerBounds()) {
+                            painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
                             QPolygonF polygon;
                             for (const auto point : bounds.polygon)
                                 polygon << toScreen(point);
                             painter.setBrush(Qt::NoBrush);
                             painter.drawPolygon(polygon);
                             painter.setBrush(kit::color(kit::Color::Accent));
+                            painter.setPen(Qt::NoPen);
                             painter.drawEllipse(toScreen(bounds.anchor), 3.0, 3.0);
                         }
                     }
