@@ -60,12 +60,7 @@ struct TimelineAxis final {
 // keyframe lanes underneath them all step by exactly this much, so the left column's rows, the
 // clip bars beside them, and the key rows below read as one grid.
 //
-// KIT GAP, disclosed rather than worked around: the design mock specifies 32, and the kit's own
-// Size::TimelineRow is 34. Kit edits are outside this task's fence, so this resolves the required
-// 32 from the closest existing token that IS exactly 32 (Size::ControlRoomy) instead of spelling a
-// raw pixel literal, which tokens.hpp forbids outright. The honest fix is a 32px timeline-row token
-// (or Size::TimelineRow becoming 32) in whoever next owns the kit.
-inline constexpr int kTimelineRowHeight = kit::px(kit::Size::ControlRoomy);
+inline constexpr int kTimelineRowHeight = kit::px(kit::Size::TimelineRow);
 
 // The playhead stroke every time-axis surface shares (task T1): a 1px Accent vertical line through
 // the ruler and all lanes, with exactly ONE small head marker at its top, painted in the work-area
@@ -157,6 +152,7 @@ class TimelineNavigator final : public QWidget {
     void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    void updateVisibility();
     enum class Drag { None, Pan, Start, End };
     TimelineRuler& ruler_;
     Drag drag_ = Drag::None;
@@ -165,11 +161,9 @@ class TimelineNavigator final : public QWidget {
     double end_ = 0.0;
 };
 
-// The honest "work area" strip (task U7, issue #122, decision 3): a thin Accent-dim band spanning
-// the FULL [0, duration) composition range. Bloom has no range-editing feature yet -- there is no
-// separate in/out point to visualize -- so this band always spans the entire width by construction;
-// it is deliberately non-interactive (no mouse handling at all) rather than pretend a click could
-// narrow it.
+// The work-area strip is a thin Accent bar with 6px endpoint handles. It projects the session's
+// persisted range and keeps the existing frame-snapped trim gesture; the default range spans the
+// full composition.
 class TimelineWorkAreaStrip final : public QWidget {
     Q_OBJECT
   public:
@@ -193,13 +187,8 @@ class TimelineWorkAreaStrip final : public QWidget {
     bool startHandle_ = false;
 };
 
-// The top of the header's right cell: a work-area strip with the single head marker immediately
-// below it. The shared stroke continues through the ruler labels and every lane.
-//
-// The marker lives here rather than inside TimelineWorkAreaStrip because the strip's one honest
-// claim is that its dim band spans the WHOLE composition range; a solid Accent triangle painted
-// inside that band would contradict exactly what timeline_ruler_tests.cpp's
-// testWorkAreaStripSpansFullWidthWithDimAccentBand samples it for.
+// The top of the header's right cell: a work-area strip. The shared playhead stroke and its single
+// marker live in the ruler immediately below, then continue through every lane.
 class TimelineWorkAreaRow final : public QWidget {
     Q_OBJECT
 

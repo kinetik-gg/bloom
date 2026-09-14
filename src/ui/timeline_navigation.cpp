@@ -227,7 +227,16 @@ TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
     setToolTip(tr("Drag the window to scroll; drag either edge to zoom. Escape cancels."));
     setFixedHeight(kit::px(kit::Size::Control));
     setFocusPolicy(Qt::StrongFocus);
-    connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
+    connect(&ruler, &TimelineRuler::axisChanged, this, [this] { updateVisibility(); });
+    updateVisibility();
+}
+
+void TimelineNavigator::updateVisibility() {
+    const auto axis = ruler_.axisForWidth(width());
+    const bool zoomed = axis.has_value() &&
+                        (axis->t0 > 0.0 || axis->t1 < axis->duration.toSeconds());
+    setVisible(zoomed);
+    update();
 }
 
 bool TimelineNavigator::event(QEvent* event) {
@@ -245,27 +254,19 @@ QRectF TimelineNavigator::windowRect() const {
         return {};
     }
     const double scale = std::max(1, width() - 1) / axis->duration.toSeconds();
-    const int inset = kit::px(kit::Spacing::XXS);
-    return {axis->t0 * scale, static_cast<qreal>(inset), (axis->t1 - axis->t0) * scale,
-            static_cast<qreal>(height() - 2 * inset)};
+    const int thumb = kit::px(kit::Size::TimelineNavigatorThumb);
+    return {axis->t0 * scale, static_cast<qreal>(height() - thumb) / 2.0,
+            (axis->t1 - axis->t0) * scale, static_cast<qreal>(thumb)};
 }
 
 void TimelineNavigator::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), kit::color(kit::Color::Surface));
+    painter.fillRect(rect(), kit::color(kit::Color::SurfaceSunken));
     const auto window = windowRect();
     if (window.isEmpty()) {
         return;
     }
-    painter.fillRect(window,
-                     kit::withOpacity(kit::color(kit::Color::Accent), kit::kDisabledOpacity));
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Accent));
-    painter.drawRect(window);
-    const qreal grip = kit::px(kit::Spacing::XS);
-    painter.fillRect(QRectF(window.left(), window.top(), grip, window.height()),
-                     kit::color(kit::Color::Accent));
-    painter.fillRect(QRectF(window.right() - grip, window.top(), grip, window.height()),
-                     kit::color(kit::Color::Accent));
+    painter.fillRect(window, kit::color(kit::Color::Muted));
 }
 
 void TimelineNavigator::mousePressEvent(QMouseEvent* event) {
