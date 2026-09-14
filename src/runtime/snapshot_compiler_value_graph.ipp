@@ -438,6 +438,44 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{runtime::CompiledValueRandom{
             *std::move(seed), *std::move(minimum), *std::move(maximum)}};
     }
+    case runtime::NodeLoweringKind::ValueUtility: {
+        // Wholly table-driven: the node's descriptor names its operands and its selectors, and this
+        // reads them in that order. There is no per-node branch here at all, which is the point --
+        // a new library node is a descriptor plus a kernel, never a third edit in the compiler.
+        const auto* descriptor = findValueUtilityDescriptor(node.typeId);
+        if (descriptor == nullptr) {
+            return std::nullopt;
+        }
+        // A composition readout is a CONSTANT in this plan. The plan is compiled from one document
+        // snapshot, and changing a composition's format or duration is a document edit that
+        // recompiles it, so baking the value here costs nothing per frame and makes it impossible
+        // for the graph and the settings to disagree.
+        if (isCompositionConstantReadout(descriptor->kernel)) {
+            return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{
+                runtime::CompiledValueOperand{{}, compositionReadout(descriptor->kernel)}}};
+        }
+        std::vector<runtime::CompiledValueOperand> operands;
+        operands.reserve(descriptor->operands.size());
+        for (const auto& declared : descriptor->operands) {
+            auto value = operandOf(declared.role);
+            if (!value.has_value()) {
+                return std::nullopt;
+            }
+            operands.push_back(*std::move(value));
+        }
+        std::vector<std::int64_t> selectors;
+        selectors.reserve(descriptor->selectors.size());
+        for (const auto& declared : descriptor->selectors) {
+            const auto* stored = parameterConstant<std::int64_t>(
+                runtime::detail::findParameterBinding(node, declared.role));
+            if (stored == nullptr) {
+                return std::nullopt;
+            }
+            selectors.push_back(*stored);
+        }
+        return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
+            descriptor->kernel, std::move(operands), std::move(selectors)}};
+    }
     case runtime::NodeLoweringKind::Solid:
     case runtime::NodeLoweringKind::Text:
     case runtime::NodeLoweringKind::LayerOutput:
@@ -447,6 +485,27 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         break;
     }
     return std::nullopt;
+}
+
+// One composition readout's baked value. The format's width and height are its PIXEL extent, and
+// the duration is in seconds so that it can be compared with a Time node's own seconds output
+// without a conversion.
+[[nodiscard]] runtime::CompiledValue
+compositionReadout(const document::ValueUtilityKernel kernel) const {
+    const auto format = composition_->format();
+    switch (kernel) {
+    case document::ValueUtilityKernel::FrameRate:
+        return static_cast<double>(format.frameRate().numerator()) /
+               static_cast<double>(format.frameRate().denominator());
+    case document::ValueUtilityKernel::CompositionDuration:
+        return composition_->duration().toSeconds();
+    case document::ValueUtilityKernel::CompositionSize:
+        return document::Vec2d{static_cast<double>(format.width()),
+                               static_cast<double>(format.height())};
+    default:
+        break;
+    }
+    return 0.0;
 }
 
 [[nodiscard]] static std::uint8_t

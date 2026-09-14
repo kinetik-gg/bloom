@@ -7,7 +7,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
     std::vector<std::uint8_t> outputs(valueOutputCount_, 1);
     valueTimeDependent_.reserve(valueOperations_.size());
     for (const auto& operation : valueOperations_) {
-        bool dependent = std::holds_alternative<CompiledValueTime>(operation.kernel);
+        // A Time node, and the one readout whose value is the FRAME rather than the composition.
+        // The other three readouts were baked into constants by the compiler and never reach here.
+        const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
+        bool dependent =
+            std::holds_alternative<CompiledValueTime>(operation.kernel) ||
+            (utility != nullptr && utility->operation == document::ValueUtilityKernel::FrameNumber);
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))
                 dependent =

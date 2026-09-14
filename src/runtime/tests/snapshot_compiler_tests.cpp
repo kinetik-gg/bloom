@@ -5,6 +5,8 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -446,6 +448,109 @@ void testValueGraphDriverResolution(Expectations& expectations) {
         expectations.expect(evaluation.diagnostics.empty() && resolved != nullptr &&
                                 *resolved == value,
                             "the driven opacity is re-resolved at each frame");
+    }
+}
+
+// Task UTIL-1's readouts. The three that describe the COMPOSITION are lowered to constants, so a
+// plan carries the settings it was compiled from and costs nothing per frame to read them back; the
+// one that describes the FRAME is a kernel, and is re-resolved at every frame like a Time node.
+void testCompositionReadoutsLowerToConstants(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "readout fixture composition must exist");
+    const auto rate = composition->format().frameRate();
+    constexpr auto rateNode = NodeId::fromRaw(14);
+    require(composition->graph().addNode(
+                {rateNode, std::string(kFrameRateNodeType), {}, kValueNodeSchemaVersion}),
+            "readout fixture Frame Rate node must be accepted");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{rateNode, std::string(kResultPortName)}),
+            "readout fixture opacity driver must be accepted");
+    require(project.validate().ok(), "readout fixture must be valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan,
+                        "a composition readout compiles");
+    if (!result.plan) {
+        return;
+    }
+    const auto& plan = *result.plan;
+    expectations.expect(plan.valueOperations().size() == 1 && plan.valueOutputCount() == 1,
+                        "and lowers to exactly one value operation with no kernel behind it");
+    if (plan.valueOperations().empty()) {
+        return;
+    }
+    const auto* passthrough =
+        std::get_if<runtime::CompiledValuePassthrough>(&plan.valueOperations().front().kernel);
+    const auto* constant = passthrough == nullptr
+                               ? nullptr
+                               : std::get_if<runtime::CompiledValue>(&passthrough->value.source);
+    const auto* baked = constant == nullptr ? nullptr : std::get_if<double>(constant);
+    const double expected =
+        static_cast<double>(rate.numerator()) / static_cast<double>(rate.denominator());
+    expectations.expect(baked != nullptr && *baked == expected,
+                        "the composition's own frame rate is baked into the plan as a constant");
+}
+
+void testFrameNumberReadoutIsResolvedPerFrame(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "readout fixture composition must exist");
+    constexpr auto frameNode = NodeId::fromRaw(14);
+    require(composition->graph().addNode(
+                {frameNode, std::string(kFrameNumberNodeType), {}, kValueNodeSchemaVersion}),
+            "readout fixture Frame Number node must be accepted");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{frameNode, std::string(kResultPortName)}),
+            "readout fixture opacity driver must be accepted");
+    require(project.validate().ok(), "readout fixture must be valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan,
+                        "a Frame Number readout compiles");
+    if (!result.plan) {
+        return;
+    }
+    const auto& plan = *result.plan;
+    // Two operations: the readout, and the explicit Integer-to-Scalar promotion the opacity socket
+    // needs. A widening that appears in the plan is a widening that can be diagnosed.
+    expectations.expect(plan.valueOperations().size() == 2 && plan.valueOutputCount() == 2,
+                        "through an explicit promotion into the Scalar the opacity socket carries");
+    const auto layer = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+        return std::holds_alternative<runtime::CompiledLayerOutput>(operation);
+    });
+    if (layer == plan.operations().end()) {
+        return;
+    }
+    const auto* driven = std::get_if<runtime::ValueOutputIndex>(
+        &std::get<runtime::CompiledLayerOutput>(*layer).opacity.source);
+    expectations.expect(driven != nullptr, "and the opacity resolves to a value-graph output");
+    if (driven == nullptr) {
+        return;
+    }
+    // 24fps, so second 0, 1 and 2 are frames 0, 24 and 48 -- the same numbers a Time node's own
+    // frame output gives, because both come from valueGraphFrameIndex().
+    const std::array<std::pair<std::int64_t, double>, 3> expected{std::pair{std::int64_t{0}, 0.0},
+                                                                  std::pair{std::int64_t{1}, 24.0},
+                                                                  std::pair{std::int64_t{2}, 48.0}};
+    for (const auto& [second, value] : expected) {
+        const auto evaluation = runtime::evaluateValueGraph(
+            plan.valueOperations(), plan.valueOutputCount(),
+            core::RationalTime::fromInteger(second), plan.format().frameRate());
+        const auto* resolved = driven->value() < evaluation.outputs.size()
+                                   ? std::get_if<double>(&evaluation.outputs[driven->value()])
+                                   : nullptr;
+        expectations.expect(evaluation.diagnostics.empty() && resolved != nullptr &&
+                                *resolved == value,
+                            "and the frame number is re-resolved at each frame");
     }
 }
 
@@ -1316,6 +1421,8 @@ int main() {
         testNestedMergeCompilation(expectations);
         testRegistryMustBeFrozen(expectations);
         testValueGraphDriverResolution(expectations);
+        testCompositionReadoutsLowerToConstants(expectations);
+        testFrameNumberReadoutIsResolvedPerFrame(expectations);
         testValueGraphCycleRefusal(expectations);
         testDeterministicTypedPlan(expectations);
         testCustomSolidLoweringRemainsSupported(expectations);

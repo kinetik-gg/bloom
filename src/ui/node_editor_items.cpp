@@ -40,6 +40,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Compositing");
     case document::NodeCategory::Values:
         return QCoreApplication::translate("node_editor", "Values");
+    case document::NodeCategory::Math:
+        return QCoreApplication::translate("node_editor", "Math");
     case document::NodeCategory::Output:
         return QCoreApplication::translate("node_editor", "Output");
     case document::NodeCategory::Compatibility:
@@ -51,10 +53,14 @@ QString nodeCategoryName(const document::NodeCategory category) {
 }
 
 std::span<const document::NodeCategory> nodeCategoryOrder() {
+    // Task UTIL-1: Math joins the list after Values, and Output moves to the END. The order is the
+    // order a graph is built in -- where pixels come from, how they are arranged, what numbers
+    // drive them, the plumbing that carries those numbers, and finally where the picture goes.
     static constexpr std::array kOrder{
         document::NodeCategory::Sources,     document::NodeCategory::Layers,
         document::NodeCategory::Compositing, document::NodeCategory::Values,
-        document::NodeCategory::Output,      document::NodeCategory::Utilities};
+        document::NodeCategory::Math,        document::NodeCategory::Utilities,
+        document::NodeCategory::Output};
     return kOrder;
 }
 
@@ -129,6 +135,11 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
         return QCoreApplication::translate("node_editor", match->name);
+    // Task UTIL-1's library carries its own name in its descriptor, beside the shape that name
+    // belongs to, rather than in a second table here that could fall out of step with the first.
+    if (const auto* descriptor = document::findValueUtilityDescriptor(typeId))
+        return QString::fromUtf8(descriptor->displayName.data(),
+                                 static_cast<qsizetype>(descriptor->displayName.size()));
     return displayTypeName(typeId);
 }
 

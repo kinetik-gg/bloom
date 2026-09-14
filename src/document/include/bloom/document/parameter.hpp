@@ -112,6 +112,18 @@ inline constexpr std::string_view kClampResultParameterSchemaKey = "bloom.math.c
 // domain differs: a negative tolerance is not a tolerance.
 inline constexpr std::string_view kCompareEpsilonParameterSchemaKey = "bloom.compare.epsilon";
 
+// Task UTIL-1's own selectors, each an Integer under its own closed mapping in
+// value_utility_nodes.hpp and each inline for the same reason as the five above.
+inline constexpr std::string_view kRoundingModeParameterSchemaKey = "bloom.convert.rounding-mode";
+// The radix a number is read or written in. The stored value is the RADIX ITSELF rather than an
+// index into an offered list, so a document that stores 16 means base sixteen even if the card
+// later offers a different set of bases.
+inline constexpr std::string_view kNumberRadixParameterSchemaKey = "bloom.convert.radix";
+inline constexpr std::string_view kStringCaseParameterSchemaKey = "bloom.string.case";
+inline constexpr std::string_view kStringPadSideParameterSchemaKey = "bloom.string.pad-side";
+inline constexpr std::string_view kIntegerOperationParameterSchemaKey = "bloom.integer.operation";
+inline constexpr std::string_view kBooleanOperationParameterSchemaKey = "bloom.boolean.operation";
+
 // The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
 // Evaluation converts them to the canonical premultiplied image representation. The text color
 // schema (kTextColorParameterSchemaKey) authors in exactly this same encoding with exactly the same

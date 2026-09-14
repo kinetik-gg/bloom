@@ -567,12 +567,19 @@ and preserves the slot and edge IDs; a body drop appends. A press where there is
 ### Node Categories
 
 `NodeDefinition::category` declares which Add-surface section a node type is listed under:
-`Sources`, `Layers`, `Compositing`, `Values`, `Output`, `Utilities`. The vocabulary is the artist's --
-what a node is for -- so it is declared beside the type rather than derived from `NodeLoweringKind`,
-which spans several sections at once. The built-ins are Solid and Text under `Sources`, the layer
-boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the literal value sources
-and `Time` under `Values`, and the whole computing library under `Utilities` (see **Value Graph And
-Drivers**).
+`Sources`, `Layers`, `Compositing`, `Values`, `Math`, `Utilities`, `Output`. The vocabulary is the
+artist's -- what a node is for -- so it is declared beside the type rather than derived from
+`NodeLoweringKind`, which spans several sections at once. The built-ins are Solid and Text under
+`Sources`, the layer boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the
+literal value sources and `Time` under `Values`, the arithmetic under `Math`, and the plumbing,
+logic and conversions under `Utilities` (see **Value Graph And Drivers** and
+[value-node-library.md](value-node-library.md)).
+
+`Math` exists because `Utilities` had become the place everything that is not a source, a layer or an
+output ends up: a Math node, a Switch, a Reroute and a string Trim are not one family, and burying
+the arithmetic among the plumbing is what made an artist scroll past it. The category is NOT
+persisted -- a document stores the node's type id -- so moving a type between sections needs no
+migration and no schema step.
 
 Add surfaces list entries in that category order and alphabetically inside each one, and
 `KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
@@ -690,6 +697,11 @@ upstream of an operand -- and three of the kinds have no curve model at all.
 | Utilities | Separate/Combine XY, XYZ, RGBA | Pure de/interleave. Channel extraction is the only way to read a colour's channels as numbers, by the no-implicit-Color-to-Vec4 rule |
 | Utilities | Random | Deterministic hash of its seed into `[min, max)`. No entropy source: a cached or exported frame has to agree with the frame that produced it, so a seeded value changes over time only when something wires a changing number into the seed |
 | Utilities | Reroute | One definition per kind, Image included. Pure pass-through; an Image Reroute is elided during image lowering and costs nothing at evaluation |
+
+Task UTIL-1's conversion, string, logic, numeric and readout nodes are a much longer catalogue than
+the rows above, and they share one lowering and one descriptor table rather than a builder each.
+They live in **[value-node-library.md](value-node-library.md)**, which also states the SAFE PARSE
+contract every node that reads a value out of text obeys.
 
 #### Fallbacks
 
