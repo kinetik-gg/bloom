@@ -149,6 +149,33 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
 
 namespace bloom::document {
 
+const LayerStack* CanonicalGraph::merge(const NodeId id) const noexcept {
+    const auto found = std::ranges::find(layerStacks_, id, &LayerStack::nodeId);
+    return found == layerStacks_.end() ? nullptr : &*found;
+}
+LayerStack* CanonicalGraph::merge(const NodeId id) noexcept {
+    return const_cast<LayerStack*>(std::as_const(*this).merge(id));
+}
+std::optional<NodeId> CanonicalGraph::outputMergeId() const noexcept {
+    if (!compositionOutput_)
+        return std::nullopt;
+    for (const auto& edge : edges_) {
+        const auto* input = std::get_if<NodeInputRef>(&edge.destination);
+        if (input && input->nodeId == compositionOutput_->nodeId &&
+            input->port == kCompositionOutputInputPort && merge(edge.source.nodeId))
+            return edge.source.nodeId;
+    }
+    return std::nullopt;
+}
+const LayerStack& CanonicalGraph::layerStack() const noexcept {
+    if (const auto id = outputMergeId())
+        return *merge(*id);
+    return layerStacks_.empty() ? emptyStack_ : layerStacks_.front();
+}
+LayerStack& CanonicalGraph::layerStack() noexcept {
+    return const_cast<LayerStack&>(std::as_const(*this).layerStack());
+}
+
 const NodeRecord* CanonicalGraph::findNode(const NodeId id) const noexcept {
     const auto iterator = std::find_if(nodes_.begin(), nodes_.end(),
                                        [id](const auto& node) { return node.id == id; });
@@ -173,6 +200,8 @@ bool CanonicalGraph::addNode(NodeRecord node) {
         }
     }
 
+    if (node.typeId == kLayerStackNodeType && !merge(node.id))
+        layerStacks_.emplace_back(node.id);
     nodes_.push_back(std::move(node));
     return true;
 }
@@ -253,22 +282,17 @@ bool CanonicalGraph::eraseEdge(const EdgeId id) {
 bool CanonicalGraph::eraseNode(const NodeId id) {
     if (findNode(id) == nullptr)
         return false;
-    std::vector<LayerSlotId> removedSlots;
-    for (const auto& boundary : layerOutputs_) {
-        if (boundary.nodeId != id)
-            continue;
-        for (const auto& entry : layerStack_.entries()) {
-            if (entry.layerId == boundary.layerId)
-                removedSlots.push_back(entry.slotId);
+    for (const auto& edge : edges_) {
+        if (edge.source.nodeId == id) {
+            if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination))
+                if (auto* stack = merge(slot->stackNodeId))
+                    (void)stack->erase(slot->slotId);
         }
     }
-    for (const auto slot : removedSlots)
-        (void)layerStack_.erase(slot);
-    std::erase_if(edges_, [&](const auto& edge) {
-        const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination);
-        return edge.source.nodeId == id || destinationNode(edge.destination) == id ||
-               (slot && std::ranges::find(removedSlots, slot->slotId) != removedSlots.end());
+    std::erase_if(edges_, [id](const auto& edge) {
+        return edge.source.nodeId == id || destinationNode(edge.destination) == id;
     });
+    std::erase_if(layerStacks_, [id](const auto& stack) { return stack.nodeId() == id; });
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
@@ -289,7 +313,8 @@ bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {
 ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                                           const NodeDefinitionRegistry& registry) const {
     ValidationResult result;
-    result.append("layerStack", layerStack_.validate());
+    for (const auto& stack : layerStacks_)
+        result.append("merges", stack.validate());
 
     std::unordered_set<NodeId> nodeIds;
     for (const auto& node : nodes_) {
@@ -330,15 +355,12 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         validateExpectedBindings(node, parameters, path, result);
     }
 
-    const auto* stackNode = findNode(layerStack_.nodeId());
-    if (stackNode == nullptr) {
-        result.add(ValidationCode::MissingReference, "layerStack.nodeId",
-                   "Layer Stack references a missing node");
-    } else if (stackNode->typeId != kLayerStackNodeType) {
-        result.add(ValidationCode::InvalidLayerStack, "layerStack.nodeId",
-                   "Layer Stack node has the wrong node type");
+    for (const auto& stack : layerStacks_) {
+        const auto* node = findNode(stack.nodeId());
+        if (!node || node->typeId != kLayerStackNodeType)
+            result.add(ValidationCode::InvalidLayerStack, "merges",
+                       "Merge slots require a Merge node");
     }
-
     std::unordered_set<NodeId> boundaryNodeIds;
     std::unordered_map<LayerId, const LayerOutputBoundary*> boundariesByLayer;
     for (const auto& boundary : layerOutputs_) {
@@ -429,19 +451,16 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         }
 
         if (const auto* nodeInput = std::get_if<NodeInputRef>(&edge.destination)) {
-            if (nodeInput->nodeId == layerStack_.nodeId()) {
+            if (merge(nodeInput->nodeId) != nullptr) {
                 result.add(ValidationCode::InvalidLayerStack, path + ".destination",
                            "Layer Stack inputs must address a stable slot and role");
             }
         } else {
             const auto& stackInput = std::get<LayerStackInputRef>(edge.destination);
-            if (stackInput.stackNodeId != layerStack_.nodeId()) {
-                result.add(ValidationCode::InvalidLayerStack, path + ".destination",
-                           "Layer Stack edge targets a different stack node");
-            }
-            if (layerStack_.find(stackInput.slotId) == nullptr) {
+            const auto* stack = merge(stackInput.stackNodeId);
+            if (!stack || !stack->find(stackInput.slotId)) {
                 result.add(ValidationCode::MissingReference, path + ".destination.slotId",
-                           "Layer Stack edge targets a missing stable slot");
+                           "Merge edge targets a missing stable slot");
             }
         }
 
@@ -498,27 +517,28 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         }
     }
 
-    for (const auto& entry : layerStack_.entries()) {
-        const auto path = "layerStack.entries[" + std::to_string(entry.slotId.value()) + "]";
-        const auto boundary = boundariesByLayer.find(entry.layerId);
-        if (boundary == boundariesByLayer.end()) {
-            result.add(ValidationCode::MissingReference, path + ".layerId",
-                       "Layer Stack entry has no matching Layer Output boundary");
-            continue;
-        }
-
-        const auto matchingContent =
-            std::find_if(edges_.begin(), edges_.end(), [&](const EdgeRecord& edge) {
+    for (const auto& stack : layerStacks_) {
+        for (const auto& entry : stack.entries()) {
+            const auto matching = std::ranges::find_if(edges_, [&](const auto& edge) {
                 const auto* input = std::get_if<LayerStackInputRef>(&edge.destination);
-                return input != nullptr && input->stackNodeId == layerStack_.nodeId() &&
-                       input->slotId == entry.slotId &&
-                       input->role == kLayerStackContentInputRole &&
-                       edge.source.nodeId == boundary->second->nodeId &&
-                       edge.source.port == boundary->second->outputPort;
+                return input && input->stackNodeId == stack.nodeId() &&
+                       input->slotId == entry.slotId && input->role == kLayerStackContentInputRole;
             });
-        if (matchingContent == edges_.end()) {
-            result.add(ValidationCode::InvalidLayerStack, path,
-                       "Layer Stack slot must receive content from its matching Layer Output");
+            if (matching == edges_.end()) {
+                result.add(ValidationCode::InvalidLayerStack, "merges.entries",
+                           "Merge slot requires an image edge");
+                continue;
+            }
+            const auto boundary = boundariesByLayer.find(entry.layerId);
+            const auto sourceBoundary = std::ranges::find(layerOutputs_, matching->source.nodeId,
+                                                          &LayerOutputBoundary::nodeId);
+            if ((entry.layerId.isValid() &&
+                 (boundary == boundariesByLayer.end() ||
+                  boundary->second->nodeId != matching->source.nodeId ||
+                  boundary->second->outputPort != matching->source.port)) ||
+                (!entry.layerId.isValid() && sourceBoundary != layerOutputs_.end()))
+                result.add(ValidationCode::InvalidLayerStack, "merges.entries",
+                           "Merge slot layer identity must match its image source");
         }
     }
 

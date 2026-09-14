@@ -1204,18 +1204,16 @@ emitInterpolation(EmitState& state,
         return false;
     }
 
-    if (!state.ok(writer.memberName("layerStack")) || !state.ok(writer.beginObject())) {
-        return false;
-    }
-    {
-        const PathScope layerStackScope(state, "layerStack");
-        if (!emitNamedId(state, "nodeId", graph.layerStack().nodeId().value())) {
+    const auto emitStack = [&](const bloom::document::LayerStack& stack) {
+        if (!state.ok(writer.beginObject()))
+            return false;
+        if (!emitNamedId(state, "nodeId", stack.nodeId().value())) {
             return false;
         }
         if (!state.ok(writer.memberName("entries")) || !state.ok(writer.beginArray())) {
             return false;
         }
-        for (const auto& entry : graph.layerStack().entries()) {
+        for (const auto& entry : stack.entries()) {
             const auto slotIdText = bloom::project::formatCanonicalUInt64(entry.slotId.value());
             const PathScope entryScope(state, RoundTripCollectionKind::LayerStackEntry,
                                        slotIdText.view());
@@ -1225,7 +1223,9 @@ emitInterpolation(EmitState& state,
             if (!emitNamedId(state, "slotId", entry.slotId.value())) {
                 return false;
             }
-            if (!emitNamedId(state, "layerId", entry.layerId.value())) {
+            if (entry.layerId.isValid()
+                    ? !emitNamedId(state, "layerId", entry.layerId.value())
+                    : (!state.ok(writer.memberName("layerId")) || !state.ok(writer.nullValue()))) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {
@@ -1241,11 +1241,18 @@ emitInterpolation(EmitState& state,
         if (!emitRetainedTrailing(state)) {
             return false;
         }
-    }
-    if (!state.ok(writer.endObject())) {
+        return state.ok(writer.endObject());
+    };
+    if (!state.ok(writer.memberName("layerStack")))
         return false;
+    {
+        const PathScope scope(state, "layerStack");
+        if (graph.merges().empty()) {
+            if (!state.ok(writer.nullValue()))
+                return false;
+        } else if (!emitStack(graph.merges().front()))
+            return false;
     }
-
     if (!graph.compositionOutput().has_value()) {
         {
             state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
@@ -1260,6 +1267,19 @@ emitInterpolation(EmitState& state,
         if (!emitOutputPortRef(state, *graph.compositionOutput())) {
             return false;
         }
+    }
+    if (graph.merges().size() > 1) {
+        if (!state.ok(writer.memberName("merges")) || !state.ok(writer.beginArray()))
+            return false;
+        const PathScope scope(state, "merges");
+        for (std::size_t i = 1; i < graph.merges().size(); ++i) {
+            const PathScope mergeScope(state, RoundTripCollectionKind::Node,
+                                       std::to_string(graph.merges()[i].nodeId().value()));
+            if (!emitStack(graph.merges()[i]))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
     }
     if (!emitRetainedTrailing(state)) {
         return false;

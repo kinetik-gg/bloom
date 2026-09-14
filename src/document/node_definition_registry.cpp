@@ -168,9 +168,9 @@ template <typename Definition>
                hasParameterSockets(definition, 1) && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
-               definition.cardinality == NodeCardinality::OnePerComposition &&
-               definition.inputs.empty() && hasImageOutput(definition, kLayerStackOutputPort) &&
-               definition.parameters.empty() && definition.layerSlotInput.has_value() &&
+               definition.cardinality == NodeCardinality::Many && definition.inputs.empty() &&
+               hasImageOutput(definition, kLayerStackOutputPort) && definition.parameters.empty() &&
+               definition.layerSlotInput.has_value() &&
                definition.layerSlotInput->role == kLayerStackContentInputRole &&
                definition.layerSlotInput->valueKind == SocketValueKind::Image &&
                definition.layerSlotInput->requiredPerSlot;
@@ -295,7 +295,7 @@ template <typename Definition>
             {},
             LayerSlotInputDefinition{std::string(kLayerStackContentInputRole),
                                      SocketValueKind::Image, true},
-            NodeCardinality::OnePerComposition,
+            NodeCardinality::Many,
             NodeCategory::Compositing};
 }
 

@@ -174,6 +174,17 @@ struct InjectedLayerOutputParameter final {
                                         entry.slotId.value());
         }
     }
+    for (const auto& stack : decodedGraph.merges) {
+        auto* target = graph.merge(stack.nodeId);
+        if (!target)
+            return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
+                                        stack.nodeId.value());
+        for (const auto& entry : stack.entries) {
+            if (!target->append(entry))
+                return compositionRejection(ReconstructionStage::LayerStackEntry, compositionId,
+                                            entry.slotId.value());
+        }
+    }
     graph.setCompositionOutput(std::move(decodedGraph.compositionOutput));
     return std::nullopt;
 }

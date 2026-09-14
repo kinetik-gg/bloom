@@ -116,6 +116,7 @@ struct DecodedGraph final {
     std::vector<document::EdgeRecord> edges;
     std::vector<document::LayerOutputBoundary> layerOutputs;
     DecodedLayerStack layerStack;
+    std::vector<DecodedLayerStack> merges;
     document::OutputPortRef compositionOutput;
 
     friend bool operator==(const DecodedGraph&, const DecodedGraph&) = default;

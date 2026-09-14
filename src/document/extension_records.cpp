@@ -71,9 +71,10 @@ struct TargetDeclarations final {
         for (const auto& boundary : composition.graph().layerOutputs()) {
             declarations.layers.insert(boundary.layerId);
         }
-        for (const auto& entry : composition.graph().layerStack().entries()) {
-            declarations.layerSlots.insert(entry.slotId);
-        }
+        for (const auto& stack : composition.graph().merges())
+            for (const auto& entry : stack.entries()) {
+                declarations.layerSlots.insert(entry.slotId);
+            }
         for (const auto& parameter : composition.parameters().records()) {
             declarations.parameters.insert(parameter.id);
         }

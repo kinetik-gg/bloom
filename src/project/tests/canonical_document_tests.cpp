@@ -163,7 +163,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 5\n"
+    "    \"minor\": 6\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -335,7 +335,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 5\n"
+        "    \"minor\": 6\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -827,7 +827,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 5\n"
+        "    \"minor\": 6\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -1207,7 +1207,7 @@ void testDriverSourceEncoding(Expectations& expectations) {
                                            "              \"outputPort\": \"value\"\n") !=
                             std::string::npos,
                         "the driver source is written as the node-and-port pair it addresses");
-    expectations.expect(encoded.bytes.find("\"minor\": 5") != std::string::npos,
+    expectations.expect(encoded.bytes.find("\"minor\": 6") != std::string::npos,
                         "a document carrying a driver source declares schema minor 4");
 }
 
@@ -1401,8 +1401,8 @@ void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1423,7 +1423,7 @@ void testSchemaMinorParameterization(Expectations& expectations) {
     const auto encoded = encodeWithSlack(request);
     expectBytesEqual(expectations,
                      encoded.ok ? std::string_view(encoded.bytes) : std::string_view{}, expected,
-                     "schemaMinor=6 with no overlay emits {1, 6} and is otherwise "
+                     "schemaMinor=6 with no overlay emits {1, 7} and is otherwise "
                      "byte-identical");
 }
 
@@ -1432,8 +1432,8 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1469,8 +1469,8 @@ void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected, "    ]\n  },\n  \"idAllocation\"",
                    "    ],\n    \"zzzProject\": \"hello\"\n  },\n  \"idAllocation\"");
 
@@ -1509,8 +1509,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1589,8 +1589,8 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1640,8 +1640,8 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1691,8 +1691,8 @@ void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
     // Five, not four: four is the CURRENT minor after task S7, and a parameterization test has to
     // name a minor the default does not already produce or it would assert nothing.
-    requireReplace(expected, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
     requireReplace(expected,
                    "      \"nodeGroup\": \"0\"\n"
                    "    }\n"
@@ -1975,8 +1975,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 5\n  },\n  \"project\"",
-                   "\"minor\": 6\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 6\n  },\n  \"project\"",
+                   "\"minor\": 7\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"

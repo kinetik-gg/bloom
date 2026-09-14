@@ -237,12 +237,14 @@ ValidationResult Project::validate() const {
                                                  std::to_string(groupId.value()) + "].id",
                                              "Node group", nodeGroupDeclarations, result);
         }
-        for (const auto& entry : composition.graph().layerStack().entries()) {
-            validateProjectUniqueDeclaration(entry.slotId, compositionOrdinal,
-                                             path + ".graph.layerStack.entries[" +
-                                                 std::to_string(entry.slotId.value()) + "].slotId",
-                                             "Layer Stack slot", layerSlotDeclarations, result);
-        }
+        for (const auto& stack : composition.graph().merges())
+            for (const auto& entry : stack.entries()) {
+                validateProjectUniqueDeclaration(entry.slotId, compositionOrdinal,
+                                                 path + ".graph.layerStack.entries[" +
+                                                     std::to_string(entry.slotId.value()) +
+                                                     "].slotId",
+                                                 "Layer Stack slot", layerSlotDeclarations, result);
+            }
     }
     result.append("", validateExtensionRecords(*this));
     return result;

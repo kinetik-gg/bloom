@@ -15,14 +15,14 @@ const LayerStackEntry* LayerStack::find(const LayerSlotId slotId) const noexcept
 }
 
 bool LayerStack::append(const LayerStackEntry entry) {
-    if (!entry.slotId.isValid() || !entry.layerId.isValid() || find(entry.slotId) != nullptr) {
+    if (!entry.slotId.isValid() || find(entry.slotId) != nullptr) {
         return false;
     }
 
     const auto duplicateLayer =
         std::find_if(entries_.begin(), entries_.end(),
                      [entry](const auto& existing) { return existing.layerId == entry.layerId; });
-    if (duplicateLayer != entries_.end()) {
+    if (entry.layerId.isValid() && duplicateLayer != entries_.end()) {
         return false;
     }
 
@@ -93,9 +93,7 @@ ValidationResult LayerStack::validate() const {
             result.add(ValidationCode::DuplicateId, path + ".slotId",
                        "Layer Stack slot ID is duplicated");
         }
-        if (!entry.layerId.isValid()) {
-            result.add(ValidationCode::InvalidId, path + ".layerId", "Layer ID must not be zero");
-        } else if (!layerIds.insert(entry.layerId).second) {
+        if (entry.layerId.isValid() && !layerIds.insert(entry.layerId).second) {
             result.add(ValidationCode::DuplicateId, path + ".layerId",
                        "Layer may participate only once in a Layer Stack");
         }
