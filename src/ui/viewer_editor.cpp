@@ -418,6 +418,38 @@ class ViewerHeaderMenuBar final : public QWidget {
 
     void refreshCollapse() { updateCollapse(); }
 
+    // Stable on purpose: the parent layout must never see this bar's minimum change when the
+    // menus collapse, or it re-lays the bar out, which resizes it, which re-evaluates the
+    // collapse, which changes the minimum again -- the unbounded recursion that took the whole
+    // application down on the owner's desktop (2026-09-14). The minimum is the collapsed shape:
+    // margins, the overflow button, and every non-menu widget at its own minimum.
+    [[nodiscard]] QSize minimumSizeHint() const override {
+        if (overflowButton_ == nullptr) {
+            return QWidget::minimumSizeHint();
+        }
+        const QMargins margins = layout_->contentsMargins();
+        int width = margins.left() + margins.right();
+        int items = 0;
+        for (int i = 0; i < layout_->count(); ++i) {
+            auto* widget = layout_->itemAt(i)->widget();
+            if (widget == nullptr) {
+                continue;
+            }
+            const bool isMenuButton =
+                std::find(menuButtons_.begin(), menuButtons_.end(), widget) != menuButtons_.end();
+            if (isMenuButton) {
+                continue;
+            }
+            width += widget == overflowButton_ ? widget->sizeHint().width()
+                                               : widget->minimumSizeHint().width();
+            ++items;
+        }
+        if (items > 1) {
+            width += (items - 1) * layout_->spacing();
+        }
+        return {width, QWidget::minimumSizeHint().height()};
+    }
+
   protected:
     void resizeEvent(QResizeEvent* event) override {
         QWidget::resizeEvent(event);
@@ -425,22 +457,41 @@ class ViewerHeaderMenuBar final : public QWidget {
     }
 
   private:
+    // Decides from measurements alone -- never by showing the buttons to see whether they fit --
+    // and only touches visibility when the decision actually changes. Showing and hiding inside a
+    // resize is what re-enters the layout; the guard makes a re-entrant call a no-op rather than
+    // a recursion.
     void updateCollapse() {
-        if (overflowButton_ == nullptr) {
+        if (overflowButton_ == nullptr || updatingCollapse_) {
             return;
         }
-        for (auto* button : menuButtons_) {
-            button->show();
+        updatingCollapse_ = true;
+        const QMargins margins = layout_->contentsMargins();
+        int needed = margins.left() + margins.right();
+        int items = 0;
+        for (int i = 0; i < layout_->count(); ++i) {
+            auto* widget = layout_->itemAt(i)->widget();
+            if (widget == nullptr || widget == overflowButton_) {
+                continue;
+            }
+            needed += widget->sizeHint().width();
+            ++items;
         }
-        overflowButton_->hide();
-        const bool fits = layout_->sizeHint().width() <= width();
-        if (fits) {
-            return;
+        if (items > 1) {
+            needed += (items - 1) * layout_->spacing();
         }
-        for (auto* button : menuButtons_) {
-            button->hide();
+        const bool collapse = needed > width();
+        // Diagnostics for the regression test: the width the menus need, and the decision.
+        setProperty("collapseThreshold", needed);
+        setProperty("collapsed", collapse);
+        if (collapse != collapsed_) {
+            collapsed_ = collapse;
+            for (auto* button : menuButtons_) {
+                button->setVisible(!collapse);
+            }
+            overflowButton_->setVisible(collapse);
         }
-        overflowButton_->show();
+        updatingCollapse_ = false;
     }
 
     QHBoxLayout* layout_ = nullptr;
@@ -448,6 +499,8 @@ class ViewerHeaderMenuBar final : public QWidget {
     std::vector<QMenu*> menus_;
     QToolButton* overflowButton_ = nullptr;
     QMenu* overflowMenu_ = nullptr;
+    bool collapsed_ = false;
+    bool updatingCollapse_ = false;
 };
 
 } // namespace

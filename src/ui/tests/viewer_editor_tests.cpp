@@ -1,3 +1,4 @@
+#include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -1430,6 +1431,73 @@ void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
+// Regression: the header's collapse used to decide by showing every menu button and measuring,
+// inside resizeEvent. Showing them changed the bar's minimum, the parent re-laid it out, the bar
+// resized, and the collapse re-ran -- without bound, until the stack was gone (owner's desktop,
+// 2026-09-14). Sweeping the width across the threshold several times would not return from the
+// first crossing on the old code; on the new code the state must follow the width and the
+// minimum size hint must not move with the state.
+void testViewerHeaderCollapseIsStableAcrossResizes(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Viewer Header Collapse Test"));
+    auto* header = fixture.viewer.findChild<QWidget*>("viewerHeaderMenuBar");
+    auto* overflow = fixture.viewer.findChild<QToolButton*>("viewerHeaderOverflowButton");
+    auto* viewButton = fixture.viewer.findChild<QToolButton*>("viewerViewMenuButton");
+    expectations.expect(header != nullptr && overflow != nullptr,
+                        "the collapse regression fixture finds the header and its overflow");
+    if (header == nullptr || overflow == nullptr) {
+        fixture.controller.beginShutdown();
+        fixture.bridge.beginShutdown();
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    // A hidden widget receives no resize events, so the sweep drives the SHOWN viewer's width and
+    // lets its layout hand the bar whatever width follows -- the path the desktop takes.
+    fixture.viewer.show();
+    fixture.viewer.resize(1400, 600);
+    QCoreApplication::processEvents();
+    const QSize wideMinimum = header->minimumSizeHint();
+    bool stateFollowsWidth = true;
+    bool minimumIsStable = true;
+    bool sawCollapsed = false;
+    bool sawExpanded = false;
+    // The bar is resized directly (shown, so the resize event is delivered synchronously) and the
+    // decision is checked twice per step: right after the resize, and again after the event loop
+    // has let the parent layout answer -- which is exactly where the old code re-entered itself.
+    const int height = header->height();
+    const std::array<int, 5> widths{1200, 160, 1200, 120, 1200};
+    auto consistent = [&]() {
+        const bool collapsed = !overflow->isHidden();
+        const bool expectCollapsed =
+            header->property("collapseThreshold").toInt() > header->width();
+        const bool buttonsAgree = viewButton == nullptr || viewButton->isHidden() == collapsed;
+        return collapsed == expectCollapsed && buttonsAgree;
+    };
+    for (const int width : widths) {
+        header->resize(width, height);
+        if (!consistent()) {
+            stateFollowsWidth = false;
+        }
+        (!overflow->isHidden() ? sawCollapsed : sawExpanded) = true;
+        QCoreApplication::processEvents();
+        if (!consistent()) {
+            stateFollowsWidth = false;
+        }
+        if (header->minimumSizeHint() != wideMinimum) {
+            minimumIsStable = false;
+        }
+    }
+    expectations.expect(sawCollapsed && sawExpanded,
+                        "the width sweep crosses the Viewer header's collapse threshold both ways");
+    expectations.expect(stateFollowsWidth,
+                        "the Viewer header collapses exactly when its menus do not fit");
+    expectations.expect(minimumIsStable,
+                        "the Viewer header's minimum size hint does not move with its collapse");
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectations) {
     using namespace bloom;
     const auto background = ui::kit::color(ui::kit::Color::Background);
@@ -1525,6 +1593,7 @@ int main(int argc, char** argv) {
     testBackgroundDropdownChoosesTheSurroundAndPersists(expectations);
     testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
     testViewerHeaderSelectorsMenusAndOverflow(expectations);
+    testViewerHeaderCollapseIsStableAcrossResizes(expectations);
     testViewerOverlayPixelsFollowTransformAndThreshold(expectations);
     testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
