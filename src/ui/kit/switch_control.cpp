@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/switch_control.hpp>
 
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -21,6 +22,7 @@ constexpr int kThumbInset = 2;
 } // namespace
 
 KSwitch::KSwitch(QWidget* parent) : QAbstractButton(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSwitch"));
     setCheckable(true);
     setFocusPolicy(Qt::StrongFocus);
@@ -52,14 +54,14 @@ State KSwitch::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (hasFocus()) {
+    if (hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;
 }
 
 Color KSwitch::borderToken() const {
-    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+    return borderForInteraction(isEnabled(), hasKeyboardFocus(*this), hovered_);
 }
 
 QSize KSwitch::sizeHint() const {

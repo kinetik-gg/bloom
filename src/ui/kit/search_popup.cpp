@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/search_popup.hpp>
 
 #include <bloom/ui/kit/dropdown_popup.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -56,6 +57,7 @@ namespace {
 } // namespace
 
 KSearchPopup::KSearchPopup(QWidget* parent) : QWidget(parent, Qt::Popup) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSearchPopup"));
     setAccessibleName(tr("Add node search"));
     setAttribute(Qt::WA_TranslucentBackground);
@@ -75,7 +77,7 @@ QLineEdit#kSearchFilter {
     border: {border.Hairline}px solid {color.Border};
     padding: {space.XS}px {space.M}px;
 }
-QLineEdit#kSearchFilter:focus { border-color: {color.Accent}; }
+QLineEdit#kSearchFilter[bloomKeyboardFocus="true"] { border-color: {color.Accent}; }
 )")));
     static_cast<QVBoxLayout*>(dropdown_->surface()->layout())->insertWidget(0, field_);
     model_ = new QStandardItemModel(this);

@@ -92,15 +92,17 @@ state recipes below step along exactly this ladder and nothing else.
 
 A control shows exactly one border, and its color is the whole state channel: `Border` at rest,
 `BorderHover` under the pointer, `Accent` while active -- focused, being edited, or holding an open
-popup. **Focus wins over hover**: a control that is both keeps `Accent`, so putting the pointer on
-the thing you are editing never takes the focus indication away. A control that is borderless at
-rest (a `KValueField` cell) paints its resting border transparent and gains the outline only on
-hover or focus. `kit::borderForInteraction()` is the one implementation;
+popup. Focused means keyboard focus only: `Qt::TabFocusReason` and `Qt::BacktabFocusReason` turn on
+the focus affordance, while pointer-assigned focus leaves the control at its resting or hover state.
+**Focus wins over hover**: a control that is both keeps `Accent`, so putting the pointer on the thing
+you are editing never takes the focus indication away. A control that is borderless at rest (a
+`KValueField` cell) paints its resting border transparent and gains the outline only on hover or
+keyboard focus. `kit::borderForInteraction()` is the one implementation;
 `src/ui/tests/kit_focus_border_tests.cpp` pins every control at all four points.
 
 The color widgets are the documented exception: `KColorChip` and `KRangeSelector` (through
 `kit::drawFocusRing()`) and `KColorSwatches` and `KColorPicker` (through accent pens of their own)
-still draw a `1.5` accent ring outside the focused element, because their focusable target is a
+still draw a `1.5` accent ring outside the keyboard-focused element, because their focusable target is a
 color field, a swatch, or a handle whose own border color is the artist's data rather than a state
 channel -- a border-color change there could not carry focus at all.
 
@@ -310,10 +312,13 @@ drag -- is the single commit. The rotation slider spans one turn each way and pi
 cell stays the authority for a wound value past that, which the schema accepts and the slider
 cannot reach.
 
-The remaining parameters of a selected definition render in its source section. The definition
-owns kind, animation support, role and default; the schema-owned selector vocabulary supplies the
-closed enum choices. Labels derive from role names, with separators converted to spaces. Existing
-hand-crafted controls keep their identities and command paths.
+The remaining artist-facing parameters of a selected definition render in its source section. The
+definition owns kind, animation support, role and default; the schema-owned selector vocabulary
+supplies the closed enum choices. Labels derive from role names, with separators converted to
+spaces. Technical metadata roles such as alpha association and encoding are explicitly hidden from
+Properties; Solid's source section therefore contains only Color, Width and Height, with alpha
+still reachable through the Color picker. Existing hand-crafted controls keep their identities and
+command paths.
 
 | Parameter kind | Properties control |
 | --- | --- |
@@ -660,7 +665,9 @@ licensing, substitution, and missing-dependency workflow.
 The layer-stack column is a fixed 80 px toggle strip followed by a flexible Name column (minimum
 120 px), a 100 px Blending column, and a 100 px Parent column. Each toggle is a 16 px square with
 a Border, ControlSurface fill, and semantic Phosphor glyph: visibility, disabled audio, solo, and
-lock. The disabled audio tooltip states that media controls are not available yet. The Name cell
+lock. An off glyph uses Regular weight; an on glyph uses Fill weight, while the square's border
+remains neutral in both states. The disabled audio tooltip states that media controls are not
+available yet. The Name cell
 has no swatch; a fixed 16 px chevron sits directly left of the name. Parent is a visible disabled
 Compact dropdown showing `None` with an honest tooltip.
 

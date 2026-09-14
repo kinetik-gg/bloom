@@ -4,6 +4,10 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QApplication>
+#include <QCoreApplication>
+#include <QEvent>
+#include <QFocusEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QIcon>
@@ -20,6 +24,44 @@
 
 namespace bloom::ui::kit {
 namespace {
+
+constexpr auto kKeyboardFocusProperty = "bloomKeyboardFocus";
+
+class KeyboardFocusTracker final : public QObject {
+  public:
+    explicit KeyboardFocusTracker(QObject* parent) : QObject(parent) {}
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        auto* widget = qobject_cast<QWidget*>(watched);
+        if (widget == nullptr) {
+            return QObject::eventFilter(watched, event);
+        }
+        if (event->type() == QEvent::FocusIn) {
+            const auto reason = static_cast<QFocusEvent*>(event)->reason();
+            widget->setProperty(kKeyboardFocusProperty,
+                                reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason);
+            widget->style()->unpolish(widget);
+            widget->style()->polish(widget);
+            widget->update();
+        } else if (event->type() == QEvent::FocusOut) {
+            widget->setProperty(kKeyboardFocusProperty, false);
+            widget->style()->unpolish(widget);
+            widget->style()->polish(widget);
+            widget->update();
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+void installKeyboardFocusTracker(QApplication& application) {
+    if (application.property(kKeyboardFocusProperty).toBool()) {
+        return;
+    }
+    auto* tracker = new KeyboardFocusTracker(&application);
+    application.installEventFilter(tracker);
+    application.setProperty(kKeyboardFocusProperty, true);
+}
 
 // The gap between the icon column and the label, and between the label and the shortcut column.
 [[nodiscard]] int menuColumnGap() { return px(Spacing::S); }
@@ -46,6 +88,22 @@ struct MenuText {
 
 bool showMnemonicUnderline(const Qt::KeyboardModifiers modifiers) noexcept {
     return modifiers.testFlag(Qt::AltModifier);
+}
+
+void installKeyboardFocusTracking(QApplication& application) {
+    installKeyboardFocusTracker(application);
+}
+
+void ensureKeyboardFocusTracking(QWidget& widget) {
+    auto* application = qobject_cast<QApplication*>(QCoreApplication::instance());
+    if (application != nullptr) {
+        installKeyboardFocusTracker(*application);
+    }
+    Q_UNUSED(widget)
+}
+
+bool hasKeyboardFocus(const QWidget& widget) noexcept {
+    return widget.hasFocus() && widget.property(kKeyboardFocusProperty).toBool();
 }
 
 int menuIconColumnWidth() { return px(Size::IconSmall); }

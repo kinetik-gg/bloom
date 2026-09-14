@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/theme.hpp>
 
 #include <bloom/ui/kit/fonts.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QApplication>
@@ -281,7 +282,7 @@ QComboBox {
 QComboBox:hover {
     border-color: {color.BorderHover};
 }
-QComboBox:focus {
+QComboBox[bloomKeyboardFocus="true"] {
     border-color: {color.Accent};
 }
 QComboBox:disabled {
@@ -455,6 +456,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
 }
 
 void installKinetikTheme(QApplication& application) {
+    installKeyboardFocusTracking(application);
     // Fusion rather than the platform style: Kinetik is one interface on Linux, macOS, and Windows,
     // and only a style that honors the application palette and stylesheet uniformly can deliver
     // that. The native style on macOS and Windows overrides large parts of both.

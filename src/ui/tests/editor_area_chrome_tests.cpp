@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
+#include <QEvent>
 #include <QFont>
 #include <QIcon>
 #include <QImage>
@@ -20,8 +21,10 @@
 #include <QSizePolicy>
 #include <QString>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -410,6 +413,57 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
                         "the switcher field is ControlRoomy (32) tall");
 }
 
+double pixelLuminance(const QColor& color) {
+    return 0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue();
+}
+
+void testPanelSwitcherFocusIsKeyboardOnly(Expectations& expectations) {
+    const EditorRegistry registry = makeRegistry();
+    auto* area = new EditorArea(registry, "bloom.probe", QString{});
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->addWidget(area);
+    host.resize(320, 180);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    auto* picker = area->findChild<kit::KPanelSwitcher*>(QStringLiteral("editorTypePicker"));
+    expectations.expect(picker != nullptr, "the editor header owns the panel switcher");
+    if (picker == nullptr) {
+        delete area;
+        return;
+    }
+
+    picker->clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(picker, &leave);
+    const QImage resting = picker->grab().toImage();
+    const auto edgeLuminance = [](const QImage& image) {
+        const int y = std::min(2, image.height() - 1);
+        return pixelLuminance(image.pixelColor(image.width() / 2, y));
+    };
+    const double restingEdge = edgeLuminance(resting);
+    const double borderEdge = pixelLuminance(kit::color(kit::Color::Border));
+    const double accentEdge = pixelLuminance(kit::color(kit::Color::Accent));
+    expectations.expect(picker->borderToken() == kit::Color::Border &&
+                            std::abs(restingEdge - borderEdge) < std::abs(restingEdge - accentEdge),
+                        "a resting panel switcher has no focus outline without keyboard focus");
+
+    picker->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    const QImage focused = picker->grab().toImage();
+    const double focusedEdge = edgeLuminance(focused);
+    expectations.expect(picker->borderToken() == kit::Color::Accent &&
+                            focusedEdge > restingEdge + 10.0,
+                        "the panel switcher shows its focus outline after keyboard traversal");
+
+    picker->clearFocus();
+    QCoreApplication::sendEvent(picker, &leave);
+    delete area;
+}
+
 // FORMAL AMENDMENT 1 (task C1, after the first report; owner: "an empty reserved strip on every
 // panel is NOT wanted"). An editor that implements EditorFooterProvider and offers a real footer
 // widget gets one hosted under objectName "editorFooter", holding exactly the widget it handed
@@ -622,6 +676,7 @@ int main(int argc, char** argv) {
     testThePanelSwitcherPinsTheIconMapping(expectations);
     testThePanelSwitcherHugsItsContentAndKeepsBehaviorParity(expectations);
     testHeaderProportionsMatchTheDesignCrops(expectations);
+    testPanelSwitcherFocusIsKeyboardOnly(expectations);
     testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(expectations);
     testAFooterLessEditorHasNoEditorFooterChildAtAll(expectations);
     testAHeaderMenuProvidingEditorGetsItsWidgetHostedInTheHeader(expectations);
