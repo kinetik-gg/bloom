@@ -165,6 +165,7 @@ class LayerTransform final {
     // Inverse mapping of one output pixel centre, in ABSOLUTE composition coordinates, to the
     // source pixel coordinate that lands on it.
     [[nodiscard]] SamplePoint inverseMap(double outputX, double outputY) const noexcept;
+    [[nodiscard]] SamplePoint forwardMap(double localX, double localY) const noexcept;
 
     // The output pixels this transform can write a non-transparent value to, clipped to `clip`
     // (the composition's own window). No value means the layer's bilinear support misses `clip`

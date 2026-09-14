@@ -158,6 +158,10 @@ class ProcessFrame final {
         return statistics_;
     }
     [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const&& = delete;
+    [[nodiscard]] std::span<const EvaluatedOperationBounds> evaluatedBounds() const& noexcept {
+        return bounds_;
+    }
+    [[nodiscard]] std::span<const EvaluatedOperationBounds> evaluatedBounds() const&& = delete;
     [[nodiscard]] const ProcessFrameIdentity& identity() const& noexcept { return identity_; }
     [[nodiscard]] const ProcessFrameIdentity& identity() const&& = delete;
     [[nodiscard]] const render::Rgba32fImage& processImage() const& noexcept {
@@ -170,8 +174,10 @@ class ProcessFrame final {
 
     ProcessFrame(ProcessFrameIdentity identity,
                  std::shared_ptr<const render::Rgba32fImage> processImage,
-                 OperationCacheStatistics statistics) noexcept;
+                 OperationCacheStatistics statistics,
+                 std::vector<EvaluatedOperationBounds> bounds) noexcept;
 
+    std::vector<EvaluatedOperationBounds> bounds_;
     OperationCacheStatistics statistics_;
     ProcessFrameIdentity identity_;
     std::shared_ptr<const render::Rgba32fImage> processImage_;

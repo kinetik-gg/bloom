@@ -1809,6 +1809,7 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
     }
 }
 
+#include "content_bounds_tests.ipp"
 #include "operation_memoization_tests.ipp"
 
 } // namespace
@@ -1820,6 +1821,8 @@ int main(int argc, char* argv[]) {
             benchmarkOperationMemoization(expectations);
             return expectations.failures() == 0 ? 0 : 1;
         }
+        testContentBounds(expectations);
+        testContentBoundsEdgeCases(expectations);
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);

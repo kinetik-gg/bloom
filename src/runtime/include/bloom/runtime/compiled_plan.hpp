@@ -9,6 +9,7 @@
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -86,12 +87,37 @@ class OperationIndex final {
     std::size_t value_ = 0;
 };
 
+// Content rectangles use pixel-edge coordinates in full-resolution local space.
+// Bounds are evaluated from the plan's source operands and transformed input bounds at frame time.
+struct ContentBounds final {
+    double left = 0.0;
+    double top = 0.0;
+    double right = 0.0;
+    double bottom = 0.0;
+    [[nodiscard]] bool empty() const noexcept { return right <= left || bottom <= top; }
+    [[nodiscard]] document::Vec2d centre() const noexcept {
+        return {(left + right) / 2.0, (top + bottom) / 2.0};
+    }
+    friend bool operator==(const ContentBounds&, const ContentBounds&) = default;
+};
+struct EvaluatedOperationBounds final {
+    ContentBounds local;
+    ContentBounds output;
+    document::LayerId layerId;
+    std::array<document::Vec2d, 4> polygon{};
+    document::Vec2d anchor;
+    friend bool operator==(const EvaluatedOperationBounds&,
+                           const EvaluatedOperationBounds&) = default;
+};
+
 // A lowered solid source. Its colour is a typed operand rather than a resolved constant (task S5):
 // the solid colour schema is animatable now, so the value is either a constant or an index into the
 // plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
 struct CompiledSolid {
     document::NodeId sourceNodeId;
     CompiledColorParameter color;
+    std::optional<CompiledScalarParameter> width{};
+    std::optional<CompiledScalarParameter> height{};
 
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
@@ -100,12 +126,21 @@ struct CompiledSolid {
 // and no command in the surface can put it on a curve; size and colour became typed operands in
 // task S5, when both schemas became animatable. Each carries its own parameter identity so a
 // diagnostic can name the exact parameter that failed, exactly as CompiledSolid does.
+struct CompiledTextLayout {
+    document::ParameterId alignmentId;
+    std::int64_t alignment = 0;
+    CompiledScalarParameter lineHeight;
+    CompiledScalarParameter letterSpacing;
+    friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
+};
+
 struct CompiledText {
     document::NodeId sourceNodeId;
     document::ParameterId contentParameterId;
     std::string content;
     CompiledScalarParameter size;
     CompiledColorParameter color;
+    std::optional<CompiledTextLayout> layout{};
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
@@ -134,6 +169,8 @@ struct CompiledLayerOutput {
     core::RationalTime inPoint{};
     // Absent means full duration; old/default plans retain identical behavior.
     std::optional<core::RationalTime> outPoint{};
+    // Position places centre(local bounds) + anchor at the authored parent-space point.
+    bool localBounds = false;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 
@@ -149,6 +186,7 @@ struct CompiledMergeInput {
 struct CompiledMerge {
     document::NodeId sourceNodeId;
     std::vector<CompiledMergeInput> entries;
+    bool localBounds = false;
 
     friend bool operator==(const CompiledMerge&, const CompiledMerge&) = default;
 };

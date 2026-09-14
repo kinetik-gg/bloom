@@ -94,6 +94,24 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
 // column in the row span where it starts. Separating the clipping arithmetic from the compositing
 // keeps the evaluator's text arm readable and makes the off-frame cases -- text scrolled left of
 // the frame, above it, wider than it -- one testable rule instead of four inline branches.
+[[nodiscard]] inline ContentBounds boundsForWindow(const render::ImageWindow window,
+                                                   const double sx, const double sy) noexcept {
+    return {static_cast<double>(window.originX()) / sx, static_cast<double>(window.originY()) / sy,
+            static_cast<double>(window.maxXExclusive()) / sx,
+            static_cast<double>(window.maxYExclusive()) / sy};
+}
+[[nodiscard]] inline ContentBounds unionBounds(const ContentBounds a,
+                                               const ContentBounds b) noexcept {
+    if (a.empty())
+        return b;
+    if (b.empty())
+        return a;
+    return {std::min(a.left, b.left), std::min(a.top, b.top), std::max(a.right, b.right),
+            std::max(a.bottom, b.bottom)};
+}
+[[nodiscard]] inline std::array<document::Vec2d, 4> boundsCorners(const ContentBounds b) noexcept {
+    return {{{b.left, b.top}, {b.right, b.top}, {b.right, b.bottom}, {b.left, b.bottom}}};
+}
 struct ClippedCoverageRow final {
     std::span<const std::uint8_t> coverage;
     std::size_t outputOffset = 0;
@@ -107,7 +125,7 @@ struct ClippedCoverageRow final {
     }
     // The text origin is the window's own origin, so a bitmap coordinate is a window coordinate
     // plus the bitmap's origin offset.
-    const auto bitmapRow = outputY - window.originY() - bitmap.originY();
+    const auto bitmapRow = outputY - bitmap.originY();
     if (bitmapRow < 0 || bitmapRow >= static_cast<std::int64_t>(bitmap.height())) {
         return {};
     }
@@ -115,8 +133,8 @@ struct ClippedCoverageRow final {
     if (row.empty()) {
         return {};
     }
-    const auto width = static_cast<std::int64_t>(window.extent().width());
-    const auto firstColumn = std::max<std::int64_t>(bitmap.originX(), 0);
+    const auto width = window.maxXExclusive();
+    const auto firstColumn = std::max<std::int64_t>(bitmap.originX(), window.originX());
     const auto lastColumnExclusive =
         std::min<std::int64_t>(bitmap.originX() + static_cast<std::int64_t>(bitmap.width()), width);
     if (lastColumnExclusive <= firstColumn) {
@@ -124,7 +142,7 @@ struct ClippedCoverageRow final {
     }
     const auto skipped = static_cast<std::size_t>(firstColumn - bitmap.originX());
     const auto count = static_cast<std::size_t>(lastColumnExclusive - firstColumn);
-    return {row.subspan(skipped, count), static_cast<std::size_t>(firstColumn)};
+    return {row.subspan(skipped, count), static_cast<std::size_t>(firstColumn - window.originX())};
 }
 
 [[nodiscard]] EvaluationDiagnostic imageDiagnostic(const render::ImageError& error,

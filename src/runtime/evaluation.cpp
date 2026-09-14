@@ -45,9 +45,10 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
 
 ProcessFrame::ProcessFrame(ProcessFrameIdentity identity,
                            std::shared_ptr<const render::Rgba32fImage> processImage,
-                           OperationCacheStatistics statistics) noexcept
-    : statistics_(std::move(statistics)), identity_(std::move(identity)),
-      processImage_(std::move(processImage)) {}
+                           OperationCacheStatistics statistics,
+                           std::vector<EvaluatedOperationBounds> bounds) noexcept
+    : bounds_(std::move(bounds)), statistics_(std::move(statistics)),
+      identity_(std::move(identity)), processImage_(std::move(processImage)) {}
 
 EvaluationResult EvaluationResult::evaluated(std::shared_ptr<const ProcessFrame> frame,
                                              std::vector<EvaluationDiagnostic> diagnostics) {
