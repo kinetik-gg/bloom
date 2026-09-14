@@ -299,6 +299,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
+    enum class Tool { Select, Hand, Zoom };
+    Tool tool_ = Tool::Select;
+    QWidget* toolColumn_ = nullptr;
     bool panActive_ = false;
     Qt::MouseButton panButton_ = Qt::NoButton;
     QPointF panOrigin_;

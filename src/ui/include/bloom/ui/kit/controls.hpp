@@ -5,6 +5,8 @@
 #include <QToolButton>
 #include <bloom/ui/kit/icons.hpp>
 
+class QVBoxLayout;
+class QButtonGroup;
 namespace bloom::ui::kit {
 class KMenuButton : public QToolButton {
     Q_OBJECT
@@ -29,6 +31,17 @@ class KIconToggle final : public KIconButton {
 
   private:
     IconId glyph_;
+};
+class KToolColumn final : public QWidget {
+    Q_OBJECT
+  public:
+    explicit KToolColumn(QWidget* parent = nullptr);
+    KIconToggle* addTool(IconId id, const QString& label, const QString& objectName,
+                         bool enabled = true);
+
+  private:
+    QVBoxLayout* column_;
+    QButtonGroup* group_;
 };
 class KLabel : public QLabel {
     Q_OBJECT

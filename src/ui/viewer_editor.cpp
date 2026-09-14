@@ -267,7 +267,7 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds, kit::color(kit::Color::Background));
+    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
 }
 
 // Approximates Elevation::Popup's token shadow (kit::shadow()) as a stack of expanding,
@@ -320,7 +320,7 @@ class ViewerTimecodeReadout final : public QWidget {
         setToolTip(ViewerEditor::tr("Click to type an exact frame number"));
         timecodeFormat_ =
             QSettings()
-                .value(QLatin1StringView(kTimeFormatSetting), QStringLiteral("frames"))
+                .value(QLatin1StringView(kTimeFormatSetting), QStringLiteral("timecode"))
                 .toString() == QStringLiteral("timecode");
 
         stack_ = new QStackedLayout(this);
@@ -342,7 +342,7 @@ class ViewerTimecodeReadout final : public QWidget {
         // A frame INDEX, always -- even while the label is showing timecode. Typing a frame number
         // is the one entry form that needs no parsing rules of its own, and it is what the task
         // asks for; the display format is a separate question the context menu answers.
-        editor_->setValidator(new QIntValidator(0, std::numeric_limits<int>::max(), editor_));
+        editor_->setToolTip(ViewerEditor::tr("Enter a frame number or HH:MM:SS:FF timecode"));
         editor_->installEventFilter(this);
 
         stack_->addWidget(label_);
@@ -406,9 +406,7 @@ class ViewerTimecodeReadout final : public QWidget {
                                 : QString::number(*nearest);
             }
         }
-        label_->setText(
-            (timecodeFormat_ ? ViewerEditor::tr("TC %1 · %2") : ViewerEditor::tr("Frame %1 · %2"))
-                .arg(frameText, formatExactSeconds(time)));
+        label_->setText(frameText);
         label_->setToolTip(timecodeFormat_
                                ? ViewerEditor::tr("Non-drop timecode · exact composition time")
                                : ViewerEditor::tr("Frame index · exact composition time"));
@@ -418,10 +416,7 @@ class ViewerTimecodeReadout final : public QWidget {
         // A FIXED width from the widest string this readout can ever show, not the current text's
         // width: the text changes on every frame of playback, and a width that tracked it would
         // relayout the whole footer sixty times a second and make every control beside it twitch.
-        const QFontMetrics metrics(kit::font(kit::TypeRole::Value));
-        const int width = metrics.horizontalAdvance(QStringLiteral("TC 00:00:00:00 · 00000.000s")) +
-                          kit::px(kit::Spacing::S);
-        return {width, kit::px(kit::Size::ControlCompact)};
+        return {kit::px(kit::Size::ViewerTimecodeWidth), kit::px(kit::Size::Control)};
     }
 
   protected:
@@ -463,7 +458,9 @@ class ViewerTimecodeReadout final : public QWidget {
         }
         const auto nearest =
             nearestFrameIndexForTime(context->frameRate, context->duration, session_.currentTime());
-        editor_->setText(QString::number(nearest.value_or(0)));
+        editor_->setText(timecodeFormat_ ? formatTimelineFrameLabel(nearest.value_or(0),
+                                                                    context->frameRate, true)
+                                         : QString::number(nearest.value_or(0)));
         stack_->setCurrentWidget(editor_);
         editor_->selectAll();
         editor_->setFocus(Qt::MouseFocusReason);
@@ -478,7 +475,26 @@ class ViewerTimecodeReadout final : public QWidget {
     void commitEdit() {
         const auto context = frameContextFor(session_);
         bool parsed = false;
-        const auto typed = editor_->text().toULongLong(&parsed);
+        auto typed = editor_->text().toULongLong(&parsed);
+        const auto parts = editor_->text().split(':');
+        if (context && parts.size() == 4) {
+            bool valid = true;
+            std::array<qulonglong, 4> values{};
+            for (int index = 0; index < 4; ++index) {
+                bool partOk = false;
+                values[static_cast<std::size_t>(index)] = parts[index].toULongLong(&partOk);
+                valid = valid && partOk;
+            }
+            const auto numerator = static_cast<qulonglong>(context->frameRate.numerator());
+            const auto denominator = static_cast<qulonglong>(context->frameRate.denominator());
+            const auto nominal =
+                std::max<qulonglong>(1, (numerator + denominator / 2) / denominator);
+            parsed = valid &&
+                     values[0] < std::numeric_limits<qulonglong>::max() / nominal / 3600 - 1 &&
+                     values[1] < 60 && values[2] < 60 && values[3] < nominal;
+            if (parsed)
+                typed = ((values[0] * 3600 + values[1] * 60 + values[2]) * nominal) + values[3];
+        }
         cancelEdit();
         if (!parsed || !context.has_value() || !seek_) {
             // An unparseable entry reverts in silence: there is nothing to report that the
@@ -1182,6 +1198,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         resolutionDropdown_->setCurrentIndex(
             static_cast<int>(previewController_.settings().resolutionPolicy));
         resolutionReadout_->setText(viewerResolutionText(previewController_));
+        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
     });
     // Part of the Resolution control, not a footer item of its own: what the chosen policy actually
     // resolved to. For Auto that effective factor is visible nowhere else.
@@ -1190,6 +1207,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     resolutionReadout_->setAccessibleName(tr("Effective preview resolution"));
     resolutionReadout_->setFont(kit::font(kit::TypeRole::Value));
     resolutionReadout_->setText(viewerResolutionText(previewController_));
+    resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
 
     // ---- Background ----------------------------------------------------------------------------
     backgroundDropdown_ = new kit::KDropdown(footer);
@@ -1265,10 +1283,24 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     timeReadout_ = new ViewerTimecodeReadout(
         session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
 
+    channelDropdown_->setFixedWidth(kit::px(kit::Size::ViewerChannelWidth));
+    zoomDropdown_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
+    resolutionDropdown_->setFixedWidth(kit::px(kit::Size::ViewerResolutionWidth));
+    timeReadout_->setFixedWidth(kit::px(kit::Size::ViewerTimecodeWidth));
+    ramPreviewButton_->setFixedWidth(kit::px(kit::Size::ViewerModeWidth));
+    ramPreviewButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    ramPreviewButton_->setText(tr("RAM Preview"));
+    // Background stays available from View. Keep old object identities for automation.
+    backgroundDropdown_->hide();
+    resolutionReadout_->hide();
+    resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
     for (auto* control : std::initializer_list<QWidget*>{
-             channelDropdown_, zoomDropdown_, resolutionDropdown_, resolutionReadout_,
-             backgroundDropdown_, stepToStartButton_, stepBackButton_, playPauseButton_,
-             stepForwardButton_, stepToEndButton_, loopButton_, ramPreviewButton_, timeReadout_})
+             channelDropdown_, ramPreviewButton_, stepToStartButton_, stepBackButton_,
+             playPauseButton_, stepForwardButton_, stepToEndButton_, loopButton_})
+        chrome_.footer.addWidget(control);
+    chrome_.footer.addStretch();
+    for (auto* control :
+         std::initializer_list<QWidget*>{timeReadout_, zoomDropdown_, resolutionDropdown_})
         chrome_.footer.addWidget(control);
     statusBarFooter_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
     chrome_.hosted = [this] {
@@ -1286,6 +1318,34 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
       ramPreview_(ramPreview) {
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
+    auto* tools = new kit::KToolColumn(this);
+    toolColumn_ = tools;
+    tools->setObjectName("viewerToolColumn");
+    auto* select = tools->addTool(kit::IconId::Select, tr("Select and move"), "viewerSelectTool");
+    auto* hand = tools->addTool(kit::IconId::Pan, tr("Hand: drag to pan"), "viewerHandTool");
+    auto* zoom = tools->addTool(
+        kit::IconId::Zoom, tr("Zoom: click to zoom in; Alt-click to zoom out"), "viewerZoomTool");
+    tools->addTool(kit::IconId::Text, tr("Text tool is not available yet; use Add Text"),
+                   "viewerTextTool", false);
+    tools->addTool(kit::IconId::Rectangle, tr("Rectangle tool is not available yet"),
+                   "viewerRectangleTool", false);
+    tools->addTool(kit::IconId::Pen, tr("Pen tool is not available yet"), "viewerPenTool", false);
+    select->setChecked(true);
+    connect(select, &QToolButton::clicked, this, [this] {
+        tool_ = Tool::Select;
+        updatePanCursor();
+    });
+    connect(hand, &QToolButton::clicked, this, [this] {
+        tool_ = Tool::Hand;
+        updatePanCursor();
+    });
+    connect(zoom, &QToolButton::clicked, this, [this] {
+        tool_ = Tool::Zoom;
+        updatePanCursor();
+    });
+    tools->adjustSize();
+    tools->move(kit::px(kit::Spacing::S), kit::px(kit::Spacing::S));
+
     setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
@@ -1364,6 +1424,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
         updatePreviewAccessibility();
         resolutionReadout_->setText(viewerResolutionText(previewController_));
+        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
         // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
         // (docs/architecture/animation-and-time.md); a mid-drag mapping change cancels the gesture
         // rather than silently mis-mapping the rest of it.
@@ -1662,11 +1723,9 @@ QRectF ViewerEditor::statusBarRect() const {
 
 QRectF ViewerEditor::canvasRect() const {
     const QRectF bar = statusBarRect();
-    // Full-bleed (decision 1): no side or top inset at all, only the bottom strip the status bar
-    // structurally requires -- that strip is a persistent control row, not "padding" -- and
-    // (FORMAL AMENDMENT 1) not reserved at all once that row has moved into an external footer
-    // widget, where bar.height() is already 0.
-    return QRectF(rect()).adjusted(0.0, 0.0, 0.0, -bar.height());
+    const qreal padding = kit::px(kit::Size::ViewerWorkPadding);
+    return QRectF(rect()).adjusted(padding + kit::px(kit::Size::ToolColumnWidth), padding, -padding,
+                                   -bar.height() - padding);
 }
 
 void ViewerEditor::layoutStatusBar() {
@@ -1683,6 +1742,7 @@ void ViewerEditor::refreshZoomDropdown() {
     updatePreviewResolution();
     if (resolutionReadout_ != nullptr) {
         resolutionReadout_->setText(viewerResolutionText(previewController_));
+        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
     }
     if (zoomDropdown_ == nullptr) {
         return;
@@ -1782,7 +1842,7 @@ std::optional<ViewerEditor::DisplayGeometry> ViewerEditor::currentDisplayGeometr
 void ViewerEditor::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
-    painter.fillRect(rect(), kit::color(kit::Color::Background));
+    painter.fillRect(rect(), kit::color(kit::Color::Canvas));
 
     const QRectF frame = canvasRect();
     const auto* composition = session_.composition();
@@ -1846,9 +1906,11 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, shownImage, QRectF(shownImage.rect()));
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                    painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
+                    painter.setPen(QPen(kit::color(kit::Color::CompositionFrame),
+                                        kit::kCompositionFrameWidth));
                     painter.setBrush(Qt::NoBrush);
-                    painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
+                    painter.drawRect(displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth,
+                                                          -kit::kCompositionFrameWidth));
                     if (geometry.has_value()) {
                         const auto bounds = previewController_.selectedLayerBounds();
                         paintViewerOverlays(painter, frame, displayRect,
@@ -2000,6 +2062,10 @@ void ViewerEditor::updatePanCursor() {
     if (panActive_) {
         setCursor(Qt::ClosedHandCursor);
 
+    } else if (tool_ == Tool::Hand) {
+        setCursor(Qt::OpenHandCursor);
+    } else if (tool_ == Tool::Zoom) {
+        setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
     }
@@ -2008,11 +2074,26 @@ void ViewerEditor::updatePanCursor() {
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
-            geometry.has_value() && (event->button() == Qt::MiddleButton)) {
+            geometry.has_value() && (event->button() == Qt::MiddleButton ||
+                                     (event->button() == Qt::LeftButton && tool_ == Tool::Hand))) {
             beginPan(event->button(), event->position(), *geometry);
             event->accept();
             return;
         }
+    }
+
+    if (!dragActive_ && !panActive_ && tool_ == Tool::Zoom && event->button() == Qt::LeftButton) {
+        if (const auto geometry = currentDisplayGeometry()) {
+            transform_ =
+                zoomAboutPoint(transform_, canvasRect(), geometry->extent, geometry->pixelAspect,
+                               event->position(),
+                               event->modifiers().testFlag(Qt::AltModifier) ? 1.0 / kZoomStepFactor
+                                                                            : kZoomStepFactor);
+            refreshZoomDropdown();
+            update();
+        }
+        event->accept();
+        return;
     }
 
     if (event->button() != Qt::LeftButton ||

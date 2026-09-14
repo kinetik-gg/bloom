@@ -1,5 +1,7 @@
+#include <QButtonGroup>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QVBoxLayout>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -34,6 +36,9 @@ void KIconToggle::setGlyph(IconId id) {
     update();
 }
 QPixmap KIconToggle::glyphPixmap() const {
+    if (property("toolChoice").toBool() && isChecked())
+        return iconPixmap(glyph_, Size::IconControl, Color::Foreground, State::Normal,
+                          IconWeight::Fill, devicePixelRatioF());
     return iconPixmap(glyph_, Size::IconControl, Color::Muted,
                       !isEnabled()  ? State::Disabled
                       : isChecked() ? State::Selected
@@ -45,7 +50,9 @@ void KIconToggle::paintEvent(QPaintEvent*) {
     const QRectF box = QRectF(rect()).adjusted(px(Spacing::XXS), px(Spacing::XXS),
                                                -px(Spacing::XXS), -px(Spacing::XXS));
     fillRoundedSurface(
-        painter, box, color(Color::ControlSurface),
+        painter, box,
+        color(property("toolChoice").toBool() && isChecked() ? Color::Accent
+                                                             : Color::ControlSurface),
         color(borderForInteraction(isEnabled(), hasKeyboardFocus(*this), underMouse())),
         Radius::Small);
     const auto glyph = glyphPixmap();
@@ -54,6 +61,27 @@ void KIconToggle::paintEvent(QPaintEvent*) {
     const QPointF origin(std::round((width() - size.width()) * dpr / 2) / dpr,
                          std::round((height() - size.height()) * dpr / 2) / dpr);
     painter.drawPixmap(origin, glyph);
+}
+KToolColumn::KToolColumn(QWidget* parent)
+    : QWidget(parent), column_(new QVBoxLayout(this)), group_(new QButtonGroup(this)) {
+    setFixedWidth(px(Size::ToolColumnWidth));
+    column_->setContentsMargins(px(Spacing::XXS), px(Spacing::XXS), px(Spacing::XXS),
+                                px(Spacing::XXS));
+    column_->setSpacing(px(Spacing::XS));
+    group_->setExclusive(true);
+}
+KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString& objectName,
+                                  bool enabled) {
+    auto* button = new KIconToggle(id, this);
+    button->setObjectName(objectName);
+    button->setAccessibleName(label);
+    button->setToolTip(label);
+    button->setProperty("toolChoice", true);
+    button->setFixedWidth(px(Size::Control));
+    button->setEnabled(enabled);
+    group_->addButton(button);
+    column_->addWidget(button, 0, Qt::AlignHCenter);
+    return button;
 }
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {

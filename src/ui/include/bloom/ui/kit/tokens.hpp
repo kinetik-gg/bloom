@@ -27,6 +27,8 @@ namespace bloom::ui::kit {
 // Brand is the Bloom logo color and is never used for interface chrome.
 enum class Color : std::uint8_t {
     Background,
+    Canvas,
+    CompositionFrame,
     SurfaceSunken,
     Surface,
     SurfaceRaised,
@@ -146,6 +148,13 @@ enum class Size : int {
     MinorTick = 4,
     MajorTick = 8,
     ViewerChecker = 22,
+    ViewerWorkPadding = 48,
+    ToolColumnWidth = 32,
+    ViewerChannelWidth = 64,
+    ViewerModeWidth = 108,
+    ViewerTimecodeWidth = 112,
+    ViewerZoomWidth = 64,
+    ViewerResolutionWidth = 96,
     ViewerMinWidth = 220,
     ViewerMinHeight = 176,
     MultilineHeight = 78,
@@ -230,6 +239,7 @@ inline constexpr int WorkspaceVersion = 2;
 
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.
+inline constexpr qreal kCompositionFrameWidth = 1.0;
 inline constexpr qreal kKeyDiamondRadius = 4.5;
 inline constexpr qreal kNodeCanvasHalfExtent = 256.0 * 1024;
 inline constexpr qreal kHairlineWidth = 1.0;

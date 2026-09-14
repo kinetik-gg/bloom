@@ -82,6 +82,8 @@ const auto& iconAssets() {
         {IconId::AlignLeft, QLatin1StringView("text-align-left")},
         {IconId::AlignCenter, QLatin1StringView("text-align-center")},
         {IconId::AlignRight, QLatin1StringView("text-align-right")},
+        {IconId::Rectangle, QLatin1StringView("rectangle")},
+        {IconId::Pen, QLatin1StringView("pen-nib")},
         {IconId::Snap, QLatin1StringView("magnet")},
     });
     return entries;

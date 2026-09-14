@@ -639,6 +639,7 @@ void testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(Expectations& expe
 // non-terminating decimal (docs/architecture/animation-and-time.md).
 void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& expectations) {
     using namespace bloom;
+    QSettings().setValue("timeline/time-format", QStringLiteral("frames"));
     ViewerFixture fixture(makeTestProject("Readout Subframe Test"));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the fixture's initial frame becomes ready");
@@ -649,8 +650,7 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
     // makes each of them.
     expectations.expect(fixture.viewer.statusBarReadoutTextForTest() == QStringLiteral("Auto · 1"),
                         "the resolution readout names the effective Auto factor");
-    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
-                            QStringLiteral("Frame 0 · 0.000s"),
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("0"),
                         "the readout starts at frame 0, exact zero seconds");
 
     // 1/3 s has no terminating decimal expansion: truncated to 3 places this is EXACTLY "0.333s",
@@ -660,9 +660,8 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
     if (subframeTime.has_value()) {
         expectations.expect(fixture.session.setCurrentTime(*subframeTime),
                             "the session accepts an exact subframe time");
-        expectations.expect(
-            fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("0.333s")),
-            "the readout truncates 1/3 second to exactly 0.333s (never a rounded 0.334s)");
+        expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("8"),
+                            "the readout projects exact one-third second to frame 8");
     }
 
     fixture.controller.beginShutdown();
@@ -943,10 +942,10 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
     QCoreApplication::processEvents();
 
     const char* const ordered[] = {
-        "viewerChannelDropdown",    "viewerZoomDropdown",        "viewerResolutionDropdown",
-        "viewerBackgroundDropdown", "viewerStepToStartButton",   "timelineStepBackButton",
-        "playPauseButton",          "timelineStepForwardButton", "viewerStepToEndButton",
-        "timelineLoopIndicator",    "timelineRamPreviewButton",  "viewerTimeReadout"};
+        "viewerChannelDropdown",  "timelineRamPreviewButton", "viewerStepToStartButton",
+        "timelineStepBackButton", "playPauseButton",          "timelineStepForwardButton",
+        "viewerStepToEndButton",  "timelineLoopIndicator",    "viewerTimeReadout",
+        "viewerZoomDropdown",     "viewerResolutionDropdown"};
     int previousRight = -1;
     for (const char* name : ordered) {
         auto* control = footer->findChild<QWidget*>(QString::fromLatin1(name));
@@ -967,9 +966,9 @@ void testTransportButtonsAreSquareAndUseTheControlIconRole(Expectations& expecta
     using namespace bloom;
     ViewerFixture fixture(makeTestProject("Transport Button Metrics Test"));
     const int box = ui::kit::px(ui::kit::iconSize(ui::kit::IconRole::Control));
-    for (const char* name : {"viewerStepToStartButton", "timelineStepBackButton", "playPauseButton",
-                             "timelineStepForwardButton", "viewerStepToEndButton",
-                             "timelineLoopIndicator", "timelineRamPreviewButton"}) {
+    for (const char* name :
+         {"viewerStepToStartButton", "timelineStepBackButton", "playPauseButton",
+          "timelineStepForwardButton", "viewerStepToEndButton", "timelineLoopIndicator"}) {
         auto* button = fixture.viewer.findChild<QToolButton*>(QString::fromLatin1(name));
         expectations.expect(button != nullptr, std::string{name} + " is reachable by name");
         if (button == nullptr) {
@@ -1129,8 +1128,11 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         // it (drawFrameShadow() spreads by the Popup elevation's blur radius).
         fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1); // 25%
         QCoreApplication::processEvents();
-        const auto corner = [&fixture] { return fixture.viewer.grab().toImage().pixelColor(2, 2); };
-        expectations.expect(corner() == ui::kit::color(ui::kit::Color::Background),
+        const auto corner = [&fixture] {
+            return fixture.viewer.grab().toImage().pixelColor(
+                fixture.viewer.canvasRect().topLeft().toPoint() + QPoint(2, 2));
+        };
+        expectations.expect(corner() == ui::kit::color(ui::kit::Color::Canvas),
                             "Solid paints the application's own canvas Background token");
         background->setCurrentIndex(2); // Black
         QCoreApplication::processEvents();
@@ -1179,8 +1181,7 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
         reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
         return;
     }
-    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
-                            QStringLiteral("Frame 0 · 0.000s"),
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("0"),
                         "the readout starts on the frame-index format");
 
     // A click opens the editor seeded with the current frame; typing a number and pressing Return
@@ -1228,17 +1229,26 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     }
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
     timecode->trigger();
-    expectations.expect(
-        fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("00:00:03:00")) &&
-            fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("3.000s")),
-        "Timecode shows non-drop timecode AND keeps the exact seconds beside it");
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("00:00:03:00"),
+                        "Timecode shows the single non-drop readout");
     expectations.expect(QSettings().value("timeline/time-format").toString() ==
                             QStringLiteral("timecode"),
                         "the format is persisted under the SAME key the timeline ruler reads, so "
                         "the two surfaces can never disagree about it");
+    QCoreApplication::sendEvent(readout, &press);
+    editor->setText("00:00:02:12");
+    QMetaObject::invokeMethod(editor, "returnPressed");
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.session.currentTime() == *core::RationalTime::create(5, 2),
+                        "typed timecode maps to exact rational frame time");
+    QCoreApplication::sendEvent(readout, &press);
+    editor->setText("00:99:00:00");
+    QMetaObject::invokeMethod(editor, "returnPressed");
+    expectations.expect(fixture.session.currentTime() == *core::RationalTime::create(5, 2),
+                        "invalid timecode leaves time unchanged");
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
     frames->trigger();
-    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
-                            QStringLiteral("Frame 72 · 3.000s"),
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("72"),
                         "Frames restores the frame-index reading");
 
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
@@ -1323,7 +1333,7 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
         clearInteraction();
         const auto selectedImage = fixture.viewer.grab().toImage();
         const auto display = ui::viewTransformedDisplayRect(
-            QRectF(fixture.viewer.rect()), extent(160, 120), core::PixelAspectRatio::square(),
+            fixture.viewer.canvasRect(), extent(160, 120), core::PixelAspectRatio::square(),
             fixture.viewer.viewTransformForTest());
         const auto screen = [&](double x, double y) {
             return QPoint(qRound(display.left() + x * display.width() / 160.0),
