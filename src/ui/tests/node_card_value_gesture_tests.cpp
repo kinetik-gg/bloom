@@ -11,6 +11,7 @@
 #include "node_production_harness.hpp"
 
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/color_picker.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -241,12 +242,24 @@ void colorChipCommits(App& app, const document::NodeId solid) {
     if (chip == nullptr) {
         return;
     }
-    chip->setColor(kit::KColor::fromRgba(0.25F, 0.5F, 0.75F, 1.0F));
+    click(app, chip);
+    expect(chip->isPickerOpen(), "clicking the Solid card's color chip opens its picker");
+    // The picker is the chip's own popup; choosing a colour in it is what the chip reports.
+    chip->picker()->setColor(kit::KColor::fromRgba(0.25F, 0.5F, 0.75F, 1.0F));
     QCoreApplication::processEvents();
     const auto stored = colorOf(app, solid, document::kSolidColorParameterRole);
     expect(stored.has_value() && closeTo(static_cast<float>(stored->red), 0.25) &&
                closeTo(static_cast<float>(stored->green), 0.5),
-           "committing a color on the Solid card writes the document");
+           "choosing a color in the picker writes the Solid card's own parameter");
+    expect(closeTo(chip->color().red, 0.25), "and the chip shows what it committed");
+    chip->closePicker();
+    // Offscreen there is no window manager to reactivate the window under a dismissed popup, so
+    // the canvas is reactivated and refocused here rather than the next gesture finding no active
+    // window at all. Harness state only -- nothing about the card is being reset.
+    app.editor.activateWindow();
+    QCoreApplication::processEvents();
+    app.editor.graphView()->setFocus();
+    QCoreApplication::processEvents();
 }
 
 // --- (d) Tab moves between cells ---------------------------------------------------------------
