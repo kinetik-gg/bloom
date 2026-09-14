@@ -1224,6 +1224,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
 
             detail::OperationKey key;
             if (cache) {
+                key.add(std::string("image"));
                 key.add(plan->projectId());
                 key.add(plan->compositionId());
                 key.add(plan->format().width());
