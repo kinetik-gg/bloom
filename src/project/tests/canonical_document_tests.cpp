@@ -703,7 +703,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        kLayerOutputNodeSchemaVersion};
+        3};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -713,7 +713,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
                                      {{"color", ParameterId::fromRaw(7)}},
-                                     kSolidSourceNodeSchemaVersion};
+                                     1};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
@@ -1881,7 +1881,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        kLayerOutputNodeSchemaVersion};
+        3};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(3),
                                            std::string(kCompositionOutputNodeType),
                                            {},

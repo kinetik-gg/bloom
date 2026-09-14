@@ -114,7 +114,7 @@ Authored authoredProject() {
         graph.addNode({*solidNodeId,
                        std::string(document::kSolidSourceNodeType),
                        {{std::string(document::kSolidColorParameterRole), *colorParameter}},
-                       document::kSolidSourceNodeSchemaVersion}) &&
+                       1}) &&
         graph.addNode({*layerNodeId,
                        std::string(document::kLayerOutputNodeType),
                        {{std::string(document::kPositionParameterRole), *positionParameter},
@@ -123,7 +123,7 @@ Authored authoredProject() {
                         {std::string(document::kRotationParameterRole), *rotationParameter},
                         {std::string(document::kOpacityParameterRole), *opacityParameter},
                         {std::string(document::kBlendModeParameterRole), *blendModeParameter}},
-                       document::kLayerOutputNodeSchemaVersion}) &&
+                       3}) &&
         graph.addLayerOutput(
             {*layerNodeId, *layerId, "Solid 1", std::string(document::kLayerOutputOutputPort)}) &&
         graph.layerStack().append({*slotId, *layerId}) &&

@@ -91,7 +91,7 @@ inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
                        {kSolidSourceNodeId,
                         std::string(document::kSolidSourceNodeType),
                         {{std::string(document::kSolidColorParameterRole), kSolidColorId}},
-                        document::kSolidSourceNodeSchemaVersion}),
+                        1}),
                    "source fixture solid node must be accepted");
     requireFixture(composition->graph().addNode(
                        {kTextSourceNodeId,
@@ -99,7 +99,7 @@ inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
                         {{std::string(document::kTextParameterRole), kTextContentId},
                          {std::string(document::kTextSizeParameterRole), kTextSizeId},
                          {std::string(document::kTextColorParameterRole), kTextColorId}},
-                        document::kTextSourceNodeSchemaVersion}),
+                        1}),
                    "source fixture text node must be accepted");
     requireFixture(composition->parameters().insert(
                        {kSolidColorId, std::string(document::kSolidColorParameterSchemaKey),

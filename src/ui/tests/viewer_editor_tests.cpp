@@ -52,7 +52,6 @@
 #include <iostream>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1244,8 +1243,10 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
 void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     using namespace bloom;
     const auto format = document::CompositionFormat::create(160, 120);
-    if (!format)
-        throw std::runtime_error("bounds format");
+    if (!format) {
+        expectations.expect(false, "bounds format is valid");
+        return;
+    }
     ViewerFixture fixture(document::makeNewProject("Bounds overlay", "Main",
                                                    core::RationalTime::fromInteger(1), *format));
     auto footer = std::unique_ptr<QWidget>(fixture.viewer.takeFooterWidget());
@@ -1260,8 +1261,11 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     }
     const auto layer = *selected;
     const auto source = fixture.session.directSourceNodeForLayer(layer);
-    if (!source)
-        throw std::runtime_error("bounds source");
+    if (!source) {
+        expectations.expect(false, "bounds source is present");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
     const auto bindings = fixture.session.composition()->graph().findNode(*source)->parameters;
     for (const auto& binding : bindings) {
         if (binding.role == "width")

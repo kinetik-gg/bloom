@@ -246,7 +246,7 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        kLayerOutputNodeSchemaVersion};
+        3};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -256,7 +256,7 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
                                      {{"color", ParameterId::fromRaw(7)}},
-                                     kSolidSourceNodeSchemaVersion};
+                                     1};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
@@ -725,8 +725,7 @@ void testProjectValidateRejection(Expectations& expectations) {
 
     composition.graph.nodes.front() = {
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
-    NodeRecord layerOutputNode{
-        NodeId::fromRaw(3), std::string(kLayerOutputNodeType), {}, kLayerOutputNodeSchemaVersion};
+    NodeRecord layerOutputNode{NodeId::fromRaw(3), std::string(kLayerOutputNodeType), {}, 3};
     // Swapped on purpose: "position" is bound to the opacity-schema parameter and vice versa.
     layerOutputNode.parameters = {{"opacity", ParameterId::fromRaw(5)},
                                   {"position", ParameterId::fromRaw(3)}};
@@ -816,8 +815,7 @@ void testVersionOneLayerOutputUpgradesOnReconstruct(Expectations& expectations) 
     if (node == nullptr || live == nullptr) {
         return;
     }
-    expectations.expect(node->schemaVersion == kLayerOutputNodeSchemaVersion &&
-                            node->parameters.size() == 6,
+    expectations.expect(node->schemaVersion == 3 && node->parameters.size() == 6,
                         "the upgraded node declares the current schema version and all six roles");
     const auto boundId = [node](const std::string_view role) {
         const auto binding = std::ranges::find(node->parameters, role, &ParameterBinding::role);
@@ -925,8 +923,7 @@ void testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(Expectations& expe
     if (node == nullptr || live == nullptr) {
         return;
     }
-    expectations.expect(node->schemaVersion == kLayerOutputNodeSchemaVersion &&
-                            node->parameters.size() == 6,
+    expectations.expect(node->schemaVersion == 3 && node->parameters.size() == 6,
                         "a version-2 node gains exactly one binding");
     const auto binding =
         std::ranges::find(node->parameters, std::string_view("blendMode"), &ParameterBinding::role);
