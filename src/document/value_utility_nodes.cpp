@@ -341,7 +341,15 @@ constexpr std::array<ValueUtilityOperand, 2> kHueShiftOperands{
 constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
     ValueUtilityOperand{.role = bloom::document::kValuePortName, .kind = SocketValueKind::Boolean}};
 
-constexpr std::array<ValueUtilityDescriptor, 58> kDescriptors{
+// ---------------------------------------------------------------------------------------------
+// Deliverable 5: readouts
+// ---------------------------------------------------------------------------------------------
+
+// No operands at all, exactly as a Time node has none: a readout's value belongs to the
+// composition or to the evaluation request, not to the document's own authored values.
+constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
+
+constexpr std::array<ValueUtilityDescriptor, 62> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -520,6 +528,19 @@ constexpr std::array<ValueUtilityDescriptor, 58> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kInRangeNodeType, "In Range",
                            ValueUtilityKernel::InRange, NodeCategory::Utilities, kIntervalOperands,
                            kNoSelectors, kBooleanResult},
+
+    ValueUtilityDescriptor{bloom::document::kFrameNumberNodeType, "Frame Number",
+                           ValueUtilityKernel::FrameNumber, NodeCategory::Values, kNoOperands,
+                           kNoSelectors, kIntegerResult},
+    ValueUtilityDescriptor{bloom::document::kFrameRateNodeType, "Frame Rate",
+                           ValueUtilityKernel::FrameRate, NodeCategory::Values, kNoOperands,
+                           kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kCompositionDurationNodeType, "Composition Duration",
+                           ValueUtilityKernel::CompositionDuration, NodeCategory::Values,
+                           kNoOperands, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kCompositionSizeNodeType, "Composition Size",
+                           ValueUtilityKernel::CompositionSize, NodeCategory::Values, kNoOperands,
+                           kNoSelectors, kVector2Result},
 };
 
 } // namespace

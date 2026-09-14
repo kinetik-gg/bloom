@@ -44,6 +44,12 @@ enum class Family : std::uint8_t {
     case Kernel::FramesToSeconds:
     case Kernel::SecondsToTimecode:
     case Kernel::TimecodeToSeconds:
+    // The readouts live with the time conversions because a frame number IS a time, and because the
+    // three that are not are refused in the same place.
+    case Kernel::FrameNumber:
+    case Kernel::FrameRate:
+    case Kernel::CompositionDuration:
+    case Kernel::CompositionSize:
         return Family::Time;
     case Kernel::StringConcatenate:
     case Kernel::StringFormat:

@@ -1,5 +1,7 @@
 #include "value_utility_support.hpp"
 
+#include <bloom/runtime/value_graph_evaluation.hpp>
+
 #include <bloom/core/safe_parse.hpp>
 
 #include <cmath>
@@ -187,6 +189,32 @@ ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation) 
     case Kernel::SecondsToTimecode:
         outcome.outputs[0] =
             timecodeForFrames(framesForSeconds(reader.scalar(0), invocation.rate), invocation.rate);
+        break;
+    case Kernel::FrameNumber: {
+        // The SAME answer a Time node's frame output gives, from the same exact rational
+        // arithmetic, so the two can never name different frames for one instant.
+        const auto frame = runtime::valueGraphFrameIndex(invocation.time, invocation.rate);
+        if (!frame.has_value()) {
+            outcome.failed = true;
+            outcome.failedOperand = 0;
+            outcome.summary = "Frame number is not representable at this time";
+            outcome.detail = "The request time multiplied by the frame rate overflows an exact "
+                             "integer.";
+            break;
+        }
+        outcome.outputs[0] = *frame;
+        break;
+    }
+    case Kernel::FrameRate:
+    case Kernel::CompositionDuration:
+    case Kernel::CompositionSize:
+        // Baked into a constant by the compiler, so one reaching the evaluator means the plan
+        // disagrees with the lowering that produced it.
+        outcome.failed = true;
+        outcome.failedOperand = 0;
+        outcome.summary = "Composition readout was not lowered to a constant";
+        outcome.detail = "A composition readout is compiled from the document snapshot, not "
+                         "evaluated per frame.";
         break;
     case Kernel::TimecodeToSeconds: {
         const auto text = reader.text(0);

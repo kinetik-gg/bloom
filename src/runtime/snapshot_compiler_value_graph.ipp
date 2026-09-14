@@ -446,6 +446,14 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         if (descriptor == nullptr) {
             return std::nullopt;
         }
+        // A composition readout is a CONSTANT in this plan. The plan is compiled from one document
+        // snapshot, and changing a composition's format or duration is a document edit that
+        // recompiles it, so baking the value here costs nothing per frame and makes it impossible
+        // for the graph and the settings to disagree.
+        if (isCompositionConstantReadout(descriptor->kernel)) {
+            return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{
+                runtime::CompiledValueOperand{{}, compositionReadout(descriptor->kernel)}}};
+        }
         std::vector<runtime::CompiledValueOperand> operands;
         operands.reserve(descriptor->operands.size());
         for (const auto& declared : descriptor->operands) {
@@ -477,6 +485,27 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         break;
     }
     return std::nullopt;
+}
+
+// One composition readout's baked value. The format's width and height are its PIXEL extent, and
+// the duration is in seconds so that it can be compared with a Time node's own seconds output
+// without a conversion.
+[[nodiscard]] runtime::CompiledValue
+compositionReadout(const document::ValueUtilityKernel kernel) const {
+    const auto format = composition_->format();
+    switch (kernel) {
+    case document::ValueUtilityKernel::FrameRate:
+        return static_cast<double>(format.frameRate().numerator()) /
+               static_cast<double>(format.frameRate().denominator());
+    case document::ValueUtilityKernel::CompositionDuration:
+        return composition_->duration().toSeconds();
+    case document::ValueUtilityKernel::CompositionSize:
+        return document::Vec2d{static_cast<double>(format.width()),
+                               static_cast<double>(format.height())};
+    default:
+        break;
+    }
+    return 0.0;
 }
 
 [[nodiscard]] static std::uint8_t

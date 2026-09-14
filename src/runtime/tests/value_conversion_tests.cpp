@@ -3,6 +3,7 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -450,6 +452,27 @@ void testTimeConversions(Expectations& expectations) {
         expectations.expect(holds(outcome, 0, item.seconds) && holds(outcome, 1, item.valid) &&
                                 !outcome.failed,
                             "Timecode To Seconds reads its three forms and falls back otherwise");
+    }
+
+    // The Frame Number readout is the same arithmetic a Time node's frame output uses, so the two
+    // can never name different frames for one instant.
+    for (const auto& [second, frame] : std::array<std::pair<std::int64_t, std::int64_t>, 3>{
+             std::pair{std::int64_t{0}, std::int64_t{0}},
+             std::pair{std::int64_t{1}, std::int64_t{24}},
+             std::pair{std::int64_t{3}, std::int64_t{72}}}) {
+        const auto outcome = runtime::evaluateValueUtility(
+            {Kernel::FrameNumber, {}, {}, core::RationalTime::fromInteger(second), rate});
+        expectations.expect(!outcome.failed && holds(outcome, 0, frame),
+                            "Frame Number answers the frame the request time falls in");
+    }
+    // The three composition readouts are baked into constants by the compiler, so one reaching the
+    // evaluator means the plan disagrees with the lowering that produced it.
+    for (const auto kernel :
+         {Kernel::FrameRate, Kernel::CompositionDuration, Kernel::CompositionSize}) {
+        const auto outcome = runtime::evaluateValueUtility(
+            {kernel, {}, {}, core::RationalTime::fromInteger(0), rate});
+        expectations.expect(outcome.failed && !outcome.summary.empty(),
+                            "a composition readout is lowered to a constant, never evaluated");
     }
 
     // A fractional rate counts the frame field to its NOMINAL whole number, which is what non-drop

@@ -270,6 +270,50 @@ Category `Utilities`. A predicate is not arithmetic, so these did not move into 
 | Boolean Not | `value` Boolean | `result` Boolean | |
 | In Range | `value` Scalar, `min` Scalar (0), `max` Scalar (1) | `result` Boolean | INCLUSIVE at both ends. A reversed pair names no interval, so nothing is inside it; NaN is in no interval |
 
+## Readouts
+
+Category `Values`, beside the literal sources and `Time`, because a readout is where a value comes
+FROM. None has an input or a parameter at all: its value belongs to the composition or to the
+evaluation request, not to the document's authored values.
+
+| Node | Inputs | Outputs | Notes |
+| --- | --- | --- | --- |
+| Frame Number | none | `result` Integer | The frame the request time falls in, from the same exact rational arithmetic a `Time` node's `frame` output uses |
+| Frame Rate | none | `result` Scalar | The composition's frame rate as a number |
+| Composition Duration | none | `result` Scalar | Seconds, so it compares directly with a `Time` node's `seconds` output |
+| Composition Size | none | `result` Vector2 | The composition's pixel extent |
+
+### Three of these are constants in the plan
+
+`Frame Rate`, `Composition Duration` and `Composition Size` describe the COMPOSITION, and a plan is
+compiled from one document snapshot. Changing a composition's format or duration is a document edit
+that recompiles the plan, so the compiler bakes each of them into a `CompiledValuePassthrough`
+holding the value it read. They therefore cost nothing per frame, are never time-dependent, and
+cannot disagree with the settings they came from.
+
+`Frame Number` is the one that describes the FRAME, so it is the one kernel the evaluator computes,
+and the one readout the plan's time-dependence analysis marks as time-dependent -- exactly as it
+marks a `Time` node.
+
+### Layer Bounds is NOT delivered
+
+Task UTIL-1 asked for a `Layer Bounds` readout -- an Image input answering size, origin and anchor
+from the compiled plan's evaluated bounds -- "if it needs plan plumbing beyond a day's work, deliver
+the others and disclose". It does, and this is the disclosure.
+
+The obstruction is an ORDERING one, not an amount of typing. The value graph is compiled and
+evaluated in its own pass BEFORE any image operation runs, which is what lets an image operation
+read a value-graph output as a parameter. Evaluated bounds are produced BY the image pass. A value
+node that read them would need the image pass's results to exist before the value pass runs, which
+inverts the one ordering the two-pass design rests on, and a composition could then contain a cycle
+the existing acyclic check cannot see -- a Layer Bounds feeding a transform whose own bounds it
+reads.
+
+Delivering it properly means either a second value pass that runs after the image pass (and a rule
+about which parameters may read it), or per-node bounds resolution hoisted out of evaluation into
+compilation. Both are design changes to the evaluation model rather than another node, so the other
+four readouts ship and this one does not.
+
 ### Why these are nodes rather than implicit coercions
 
 The connect-time promotion whitelist (`layer-graph-model.md`, **Socket Kinds And Promotion**) admits

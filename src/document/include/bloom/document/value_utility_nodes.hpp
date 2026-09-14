@@ -100,6 +100,11 @@ enum class ValueUtilityKernel : std::uint8_t {
     BooleanLogic,
     BooleanNot,
     InRange,
+    // Readouts (deliverable 5): what the COMPOSITION is, as numbers a graph can read.
+    FrameNumber,
+    FrameRate,
+    CompositionDuration,
+    CompositionSize,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -168,6 +173,23 @@ inline constexpr std::string_view kLuminanceNodeType = "bloom.luminance";
 inline constexpr std::string_view kBooleanLogicNodeType = "bloom.boolean-logic";
 inline constexpr std::string_view kBooleanNotNodeType = "bloom.boolean-not";
 inline constexpr std::string_view kInRangeNodeType = "bloom.in-range";
+
+inline constexpr std::string_view kFrameNumberNodeType = "bloom.frame-number";
+inline constexpr std::string_view kFrameRateNodeType = "bloom.frame-rate";
+inline constexpr std::string_view kCompositionDurationNodeType = "bloom.composition-duration";
+inline constexpr std::string_view kCompositionSizeNodeType = "bloom.composition-size";
+
+// Whether this readout's value is a property of the COMPOSITION rather than of the frame being
+// rendered. The three that are get lowered to a constant -- a plan is compiled from one document
+// snapshot, and changing the composition's format or duration is a document edit that recompiles it
+// -- so they cost nothing per frame and can never disagree with the settings they were read from.
+// Frame Number is the one that is not, and it is the one kernel the evaluator computes.
+[[nodiscard]] constexpr bool
+isCompositionConstantReadout(const ValueUtilityKernel kernel) noexcept {
+    return kernel == ValueUtilityKernel::FrameRate ||
+           kernel == ValueUtilityKernel::CompositionDuration ||
+           kernel == ValueUtilityKernel::CompositionSize;
+}
 
 // ---------------------------------------------------------------------------------------------
 // The selector vocabularies
