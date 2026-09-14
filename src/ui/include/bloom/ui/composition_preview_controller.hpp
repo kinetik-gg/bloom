@@ -113,6 +113,9 @@ class CompositionPreviewController final : public QObject {
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
+    // Geometry belongs to the delivered immutable process frame, including its sampled time.
+    // No layout, evaluation, or image walk takes place on the UI thread.
+    [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds> selectedLayerBounds() const;
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;

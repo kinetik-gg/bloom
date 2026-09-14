@@ -96,6 +96,32 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
     return state_;
 }
 
+std::vector<runtime::EvaluatedOperationBounds>
+CompositionPreviewController::selectedLayerBounds() const {
+    std::vector<runtime::EvaluatedOperationBounds> result;
+    if (!state_.frame || !state_.frame->hasProcessFrame() ||
+        state_.frame->desiredIdentity().compositionId != session_.compositionId())
+        return result;
+    const auto& selection = session_.selection();
+    const auto* primary = std::get_if<document::LayerId>(&selection.primary);
+    const auto layer = primary ? std::optional(*primary) : selection.contextualLayer;
+    const auto& nodes = session_.selectedNodes();
+    const auto& frame = *state_.frame->processFrame();
+    const auto operations = frame.identity().plan->operations();
+    const auto allBounds = frame.evaluatedBounds();
+    for (std::size_t index = 0; index < allBounds.size(); ++index) {
+        const auto& bounds = allBounds[index];
+        const auto* boundary = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
+        if (!boundary || !bounds.layerId.isValid() || bounds.output.empty())
+            continue;
+        const bool selected =
+            (layer && bounds.layerId == *layer) || nodes.contains(boundary->sourceNodeId);
+        if (selected)
+            result.push_back(bounds);
+    }
+    return result;
+}
+
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {

@@ -43,6 +43,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -51,6 +52,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1239,6 +1241,102 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     QSettings().remove("timeline/time-format");
 }
 
+void testSelectedBoundsOverlayPixels(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(160, 120);
+    if (!format)
+        throw std::runtime_error("bounds format");
+    ViewerFixture fixture(document::makeNewProject("Bounds overlay", "Main",
+                                                   core::RationalTime::fromInteger(1), *format));
+    auto footer = std::unique_ptr<QWidget>(fixture.viewer.takeFooterWidget());
+    footer->hide();
+    expectations.expect(fixture.session.addSolidLayer("Bounds", {0, 0, 0, 1}),
+                        "bounds fixture adds solid");
+    const auto* selected = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    if (!selected) {
+        expectations.expect(false, "new layer selected");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    const auto layer = *selected;
+    const auto source = fixture.session.directSourceNodeForLayer(layer);
+    if (!source)
+        throw std::runtime_error("bounds source");
+    const auto bindings = fixture.session.composition()->graph().findNode(*source)->parameters;
+    for (const auto& binding : bindings) {
+        if (binding.role == "width")
+            (void)fixture.session.setParameterValue(binding.parameterId, 80.0, "Width");
+        if (binding.role == "height")
+            (void)fixture.session.setParameterValue(binding.parameterId, 40.0, "Height");
+    }
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
+    fixture.viewer.show();
+    fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "bounds frame delivered");
+    const auto bounds = fixture.controller.selectedLayerBounds();
+    expectations.expect(bounds.size() == 1 && bounds[0].anchor == document::Vec2d{80, 60} &&
+                            bounds[0].local == runtime::ContentBounds{0, 0, 80, 40},
+                        "query returns delivered local bounds and composition anchor");
+    const auto clearInteraction = [&] {
+        fixture.viewer.clearFocus();
+        for (auto* child : fixture.viewer.findChildren<QWidget*>()) {
+            child->clearFocus();
+            child->setAttribute(Qt::WA_UnderMouse, false);
+        }
+        fixture.viewer.setAttribute(Qt::WA_UnderMouse, false);
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(&fixture.viewer, &leave);
+        QCoreApplication::processEvents();
+    };
+    for (const int zoomIndex : {3, 4}) {
+        fixture.viewer.zoomDropdownForTest()->setCurrentIndex(zoomIndex);
+        const QPointF pressPoint(150, 120), movePoint(169, 107);
+        QMouseEvent press(QEvent::MouseButtonPress, pressPoint, pressPoint, Qt::MiddleButton,
+                          Qt::MiddleButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&fixture.viewer, &press);
+        QMouseEvent move(QEvent::MouseMove, movePoint, movePoint, Qt::NoButton, Qt::MiddleButton,
+                         Qt::NoModifier);
+        QCoreApplication::sendEvent(&fixture.viewer, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, movePoint, movePoint, Qt::MiddleButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&fixture.viewer, &release);
+        fixture.session.clearSelection();
+        clearInteraction();
+        const auto unselected = fixture.viewer.grab().toImage();
+        fixture.session.selectLayer(layer);
+        clearInteraction();
+        const auto selectedImage = fixture.viewer.grab().toImage();
+        const auto display = ui::viewTransformedDisplayRect(
+            QRectF(fixture.viewer.rect()), extent(160, 120), core::PixelAspectRatio::square(),
+            fixture.viewer.viewTransformForTest());
+        const auto screen = [&](double x, double y) {
+            return QPoint(qRound(display.left() + x * display.width() / 160.0),
+                          qRound(display.top() + y * display.height() / 120.0));
+        };
+        const auto brightness = [](QColor color) {
+            return color.red() + color.green() + color.blue();
+        };
+        const auto anchor = screen(80, 60);
+        const auto edge = screen(80, 40);
+        expectations.expect(
+            brightness(selectedImage.pixelColor(anchor)) >
+                brightness(unselected.pixelColor(anchor)) + 50,
+            "selected anchor is a filled bright six-pixel dot at the delivered point");
+        int gain = 0;
+        for (int dy = -1; dy <= 1; ++dy)
+            gain = std::max(gain, brightness(selectedImage.pixelColor(edge + QPoint(0, dy))) -
+                                      brightness(unselected.pixelColor(edge + QPoint(0, dy))));
+        expectations.expect(
+            gain > 50,
+            "selected one-pixel outline follows the view zoom without object-name probes");
+        expectations.expect(selectedImage.pixelColor(anchor + QPoint(6, 0)) ==
+                                unselected.pixelColor(anchor + QPoint(6, 0)),
+                            "anchor dot stays six screen pixels across at every zoom");
+    }
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1250,6 +1348,7 @@ int main(int argc, char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
+    testSelectedBoundsOverlayPixels(expectations);
     testResolutionDropdownPersistsAndMovesWithFooter(expectations);
     testAutoFollowsFitResize(expectations);
     testProxyPaintingAndAutoZoom(expectations);
