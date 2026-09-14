@@ -244,21 +244,74 @@ viewer editors need no such wrapping -- their own canvases already scale down to
 get, unwrapped. Node cards keep their own, separate minimum-width rule and are out of this task's
 scope entirely.
 
-### Viewer footer readouts
+### Viewer footer
 
-Right-anchored, in this order from the right edge, each one silent when it has nothing true to say.
-The exact frame and timecode readout takes whatever width is left, centered.
+One row, `Size::Control` tall, on `Surface` with a `Border` hairline along its top edge. Left to
+right:
 
-| Readout | Shown when | Token |
+| Control | Object name | Notes |
 | --- | --- | --- |
-| Color-state chip | Always | Chip color follows the preview's qualification state |
-| `N dropped` | While a playback run is counting | `Muted` at zero, `Warn` above it |
-| `Caching N/M` | While a RAM preview run is caching | `Accent` |
+| Channel | `viewerChannelDropdown` | RGBA, RGB, R, G, B, Alpha |
+| Zoom | `viewerZoomDropdown` | Fit, 25, 50, 100, 200, 400, plus one trailing custom value |
+| Resolution | `viewerResolutionDropdown` | Auto, Full, Half, Quarter; persisted in `viewer/resolution` |
+| Effective resolution | `viewerResolutionReadout` | `Auto · ¼`; part of the Resolution control, not an item of its own |
+| Background | `viewerBackgroundDropdown` | Solid, Checkerboard, Black, White; persisted in `viewer/background` |
+| Transport | see below | Go to start, step back, play/pause, step forward, go to end, loop, RAM Preview |
+| Frame / time readout | `viewerTimeReadout` | `TypeRole::Value`; click to type an exact frame number |
 
-All three use `TypeRole::Value`, the monospaced numeric role, so a count never reflows the readouts
+The transport's buttons are `viewerStepToStartButton`, `timelineStepBackButton`, `playPauseButton`,
+`timelineStepForwardButton`, `viewerStepToEndButton`, `timelineLoopIndicator` (a real toggle now,
+not a status glyph), and `timelineRamPreviewButton`. The four names that still begin with
+`timeline` are the ones that moved here from the Timeline's own bottom row: they changed parent,
+not identity, and renaming them would have broken the contract every test and every future
+automation reads them by.
+
+Each button is a `Size::Control` square carrying an `IconRole::Control` glyph. The readout reserves
+a fixed width from the widest string it can ever show, not from its current text, so a count
+changing sixty times a second never relayouts the row beside it.
+
+Channel is a presentation remap and nothing else: it is applied while packing the frame for the
+canvas, after display-referred conversion, and never reaches an export, a cached frame, or the
+display buffer the colour pipeline produced. Alpha shows the alpha channel as luminance; R, G and B
+show that one channel as grey; RGB is the composite with alpha forced opaque.
+
+Background chooses the canvas surround. Solid is the application's own `Background` token, and the
+control says so: a composition carries no background colour in the document model, so a
+"composition background" would be an invented value. Black and White are literal, because a known
+value is the entire reason an artist asks for them.
+
+### Window status bar
+
+One kit strip at the bottom of the main window, `windowStatusBar`, `Size::Control` tall, on
+`Surface` with a `Border` hairline along its top edge. Not `QStatusBar`: that brings its own
+chrome, size grip and item model. It is a row of the central column, so it stays visible whichever
+central page is authoritative.
+
+Left to right, each cell silent when it has nothing true to say:
+
+| Cell | Object name | Shown when | Token |
+| --- | --- | --- | --- |
+| Colour-state chip | `windowStatusBarColorChip` | Always | Chip colour follows the preview's qualification state: `Ok`, `Warn`, or `Error` |
+| Preview state | `windowStatusBarPreviewState` | Always | `Accent` rendering, `Ok` ready, `Warn` unsupported, `Muted` cancelled, `Error` failed |
+| `N dropped` | `windowStatusBarDroppedFrames` | While a playback run is counting | `Muted` at zero, `Warn` above it |
+| Cache | `windowStatusBarCache` | While a RAM preview run is caching, or while the cache holds frames | `Accent` |
+| Message | `windowStatusBarMessage` | While there is a notice or running work | `Foreground` |
+| Version | `windowStatusBarVersion` | Always | `Faint`, `UiSmall`, right-aligned |
+
+The numeric cells use `TypeRole::Value`, the monospaced role, so a count never reflows the cells
 beside it as it changes. "Silent when it has nothing to say" is the rule they share: outside a
-playback run there is no dropped-frame figure, and outside a RAM preview run there is no progress --
+playback run there is no dropped-frame figure, and with an empty cache there is no cache reading --
 a zero shown out of context reads as a measurement, which would be a different claim.
+
+Messages have two lifetimes. A notice -- a rejected command, an export that landed, a cancellation
+-- clears itself after five seconds. Work that is still running -- `Saving…`, `Opening…`, range
+export progress -- persists until it is replaced, because a message that vanished while the work
+continued would be a lie. A notice takes precedence while it lasts; the persistent message is what
+is left when it expires.
+
+Nothing is painted over the viewer canvas. The readiness chip and the failure banner that used to
+be drawn on top of the pixels are cells in this strip; a viewer canvas shows the composition, and
+everything else reports here.
 
 ### Nodes footer (task NODES-1)
 
@@ -356,8 +409,25 @@ Phosphor Icons is Bloom's default interface icon family.
 - Retain the upstream MIT license and record asset provenance beside the vendored files.
 - Preserve vendored upstream SVGs unchanged and enumerate them explicitly with `qt_add_resources`
   under a Bloom-owned resource prefix.
-- Use `regular` as the default visual weight and `fill` for selected or toggled states. Add another
-  weight only when testing shows a concrete legibility need at Bloom's supported control sizes.
+- Use `regular` as the default visual weight and `fill` for selected or toggled states.
+- Two icon ROLES fix where each weight and size is used, and a call site names the role rather than
+  the pair (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
+
+  | Role | Where | Weight | Box |
+  | --- | --- | --- | --- |
+  | `Chrome` | Panel headers, menus, per-item toggles | Phosphor Bold | `IconMedium` (16 px) |
+  | `Control` | The transport and the viewer footer | Phosphor Fill | `IconLarge` (20 px) |
+
+  `iconWeight()` and `iconSize()` are the single definition of both rows, so changing one of them
+  changes every icon of that kind in the application at once, rather than leaving a scatter of call
+  sites that each remembered a number.
+- A glyph that is one ornament INSIDE another control -- a dropdown's chevron, a menu row's check
+  mark, a radio row's tick, a `KButton`'s own icon -- is not a chrome icon in its own right. Its box
+  comes from the host control's metrics, so it takes only the role's weight
+  (`iconWeight(IconRole::Chrome)`) and keeps that box.
+- Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
+  `fill` and `bold` complete over all 48 ids, because a role that asks for a weight must find it for
+  every icon: a missing file renders as a silent blank, not an error.
 - Access icons through a typed, semantic C++ API such as `IconId::SplitHorizontal`. Product code
   must not spread upstream filenames or resource paths through widgets.
 - Render and tint SVGs through Qt, with caching that accounts for icon identity, size, state,
