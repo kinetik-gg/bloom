@@ -58,11 +58,22 @@ timelinePropertyEntries(const CompositionSession& session,
         if (const auto source = session.directSourceNodeForLayer(layer.layerId)) {
             const auto* node = composition->graph().findNode(*source);
             bool heading = false;
-            for (const auto& binding : node->parameters) {
+            const auto* definition =
+                document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+            if (!definition)
+                continue;
+            for (const auto& declared : definition->parameters) {
+                const auto found = std::ranges::find(node->parameters, declared.role,
+                                                     &document::ParameterBinding::role);
+                if (found == node->parameters.end())
+                    continue;
+                const auto& binding = *found;
                 const auto* parameter = composition->parameters().find(binding.parameterId);
-                if (!parameter || !(document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
-                                    document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
-                                    document::isColor4AnimatableSchemaKey(parameter->schemaKey)))
+                if (!parameter ||
+                    !(document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
+                      document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
+                      document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
+                      parameter->schemaKey == document::kTextAlignmentParameterSchemaKey))
                     continue;
                 if (!heading) {
                     group(QObject::tr("Source"));
@@ -74,6 +85,16 @@ timelinePropertyEntries(const CompositionSession& session,
                     name = QObject::tr("Color");
                 if (binding.role == document::kTextSizeParameterRole)
                     name = QObject::tr("Size");
+                if (binding.role == document::kSolidWidthParameterRole)
+                    name = QObject::tr("Width");
+                if (binding.role == document::kSolidHeightParameterRole)
+                    name = QObject::tr("Height");
+                if (binding.role == document::kTextAlignmentParameterRole)
+                    name = QObject::tr("Alignment");
+                if (binding.role == document::kTextLineHeightParameterRole)
+                    name = QObject::tr("Line Height");
+                if (binding.role == document::kTextLetterSpacingParameterRole)
+                    name = QObject::tr("Letter Spacing");
                 add(*source, binding.role, name);
             }
         }
@@ -84,7 +105,7 @@ timelinePropertyEntries(const CompositionSession& session,
 TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session), label_(new QLabel(this)),
       diamond_(new KeyframeDiamond(session, "", this)), blending_(new kit::KDropdown(this)),
-      color_(new kit::KColorChip(this)) {
+      alignment_(new kit::KDropdown(this)), color_(new kit::KColorChip(this)) {
     setObjectName("timelinePropertyRow");
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(TimelineEditor::propertyNameIndent(), 0, kit::px(kit::Spacing::XS),
@@ -122,6 +143,18 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         blending_->addItem(blendModeDisplayName(mode),
                            QVariant::fromValue(core::blendModeStoredValue(mode)));
     layout->addWidget(blending_, 1);
+    alignment_->setObjectName("timelinePropertyAlignment");
+    alignment_->setAccessibleName(tr("Alignment"));
+    alignment_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    alignment_->addItem(tr("Left"), 0);
+    alignment_->addItem(tr("Center"), 1);
+    alignment_->addItem(tr("Right"), 2);
+    layout->addWidget(alignment_, 1);
+    connect(alignment_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+        if (!binding_ && index >= 0)
+            (void)session_.setParameterValue(entry_.parameterId, static_cast<std::int64_t>(index),
+                                             tr("Set Alignment"));
+    });
     color_->setObjectName("timelinePropertyColor");
     layout->addWidget(color_, 1);
     connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
@@ -176,6 +209,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         for (auto* cell : cells_)
             cell->hide();
         blending_->hide();
+        alignment_->hide();
         color_->hide();
         diamond_->hide();
     }
@@ -188,6 +222,20 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const bool opacity = role == document::kOpacityParameterRole;
         const bool rotation = role == document::kRotationParameterRole;
         const bool size = role == document::kTextSizeParameterRole;
+        const bool dimension = role == document::kSolidWidthParameterRole ||
+                               role == document::kSolidHeightParameterRole;
+        const bool lineHeight = role == document::kTextLineHeightParameterRole;
+        alignment_->setVisible(role == document::kTextAlignmentParameterRole);
+        if (role == document::kTextAlignmentParameterRole) {
+            const auto* record = session_.composition()->parameters().find(entry.parameterId);
+            const auto* constant =
+                record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+            const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+            if (value)
+                alignment_->setCurrentIndex(static_cast<int>(*value));
+            alignment_->setEnabled(value != nullptr);
+            diamond_->hide();
+        }
         const auto vector = session_.effectiveVec2Value(entry.parameterId);
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
@@ -211,7 +259,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         for (int i = 0; i < count; ++i) {
             auto* field = fields_[static_cast<std::size_t>(i)];
             field->setRange(opacity             ? 0
-                            : size              ? 1
+                            : size || dimension ? 1
+                            : lineHeight        ? 0.01
                             : scale || rotation ? -100'000
                                                 : -1'000'000,
                             opacity             ? 100
@@ -222,8 +271,10 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             field->setSingleStep(color ? 0.01 : 1);
             field->setUnit(scale || opacity ? "%"
                            : rotation       ? QString::fromUtf8("°")
-                           : vector || size ? "px"
-                                            : "");
+                           : vector || size || dimension ||
+                                   role == document::kTextLetterSpacingParameterRole
+                               ? "px"
+                               : "");
             field->setValue(values[static_cast<std::size_t>(i)]);
             field->show();
         }

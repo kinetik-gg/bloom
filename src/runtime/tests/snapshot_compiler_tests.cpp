@@ -122,7 +122,7 @@ struct ProjectOptions final {
         {kFirstSolidNode,
          std::string(kSolidSourceNodeType),
          {{std::string(kSolidColorParameterRole), kFirstColor}},
-         kSolidSourceNodeSchemaVersion},
+         1},
         {kFirstLayerNode,
          std::string(kLayerOutputNodeType),
          {{std::string(kPositionParameterRole), kFirstPosition},
@@ -131,7 +131,7 @@ struct ProjectOptions final {
           {std::string(kRotationParameterRole), kFirstRotation},
           {std::string(kOpacityParameterRole), kFirstOpacity},
           {std::string(kBlendModeParameterRole), kFirstBlendMode}},
-         kLayerOutputNodeSchemaVersion},
+         3},
         {kStackNode, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion},
         {kOutputNode,
          std::string(kCompositionOutputNodeType),
@@ -142,7 +142,7 @@ struct ProjectOptions final {
         nodes.push_back({kSecondSolidNode,
                          std::string(kSolidSourceNodeType),
                          {{std::string(kSolidColorParameterRole), kSecondColor}},
-                         kSolidSourceNodeSchemaVersion});
+                         1});
         nodes.push_back({kSecondLayerNode,
                          std::string(kLayerOutputNodeType),
                          {{std::string(kPositionParameterRole), kSecondPosition},
@@ -151,7 +151,7 @@ struct ProjectOptions final {
                           {std::string(kRotationParameterRole), kSecondRotation},
                           {std::string(kOpacityParameterRole), kSecondOpacity},
                           {std::string(kBlendModeParameterRole), kSecondBlendMode}},
-                         kLayerOutputNodeSchemaVersion});
+                         3});
     }
     if (options.reverseInsertion) {
         std::ranges::reverse(nodes);
@@ -725,7 +725,7 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
     auto* textComposition = text.findComposition(kCompositionId);
     auto* textNode = textComposition->graph().findNode(kFirstSolidNode);
     textNode->typeId = std::string(document::kTextSourceNodeType);
-    textNode->schemaVersion = document::kTextSourceNodeSchemaVersion;
+    textNode->schemaVersion = 1;
     textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
                             {std::string(document::kTextSizeParameterRole), kTextSize},
                             {std::string(document::kTextColorParameterRole), kTextColor}};

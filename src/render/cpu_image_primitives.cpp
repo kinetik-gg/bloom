@@ -535,6 +535,21 @@ LayerTransform::SamplePoint LayerTransform::inverseMap(const double outputX,
             state_.anchorLocalY + (state_.inverseC * offsetX + state_.inverseD * offsetY)};
 }
 
+LayerTransform::SamplePoint LayerTransform::forwardMap(const double localX,
+                                                       const double localY) const noexcept {
+    if (state_.translationOnly) {
+        return SamplePoint{static_cast<double>(state_.sourceWindow.originX()) + localX +
+                               state_.deviceTranslationX,
+                           static_cast<double>(state_.sourceWindow.originY()) + localY +
+                               state_.deviceTranslationY};
+    }
+    const auto offsetX = localX - state_.anchorLocalX;
+    const auto offsetY = localY - state_.anchorLocalY;
+    return SamplePoint{
+        state_.pivotOutputX + (state_.forwardA * offsetX + state_.forwardB * offsetY),
+        state_.pivotOutputY + (state_.forwardC * offsetX + state_.forwardD * offsetY)};
+}
+
 std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip) const noexcept {
     // Bilinear support, in source-local coordinates: a tap is fetched whenever the sample
     // coordinate is strictly inside (-1, extent), so the closed box [-1, extent] bounds every
@@ -544,22 +559,8 @@ std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip)
     const auto highX = static_cast<double>(state_.sourceWindow.extent().width());
     const auto highY = static_cast<double>(state_.sourceWindow.extent().height());
 
-    auto forward = [this](const double localX, const double localY) noexcept {
-        if (state_.translationOnly) {
-            return SamplePoint{static_cast<double>(state_.sourceWindow.originX()) + localX +
-                                   state_.deviceTranslationX,
-                               static_cast<double>(state_.sourceWindow.originY()) + localY +
-                                   state_.deviceTranslationY};
-        }
-        const auto offsetX = localX - state_.anchorLocalX;
-        const auto offsetY = localY - state_.anchorLocalY;
-        return SamplePoint{
-            state_.pivotOutputX + (state_.forwardA * offsetX + state_.forwardB * offsetY),
-            state_.pivotOutputY + (state_.forwardC * offsetX + state_.forwardD * offsetY)};
-    };
-
-    const std::array corners{forward(lowX, lowY), forward(highX, lowY), forward(lowX, highY),
-                             forward(highX, highY)};
+    const std::array corners{forwardMap(lowX, lowY), forwardMap(highX, lowY),
+                             forwardMap(lowX, highY), forwardMap(highX, highY)};
     auto minimumX = corners.front().x;
     auto maximumX = corners.front().x;
     auto minimumY = corners.front().y;

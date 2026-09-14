@@ -77,7 +77,7 @@ void testMuteKindsAndPixels(Expectations& expectations) {
     auto* composition = text.findComposition(kCompositionId);
     auto* node = composition->graph().findNode(kFirstSolidNode);
     node->typeId = std::string(document::kTextSourceNodeType);
-    node->schemaVersion = document::kTextSourceNodeSchemaVersion;
+    node->schemaVersion = 1;
     node->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
                         {std::string(document::kTextSizeParameterRole), kTextSize},
                         {std::string(document::kTextColorParameterRole), kTextColor}};
@@ -170,7 +170,8 @@ void testMuteFirstImageInput(Expectations& expectations) {
 
 void testLayerFlagsAndRangeLowering(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
-    require(runtime::registerBuiltInNodeDefinitions(registry), "timeline built-ins"); registry.freeze();
+    require(runtime::registerBuiltInNodeDefinitions(registry), "timeline built-ins");
+    registry.freeze();
     const auto reference = evaluateMuteProof(compile(muteProject(), registry));
     auto project = muteProject(true);
     auto* composition = project.findComposition(kCompositionId);
@@ -179,13 +180,26 @@ void testLayerFlagsAndRangeLowering(Expectations& expectations) {
     layer->solo = true;
     const auto solo = compile(project, registry);
     const auto result = evaluateMuteProof(solo);
-    expectations.expect(result.frame() && reference.frame() && std::ranges::equal(result.frame()->processImage().pixels(), reference.frame()->processImage().pixels()), "solo prunes other entries and preserves the chosen layer's pixels");
+    expectations.expect(result.frame() && reference.frame() &&
+                            std::ranges::equal(result.frame()->processImage().pixels(),
+                                               reference.frame()->processImage().pixels()),
+                        "solo prunes other entries and preserves the chosen layer's pixels");
     layer->enabled = false;
     const auto hidden = compile(project, registry);
     const auto hiddenFrame = evaluateMuteProof(hidden);
-    expectations.expect(hidden.plan && hidden.plan->operations().size() == 2 && hiddenFrame.frame() && std::ranges::all_of(hiddenFrame.frame()->processImage().pixels(), [](const auto& p) { return p == render::Rgba32f::transparent(); }), "disabled solo layer leaves no stack entry or upstream operations");
-    layer->enabled = true; layer->inPoint = core::RationalTime::fromInteger(1); layer->outPoint = core::RationalTime::fromInteger(2);
+    expectations.expect(
+        hidden.plan && hidden.plan->operations().size() == 2 && hiddenFrame.frame() &&
+            std::ranges::all_of(hiddenFrame.frame()->processImage().pixels(),
+                                [](const auto& p) { return p == render::Rgba32f::transparent(); }),
+        "disabled solo layer leaves no stack entry or upstream operations");
+    layer->enabled = true;
+    layer->inPoint = core::RationalTime::fromInteger(1);
+    layer->outPoint = core::RationalTime::fromInteger(2);
     const auto ranged = compile(project, registry);
     const auto before = evaluateMuteProof(ranged);
-    expectations.expect(before.frame() && std::ranges::all_of(before.frame()->processImage().pixels(), [](const auto& p) { return p == render::Rgba32f::transparent(); }), "compiler carries durable range into evaluator absence");
+    expectations.expect(
+        before.frame() &&
+            std::ranges::all_of(before.frame()->processImage().pixels(),
+                                [](const auto& p) { return p == render::Rgba32f::transparent(); }),
+        "compiler carries durable range into evaluator absence");
 }

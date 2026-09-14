@@ -272,14 +272,14 @@ kernel in the stage; the translate-only case is a path inside this one.
   process representation is premultiplied, so interpolating towards that transparent black is already
   the correct edge falloff: no unpremultiply/repremultiply round trip is involved and no edge pixel
   can carry colour above its own alpha.
-- **Bounds.** A layer's output data window is its transformed bounds clipped to the composition, and
+- **Bounds.** A legacy layer's output data window is its transformed bounds clipped to the composition, and
   its display window stays the composition's. The transformed bounds are the integer bounding box of
   the forward image of the bilinear support box (the source data window grown by one pixel on every
   side), so they may include a pixel the resample then writes as transparent but can never exclude
   one it would write as opaque. A scaled-down, rotated, or moved layer therefore allocates and
   resamples only the pixels it can reach. The Layer Stack composites each entry over the rows and
   columns that entry's own data window occupies.
-- **Empty layers.** A layer whose transformed bounds miss the composition entirely, and a layer
+- **Empty layers.** A legacy layer whose transformed bounds miss the composition entirely, and a layer
   collapsed by a scale factor of exactly zero, publish no image at all. The Layer Stack treats an
   absent entry image as a layer that contributes nothing, which is exactly what compositing an empty
   layer means — not an evaluation failure.
@@ -320,7 +320,7 @@ contract.
 - **The blend mode is a discrete authored value.** It carries no curve: the schema declares it
   non-animatable, so the compiled plan holds a resolved enumerator rather than a parameter source.
 
-### Text Rasterization Version 1
+### Text Rasterization And Local Layout
 
 Text rasterization is Qt-free and deterministic. One face is available -- the DejaVu Sans Book TTF
 vendored for the interface, embedded into `bloom_render` as a build-time byte array so no evaluation
@@ -331,25 +331,16 @@ adapter; its acquisition provenance, license review, and security review are in
 `dependencies/licenses/stb_truetype/`, and that security review qualifies the library only for font
 bytes Bloom itself pins.
 
-Layout in version 1 is deliberately minimal and explicitly not text layout: one line, left to right,
-each glyph advancing by its own horizontal advance plus the face's kern pair, no wrapping, no
-shaping, no bidirectional reordering, and no line breaks -- a newline is a glyph lookup like any other
-codepoint. Shaping, font asset identity, and layout contracts remain deferred as the roadmap states;
-this version exists so the CPU reference evaluator can produce pixels for the text source that the
-document schema has always carried.
+Text v2 lays out multiple lines using glyph advances and kerning plus authored letter spacing.
+Each line is aligned Left, Center, or Right within the maximum line advance before glyph rasterization,
+so fractional alignment participates in the glyph's horizontal subpixel phase. Line baselines are
+separated by em size times line height and snapped to integer rows. The glyph union is the local
+bounds; only that bounds-sized coverage/image buffer is allocated. Empty lines advance layout without
+inventing ink. CRLF is accepted. Shaping, bidi, wrapping, and selectable font assets remain deferred.
 
-Geometry is stated once so compositing has no latitude. The text origin is the pen start on the
-ascender line: `x` is the left edge of the first glyph's advance and `y` is the font's ascent above
-the baseline, with the baseline snapped to a whole row once for the whole line so the same string at
-the same size always rasterizes identically. The evaluator places that origin at the frame's own data
-window origin, which puts the first line inside the frame with its ascender flush to the top edge;
-the Layer Output position then moves the whole layer from there, exactly as it moves a Solid. The
-coverage bitmap is the exact union of every glyph's ink, so its offset from the text origin may be
-negative, and clipping to the frame is the compositor's decision rather than the rasterizer's. Em
-size is per axis, taken from the same scale factors a proxy evaluation applies to layer translation,
-so a proxy frame holds a smaller picture of the same composition rather than full-size glyphs in a
-small frame. The authored size is bounded identically by the document schema and the rasterizer; the
-two bounds are held equal at compile time in `src/runtime`, the one module that sees both.
+Text v1 explicitly retains the legacy single-line lookup and frame-sized image, including old clipping.
+It uses the same pinned font and unchanged glyph primitive. Solid v2 evaluates its dimension operands
+into exact local bounds and uses a containing integer buffer, with fractional edge coverage.
 
 Empty content, and content whose glyphs are all blank, rasterize to no coverage and compose a
 transparent frame. That is a success, not a failure: a text layer an artist has not typed into yet is
@@ -358,23 +349,26 @@ missing-glyph box, so unsupported text is visibly missing rather than silently d
 that is not well-formed UTF-8 is refused at the document boundary rather than rendered as
 replacement boxes.
 
-The initial evaluator treats a Layer Output position as an absolute source-center coordinate in the
-full composition raster. `(width / 2, height / 2)` is identity for the current composition-sized
-Solid source. Positive X moves right and positive Y moves down. A proxy scales the displacement per
-axis and derives a pixel aspect that preserves full-resolution display aspect. Pixel centers use the
-same half-pixel lattice on both sides of the inverse gather, so an integer displacement remains
-exact.
+Layer v4 maps `centre(bounds) + anchor` to position in composition space. The plan carries dimension
+and layout operands and explicit local/legacy placement modes. At the sampled frame time, the worker
+retains each operation's local and output rectangles and each layer's transformed corners and anchor.
+These values accompany the immutable ProcessFrame and operation-cache result; the viewer reads them
+without evaluation or rasterization. They are derived state and never persisted as project truth.
 
-Evaluation is deliberately full-frame and single-worker in this version. Preflight validates every
-operation reference, computes exact consumer counts and the peak live pixel bytes, and rejects the
-request before image allocation when its aggregate budget is insufficient. Images are released
-after their last consumer. Cancellation is checked at operation and scanline boundaries, and a
-cancelled or failed evaluation publishes no partial frame. The normative successful evaluation
-product owns only the premultiplied process image. Display preparation consumes that immutable
-product in a separate typed stage and owns its own buffer, diagnostics, budget, and cache identity.
-The live `ProcessFrame`, `ReferenceDisplayFrame`, and `PreparedPreviewFrame` types enforce that
-ownership split. The preview pipeline runs process evaluation and reference-display preparation
-sequentially on one worker without nesting task submissions or exposing a combined cache identity.
+Merge v2 takes the union of transformed input bounds and retains its intermediate image outside the
+composition. Composition Output crops to the composition window. Source bounds are distinct from the
+bilinear support window so filtering padding never shifts an anchor. Legacy Layer/Merge paths keep
+their original clipping. Zero scale and empty glyph content produce empty geometry.
+
+Preflight validates operand references and schema domains. Actual intermediate image allocations also
+check the remaining request pixel budget, including live text coverage. Cancellation is checked at
+operation and scanline boundaries, and cancelled/failed evaluation publishes no partial frame.
+Operation memoization includes dimension, typography, placement mode, and dependency values and retains
+matching evaluated geometry. Display preparation remains a separate typed stage.
+
+Evaluator semantics 5, primitive semantics 5, plan semantics 3, and animation semantics 2 remain
+unchanged: legacy plan values retain their exact behavior; the new operand/mode alternatives are
+explicit. Existing pixel and semantic identity goldens are not regenerated.
 
 ## Primitive Families
 
@@ -549,3 +543,7 @@ Interactive override plans and requests bypass both lookup and insertion, includ
 Their temporary gesture values cannot populate the operation cache. `bypassOperationCache` also
 provides a serial uncached reference for verification. Caching is process-local; nothing is persisted
 in the project or on disk.
+
+Evaluated operation geometry is retained beside cached display pixels. The frame-cache budget
+counts both payloads; releasing the Float32 process image leaves bounds queries and overlays available
+on playback cache hits without evaluation.

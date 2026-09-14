@@ -61,8 +61,10 @@ void testLayoutSelectionAndSockets() {
            "one undo restores every selected node");
     expect(f.session.redo(), "move redoes");
     const auto resizedBefore = f.stack.size();
-    f.drag({287, 160}, {359, 160});
-    expect(f.session.composition()->nodeLayout().at(a).width == 200 &&
+    const auto resizePoint = f.card(a)->pos() + QPointF(f.card(a)->cardWidth() - 1, 10);
+    const auto resizedWidth = f.card(a)->cardWidth() + 72;
+    f.drag(resizePoint, resizePoint + QPointF(72, 0));
+    expect(f.session.composition()->nodeLayout().at(a).width == resizedWidth &&
                f.stack.size() == resizedBefore + 1,
            "right edge resize publishes one width edit");
     const auto savedPosition = f.card(a)->pos();
@@ -166,7 +168,7 @@ void testLayoutSelectionAndSockets() {
             NodeGraphicsScene projection;
             projection.setProjection(opened.document->snapshot(), f.session.compositionId());
             auto* item = dynamic_cast<node_editor::NodeItem*>(projection.findNodeItem(a));
-            expect(item && item->pos() == savedPosition && item->cardWidth() == 200,
+            expect(item && item->pos() == savedPosition && item->cardWidth() == resizedWidth,
                    "reopened card reads persisted dragged position and resized width");
         }
     }

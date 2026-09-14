@@ -226,6 +226,8 @@ enum class ScalarDomain : std::uint8_t {
     Unbounded,
     Unit,
     TextSize,
+    Dimension,
+    Positive,
 };
 
 [[nodiscard]] bool withinScalarDomain(const ScalarDomain domain, const double value) noexcept {
@@ -234,6 +236,10 @@ enum class ScalarDomain : std::uint8_t {
         return true;
     case ScalarDomain::Unit:
         return value >= 0.0 && value <= 1.0;
+    case ScalarDomain::Positive:
+        return value > 0.0;
+    case ScalarDomain::Dimension:
+        return value >= 1.0;
     case ScalarDomain::TextSize:
         return value > 0.0 && value <= document::kMaximumTextSizePixels;
     }
@@ -246,6 +252,10 @@ enum class ScalarDomain : std::uint8_t {
         return "Scalar parameter is not finite";
     case ScalarDomain::Unit:
         return "Layer opacity is outside its unit domain";
+    case ScalarDomain::Positive:
+        return "Value must be positive";
+    case ScalarDomain::Dimension:
+        return "Dimension must be at least one pixel";
     case ScalarDomain::TextSize:
         return "Text size is outside its domain";
     }
@@ -303,11 +313,19 @@ enum class ScalarDomain : std::uint8_t {
     return std::visit(
         Overloaded{
             [&plan, index, &failure](const CompiledSolid& solid) {
-                return hasValidColorCurveReference(solid.color, plan, index, failure);
+                return hasValidColorCurveReference(solid.color, plan, index, failure) &&
+                       (!solid.width ||
+                        hasValidScalarCurveReference(*solid.width, plan, index, failure)) &&
+                       (!solid.height ||
+                        hasValidScalarCurveReference(*solid.height, plan, index, failure));
             },
             [&plan, index, &failure](const CompiledText& text) {
                 return hasValidScalarCurveReference(text.size, plan, index, failure) &&
-                       hasValidColorCurveReference(text.color, plan, index, failure);
+                       hasValidColorCurveReference(text.color, plan, index, failure) &&
+                       (!text.layout || (hasValidScalarCurveReference(text.layout->lineHeight, plan,
+                                                                      index, failure) &&
+                                         hasValidScalarCurveReference(text.layout->letterSpacing,
+                                                                      plan, index, failure)));
             },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
                 const auto sourcesAnImage = [&plan, index, &layer] {
@@ -884,37 +902,57 @@ template <typename Value>
         }
         const auto operationSubject =
             subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
-        std::visit(Overloaded{
-                       [&](const CompiledSolid& solid) {
-                           static_cast<void>(registerColor(solid.color, "color", operationSubject));
-                       },
-                       [&](const CompiledText& text) {
-                           // Every check is re-run here rather than trusted from compilation: the
-                           // evaluator validates the plan it is handed, because a plan can also
-                           // arrive from a retained frame or a test fixture rather than straight
-                           // from the compiler.
-                           static_cast<void>(
-                               registerParameter(text.contentParameterId, operationSubject) &&
-                               registerScalar(text.size, "size", ScalarDomain::TextSize,
-                                              operationSubject) &&
-                               registerColor(text.color, "color", operationSubject));
-                       },
-                       [&](const CompiledLayerOutput& layer) {
-                           // One rule applied five times, through exactly the helpers a Solid's and
-                           // a Text's own operands use.
-                           static_cast<void>(
-                               registerVec2(layer.position, "position", operationSubject) &&
-                               registerVec2(layer.anchor, "anchor", operationSubject) &&
-                               registerVec2(layer.scale, "scale", operationSubject) &&
-                               registerScalar(layer.rotation, "rotation", ScalarDomain::Unbounded,
-                                              operationSubject) &&
-                               registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
-                                              operationSubject));
-                       },
-                       [](const CompiledMerge&) {},
-                       [](const CompiledCompositionOutput&) {},
-                   },
-                   plan->operations()[index]);
+        std::visit(
+            Overloaded{
+                [&](const CompiledSolid& solid) {
+                    if (solid.width.has_value() != solid.height.has_value()) {
+                        parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                      "Solid dimensions must be present together",
+                                                      {}, operationSubject);
+                        return;
+                    }
+                    static_cast<void>(registerColor(solid.color, "color", operationSubject));
+                    if (solid.width)
+                        static_cast<void>(registerScalar(
+                            *solid.width, "width", ScalarDomain::Dimension, operationSubject));
+                    if (solid.height)
+                        static_cast<void>(registerScalar(
+                            *solid.height, "height", ScalarDomain::Dimension, operationSubject));
+                },
+                [&](const CompiledText& text) {
+                    if (text.layout) {
+                        static_cast<void>(
+                            registerParameter(text.layout->alignmentId, operationSubject) &&
+                            registerScalar(text.layout->lineHeight, "line-height",
+                                           ScalarDomain::Positive, operationSubject) &&
+                            registerScalar(text.layout->letterSpacing, "letter-spacing",
+                                           ScalarDomain::Unbounded, operationSubject));
+                    }
+                    // Every check is re-run here rather than trusted from compilation: the
+                    // evaluator validates the plan it is handed, because a plan can also
+                    // arrive from a retained frame or a test fixture rather than straight
+                    // from the compiler.
+                    static_cast<void>(
+                        registerParameter(text.contentParameterId, operationSubject) &&
+                        registerScalar(text.size, "size", ScalarDomain::TextSize,
+                                       operationSubject) &&
+                        registerColor(text.color, "color", operationSubject));
+                },
+                [&](const CompiledLayerOutput& layer) {
+                    // One rule applied five times, through exactly the helpers a Solid's and
+                    // a Text's own operands use.
+                    static_cast<void>(registerVec2(layer.position, "position", operationSubject) &&
+                                      registerVec2(layer.anchor, "anchor", operationSubject) &&
+                                      registerVec2(layer.scale, "scale", operationSubject) &&
+                                      registerScalar(layer.rotation, "rotation",
+                                                     ScalarDomain::Unbounded, operationSubject) &&
+                                      registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
+                                                     operationSubject));
+                },
+                [](const CompiledMerge&) {},
+                [](const CompiledCompositionOutput&) {},
+            },
+            plan->operations()[index]);
     }
     if (parameterFailure.has_value()) {
         return PreflightOutcome::failure(std::move(*parameterFailure));
@@ -1209,6 +1247,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         }
         auto resolved = std::move(*checked.resolved);
         std::vector<std::shared_ptr<const render::Rgba32fImage>> slots(plan->operations().size());
+        std::vector<EvaluatedOperationBounds> bounds(plan->operations().size());
+        const auto remainingPixelBudget = [&] {
+            auto remaining = request.pixelStorageByteLimit;
+            for (const auto& slot : slots) {
+                if (!slot)
+                    continue;
+                const auto bytes = slot->pixels().size_bytes();
+                if (bytes > remaining)
+                    return std::size_t{0};
+                remaining -= bytes;
+            }
+            return remaining;
+        };
         std::shared_ptr<const render::Rgba32fImage> processImage;
         std::vector<std::string> contentHashes(plan->operations().size());
 
@@ -1250,13 +1301,24 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     [&](const auto& step) {
                         key.add(step.sourceNodeId);
                         using Step = std::decay_t<decltype(step)>;
-                        if constexpr (std::is_same_v<Step, CompiledSolid>)
+                        if constexpr (std::is_same_v<Step, CompiledSolid>) {
                             parameter(step.color);
-                        else if constexpr (std::is_same_v<Step, CompiledText>) {
+                            if (step.width)
+                                parameter(*step.width);
+                            if (step.height)
+                                parameter(*step.height);
+                        } else if constexpr (std::is_same_v<Step, CompiledText>) {
                             key.add(step.content);
+                            key.add(step.layout.has_value());
+                            if (step.layout) {
+                                key.add(step.layout->alignment);
+                                parameter(step.layout->lineHeight);
+                                parameter(step.layout->letterSpacing);
+                            }
                             parameter(step.size);
                             parameter(step.color);
                         } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
+                            key.add(step.localBounds);
                             parameter(step.position);
                             parameter(step.anchor);
                             parameter(step.scale);
@@ -1266,6 +1328,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(request.time >= step.inPoint &&
                                     (!step.outPoint || request.time < *step.outPoint));
                         } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
+                            key.add(step.localBounds);
                             key.add(step.entries.size());
                             for (const auto& entry : step.entries)
                                 key.add(entry.layerId.isValid());
@@ -1279,8 +1342,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             const auto hit =
                 cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
             if (hit) {
+                if (hit->image && hit->image->pixels().size_bytes() > remainingPixelBudget())
+                    return EvaluationResult::failed(
+                        diagnostic(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                   "Cached operation exceeds the resident pixel budget", {},
+                                   operationSubject));
                 ++frameStatistics.hits;
                 slots[index] = hit->image;
+                bounds[index] = hit->bounds;
                 if (index == request.output.value())
                     processImage = hit->image;
                 reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
@@ -1311,22 +1380,80 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Solid color is not evaluable");
                                 return;
                             }
+                            auto descriptor = resolved.imageDescriptor;
+                            double exactWidth =
+                                static_cast<double>(descriptor.dataWindow().extent().width());
+                            double exactHeight =
+                                static_cast<double>(descriptor.dataWindow().extent().height());
+                            double authorWidth = plan->format().width();
+                            double authorHeight = plan->format().height();
+                            if (solid.width && solid.height) {
+                                const auto width =
+                                    detail::resolveParameter(*solid.width, *plan, resolved);
+                                const auto height =
+                                    detail::resolveParameter(*solid.height, *plan, resolved);
+                                if (!width || !height || width->value < 1.0 ||
+                                    height->value < 1.0) {
+                                    operationFailure = diagnostic(
+                                        EvaluationDiagnosticCode::InvalidParameter,
+                                        "Solid dimensions are not evaluable", {}, operationSubject);
+                                    return;
+                                }
+                                // Preserve the exact device extent of composition-sized sources:
+                                // width * (proxyWidth / width) can round above the integer and
+                                // otherwise allocate an extra column, changing legacy pivots.
+                                authorWidth = width->value;
+                                authorHeight = height->value;
+                                if (authorWidth != plan->format().width())
+                                    exactWidth = authorWidth * resolved.horizontalScale;
+                                if (authorHeight != plan->format().height())
+                                    exactHeight = authorHeight * resolved.verticalScale;
+                                const auto w = std::ceil(exactWidth);
+                                const auto h = std::ceil(exactHeight);
+                                if (!std::isfinite(w) || !std::isfinite(h) || w > 16777216.0 ||
+                                    h > 16777216.0) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   "Solid dimensions exceed the supported extent",
+                                                   {}, operationSubject);
+                                    return;
+                                }
+                                const auto window =
+                                    render::ImageWindow::create(0, 0, static_cast<std::uint64_t>(w),
+                                                                static_cast<std::uint64_t>(h));
+                                const auto local = render::Rgba32fImageDescriptor::create(
+                                    *window.value(), descriptor.displayWindow(),
+                                    descriptor.pixelAspect());
+                                if (!local) {
+                                    operationFailure =
+                                        imageDiagnostic(*local.error(), operationSubject,
+                                                        "Solid bounds are invalid");
+                                    return;
+                                }
+                                descriptor = *local.value();
+                            }
+                            bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
+                                                                          resolved.horizontalScale,
+                                                                          resolved.verticalScale);
+                            bounds[index].local.right = authorWidth;
+                            bounds[index].local.bottom = authorHeight;
+                            bounds[index].output = bounds[index].local;
                             auto builder = render::Rgba32fImageBuilder::create(
-                                resolved.imageDescriptor, resolved.imageBytes);
+                                descriptor, remainingPixelBudget());
                             if (!builder) {
                                 operationFailure =
                                     imageDiagnostic(*builder.error(), operationSubject,
                                                     "Solid process image could not be allocated");
                                 return;
                             }
-                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto window = descriptor.dataWindow();
                             const auto height = window.extent().height();
                             reportRowPassStarted(progress, operationIndex, height);
                             auto& image = *builder.value();
                             const auto solidPixel = *pixel.value();
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, window.originY(),
-                                [&image, solidPixel,
+                                [&image, solidPixel, exactWidth, exactHeight,
                                  &operationSubject](const std::int64_t y) -> RowFailure {
                                     auto row = image.row(y);
                                     if (!row) {
@@ -1335,6 +1462,37 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                             "Solid output row could not be addressed");
                                     }
                                     render::fillSolidRow(*row.value(), solidPixel);
+                                    const auto verticalCoverage =
+                                        std::clamp(exactHeight - static_cast<double>(y), 0.0, 1.0);
+                                    if (verticalCoverage == 1.0 &&
+                                        exactWidth == static_cast<double>(row.value()->size()))
+                                        return std::nullopt;
+                                    const auto firstPartial =
+                                        verticalCoverage == 1.0 ? row.value()->size() - 1 : 0;
+                                    for (std::size_t x = firstPartial; x < row.value()->size();
+                                         ++x) {
+                                        const auto coverage =
+                                            verticalCoverage *
+                                            std::clamp(exactWidth - static_cast<double>(x), 0.0,
+                                                       1.0);
+                                        if (coverage == 1.0)
+                                            continue;
+                                        const auto value = render::Rgba32f::fromPremultiplied(
+                                            static_cast<float>(
+                                                static_cast<double>(solidPixel.red()) * coverage),
+                                            static_cast<float>(
+                                                static_cast<double>(solidPixel.green()) * coverage),
+                                            static_cast<float>(
+                                                static_cast<double>(solidPixel.blue()) * coverage),
+                                            static_cast<float>(
+                                                static_cast<double>(solidPixel.alpha()) *
+                                                coverage));
+                                        if (!value)
+                                            return imageDiagnostic(
+                                                *value.error(), operationSubject,
+                                                "Solid edge coverage is invalid");
+                                        (*row.value())[x] = *value.value();
+                                    }
                                     return std::nullopt;
                                 });
                             if (outcome.cancelled) {
@@ -1399,9 +1557,27 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Text size is not rasterizable");
                                 return;
                             }
+                            render::TextLayoutOptions layout{.multiline = false};
+                            if (text.layout) {
+                                const auto lineHeight = detail::resolveParameter(
+                                    text.layout->lineHeight, *plan, resolved);
+                                const auto letterSpacing = detail::resolveParameter(
+                                    text.layout->letterSpacing, *plan, resolved);
+                                if (!lineHeight || !letterSpacing || text.layout->alignment < 0 ||
+                                    text.layout->alignment > 2) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   "Text layout is invalid", {}, operationSubject);
+                                    return;
+                                }
+                                layout = {
+                                    static_cast<render::TextAlignment>(text.layout->alignment),
+                                    lineHeight->value,
+                                    letterSpacing->value * resolved.horizontalScale, true};
+                            }
                             auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                                text.content, *rasterParameters.value(),
-                                request.pixelStorageByteLimit);
+                                text.content, *rasterParameters.value(), remainingPixelBudget(),
+                                layout);
                             if (!coverage) {
                                 operationFailure =
                                     imageDiagnostic(*coverage.error(), operationSubject,
@@ -1410,8 +1586,33 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationFailure->subject.field = "content";
                                 return;
                             }
+                            auto descriptor = resolved.imageDescriptor;
+                            if (text.layout) {
+                                if (!coverage.value()->hasCoverage())
+                                    return;
+                                const auto window = render::ImageWindow::create(
+                                    coverage.value()->originX(), coverage.value()->originY(),
+                                    coverage.value()->width(), coverage.value()->height());
+                                const auto local = render::Rgba32fImageDescriptor::create(
+                                    *window.value(), descriptor.displayWindow(),
+                                    descriptor.pixelAspect());
+                                if (!local) {
+                                    operationFailure =
+                                        imageDiagnostic(*local.error(), operationSubject,
+                                                        "Text bounds are invalid");
+                                    return;
+                                }
+                                descriptor = *local.value();
+                            }
+                            bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
+                                                                          resolved.horizontalScale,
+                                                                          resolved.verticalScale);
+                            bounds[index].output = bounds[index].local;
                             auto builder = render::Rgba32fImageBuilder::create(
-                                resolved.imageDescriptor, resolved.imageBytes,
+                                descriptor,
+                                remainingPixelBudget() -
+                                    std::min(remainingPixelBudget(),
+                                             coverage.value()->coverage().size()),
                                 render::Rgba32f::transparent());
                             if (!builder) {
                                 operationFailure =
@@ -1419,7 +1620,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     "Text process image could not be allocated");
                                 return;
                             }
-                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto window = descriptor.dataWindow();
                             const auto height = window.extent().height();
                             const auto& bitmap = *coverage.value();
                             reportRowPassStarted(progress, operationIndex, height);
@@ -1499,7 +1700,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 static_cast<double>(plan->format().width()) / 2.0;
                             const auto fullCenterY =
                                 static_cast<double>(plan->format().height()) / 2.0;
-                            const render::LayerTransform::Authored authored{
+                            render::LayerTransform::Authored authored{
                                 .translationX = position->value.x - fullCenterX,
                                 .translationY = position->value.y - fullCenterY,
                                 .anchorX = anchor->value.x,
@@ -1537,6 +1738,25 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Layer source image has no descriptor", {}, operationSubject);
                                 return;
                             }
+                            auto& geometry = bounds[index];
+                            geometry.layerId = layer.layerId;
+                            geometry.local = bounds[layer.input.value()].output;
+                            if (geometry.local.empty())
+                                return;
+                            if (layer.localBounds) {
+                                const auto centre = geometry.local.centre();
+                                const auto window = sourceDescriptor->dataWindow();
+                                const auto bufferCentre =
+                                    detail::boundsForWindow(window, resolved.horizontalScale,
+                                                            resolved.verticalScale)
+                                        .centre();
+                                authored.translationX =
+                                    position->value.x - centre.x - anchor->value.x;
+                                authored.translationY =
+                                    position->value.y - centre.y - anchor->value.y;
+                                authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
+                                authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
+                            }
                             // A scale factor of exactly zero collapses the layer to no area at all.
                             // That is an authorable value -- a scale curve starting from nothing --
                             // not an error, so the layer simply contributes no pixels and publishes
@@ -1558,15 +1778,64 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     "Layer transform parameters are not evaluable");
                                 return;
                             }
-                            // The layer's own data window is the transformed bounds clipped to the
-                            // composition: a scaled-down, rotated, or moved layer allocates and
-                            // resamples only the pixels it can actually reach, and a layer the
-                            // transform carries entirely off the frame allocates nothing at all.
-                            // The display window stays the composition's, so the layer remains a
-                            // picture of this composition.
+                            // Local content remains available outside the composition so a parent
+                            // transform can bring it back. Compatibility layers retain frame
+                            // clipping.
+                            const auto sourceWindow = sourceDescriptor->dataWindow();
+                            const auto map = [&](const document::Vec2d point) {
+                                const auto mapped = transform.value()->forwardMap(
+                                    point.x * resolved.horizontalScale - 0.5 -
+                                        static_cast<double>(sourceWindow.originX()),
+                                    point.y * resolved.verticalScale - 0.5 -
+                                        static_cast<double>(sourceWindow.originY()));
+                                return document::Vec2d{(mapped.x + 0.5) / resolved.horizontalScale,
+                                                       (mapped.y + 0.5) / resolved.verticalScale};
+                            };
+                            geometry.polygon = detail::boundsCorners(geometry.local);
+                            for (auto& point : geometry.polygon)
+                                point = map(point);
+                            geometry.output = {geometry.polygon[0].x, geometry.polygon[0].y,
+                                               geometry.polygon[0].x, geometry.polygon[0].y};
+                            for (const auto point : geometry.polygon) {
+                                geometry.output.left = std::min(geometry.output.left, point.x);
+                                geometry.output.top = std::min(geometry.output.top, point.y);
+                                geometry.output.right = std::max(geometry.output.right, point.x);
+                                geometry.output.bottom = std::max(geometry.output.bottom, point.y);
+                            }
+                            const auto centre = layer.localBounds
+                                                    ? geometry.local.centre()
+                                                    : detail::boundsForWindow(
+                                                          sourceWindow, resolved.horizontalScale,
+                                                          resolved.verticalScale)
+                                                          .centre();
+                            geometry.anchor =
+                                map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+                            if (layer.localBounds) {
+                                constexpr double limit = 16777214.0;
+                                const double right = sourceWindow.extent().width();
+                                const double bottom = sourceWindow.extent().height();
+                                const std::array support{
+                                    transform.value()->forwardMap(-1.0, -1.0),
+                                    transform.value()->forwardMap(right, -1.0),
+                                    transform.value()->forwardMap(right, bottom),
+                                    transform.value()->forwardMap(-1.0, bottom)};
+                                for (const auto point : support) {
+                                    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+                                        std::abs(point.x) > limit || std::abs(point.y) > limit) {
+                                        operationFailure =
+                                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                       "Transformed content exceeds the supported "
+                                                       "coordinate range",
+                                                       {}, operationSubject);
+                                        return;
+                                    }
+                                }
+                            }
                             const auto compositionWindow = resolved.imageDescriptor.dataWindow();
-                            const auto layerWindow =
-                                transform.value()->supportBounds(compositionWindow);
+                            const auto workingWindow = render::ImageWindow::create(
+                                -16777216, -16777216, 33554432, 33554432);
+                            const auto layerWindow = transform.value()->supportBounds(
+                                layer.localBounds ? *workingWindow.value() : compositionWindow);
                             if (!layerWindow.has_value()) {
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,
@@ -1585,7 +1854,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             auto builder = render::Rgba32fImageBuilder::create(
-                                *layerDescriptor.value(), resolved.imageBytes);
+                                *layerDescriptor.value(), remainingPixelBudget());
                             if (!builder) {
                                 operationFailure = imageDiagnostic(
                                     *builder.error(), operationSubject,
@@ -1636,16 +1905,52 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             produced.emplace(std::move(*frozen.value()));
                         },
                         [&](const CompiledMerge& stack) {
+                            ContentBounds storage;
+                            for (const auto& entry : stack.entries) {
+                                bounds[index].local = detail::unionBounds(
+                                    bounds[index].local, bounds[entry.input.value()].output);
+                                if (slots[entry.input.value()]) {
+                                    const auto view = slots[entry.input.value()]->view();
+                                    storage = detail::unionBounds(
+                                        storage,
+                                        detail::boundsForWindow(
+                                            view.value()->descriptor()->dataWindow(), 1.0, 1.0));
+                                }
+                            }
+                            bounds[index].output = bounds[index].local;
+                            auto descriptor = resolved.imageDescriptor;
+                            if (stack.localBounds && !storage.empty()) {
+                                const auto window = render::ImageWindow::create(
+                                    static_cast<std::int64_t>(storage.left),
+                                    static_cast<std::int64_t>(storage.top),
+                                    static_cast<std::uint64_t>(storage.right - storage.left),
+                                    static_cast<std::uint64_t>(storage.bottom - storage.top));
+                                if (!window) {
+                                    operationFailure =
+                                        imageDiagnostic(*window.error(), operationSubject,
+                                                        "Merge bounds are invalid");
+                                    return;
+                                }
+                                const auto local = render::Rgba32fImageDescriptor::create(
+                                    *window.value(), descriptor.displayWindow(),
+                                    descriptor.pixelAspect());
+                                if (!local) {
+                                    operationFailure =
+                                        imageDiagnostic(*local.error(), operationSubject,
+                                                        "Merge descriptor is invalid");
+                                    return;
+                                }
+                                descriptor = *local.value();
+                            }
                             auto builder = render::Rgba32fImageBuilder::create(
-                                resolved.imageDescriptor, resolved.imageBytes,
-                                render::Rgba32f::transparent());
+                                descriptor, remainingPixelBudget(), render::Rgba32f::transparent());
                             if (!builder) {
                                 operationFailure =
                                     imageDiagnostic(*builder.error(), operationSubject,
                                                     "Layer Stack image could not be allocated");
                                 return;
                             }
-                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto window = descriptor.dataWindow();
                             const auto height = window.extent().height();
                             const std::uint64_t totalRows =
                                 static_cast<std::uint64_t>(height) * stack.entries.size();
@@ -1696,16 +2001,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 // the layer occupies and writes into the matching span of each
                                 // destination row.
                                 const auto sourceWindow = sourceDescriptor->dataWindow();
-                                const auto columnOffset = sourceWindow.originX() - window.originX();
-                                if (columnOffset < 0 ||
-                                    sourceWindow.maxXExclusive() > window.maxXExclusive()) {
-                                    operationFailure = imageDiagnostic(
-                                        render::ImageError::codeOnly(
-                                            render::ImageErrorCode::IncompatibleImageDescriptor),
-                                        operationSubject,
-                                        "Layer Stack source exceeds the composition window");
-                                    return;
-                                }
+                                const auto firstColumn =
+                                    std::max(sourceWindow.originX(), window.originX());
+                                const auto lastColumn =
+                                    std::min(sourceWindow.maxXExclusive(), window.maxXExclusive());
+                                if (lastColumn <= firstColumn)
+                                    continue;
+                                const auto columnOffset = firstColumn - window.originX();
+                                const auto sourceOffset = firstColumn - sourceWindow.originX();
+                                const auto columnCount =
+                                    static_cast<std::size_t>(lastColumn - firstColumn);
                                 // Entries fold in order, bottom to top, because each one composites
                                 // over what the ones beneath it left behind. The ROWS of one entry
                                 // are independent of each other, so they band; the entries
@@ -1714,7 +2019,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 const auto& source = *sourceView.value();
                                 const auto outcome = runRowBandPass(
                                     rowBands, cancellation, height, window.originY(),
-                                    [&image, &source, sourceWindow, columnOffset, blendMode,
+                                    [&image, &source, sourceWindow, columnOffset, sourceOffset,
+                                     columnCount, blendMode,
                                      &operationSubject](const std::int64_t y) -> RowFailure {
                                         if (y < sourceWindow.originY() ||
                                             y >= sourceWindow.maxYExclusive()) {
@@ -1735,10 +2041,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         }
                                         if (const auto rowStatus =
                                                 render::blendLinearRec709SceneRow(
-                                                    blendMode, *sourceRow.value(),
+                                                    blendMode,
+                                                    sourceRow.value()->subspan(
+                                                        static_cast<std::size_t>(sourceOffset),
+                                                        columnCount),
                                                     destinationRow.value()->subspan(
                                                         static_cast<std::size_t>(columnOffset),
-                                                        sourceWindow.extent().width()))) {
+                                                        columnCount))) {
                                             return imageDiagnostic(
                                                 *rowStatus, operationSubject,
                                                 "Layer Stack blend could not be evaluated");
@@ -1777,7 +2086,67 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             produced.emplace(std::move(*frozen.value()));
                         },
                         [&](const CompiledCompositionOutput& output) {
+                            bounds[index] = bounds[output.input.value()];
                             processImage = slots[output.input.value()];
+                            const auto sourceView = processImage->view();
+                            const auto sourceWindow =
+                                sourceView.value()->descriptor()->dataWindow();
+                            const auto destinationWindow = resolved.imageDescriptor.dataWindow();
+                            if (sourceWindow != destinationWindow) {
+                                auto builder = render::Rgba32fImageBuilder::create(
+                                    resolved.imageDescriptor, remainingPixelBudget(),
+                                    render::Rgba32f::transparent());
+                                if (!builder) {
+                                    operationFailure =
+                                        imageDiagnostic(*builder.error(), operationSubject,
+                                                        "Output image could not be allocated");
+                                    return;
+                                }
+                                const auto left =
+                                    std::max(sourceWindow.originX(), destinationWindow.originX());
+                                const auto right = std::min(sourceWindow.maxXExclusive(),
+                                                            destinationWindow.maxXExclusive());
+                                auto& image = *builder.value();
+                                const auto& source = *sourceView.value();
+                                const auto outcome = runRowBandPass(
+                                    rowBands, cancellation, destinationWindow.extent().height(),
+                                    destinationWindow.originY(),
+                                    [&](const std::int64_t y) -> RowFailure {
+                                        if (right <= left || y < sourceWindow.originY() ||
+                                            y >= sourceWindow.maxYExclusive())
+                                            return std::nullopt;
+                                        const auto row = source.row(y);
+                                        auto destination = image.row(y);
+                                        if (!row || !destination)
+                                            return diagnostic(
+                                                EvaluationDiagnosticCode::InternalInvariant,
+                                                "Output row is unavailable", {}, operationSubject);
+                                        const auto sourcePixels = row.value()->subspan(
+                                            static_cast<std::size_t>(left - sourceWindow.originX()),
+                                            static_cast<std::size_t>(right - left));
+                                        std::copy(sourcePixels.begin(), sourcePixels.end(),
+                                                  destination.value()->begin() +
+                                                      (left - destinationWindow.originX()));
+                                        return std::nullopt;
+                                    });
+                                if (outcome.cancelled) {
+                                    operationCancelled = true;
+                                    return;
+                                }
+                                if (outcome.failure || outcome.incomplete) {
+                                    operationFailure = rowPassFailure(outcome, operationSubject);
+                                    return;
+                                }
+                                auto frozen = std::move(*builder.value()).freeze();
+                                if (!frozen) {
+                                    operationFailure =
+                                        imageDiagnostic(*frozen.error(), operationSubject,
+                                                        "Output image could not be published");
+                                    return;
+                                }
+                                processImage = std::make_shared<const render::Rgba32fImage>(
+                                    std::move(*frozen.value()));
+                            }
                             slots[output.input.value()].reset();
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
                                                       .operation = operationIndex,
@@ -1801,7 +2170,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],
-                         .values = {}});
+                         .values = {},
+                         .bounds = bounds[index]});
             }
             if (index != request.output.value()) {
                 forEachInput(plan->operations()[index], [&](const OperationIndex input) {
@@ -1834,8 +2204,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
         };
-        auto frame = std::shared_ptr<const ProcessFrame>(
-            new ProcessFrame(std::move(identity), std::move(processImage), frameStatistics));
+        auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
+            std::move(identity), std::move(processImage), frameStatistics, std::move(bounds)));
         if (statistics)
             *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame));

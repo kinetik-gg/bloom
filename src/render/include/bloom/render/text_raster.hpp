@@ -20,6 +20,14 @@ inline constexpr double kMaximumTextPixelSize = 4096.0;
 // Checked text raster parameters. Horizontal and vertical em sizes are separate so a
 // proxy-resolution evaluation can scale glyphs by exactly the same per-axis factors it scales layer
 // translation by, instead of rasterizing at full size into a reduced frame.
+enum class TextAlignment : std::uint8_t { Left, Center, Right };
+struct TextLayoutOptions final {
+    TextAlignment alignment = TextAlignment::Left;
+    double lineHeight = 1.0;
+    double letterSpacing = 0.0;
+    bool multiline = true;
+};
+
 class TextRasterParameters final {
   public:
     [[nodiscard]] static ImageResult<TextRasterParameters>
@@ -79,7 +87,7 @@ class TextCoverageBitmap final {
     // bytes -- checked from the computed extent BEFORE any storage is allocated or any glyph drawn.
     [[nodiscard]] static ImageResult<TextCoverageBitmap>
     rasterizeEmbeddedDejaVuSans(std::string_view utf8Content, TextRasterParameters parameters,
-                                std::size_t coverageByteLimit);
+                                std::size_t coverageByteLimit, TextLayoutOptions layout = {});
 
     [[nodiscard]] bool hasCoverage() const noexcept { return !coverage_.empty(); }
     [[nodiscard]] std::int64_t originX() const noexcept { return originX_; }

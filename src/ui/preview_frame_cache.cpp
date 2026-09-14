@@ -77,10 +77,13 @@ void PreviewFrameCache::scheduleNotification() {
 
 std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept {
     // What RETAINING this frame costs, which is not what holding it costs right now: insertion
-    // keeps the packed display buffer and drops the Float32 process image, so the process image is
-    // not counted (task PERF1, FORMAL AMENDMENT 1).
+    // keeps packed display pixels and evaluated geometry while dropping the Float32 process image.
     const auto view = frame.displayBufferView();
-    return view.has_value() ? view->pixels.size_bytes() : 0;
+    const auto geometryBytes = frame.evaluatedBounds().size_bytes();
+    if (!view ||
+        geometryBytes > std::numeric_limits<std::size_t>::max() - view->pixels.size_bytes())
+        return 0;
+    return view->pixels.size_bytes() + geometryBytes;
 }
 
 PreparedPreviewFrameHandle

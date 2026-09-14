@@ -120,7 +120,15 @@ template <typename Definition>
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
-               definition.parameters.size() == 1 &&
+               ((definition.key.typeId != kSolidSourceNodeType || definition.key.schemaVersion == 1)
+                    ? definition.parameters.size() == 1
+                    : (definition.parameters.size() == 3 &&
+                       hasParameter(definition, 1, kSolidWidthParameterRole,
+                                    kSolidWidthParameterSchemaKey, ParameterValueKind::Float64,
+                                    true) &&
+                       hasParameter(definition, 2, kSolidHeightParameterRole,
+                                    kSolidHeightParameterSchemaKey, ParameterValueKind::Float64,
+                                    true))) &&
                hasParameter(definition, 0, kSolidColorParameterRole, kSolidColorParameterSchemaKey,
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
@@ -130,9 +138,21 @@ template <typename Definition>
         // then color. The font is not a parameter -- this lowering has exactly one face
         // (src/render's embedded DejaVu Sans), so a font parameter would promise a selection the
         // renderer cannot honor.
-        return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
+        return (hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) ||
+                hasCanonicalKey(definition, kTextSourceNodeType, 1)) &&
                hasImageOutput(definition, kTextSourceOutputPort) &&
-               definition.parameters.size() == 3 &&
+               (definition.key.schemaVersion == 1
+                    ? definition.parameters.size() == 3
+                    : (definition.parameters.size() == 6 &&
+                       hasParameter(definition, 3, kTextAlignmentParameterRole,
+                                    kTextAlignmentParameterSchemaKey,
+                                    ParameterValueKind::Integer) &&
+                       hasParameter(definition, 4, kTextLineHeightParameterRole,
+                                    kTextLineHeightParameterSchemaKey, ParameterValueKind::Float64,
+                                    true) &&
+                       hasParameter(definition, 5, kTextLetterSpacingParameterRole,
+                                    kTextLetterSpacingParameterSchemaKey,
+                                    ParameterValueKind::Float64, true))) &&
                hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
                             ParameterValueKind::String,
                             isAnimatableSchemaKey(kTextParameterSchemaKey)) &&
@@ -149,7 +169,8 @@ template <typename Definition>
         // round it is turned, how much of it shows through, then how it combines with what is
         // beneath it. The two appearance values come after the four geometric ones, and the blend
         // mode comes last because it is the only one that is not a continuous value at all.
-        return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
+        return (hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) ||
+                hasCanonicalKey(definition, kLayerOutputNodeType, 3)) &&
                hasLeadingImageInput(definition, kLayerOutputContentInputPort, false) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
                definition.parameters.size() == 6 &&
@@ -167,7 +188,8 @@ template <typename Definition>
                             ParameterValueKind::Integer) &&
                hasParameterSockets(definition, 1) && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
-        return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
+        return (hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) ||
+                hasCanonicalKey(definition, kLayerStackNodeType, 1)) &&
                definition.cardinality == NodeCardinality::Many && definition.inputs.empty() &&
                hasImageOutput(definition, kLayerStackOutputPort) && definition.parameters.empty() &&
                definition.layerSlotInput.has_value() &&
@@ -223,29 +245,45 @@ template <typename Definition>
     return hasValidLoweringShape(definition);
 }
 
-[[nodiscard]] NodeDefinition solidDefinition() {
+[[nodiscard]] NodeDefinition solidDefinition(const bool localBounds = true) {
     using namespace bloom::document;
-    return {{std::string(kSolidSourceNodeType), kSolidSourceNodeSchemaVersion},
-            NodeLoweringKind::Solid,
-            // Task S7, item 3: the colour parameter is a linkable socket as well as an inline chip.
-            // Optional, because the parameter IS the value when nothing is connected -- an
-            // unconnected operand is an authored constant, not a missing input.
-            {{std::string(kSolidColorParameterRole), SocketValueKind::Color, false}},
-            {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
-            // Task S5, item 1: supportsAnimation is true now. It is NOT a second opinion about what
-            // is animatable -- the shape check below asserts it agrees with
-            // document::isColor4AnimatableSchemaKey(), so the schema predicates stay the single
-            // authority and a registered definition cannot drift from them.
-            {{std::string(kSolidColorParameterRole), std::string(kSolidColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
-            std::nullopt,
-            NodeCardinality::Many,
-            NodeCategory::Sources};
+    NodeDefinition definition{
+        {std::string(kSolidSourceNodeType), localBounds ? kSolidSourceNodeSchemaVersion : 1},
+        NodeLoweringKind::Solid,
+        // Task S7, item 3: the colour parameter is a linkable socket as well as an inline chip.
+        // Optional, because the parameter IS the value when nothing is connected -- an
+        // unconnected operand is an authored constant, not a missing input.
+        {{std::string(kSolidColorParameterRole), SocketValueKind::Color, false}},
+        {{std::string(kSolidSourceOutputPort), SocketValueKind::Image}},
+        // Task S5, item 1: supportsAnimation is true now. It is NOT a second opinion about what
+        // is animatable -- the shape check below asserts it agrees with
+        // document::isColor4AnimatableSchemaKey(), so the schema predicates stay the single
+        // authority and a registered definition cannot drift from them.
+        {{std::string(kSolidColorParameterRole), std::string(kSolidColorParameterSchemaKey),
+          ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Sources};
+    if (!localBounds)
+        definition.category = NodeCategory::Compatibility;
+    if (localBounds) {
+        definition.inputs.push_back(
+            {std::string(kSolidWidthParameterRole), SocketValueKind::Scalar, false});
+        definition.inputs.push_back(
+            {std::string(kSolidHeightParameterRole), SocketValueKind::Scalar, false});
+        definition.parameters.push_back({std::string(kSolidWidthParameterRole),
+                                         std::string(kSolidWidthParameterSchemaKey),
+                                         ParameterValueKind::Float64, true, true, 1.0});
+        definition.parameters.push_back({std::string(kSolidHeightParameterRole),
+                                         std::string(kSolidHeightParameterSchemaKey),
+                                         ParameterValueKind::Float64, true, true, 1.0});
+    }
+    return definition;
 }
 
-[[nodiscard]] NodeDefinition layerOutputDefinition() {
+[[nodiscard]] NodeDefinition layerOutputDefinition(const bool localBounds = true) {
     using namespace bloom::document;
-    return {{std::string(kLayerOutputNodeType), kLayerOutputNodeSchemaVersion},
+    return {{std::string(kLayerOutputNodeType), localBounds ? kLayerOutputNodeSchemaVersion : 3},
             NodeLoweringKind::LayerOutput,
             // The content image first -- its position is what the dissolve gesture and the mute
             // bypass read -- then one operand socket per transform parameter, in the registered
@@ -283,12 +321,12 @@ template <typename Definition>
               ParameterValueKind::Integer, true, false, kDefaultBlendModeValue}},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Layers};
+            localBounds ? NodeCategory::Layers : NodeCategory::Compatibility};
 }
 
-[[nodiscard]] NodeDefinition layerStackDefinition() {
+[[nodiscard]] NodeDefinition layerStackDefinition(const bool localBounds = true) {
     using namespace bloom::document;
-    return {{std::string(kLayerStackNodeType), kLayerStackNodeSchemaVersion},
+    return {{std::string(kLayerStackNodeType), localBounds ? kLayerStackNodeSchemaVersion : 1},
             NodeLoweringKind::LayerStack,
             {},
             {{std::string(kLayerStackOutputPort), SocketValueKind::Image}},
@@ -296,7 +334,7 @@ template <typename Definition>
             LayerSlotInputDefinition{std::string(kLayerStackContentInputRole),
                                      SocketValueKind::Image, true},
             NodeCardinality::Many,
-            NodeCategory::Compositing};
+            localBounds ? NodeCategory::Compositing : NodeCategory::Compatibility};
 }
 
 [[nodiscard]] NodeDefinition compositionOutputDefinition() {
@@ -311,29 +349,51 @@ template <typename Definition>
             NodeCategory::Output};
 }
 
-[[nodiscard]] NodeDefinition textDefinition() {
+[[nodiscard]] NodeDefinition textDefinition(const bool typography = true) {
     using namespace bloom::document;
-    return {{std::string(kTextSourceNodeType), kTextSourceNodeSchemaVersion},
-            NodeLoweringKind::Text,
-            // One operand socket per parameter, in the same order (task S7, item 3). The content
-            // port is a String socket: a text layer whose words come from a String node is the
-            // whole point of having a String kind at all.
-            {{std::string(kTextParameterRole), SocketValueKind::String, false},
-             {std::string(kTextSizeParameterRole), SocketValueKind::Scalar, false},
-             {std::string(kTextColorParameterRole), SocketValueKind::Color, false}},
-            {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
-            // Content stays constant-only (a String has no interpolation); size and colour became
-            // animatable in task S5, which the shape check below cross-checks against the schema
-            // predicates rather than restating.
-            {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
-              ParameterValueKind::String, true, false, std::string{}},
-             {std::string(kTextSizeParameterRole), std::string(kTextSizeParameterSchemaKey),
-              ParameterValueKind::Float64, true, true, kDefaultTextSizePixels},
-             {std::string(kTextColorParameterRole), std::string(kTextColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
-            std::nullopt,
-            NodeCardinality::Many,
-            NodeCategory::Sources};
+    NodeDefinition definition{
+        {std::string(kTextSourceNodeType), typography ? kTextSourceNodeSchemaVersion : 1},
+        NodeLoweringKind::Text,
+        // One operand socket per parameter, in the same order (task S7, item 3). The content
+        // port is a String socket: a text layer whose words come from a String node is the
+        // whole point of having a String kind at all.
+        {{std::string(kTextParameterRole), SocketValueKind::String, false},
+         {std::string(kTextSizeParameterRole), SocketValueKind::Scalar, false},
+         {std::string(kTextColorParameterRole), SocketValueKind::Color, false}},
+        {{std::string(kTextSourceOutputPort), SocketValueKind::Image}},
+        // Content stays constant-only (a String has no interpolation); size and colour became
+        // animatable in task S5, which the shape check below cross-checks against the schema
+        // predicates rather than restating.
+        {{std::string(kTextParameterRole), std::string(kTextParameterSchemaKey),
+          ParameterValueKind::String, true, false, std::string{}},
+         {std::string(kTextSizeParameterRole), std::string(kTextSizeParameterSchemaKey),
+          ParameterValueKind::Float64, true, true, kDefaultTextSizePixels},
+         {std::string(kTextColorParameterRole), std::string(kTextColorParameterSchemaKey),
+          ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Sources};
+    if (!typography)
+        definition.category = NodeCategory::Compatibility;
+    if (typography) {
+        definition.inputs.push_back(
+            {std::string(kTextAlignmentParameterRole), SocketValueKind::Integer, false});
+        definition.inputs.push_back(
+            {std::string(kTextLineHeightParameterRole), SocketValueKind::Scalar, false});
+        definition.inputs.push_back(
+            {std::string(kTextLetterSpacingParameterRole), SocketValueKind::Scalar, false});
+        definition.parameters.push_back({std::string(kTextAlignmentParameterRole),
+                                         std::string(kTextAlignmentParameterSchemaKey),
+                                         ParameterValueKind::Integer, true, false,
+                                         std::int64_t{0}});
+        definition.parameters.push_back({std::string(kTextLineHeightParameterRole),
+                                         std::string(kTextLineHeightParameterSchemaKey),
+                                         ParameterValueKind::Float64, true, true, 1.0});
+        definition.parameters.push_back({std::string(kTextLetterSpacingParameterRole),
+                                         std::string(kTextLetterSpacingParameterSchemaKey),
+                                         ParameterValueKind::Float64, true, true, 0.0});
+    }
+    return definition;
 }
 
 } // namespace
@@ -400,9 +460,10 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::vector<NodeDefinition> definitions{solidDefinition(), layerOutputDefinition(),
-                                            layerStackDefinition(), compositionOutputDefinition(),
-                                            textDefinition()};
+    std::vector<NodeDefinition> definitions{
+        solidDefinition(false),        solidDefinition(),           layerOutputDefinition(false),
+        layerOutputDefinition(),       layerStackDefinition(false), layerStackDefinition(),
+        compositionOutputDefinition(), textDefinition(false),       textDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

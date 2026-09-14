@@ -333,10 +333,14 @@ void testCompiledPlanCacheCompilesOncePerRevision(Expectations& expectations) {
 
 void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Frame Cache Hit", time(1)));
+    expectations.expect(fixture.session.addSolidLayer("Bounds", {0.2, 0.4, 0.8, 1}),
+                        "cache fixture creates selected content");
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the first frame renders");
     const auto afterFirstFrame = fixture.preparationCount.load();
     const auto freshFrame = fixture.controller.state().frame;
+    const auto freshBounds = fixture.controller.selectedLayerBounds();
+    expectations.expect(freshBounds.size() == 1, "fresh frame has selected layer geometry");
     const auto freshView = freshFrame == nullptr ? std::nullopt : freshFrame->displayBufferView();
     expectations.expect(freshFrame != nullptr && freshFrame->hasProcessFrame() &&
                             freshView.has_value() && !freshView->pixels.empty(),
@@ -375,6 +379,9 @@ void testCacheHitPublishesWithoutEvaluating(Expectations& expectations) {
     // else. It is the same picture -- byte for byte the pixels the evaluation published -- but it
     // carries no process frame, and says so rather than handing one back that is silently null.
     const auto cachedFrame = fixture.controller.state().frame;
+    expectations.expect(
+        fixture.controller.selectedLayerBounds() == freshBounds,
+        "cache hit retains exact selected geometry without evaluating or retaining process pixels");
     expectations.expect(cachedFrame != nullptr && !cachedFrame->hasProcessFrame(),
                         "a frame served from the cache carries no process frame");
     expectations.expect(cachedFrame != nullptr && cachedFrame->processFrame() == nullptr,
@@ -410,13 +417,15 @@ void testCachingReleasesTheProcessImage(Expectations& expectations) {
     const std::weak_ptr<const runtime::ProcessFrame> processFrame = firstFrame->processFrame();
     const auto displayBytes = ui::PreviewFrameCache::frameByteCost(*firstFrame);
     const auto processBytes = firstFrame->processImage().pixels().size_bytes();
+    const auto geometryBytes = firstFrame->evaluatedBounds().size_bytes();
     // Released here, so that from this line on the cache is the only thing that could still be
     // holding that frame -- which is exactly what the weak handle below is asking about.
     firstFrame.reset();
-    expectations.expect(displayBytes > 0 && processBytes == displayBytes * 4,
+    expectations.expect(displayBytes > 0 && processBytes == (displayBytes - geometryBytes) * 4,
                         "this composition's process image is four times its display buffer");
-    expectations.expect(fixture.controller.frameCache().residentBytes() == displayBytes,
-                        "the cache accounts for the display buffer alone, never the process image");
+    expectations.expect(
+        fixture.controller.frameCache().residentBytes() == displayBytes,
+        "the cache accounts for display pixels and geometry, never the process image");
 
     // Move the session on twice, so nothing but the cache still refers to that first frame: the
     // controller's state holds a newer one and no request retains an older.
@@ -431,8 +440,9 @@ void testCachingReleasesTheProcessImage(Expectations& expectations) {
                         "the first frame is still cached");
     expectations.expect(processFrame.expired(),
                         "caching a frame does not keep its Float32 process image alive");
-    expectations.expect(fixture.controller.frameCache().residentBytes() == displayBytes * 3,
-                        "three cached frames cost three display buffers and nothing more");
+    expectations.expect(
+        fixture.controller.frameCache().residentBytes() == displayBytes * 3,
+        "three cached frames cost three display buffers with their evaluated geometry");
 
     finishFixture(fixture, expectations);
 }

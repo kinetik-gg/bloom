@@ -19,6 +19,7 @@ struct OperationCacheStatistics final {
 struct OperationCacheValue final {
     std::shared_ptr<const render::Rgba32fImage> image;
     std::vector<CompiledValue> values;
+    EvaluatedOperationBounds bounds{};
 };
 // Owned by the evaluator session. Concurrent preview/export tasks share this bounded LRU.
 class OperationCache final {

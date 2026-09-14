@@ -32,6 +32,7 @@ class TimelinePropertyRow final : public QWidget {
     std::array<QWidget*, 2> cells_{};
     std::array<QLabel*, 2> components_{};
     kit::KDropdown* blending_;
+    kit::KDropdown* alignment_;
     kit::KColorChip* color_;
     bool binding_ = false;
 };

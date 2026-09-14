@@ -72,8 +72,8 @@ The first useful Bloom should demonstrate this complete workflow:
 
 1. Create a project and composition.
 2. Add a deterministic solid source, or a text source that renders on the portable CPU path with one
-   embedded face and single-line layout. Text shaping, font asset identity, and layout contracts
-   remain deferred.
+   embedded face, multiline alignment, line height, and letter spacing. Text shaping and font asset
+   identity remain deferred.
 3. Represent it coherently in the layer timeline and canonical node graph.
 4. Synchronize selection across viewer, timeline, graph, and properties.
 5. Edit transform and opacity through properties and direct viewer manipulation.

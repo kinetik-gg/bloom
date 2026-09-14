@@ -1,5 +1,6 @@
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
+#include <exception>
 #include <memory>
 #include <utility>
 
@@ -69,12 +70,12 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
 
-PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(PreviewRequestIdentity desiredIdentity,
-                                                 ProcessFrameIdentity processIdentity,
-                                                 render::PreparedReferenceDisplayBuffer buffer,
-                                                 const bool isOcioQualified) noexcept
+PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(
+    PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
+    render::PreparedReferenceDisplayBuffer buffer, const bool isOcioQualified,
+    std::vector<EvaluatedOperationBounds> bounds) noexcept
     : desiredIdentity_(desiredIdentity), processIdentity_(std::move(processIdentity)),
-      buffer_(std::move(buffer)), isOcioQualified_(isOcioQualified) {}
+      buffer_(std::move(buffer)), isOcioQualified_(isOcioQualified), bounds_(std::move(bounds)) {}
 
 std::optional<PreviewDisplayOnlyFrame>
 PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
@@ -94,13 +95,22 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
     if (descriptor.value()->layout() != view->layout) {
         return std::nullopt;
     }
-    auto buffer = render::PreparedReferenceDisplayBuffer::create(*descriptor.value(), view->pixels,
-                                                                 pixelStorageByteLimit);
+    const auto geometry = source.evaluatedBounds();
+    if (geometry.size_bytes() > pixelStorageByteLimit)
+        return std::nullopt;
+    auto buffer = render::PreparedReferenceDisplayBuffer::create(
+        *descriptor.value(), view->pixels, pixelStorageByteLimit - geometry.size_bytes());
     if (!buffer) {
         return std::nullopt;
     }
-    return PreviewDisplayOnlyFrame(source.desiredIdentity(), source.processIdentity(),
-                                   std::move(*buffer.value()), view->isOcioQualified);
+    try {
+        return PreviewDisplayOnlyFrame(
+            source.desiredIdentity(), source.processIdentity(), std::move(*buffer.value()),
+            view->isOcioQualified,
+            std::vector<EvaluatedOperationBounds>(geometry.begin(), geometry.end()));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
 }
 
 std::optional<PreviewDisplayBufferView>
@@ -119,7 +129,7 @@ PreviewDisplayOnlyFrame::displayBufferView() const noexcept {
 }
 
 std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
-    return buffer_.pixels().size_bytes();
+    return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes();
 }
 
 std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
@@ -158,6 +168,12 @@ bool PreparedPreviewFrame::isOcioQualified() const noexcept {
 
 bool PreparedPreviewFrame::hasProcessFrame() const noexcept {
     return !std::holds_alternative<DisplayOnlyPtr>(displayFrame_);
+}
+
+std::span<const EvaluatedOperationBounds> PreparedPreviewFrame::evaluatedBounds() const noexcept {
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_))
+        return (*displayOnly)->evaluatedBounds();
+    return processFrame()->evaluatedBounds();
 }
 
 const ProcessFrameIdentity& PreparedPreviewFrame::processIdentity() const& noexcept {

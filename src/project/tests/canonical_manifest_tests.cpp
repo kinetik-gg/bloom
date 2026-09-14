@@ -64,7 +64,7 @@ void testEmptyGoldenBytes(Expectations& expectations) {
                                           "    \"path\": \"document.json\",\n"
                                           "    \"schemaVersion\": {\n"
                                           "      \"major\": 1,\n"
-                                          "      \"minor\": 6\n"
+                                          "      \"minor\": 7\n"
                                           "    }\n"
                                           "  },\n"
                                           "  \"requirements\": []\n"
@@ -101,7 +101,7 @@ void testNonEmptyGoldenBytes(Expectations& expectations) {
                                           "    \"path\": \"document.json\",\n"
                                           "    \"schemaVersion\": {\n"
                                           "      \"major\": 1,\n"
-                                          "      \"minor\": 6\n"
+                                          "      \"minor\": 7\n"
                                           "    }\n"
                                           "  },\n"
                                           "  \"requirements\": [\n"
@@ -173,7 +173,7 @@ void testFixedConstantsAndSchemaVersions(Expectations& expectations) {
     expectError(manifest, CanonicalManifestError::InvalidDocumentSchemaVersion,
                 "a document schema major other than one is rejected");
     manifest = {};
-    manifest.documentSchemaVersion = {1, 7};
+    manifest.documentSchemaVersion = {1, 8};
     expectations.expect(
         static_cast<bool>(bloom::project::canonicalManifestSize(manifest)),
         "a same-major newer document minor is accepted for round-tripped document truth");

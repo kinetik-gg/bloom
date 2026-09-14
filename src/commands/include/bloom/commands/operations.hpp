@@ -52,6 +52,10 @@ inline constexpr std::string_view kDuplicateCompositionOutput = "composition";
 
 class AddSolidLayer final : public Operation {
   public:
+    AddSolidLayer(document::CompositionId compositionId, std::string name, core::Color4d color)
+        : compositionId_(compositionId), name_(std::move(name)), color_(color),
+          useCompositionCentre_(true) {}
+
     AddSolidLayer(document::CompositionId compositionId, std::string name, core::Color4d color,
                   document::Vec2d position, double opacity = 1.0)
         : compositionId_(compositionId), name_(std::move(name)), color_(color), position_(position),
@@ -64,7 +68,8 @@ class AddSolidLayer final : public Operation {
     document::CompositionId compositionId_;
     std::string name_;
     core::Color4d color_;
-    document::Vec2d position_;
+    document::Vec2d position_{};
+    bool useCompositionCentre_ = false;
     double opacity_ = 1.0;
 };
 
@@ -78,6 +83,10 @@ class AddSolidLayer final : public Operation {
 // is nothing to select and nothing to persist (see bloom/render/text_raster.hpp).
 class AddTextLayer final : public Operation {
   public:
+    AddTextLayer(document::CompositionId compositionId, std::string name, std::string text)
+        : compositionId_(compositionId), name_(std::move(name)), text_(std::move(text)),
+          useCompositionCentre_(true) {}
+
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text,
                  document::Vec2d position, double opacity = 1.0,
                  double size = document::kDefaultTextSizePixels,
@@ -92,7 +101,8 @@ class AddTextLayer final : public Operation {
     document::CompositionId compositionId_;
     std::string name_;
     std::string text_;
-    document::Vec2d position_;
+    document::Vec2d position_{};
+    bool useCompositionCentre_ = false;
     double opacity_ = 1.0;
     double size_ = document::kDefaultTextSizePixels;
     core::Color4d color_{1.0, 1.0, 1.0, 1.0};

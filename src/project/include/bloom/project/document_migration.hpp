@@ -154,13 +154,17 @@ struct MigrationStepDescriptor final {
 [[nodiscard]] MigrationStepOutcome migrateMergesV1_5(const JsonValue& root,
                                                      std::pmr::memory_resource* resource,
                                                      std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateContentBoundsV1_6(const JsonValue& root,
+                                                            std::pmr::memory_resource* resource,
+                                                            std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
     MigrationStepDescriptor{{1, 2}, {1, 3}, migrateAnimationBreadthV1_2},
     MigrationStepDescriptor{{1, 3}, {1, 4}, migrateValueGraphV1_3},
     MigrationStepDescriptor{{1, 4}, {1, 5}, migrateLayerTimelineV1_4},
-    MigrationStepDescriptor{{1, 5}, {1, 6}, migrateMergesV1_5}};
+    MigrationStepDescriptor{{1, 5}, {1, 6}, migrateMergesV1_5},
+    MigrationStepDescriptor{{1, 6}, {1, 7}, migrateContentBoundsV1_6}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

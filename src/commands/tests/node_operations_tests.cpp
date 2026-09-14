@@ -215,6 +215,8 @@ void testValidityQuery(TestContext& test) {
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
+        if (definition.category == NodeCategory::Compatibility)
+            continue;
         // Task S1, item 5: a OnePerComposition type is refused once the composition already holds
         // one. The fixture's composition carries a Layer Stack from the start, so that one refuses
         // immediately; the composition output is the same rule proved from the other side -- the
@@ -243,9 +245,16 @@ void testAddAndLayout(TestContext& test) {
         for (const auto& parameter : definition.parameters) {
             const auto parameterId = result.outputId<ParameterId>("parameter." + parameter.role);
             const auto* record = parameterId ? comp.parameters().find(*parameterId) : nullptr;
+            auto expected = parameter.defaultValue;
+            if (parameter.schemaKey == document::kSolidWidthParameterSchemaKey)
+                expected = static_cast<double>(comp.format().width());
+            if (parameter.schemaKey == document::kSolidHeightParameterSchemaKey)
+                expected = static_cast<double>(comp.format().height());
+            if (parameter.schemaKey == document::kPositionParameterSchemaKey)
+                expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
+                                           static_cast<double>(comp.format().height()) / 2.0};
             test.expect(record && record->schemaKey == parameter.schemaKey &&
-                            record->source ==
-                                ParameterSource{ConstantValueSource{parameter.defaultValue}},
+                            record->source == ParameterSource{ConstantValueSource{expected}},
                         "registry default is copied exactly into an independent parameter");
         }
         if (definition.cardinality == NodeCardinality::OnePerComposition) {
@@ -257,6 +266,8 @@ void testAddAndLayout(TestContext& test) {
     // singletons
     // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
+        if (definition.category == NodeCategory::Compatibility)
+            continue;
         const bool singleton = definition.key.typeId == kCompositionOutputNodeType;
         test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
                     "exactly the Layer Stack and the composition output are one per composition: " +

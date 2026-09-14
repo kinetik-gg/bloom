@@ -353,7 +353,13 @@ lowerSolid(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Validated solid color could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledSolid{node.id, *color};
+    auto width = compiledScalarParameter(findParameterBinding(node, kSolidWidthParameterRole));
+    auto height = compiledScalarParameter(findParameterBinding(node, kSolidHeightParameterRole));
+    if (node.typeId == kSolidSourceNodeType && node.schemaVersion >= 2 && (!width || !height)) {
+        addTopologyFailure(node.id, "Solid dimensions could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledSolid{node.id, *color, width, height};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -370,7 +376,23 @@ lowerText(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledText{node.id, contentBinding->parameterId, *content, *size, *color};
+    std::optional<runtime::CompiledTextLayout> layout;
+    if (node.schemaVersion >= 2) {
+        const auto* alignmentBinding = findParameterBinding(node, kTextAlignmentParameterRole);
+        const auto* alignment = parameterConstant<std::int64_t>(alignmentBinding);
+        const auto lineHeight =
+            compiledScalarParameter(findParameterBinding(node, kTextLineHeightParameterRole));
+        const auto letterSpacing =
+            compiledScalarParameter(findParameterBinding(node, kTextLetterSpacingParameterRole));
+        if (!alignment || !lineHeight || !letterSpacing) {
+            addTopologyFailure(node.id, "Text layout could not be lowered.");
+            return std::nullopt;
+        }
+        layout = runtime::CompiledTextLayout{alignmentBinding->parameterId, *alignment, *lineHeight,
+                                             *letterSpacing};
+    }
+    return runtime::CompiledText{node.id, contentBinding->parameterId, *content, *size, *color,
+                                 layout};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -418,7 +440,8 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         blendModeBinding->parameterId,
                                         *blendMode,
                                         boundary->second->inPoint,
-                                        boundary->second->endPoint(composition_->duration())};
+                                        boundary->second->endPoint(composition_->duration()),
+                                        node.schemaVersion >= 4};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -454,7 +477,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         }
         entries.push_back({entry.slotId, entry.layerId, source->second});
     }
-    return runtime::CompiledMerge{node.id, std::move(entries)};
+    return runtime::CompiledMerge{node.id, std::move(entries), node.schemaVersion >= 2};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation> lowerCompositionOutput(

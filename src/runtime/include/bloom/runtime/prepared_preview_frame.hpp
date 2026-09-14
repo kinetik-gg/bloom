@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <vector>
 
 namespace bloom::runtime {
 
@@ -54,8 +55,8 @@ struct PreviewDisplayBufferView final {
 class PreparedPreviewFrame;
 
 // A preview frame reduced to what a viewer actually paints: the packed RGBA8 display buffer, the
-// request identity it answers, and the process identity that produced it -- and NOT the Float32
-// process image (task PERF1, FORMAL AMENDMENT 1).
+// request identity it answers, evaluated geometry, and the process identity that produced it --
+// without the Float32 process image (task PERF1, FORMAL AMENDMENT 1).
 //
 // This exists because of what retaining frames costs. At 1920x1080 the packed display buffer is
 // about 8 MB while the process image it was mapped from is about 33 MB, so a RAM preview cache that
@@ -76,9 +77,10 @@ class PreviewDisplayOnlyFrame final {
     PreviewDisplayOnlyFrame& operator=(PreviewDisplayOnlyFrame&&) = delete;
     ~PreviewDisplayOnlyFrame() = default;
 
-    // Copies `source`'s packed display pixels -- whichever alternative produced them -- and drops
-    // everything else. std::nullopt when the source has no valid display buffer, when its packed
-    // layout is not the one this storage can hold, or when the copy would exceed the byte limit.
+    // Copies `source`'s packed display pixels -- whichever alternative produced them -- and retains
+    // its evaluated geometry without the Float32 image. std::nullopt when the source has no valid
+    // display buffer, when its packed layout is not the one this storage can hold, or when the copy
+    // would exceed the byte limit.
     [[nodiscard]] static std::optional<PreviewDisplayOnlyFrame>
     create(const PreparedPreviewFrame& source, std::size_t pixelStorageByteLimit) noexcept;
 
@@ -90,16 +92,19 @@ class PreviewDisplayOnlyFrame final {
         return processIdentity_;
     }
     [[nodiscard]] const ProcessFrameIdentity& processIdentity() const&& = delete;
+    [[nodiscard]] std::span<const EvaluatedOperationBounds> evaluatedBounds() const noexcept {
+        return bounds_;
+    }
     [[nodiscard]] bool isOcioQualified() const noexcept { return isOcioQualified_; }
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
-    // What retaining this frame costs: its packed display pixels and nothing else.
+    // What retaining this frame costs: packed display pixels plus evaluated geometry.
     [[nodiscard]] std::size_t displayByteCost() const noexcept;
 
   private:
     PreviewDisplayOnlyFrame(PreviewRequestIdentity desiredIdentity,
                             ProcessFrameIdentity processIdentity,
-                            render::PreparedReferenceDisplayBuffer buffer,
-                            bool isOcioQualified) noexcept;
+                            render::PreparedReferenceDisplayBuffer buffer, bool isOcioQualified,
+                            std::vector<EvaluatedOperationBounds> bounds) noexcept;
 
     PreviewRequestIdentity desiredIdentity_;
     ProcessFrameIdentity processIdentity_;
@@ -108,6 +113,7 @@ class PreviewDisplayOnlyFrame final {
     // the pixels' own type.
     render::PreparedReferenceDisplayBuffer buffer_;
     bool isOcioQualified_ = false;
+    std::vector<EvaluatedOperationBounds> bounds_;
 };
 
 // A closed alternative over the two production display products (issue #97, task C3, design
@@ -151,6 +157,7 @@ class PreparedPreviewFrame final {
     // False exactly for a display-only frame: its scene-linear pixels were deliberately not
     // retained, so processFrame() is null and processImage() must not be called.
     [[nodiscard]] bool hasProcessFrame() const noexcept;
+    [[nodiscard]] std::span<const EvaluatedOperationBounds> evaluatedBounds() const noexcept;
 
     [[nodiscard]] const ProcessFrameIdentity& processIdentity() const& noexcept;
     [[nodiscard]] const ProcessFrameIdentity& processIdentity() const&& = delete;

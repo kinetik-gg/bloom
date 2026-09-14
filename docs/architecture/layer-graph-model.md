@@ -98,48 +98,50 @@ operation, changing the previous Layer-only operand grammar. Evaluator and primi
 remain 5 because existing pixel behavior is unchanged. Output identity goldens are independently
 re-derived for plan 3, animation 2, evaluator 5 and primitives 5.
 
-### Layer Transform
+### Local Content Bounds And Layer Transform
 
-The Layer Output boundary owns the layer's complete placement, as five parameters in this authoring
-order, all five animatable:
+Every image operation has local content bounds in full-resolution pixel-edge coordinates. Solid
+version 2 declares animatable Scalar `width` and `height`, each at least one pixel; creation and
+1.7 migration write the composition size. Fractional dimensions retain their exact geometric bounds
+and partial coverage at the final row or column. Text version 2 uses the laid-out glyph box,
+including glyph overhangs. Merge version 2 takes the union of its inputs' transformed content
+bounds. A Layer Output's local bounds equal its source's output bounds. Empty content has empty
+bounds. These rectangles describe content, independently of the conservative bilinear storage window.
+
+The Layer Output version-4 authoring order is:
 
 | Role | Schema key | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `position` | `bloom.transform.position` | Vec2d | composition centre, written at creation | Where the layer centre sits, in composition pixels |
-| `anchor` | `bloom.transform.anchor` | Vec2d | `{0, 0}` | The pivot, in full-resolution layer pixels measured from the layer centre |
-| `scale` | `bloom.transform.scale` | Vec2d | `{1, 1}` | Per-axis unitless factor |
-| `rotation` | `bloom.transform.rotation` | Float64 | `0` | Degrees, clockwise on screen |
-| `opacity` | `bloom.layer.opacity` | Float64 | `1` | Unit-interval coverage multiplier |
+| `position` | `bloom.transform.position` | Vec2d | composition centre at creation | Composition-space point where the anchor lands |
+| `anchor` | `bloom.transform.anchor` | Vec2d | `{0, 0}` | Offset from the centre of local content bounds |
+| `scale` | `bloom.transform.scale` | Vec2d | `{1, 1}` | Per-axis factor about the anchor |
+| `rotation` | `bloom.transform.rotation` | Float64 | `0` | Clockwise degrees about the anchor |
+| `opacity` | `bloom.layer.opacity` | Float64 | `1` | Coverage multiplier |
 
-The geometric model, with `p` a point of the layer and `q` the composition point it lands on, both
-measured from the layer centre:
+All five are animatable. For local point `p`, bounds centre `c`, and parent-space point `q`:
 
 ```
-q = translation + anchor + R(rotation) * S(scale) * (p - anchor)
+a = c + anchor
+q = position + R(rotation) * S(scale) * (p - a)
 ```
 
-`translation` is `position` minus the composition-format centre, so a `position` of the format centre
-leaves the layer unmoved. The anchor is the one point scale and rotation leave alone; translation
-then carries the whole layer. Rotation is clockwise because Bloom's y axis points down, and is
-defined in composition pixels — a non-square pixel aspect is not divided out, which is the
-convention every timeline compositor uses.
+Pixel edges use integer coordinates and pixel centres use half-integers in this authoring space.
+The resampler converts to its integer-centred lattice once. A fresh composition-sized Solid therefore
+fills the frame exactly, and fresh Text sits centred. Changing anchor while holding position fixed
+moves content because position continues to place the new pivot. Rotation is clockwise with Y down;
+pixel aspect affects presentation, not the authored rotation.
 
-Anchor is measured from the layer centre rather than from a corner for two reasons that are both
-contract, not convenience. First, the schema default has to be a constant, and `{0, 0}` is the only
-composition-independent spelling of "the layer centre"; a corner-relative default would have to know
-the composition format, which can also change later and would silently move every anchor with it.
-Second, `position` already measures the layer from its centre, so the two Vec2d rows share an origin.
+Position, anchor, scale and rotation are finite and otherwise unbounded. Opacity is in `[0, 1]`.
+Negative scale mirrors an axis; zero scale produces empty content. Runtime resource/coordinate limits
+produce diagnostics when a requested image cannot be represented or allocated.
 
-The centre the anchor is measured from is the centre of the layer's pixel AREA. Pixel centres have
-integer coordinates, so a `w`-wide layer occupies `[-0.5, w - 0.5]` and its centre is `(w - 1) / 2`.
-That half-pixel is what makes a quarter turn map pixel centres exactly onto pixel centres.
-
-Validation is per schema rather than per value kind: `position`, `anchor`, and `scale` are finite and
-otherwise unbounded, `rotation` is finite and unbounded, and only `opacity` carries a `[0, 1]`
-domain. A negative scale factor mirrors its axis; a scale factor of exactly zero collapses the layer,
-which evaluation renders as an empty layer rather than refusing (see
-[`evaluation-primitives.md`](evaluation-primitives.md), "Layer Transform Resampling"). A rotation may
-wind past a full turn in either direction, because a rotation curve has to be able to.
+Compatibility is explicit in persisted node versions. A 1.6 document migrates Solid dimensions but
+retains Text v1, Layer v3, and Merge v1 semantics. Legacy Layer position remains a displacement from
+the composition centre, with the original frame-based pivot and clipping. This preserves animated,
+driven, and clipped content to the bit; changing only constant position and anchor values cannot
+preserve those cases. Legacy definitions are available for decoding/evaluation and are excluded from
+new-node authoring categories. Existing Layers v1/v2 upgrade to v3, not v4. Full conversion of legacy
+placement into the new coordinate contract is deferred rather than silently approximated.
 
 ### Blending
 
@@ -165,8 +167,8 @@ In the registered parameter order the blend mode comes last, after the four geom
 opacity: it is the only Layer Output parameter that is not a continuous value at all. That order is
 what the properties grid, the node card, and the timeline all read.
 
-`kLayerOutputNodeSchemaVersion` is `3`. A version-1 or version-2 node — every Layer Output written
-before these changes — is upgraded on open rather than refused: Project I/O injects the missing
+`kLayerOutputNodeSchemaVersion` is `4`. A version-1 or version-2 node — every Layer Output written
+before these changes — is upgraded to compatibility version 3 on open rather than refused: Project I/O injects the missing
 parameters at their defaults, which together are the identity transform and `Normal` blending, so an
 upgraded document renders exactly the picture the build that wrote the file produced. See
 [`project-format.md`](project-format.md), "Node Schema Upgrades".
@@ -351,19 +353,17 @@ remain preservable. Existing ports are Image. Known incompatible socket kinds ar
 
 ### Text And Mute Lowering
 
-`bloom.text-source` is a lowered, evaluable node. Its schema is exactly three parameters in this
-order -- content (String), size (Float64, pixels per em, default 72), color (Color4d, straight
-`bloom.reference.linear-srgb`, default opaque white) -- and no font parameter, because the reference
-path has exactly one embedded face (see
-[`evaluation-primitives.md`](evaluation-primitives.md)'s "Text Rasterization Version 1"). None of the
-three is animatable. The color parameter's node-local ROLE is the same string a solid color's is,
-while its schema key is its own: a role names which binding of a node a parameter fills, the schema
-key is the global identity of the value's meaning, and a text color means what a solid color means,
-which is what lets one properties row, one node-card chip, and one session write path serve both.
+Text version 2 has six parameters in authoring order: content (String), size (Scalar em pixels,
+default 72), color (straight Color4d, default opaque white), alignment (Integer: Left=0, Center=1,
+Right=2; default Left), line-height (positive Scalar em multiplier, default 1), and letter-spacing
+(Scalar pixels between adjacent glyphs, default 0). Size, color, line height and letter spacing are
+animatable. Content and alignment are discrete. The source uses the single embedded DejaVu Sans face;
+there is no font selector. Newlines start lines, CR is ignored for CRLF, and alignment places each
+line within the maximum line advance. Wrapping, shaping and bidi remain deferred.
 
-`kTextSourceNodeSchemaVersion` stays `1` across this change. `AddTextLayer` had never succeeded, so no
-project can contain a version-1 text record written against the earlier content-only shape, and a
-version bump would only have invalidated records that cannot exist.
+Text version 1 remains the exact legacy single-line/frame-rasterized path, including control-character
+glyph lookup. New source rows are projected from the registry in Nodes and Timeline. The color role
+is node-local and shared with Solid; the text color schema retains its distinct global identity.
 
 `AddTextLayer` builds the same canonical structured-layer topology `AddSolidLayer` builds, with a
 text source in the source position. It refuses a non-finite or out-of-domain size, an invalid color,

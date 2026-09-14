@@ -30,10 +30,10 @@ inline constexpr std::string_view kCompositionOutputNodeType = "bloom.compositio
 // I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
 // the version-1 picture exactly (see src/project/document_node_schema_upgrade.cpp and
 // docs/architecture/project-format.md, "Node Schema Upgrades").
-inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 3;
-inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 1;
-inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 1;
-inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kLayerOutputNodeSchemaVersion = 4;
+inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 2;
+inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 2;
+inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kCompositionOutputNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kSolidSourceOutputPort = "image";
@@ -46,8 +46,13 @@ inline constexpr std::string_view kCompositionOutputInputPort = "image";
 inline constexpr std::string_view kCompositionOutputOutputPort = "image";
 
 inline constexpr std::string_view kSolidColorParameterRole = "color";
+inline constexpr std::string_view kSolidWidthParameterRole = "width";
+inline constexpr std::string_view kSolidHeightParameterRole = "height";
 inline constexpr std::string_view kTextParameterRole = "text";
 inline constexpr std::string_view kTextSizeParameterRole = "size";
+inline constexpr std::string_view kTextAlignmentParameterRole = "alignment";
+inline constexpr std::string_view kTextLineHeightParameterRole = "line-height";
+inline constexpr std::string_view kTextLetterSpacingParameterRole = "letter-spacing";
 // Deliberately the same role string as kSolidColorParameterRole. A role is node-local -- it names
 // which binding of THIS node a parameter fills -- while the schema key is the global identity of
 // the value's meaning, and a text source's color means what a solid source's color means. Keeping

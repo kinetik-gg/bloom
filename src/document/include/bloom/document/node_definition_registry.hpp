@@ -166,6 +166,8 @@ enum class NodeCategory : std::uint8_t {
     Values,
     Output,
     Utilities,
+    // Retained persisted schemas, excluded from new-node authoring categories.
+    Compatibility,
 };
 
 // How many instances of a node type one composition may hold (task S1, item 5). The composition's

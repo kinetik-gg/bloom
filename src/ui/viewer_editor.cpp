@@ -1315,16 +1315,34 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
+                    if (displayedFrame->processIdentity().plan) {
+                        const auto& format = displayedFrame->processIdentity().plan->format();
+                        const auto toScreen = [&](const document::Vec2d point) {
+                            return QPointF(
+                                displayRect.left() + point.x * displayRect.width() /
+                                                         static_cast<double>(format.width()),
+                                displayRect.top() + point.y * displayRect.height() /
+                                                        static_cast<double>(format.height()));
+                        };
+                        for (const auto& bounds : previewController_.selectedLayerBounds()) {
+                            painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
+                            QPolygonF polygon;
+                            for (const auto point : bounds.polygon)
+                                polygon << toScreen(point);
+                            painter.setBrush(Qt::NoBrush);
+                            painter.drawPolygon(polygon);
+                            painter.setBrush(kit::color(kit::Color::Accent));
+                            painter.setPen(Qt::NoPen);
+                            painter.drawEllipse(toScreen(bounds.anchor), 3.0, 3.0);
+                        }
+                    }
                 }
             }
         }
     }
 
-    // Task VIEW-1: nothing is painted over the pixels any more. The readiness chip, the failure
-    // banner, and the "Selected: ... · evaluated bounds unavailable" strip all covered part of the
-    // frame to say something that was not about the frame's own content -- the first two are cells
-    // in the window status bar now, and the third claimed nothing the Properties panel does not
-    // already show. A viewer canvas shows the composition; everything else reports elsewhere.
+    // Readiness and diagnostics remain in the status bar. Selection geometry is derived from
+    // the delivered process frame and painted in screen space above the composition.
 }
 
 void ViewerEditor::updatePreviewAccessibility() {
