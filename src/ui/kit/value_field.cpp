@@ -41,6 +41,7 @@ constexpr int kLineEditTextMargin = 2;
 } // namespace
 
 KValueField::KValueField(QWidget* parent) : QWidget(parent) {
+    setFixedHeight(px(Size::Control));
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kValueField"));
     setFocusPolicy(Qt::StrongFocus);

@@ -188,10 +188,6 @@ void testControlSizesAndTheOutsideFocusRing(Expectations& expectations) {
     host.show();
     host.activateWindow();
     QCoreApplication::processEvents();
-    // The widget reserves one whole pixel per side for the 1.5-wide ring plus its own half-pen
-    // overhang, which is why the reservation rounds up rather than truncating.
-    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
-
     button.setControlSize(kit::KButton::ControlSize::Compact);
     const int compact = button.sizeHint().height();
     button.setControlSize(kit::KButton::ControlSize::Default);
@@ -199,12 +195,14 @@ void testControlSizesAndTheOutsideFocusRing(Expectations& expectations) {
     button.setControlSize(kit::KButton::ControlSize::Roomy);
     const int roomy = button.sizeHint().height();
 
-    expectations.expect(compact == kit::px(kit::Size::ControlCompact) + ringMargin,
-                        "the compact size is the compact control token plus the focus-ring margin");
-    expectations.expect(normal == kit::px(kit::Size::Control) + ringMargin,
-                        "the default size is the control token plus the focus-ring margin");
-    expectations.expect(roomy == kit::px(kit::Size::ControlRoomy) + ringMargin,
-                        "the roomy size is the roomy control token plus the focus-ring margin");
+    expectations.expect(
+        compact == kit::px(kit::Size::ControlCompact),
+        "the compact size is the compact control token including the focus-ring margin");
+    expectations.expect(normal == kit::px(kit::Size::Control),
+                        "the default size is the control token including the focus-ring margin");
+    expectations.expect(
+        roomy == kit::px(kit::Size::ControlRoomy),
+        "the roomy size is the roomy control token including the focus-ring margin");
 
     // The ring is drawn in that reserved margin, so taking focus cannot change the size hint --
     // and therefore cannot shift anything laid out beside the button.
@@ -248,7 +246,6 @@ void testAnIconButtonRendersBothGlyphAndLabel(Expectations& expectations) {
 // every ControlSize -- text buttons and icon+text buttons are unaffected.
 void testIconOnlyButtonsAreSquareAcrossEverySize(Expectations& expectations) {
     kit::KButton button(kit::IconId::Close, QString{});
-    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
 
     for (const auto size : {kit::KButton::ControlSize::Compact, kit::KButton::ControlSize::Default,
                             kit::KButton::ControlSize::Roomy}) {
@@ -259,9 +256,10 @@ void testIconOnlyButtonsAreSquareAcrossEverySize(Expectations& expectations) {
     }
 
     button.setControlSize(kit::KButton::ControlSize::Default);
-    expectations.expect(button.sizeHint().width() == kit::px(kit::Size::Control) + ringMargin,
-                        "the square extent is exactly controlExtent plus the focus-ring margin, "
-                        "with no text-button side padding");
+    expectations.expect(
+        button.sizeHint().width() == kit::px(kit::Size::Control),
+        "the square extent is exactly controlExtent including the focus-ring margin, "
+        "with no text-button side padding");
 
     // A labelled button (icon AND text, or text alone) keeps its own, generally non-square, hint.
     kit::KButton labelled(kit::IconId::Play, QStringLiteral("Play"));

@@ -6,6 +6,8 @@
 #include "surface_harness.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/row.hpp>
 
 using namespace bloom;
 using namespace bloom::ui;
@@ -86,6 +88,33 @@ int run(int argc, char** argv) {
            "authoring a row's blending does not move the selection");
     expect(before != modeOfRow(surfaces, targetRow), "the mode actually changed");
 
+    auto* kitRow = qobject_cast<kit::KRow*>(surfaces.layerRow(targetRow));
+    expect(kitRow != nullptr, "timeline uses the shared KRow");
+    auto* visibility =
+        kitRow ? kitRow->findChild<kit::KIconToggle*>("timelineLayerToggle0") : nullptr;
+    auto* lock = kitRow ? kitRow->findChild<kit::KIconToggle*>("timelineLayerToggle3") : nullptr;
+    expect(visibility && lock, "visibility and lock are real kit controls");
+    if (visibility && lock) {
+        const auto enabled = [&] {
+            return surfaces.session.composition()->graph().findLayer(*targetLayer)->enabled;
+        };
+        const bool wasEnabled = enabled();
+        click(visibility);
+        expect(enabled() != wasEnabled && visibility->isChecked() == enabled(),
+               "window-level toggle click authors and projects visibility");
+        (void)surfaces.session.undo();
+        expect(enabled() == wasEnabled && visibility->isChecked() == wasEnabled,
+               "undo projects back into the same toggle");
+        lock->setFocus(Qt::TabFocusReason);
+        QTest::keyClick(lock, Qt::Key_Space);
+        QCoreApplication::processEvents();
+        expect(surfaces.session.composition()->graph().findLayer(*targetLayer)->locked &&
+                   !dropdown->isEnabled(),
+               "keyboard activation locks the bound layer and disables its blending");
+        (void)surfaces.session.undo();
+        expect(dropdown->isEnabled(), "undo restores the row controls");
+    }
+
     // Every other surface agrees immediately: the Layer card's own Blending row and the Properties
     // Appearance row both read the same session answer.
     surfaces.session.selectLayer(*targetLayer);
@@ -114,6 +143,24 @@ int run(int argc, char** argv) {
         auto* scrolled = surfaces.blendingDropdown(lastRow);
         const auto scrolledLayer = layerOfRow(surfaces, lastRow);
         if (scrolled != nullptr && scrolledLayer.has_value()) {
+            auto* toggle =
+                surfaces.layerRow(lastRow)->findChild<kit::KIconToggle*>("timelineLayerToggle0");
+            expect(toggle != nullptr, "scrolled row retains real toggle cells");
+            if (toggle) {
+                const bool enabled =
+                    surfaces.session.composition()->graph().findLayer(*scrolledLayer)->enabled;
+                click(toggle);
+                expect(surfaces.session.composition()->graph().findLayer(*scrolledLayer)->enabled !=
+                           enabled,
+                       "pooled toggle authors its rebound layer");
+                (void)surfaces.session.undo();
+            }
+            scrollBar->setValue(scrollBar->maximum());
+            QCoreApplication::processEvents();
+            scrolled = surfaces.blendingDropdown(lastRow);
+            expect(scrolled != nullptr, "last row is visible after refresh");
+            if (!scrolled)
+                return 1;
             const auto scrolledBefore = surfaces.session.blendModeForLayer(*scrolledLayer);
             click(scrolled);
             const int pick = scrolled->currentIndex() == 0 ? 1 : 0;

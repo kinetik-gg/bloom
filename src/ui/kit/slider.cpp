@@ -25,6 +25,7 @@ constexpr double kKeyStepFraction = 0.01;
 } // namespace
 
 KSlider::KSlider(QWidget* parent) : QWidget(parent) {
+    setFixedHeight(px(Size::Control));
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSlider"));
     setFocusPolicy(Qt::StrongFocus);

@@ -1,3 +1,4 @@
+#include "editor_chrome_test_support.hpp"
 
 // Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
 // chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
@@ -236,20 +237,10 @@ void sendMouse(QWidget& widget, const QEvent::Type type, const qreal pixelX, con
 
 [[nodiscard]] double toggleEdgeLuminance(const QImage& image, const int cellX,
                                          const int cellWidth) {
-    const int boxSize = bloom::ui::kit::px(bloom::ui::kit::Size::IconMedium);
-    const int left = cellX + (cellWidth - boxSize) / 2;
-    const int top = (bloom::ui::kTimelineRowHeight - boxSize) / 2;
-    double total = 0.0;
-    int samples = 0;
-    for (int offset = 4; offset < boxSize - 3; ++offset) {
-        for (const QPoint point :
-             {QPoint(left + offset, top), QPoint(left + offset, top + boxSize - 1),
-              QPoint(left, top + offset), QPoint(left + boxSize - 1, top + offset)}) {
-            total += luminance(image.pixelColor(point));
-            ++samples;
-        }
-    }
-    return samples == 0 ? 0.0 : total / samples;
+    using namespace bloom::ui;
+    const int y = (kit::px(kit::Size::ListRow) - kit::px(kit::Size::Control)) / 2 +
+                  kit::px(kit::Spacing::XXS);
+    return luminance(image.pixelColor(cellX + cellWidth / 2, y));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -348,8 +339,8 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
         auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
         expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
                             "column headings are the body's first row");
-        expectations.expect(editor->takeHeaderRightWidget() == nullptr &&
-                                editor->takeHeaderMenuWidget() == nullptr,
+        expectations.expect(editor->editorChrome().headerCanvas != nullptr &&
+                                editor->editorChrome().header.host != nullptr,
                             "both header transfers are idempotent");
     }
     expectations.expect(area.setEditorId("bloom.probe"), "the split editor can be replaced");
@@ -967,8 +958,7 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     }
 
     // The cell table is shared by the headers and the rows, so one x answers for both.
-    const int toggleWidth =
-        ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS);
+    const int toggleWidth = ui::kit::px(ui::kit::Size::ToggleCell);
     static constexpr std::array<const char*, 4> kFragments{"visibility", "audio", "solo", "lock"};
     for (int index = 0; index < 4; ++index) {
         const int x = index * toggleWidth + toggleWidth / 2;
@@ -1422,12 +1412,28 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
                                 core::RationalTime::fromInteger(3),
                         "left trim handle changes only the in point");
     (void)fixture.session.undo();
-    QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
-    QTest::mouseClick(stack, Qt::LeftButton, Qt::ControlModifier, QPoint(110, 48));
+    QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                                 ui::kit::px(ui::kit::Size::Control) +
+                                 ui::kit::px(ui::kit::Spacing::L),
+                             16));
+    QTest::mouseClick(stack, Qt::LeftButton, Qt::ControlModifier,
+                      QPoint(ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                                 ui::kit::px(ui::kit::Size::Control) +
+                                 ui::kit::px(ui::kit::Spacing::L),
+                             48));
     expectations.expect(fixture.session.selectedNodes().size() == 2,
                         "Ctrl row selection shares the session selection set");
-    QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
-    QTest::mouseDClick(stack, Qt::LeftButton, Qt::NoModifier, QPoint(110, 16));
+    QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                                 ui::kit::px(ui::kit::Size::Control) +
+                                 ui::kit::px(ui::kit::Spacing::L),
+                             16));
+    QTest::mouseDClick(stack, Qt::LeftButton, Qt::NoModifier,
+                       QPoint(ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                                  ui::kit::px(ui::kit::Size::Control) +
+                                  ui::kit::px(ui::kit::Spacing::L),
+                              16));
     auto* rename = stack->findChild<QLineEdit*>("timelineLayerRenameEditor");
     expectations.expect(rename != nullptr, "double click opens inline rename");
     if (rename) {
@@ -1479,9 +1485,9 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
     }
     expectations.expect(!fixture.session.composition()->workArea(),
                         "double click clears the work area");
-    sendMouse(*stack, QEvent::MouseButtonPress, 110, 16);
-    sendMouse(*stack, QEvent::MouseMove, 110, 64);
-    sendMouse(*stack, QEvent::MouseButtonRelease, 110, 64);
+    sendMouse(*stack, QEvent::MouseButtonPress, 150, 16);
+    sendMouse(*stack, QEvent::MouseMove, 150, 64);
+    sendMouse(*stack, QEvent::MouseButtonRelease, 150, 64);
     expectations.expect(stack->entries().front().layerId == second,
                         "row drag commits stable-slot reorder");
     delete editor;

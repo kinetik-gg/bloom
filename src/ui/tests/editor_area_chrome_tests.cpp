@@ -1,5 +1,6 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -57,24 +58,18 @@ using namespace bloom::ui;
 // footer -- exercises the generic EditorFooterProvider seam without needing ViewerEditor's real
 // CompositionSession/CompositionPreviewController wiring (that pin belongs in
 // viewer_editor_tests.cpp, which already has that fixture machinery).
-class FakeFooterProvidingEditor final : public QWidget, public EditorFooterProvider {
+class FakeFooterProvidingEditor final : public QWidget, public EditorChromeProvider {
   public:
-    explicit FakeFooterProvidingEditor(QWidget* parent) : QWidget(parent) {}
-
-    QWidget* takeFooterWidget() override {
-        if (footerTaken_) {
-            return nullptr;
-        }
-        footerTaken_ = true;
-        auto* footer = new QWidget();
-        // EditorArea overwrites objectName to "editorFooter" once it takes this widget, so
-        // identity is checked with a dynamic property instead (survives the rename).
+    explicit FakeFooterProvidingEditor(QWidget* parent) : QWidget(parent) {
+        chrome_.footer.objectName = "fakeDeclaredFooter";
+        chrome_.footer.addWidget(new kit::KLabel("Footer", this));
+        auto* footer = EditorArea::buildChromeRow(chrome_.footer, this, true);
         footer->setProperty("fakeFooterMarker", true);
-        return footer;
     }
+    EditorChromeSpec& editorChrome() override { return chrome_; }
 
   private:
-    bool footerTaken_ = false;
+    EditorChromeSpec chrome_;
 };
 
 EditorRegistry makeRegistry() {
@@ -112,25 +107,17 @@ EditorRegistry makeFooterProvidingRegistry() {
 // Task NODES-1: the header's counterpart to FakeFooterProvidingEditor above -- a minimal test
 // double proving the generic EditorHeaderMenuProvider seam without needing the real node editor's
 // menus/actions (that pin belongs in node_interaction_tests.cpp, which already exercises them).
-class FakeHeaderMenuProvidingEditor final : public QWidget, public EditorHeaderMenuProvider {
+class FakeHeaderMenuProvidingEditor final : public QWidget, public EditorChromeProvider {
   public:
-    explicit FakeHeaderMenuProvidingEditor(QWidget* parent) : QWidget(parent) {}
-
-    QWidget* takeHeaderMenuWidget() override {
-        if (widgetTaken_) {
-            return nullptr;
-        }
-        widgetTaken_ = true;
-        auto* widget = new QWidget();
-        // EditorArea reparents this widget into the header without renaming it (unlike the footer,
-        // which stamps "editorFooter" over whatever objectName the provider used) -- so a plain
-        // property, not an objectName, is what a test can look for either way.
-        widget->setProperty("fakeHeaderMenuMarker", true);
-        return widget;
+    explicit FakeHeaderMenuProvidingEditor(QWidget* parent) : QWidget(parent) {
+        chrome_.header.addWidget(new kit::KLabel("Header", this));
+        auto* header = EditorArea::buildChromeRow(chrome_.header, this);
+        header->setProperty("fakeHeaderMenuMarker", true);
     }
+    EditorChromeSpec& editorChrome() override { return chrome_; }
 
   private:
-    bool widgetTaken_ = false;
+    EditorChromeSpec chrome_;
 };
 
 EditorRegistry makeHeaderMenuProvidingRegistry() {
@@ -405,12 +392,10 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
     if (header == nullptr || picker == nullptr) {
         return;
     }
-    expectations.expect(kit::px(kit::Size::EditorHeader) == 48,
-                        "the header row's own height token is 48");
-    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
-    expectations.expect(picker->sizeHint().height() ==
-                            kit::px(kit::Size::ControlRoomy) + ringMargin,
-                        "the switcher field is ControlRoomy (32) tall");
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 32,
+                        "the header row's own height token is 32");
+    expectations.expect(picker->sizeHint().height() == kit::px(kit::Size::Control),
+                        "the switcher field is Control (26) tall");
 }
 
 double pixelLuminance(const QColor& color) {
@@ -479,9 +464,11 @@ void testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(Expectations& 
         return;
     }
     expectations.expect(
-        footer->property("fakeFooterMarker").toBool(),
-        "the hosted footer really is the exact widget the provider handed back, not a copy or a "
-        "wrapper");
+        footer->findChild<QWidget*>("fakeDeclaredFooter") &&
+            footer->findChild<QWidget*>("fakeDeclaredFooter")
+                ->property("fakeFooterMarker")
+                .toBool(),
+        "the footer host retains the exact declared row and its original object name");
 }
 
 // FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/assets,

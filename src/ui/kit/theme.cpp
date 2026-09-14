@@ -221,7 +221,6 @@ QFrame#editorArea[active="true"] {
 QWidget#editorHeader {
     background: {color.Surface};
     border-bottom: {border.Hairline}px solid {color.Border};
-    min-height: {size.EditorHeader}px;
 }
 QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};
@@ -326,7 +325,6 @@ QToolButton {
     border: {border.Hairline}px solid transparent;
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.XS}px;
-    min-height: {size.ControlCompact}px;
 }
 QToolButton:hover {
     background: {color.SurfaceRaised};
@@ -400,6 +398,10 @@ QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
     background: {color.Accent};
     color: {color.Foreground};
 }
+QTreeView[kitRows="true"]::item {
+    padding: 0;
+    background: transparent;
+}
 QHeaderView {
     background: {color.Surface};
     border: none;
@@ -464,7 +466,7 @@ void installKinetikTheme(QApplication& application) {
         QApplication::setStyle(style);
     }
     // Bundled faces are registered before the application font is set, so the very first widget
-    // already renders in DejaVu Sans rather than flashing the platform family. A face that
+    // already renders in Inter rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
@@ -477,6 +479,8 @@ void installKinetikTheme(QApplication& application) {
     // after this call. kit::AltUnderlineProxyStyle::polish() sets it on every menu for that
     // reason; this line covers a menu built before any style change.
     QApplication::setFont(font(TypeRole::Ui), "QMenu");
+    QApplication::setFont(font(TypeRole::Ui), "QMenuBar");
+    QApplication::setFont(font(TypeRole::Ui), "QHeaderView");
     application.setStyleSheet(kinetikStyleSheet());
 }
 

@@ -279,5 +279,23 @@ int main(int argc, char** argv) {
     testTheCacheReturnsTheSamePixmapForTheSameIdentity(expectations);
     testPixmapsAreDevicePixelRatioAware(expectations);
     testQIconCarriesTheStateMachine(expectations);
+    for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+        for (const auto id : kit::iconIds()) {
+            for (const auto weight : {kit::IconWeight::Regular, kit::IconWeight::Fill}) {
+                const auto direct = kit::iconPixmap(id, kit::Size::IconChrome, kit::Color::Muted,
+                                                    kit::State::Normal, weight, dpr);
+                const auto engine = kit::icon(id, kit::Size::IconChrome, kit::Color::Muted, weight)
+                                        .pixmap(QSize(16, 16), dpr);
+                expectations.expect(direct.size() == QSize(qRound(16 * dpr), qRound(16 * dpr)),
+                                    "SVG rasterization has integer device-pixel dimensions");
+                expectations.expect(engine.size() == direct.size() &&
+                                        engine.devicePixelRatio() == dpr,
+                                    "QIcon engine rerasterizes at the requested DPR");
+                expectations.expect(engine.toImage() == direct.toImage(),
+                                    "QIcon never scales a cached lower-resolution glyph");
+            }
+        }
+    }
+
     return expectations.failures() == 0 ? 0 : 1;
 }

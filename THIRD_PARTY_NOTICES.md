@@ -16,6 +16,7 @@ component, and its own records explain why the lock cannot represent it.
 | Component | Version | License | Files | Records |
 | --- | --- | --- | --- | --- |
 | Phosphor Icons (core assets) | v2.0.8 | MIT | `src/ui/kit/third_party/phosphor-icons/` | `LICENSE`, `provenance.md` |
+| Inter | v4.1 | SIL Open Font License 1.1 | `src/ui/kit/third_party/inter/` | `LICENSE`, `manifest.json`, `provenance.md` |
 | DejaVu Sans | 2.37 | Bitstream Vera Fonts Copyright + Arev Fonts Copyright, DejaVu changes public domain | `src/ui/kit/third_party/dejavu-sans/` | `LICENSE`, `provenance.md` |
 | Geist Mono | v1.7.2 | SIL Open Font License 1.1 | `src/ui/kit/third_party/geist-mono/` | `LICENSE`, `provenance.md` |
 
@@ -41,9 +42,15 @@ MIT-style permissive grants that allow reproduction and distribution, including 
 software package, provided their notices travel with the fonts. The complete license text is at
 `src/ui/kit/third_party/dejavu-sans/LICENSE`, byte-identical to the upstream `LICENSE`.
 
-Bloom vendors the DejaVu Sans Book, Bold, and Oblique TTFs, unmodified, from the pinned `2.37`
-release. DejaVu Serif, DejaVu Sans Mono, the Condensed and ExtraLight cuts, and DejaVu Math TeX
-Gyre are not vendored.
+Bloom retains only the unmodified DejaVu Sans Book TTF from release `2.37`, solely for the
+render module's text source. Interface typography uses Inter.
+
+### Inter
+
+Copyright 2016 The Inter Project Authors (<https://rsms.me/inter/>). Licensed under the
+SIL Open Font License 1.1; complete text: `src/ui/kit/third_party/inter/LICENSE`.
+Bloom bundles unmodified Regular, Medium and SemiBold static TTFs from release `v4.1`.
+The manifest and provenance beside the files record computed archive and file digests.
 
 ### Geist Mono
 

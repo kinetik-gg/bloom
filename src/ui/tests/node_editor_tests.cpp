@@ -1,3 +1,4 @@
+#include "editor_chrome_test_support.hpp"
 // Task U4 (issue #123): the Kinetik node editor's navigation, selection, typed connectors,
 // context menu and in-node editing contracts. Appended as its own executable rather than folded
 // into composition_projection_test.cpp, which owns the cross-editor projection/selection contract
@@ -836,12 +837,12 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
 // spilling onto a second row (the header's height is fixed).
 void testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(Expectations& expectations) {
     GraphFixture fixture(makeProject("Node Header Menu Bar Test"));
-    auto* bar = fixture.editor.takeHeaderMenuWidget();
+    auto* bar = bloom::ui::test::header(fixture.editor);
     expectations.expect(bar != nullptr, "the node editor offers a header menu widget");
     if (bar == nullptr) {
         return;
     }
-    expectations.expect(fixture.editor.takeHeaderMenuWidget() == nullptr,
+    expectations.expect(bloom::ui::test::header(fixture.editor) == bar,
                         "a second take returns nullptr, same idempotent contract as the footer");
     bar->show();
 

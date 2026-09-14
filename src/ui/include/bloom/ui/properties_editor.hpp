@@ -33,17 +33,18 @@ class KSlider;
 class KSwitch;
 } // namespace kit
 
-class PropertiesEditor final : public QWidget, public EditorHeaderMenuProvider {
+class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
-    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    EditorChromeSpec chrome_;
     void rebuild();
     void configureRegistryRows();
     void configureUpstream();
@@ -54,7 +55,6 @@ class PropertiesEditor final : public QWidget, public EditorHeaderMenuProvider {
     std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
     QLineEdit* search_ = nullptr;
-    bool headerTaken_ = false;
     std::vector<PropertiesRegistryRow*> registryRows_;
     QWidget* registryPanel_ = nullptr;
     QString registrySignature_;

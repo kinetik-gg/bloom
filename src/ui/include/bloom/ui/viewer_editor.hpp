@@ -150,23 +150,21 @@ struct ViewTransform final {
                                            core::PixelAspectRatio pixelAspect, QPointF screenPoint,
                                            double factor) noexcept;
 
-// FORMAL AMENDMENT 1 (task C1): ViewerEditor also implements EditorFooterProvider so EditorArea
 // can host its bottom status bar (zoom control, exact frame/timecode readout, and the
-// color-state chip -- see the contract on takeFooterWidget() below) as a real footer widget
+
 // instead of a strip painted inside ViewerEditor's own canvas. Until something actually calls
-// takeFooterWidget() -- which happens only when a ViewerEditor is created through EditorArea's
+
 // rebuildEditor() -- the status bar stays exactly where every existing test already expects it:
 // painted inside ViewerEditor's own bottom Size::Control strip, with canvasRect() reserving that
 // same space it always has. Every geometry-sensitive test that constructs a ViewerEditor directly
 // (viewer_editor_tests.cpp, direct_manipulation_tests.cpp, composition_session_position_
 // interaction_tests.cpp) never calls it, so their pinned canvasRect()-derived math is completely
 // unaffected by this amendment.
-class ViewerEditor final : public QWidget,
-                           public EditorHeaderMenuProvider,
-                           public EditorFooterProvider {
+class ViewerEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
     // menu so both entry points call one method. Null leaves the footer's RAM Preview button
     // present and disabled -- an affordance that is visibly unavailable rather than one that
@@ -179,17 +177,13 @@ class ViewerEditor final : public QWidget,
     // have destroyed.
     ~ViewerEditor() override;
 
-    // EditorHeaderMenuProvider: the Viewer owns its selectors and menus so EditorArea can place
     // them immediately after the panel switcher in the shared editor header.
-    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
-    // EditorFooterProvider (task C1, FORMAL AMENDMENT 1): the first call reparents the status bar
     // widget away from this ViewerEditor and returns it -- the caller (EditorArea) takes ownership
     // from there. canvasRect() becomes full-bleed from that point on, since the bottom strip it
     // used to reserve now belongs to the caller's own footer slot instead. The color-state chip
     // keeps rendering inside the returned widget exactly as before (contract, FORMAL AMENDMENT 1).
     // A second call (this ViewerEditor already gave its footer away) returns nullptr.
-    [[nodiscard]] QWidget* takeFooterWidget() override;
 
     // Test/diagnostic surface only (never read by production code, mirroring kit::KDropdown's own
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
@@ -221,13 +215,14 @@ class ViewerEditor final : public QWidget,
     void contextMenuEvent(QContextMenuEvent* event) override;
 
   private:
+    EditorChromeSpec chrome_;
     // The region paintEvent() draws the canvas into and currentMapping() maps gestures against:
-    // the full widget rect minus the bottom status bar strip -- UNLESS takeFooterWidget() has
+
     // already relocated that strip to an external footer slot (FORMAL AMENDMENT 1), in which case
     // the canvas is full-bleed with no inset at all. There is no other inset either way
     // (decision 1).
     [[nodiscard]] QRectF canvasRect() const;
-    // Returns an empty rect once takeFooterWidget() has been called: the strip it used to
+
     // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;
     void updatePreviewAccessibility();
@@ -312,14 +307,13 @@ class ViewerEditor final : public QWidget,
     // The footer's controls (decision 3, reshaped by task VIEW-1). Every one of them is a child of
     // footer_ from construction, never of this ViewerEditor: the pre-VIEW-1 arrangement -- controls
     // parented here and the strip painted into this widget's own bottom inset until
-    // takeFooterWidget() moved them -- meant the same bar had two rendering paths that had to stay
-    // in agreement. There is one now, and takeFooterWidget() hands the whole row over by
+
     // reparenting exactly one widget.
     kit::KDropdown* zoomDropdown_ = nullptr;
     kit::KDropdown* resolutionDropdown_ = nullptr;
     // Task VIEW-1's footer, left to right: channel, zoom, resolution, background, the transport,
     // and the frame/timecode readout. Every one of them is a child of footer_ from construction --
-    // there is no second, painted-into-the-canvas copy of any of them -- so takeFooterWidget()
+
     // hands the whole row over by reparenting exactly one widget.
     kit::KDropdown* channelDropdown_ = nullptr;
     kit::KDropdown* backgroundDropdown_ = nullptr;
@@ -360,14 +354,13 @@ class ViewerEditor final : public QWidget,
     ViewerChannel channelViewChannel_ = ViewerChannel::Rgba;
     QImage channelView_;
     // FORMAL AMENDMENT 1, as of task VIEW-1: non-null for this ViewerEditor's whole life. Until
-    // takeFooterWidget() is called it is a child positioned by layoutStatusBar() inside this
+
     // widget's own bottom strip; after it, the caller owns it and this stays the surviving
     // reference the signal handlers repaint through.
     QWidget* statusBarFooter_ = nullptr;
     bool statusBarFooterTaken_ = false;
 
     QWidget* headerMenuWidget_ = nullptr;
-    bool headerMenuWidgetTaken_ = false;
     kit::KDropdown* compositionSelector_ = nullptr;
     kit::KDropdown* objectSelector_ = nullptr;
     QToolButton* compositionMenuButton_ = nullptr;

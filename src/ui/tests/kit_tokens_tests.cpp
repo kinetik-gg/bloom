@@ -135,7 +135,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Spacing::MenuItemY) == 6, "Spacing::MenuItemY is 6");
     expectations.expect(kit::px(kit::Spacing::MenuItemX) == 10, "Spacing::MenuItemX is 10");
 
-    expectations.expect(kit::px(kit::Size::ControlCompact) == 22, "ControlCompact is 22");
+    expectations.expect(kit::px(kit::Size::ControlCompact) == 26,
+                        "Compact controls share Control height");
     expectations.expect(kit::px(kit::Size::Control) == 26, "Control is 26");
     expectations.expect(kit::px(kit::Size::ControlRoomy) == 32, "ControlRoomy is 32");
     expectations.expect(kit::px(kit::Size::IconSmall) == 12, "IconSmall is 12");
@@ -146,11 +147,11 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     // task U8, issue #131, formal amendment 2, A10: the EditorArea header's OWN height (48) is a
     // distinct token from PanelHeader above, which stays 30 -- node_editor.cpp's card header
     // height and row pitch still resolve through PanelHeader unchanged.
-    expectations.expect(kit::px(kit::Size::EditorHeader) == 48, "EditorHeader is 48");
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 32, "EditorHeader aliases HeaderRow");
     expectations.expect(kit::px(kit::Size::TimelineRow) == 32, "TimelineRow is 32");
     expectations.expect(kit::px(kit::Size::TimelineBar) == 20, "TimelineBar is 20");
-    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 80,
-                        "TimelineToggleColumn is 80");
+    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 96,
+                        "TimelineToggleColumn is four 24 px cells");
     expectations.expect(kit::px(kit::Size::TimelineNameMin) == 120, "TimelineNameMin is 120");
     expectations.expect(kit::px(kit::Size::TimelineColumn) == 100, "TimelineColumn is 100");
     expectations.expect(kit::px(kit::Size::TimelineWorkArea) == 6, "TimelineWorkArea is 6");
@@ -205,7 +206,7 @@ void testElevationsCarryTheSpecifiedShadows(Expectations& expectations) {
 void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expectations) {
     const auto ui = kit::font(kit::TypeRole::Ui);
     expectations.expect(ui.families().contains(kit::interfaceFontFamily()),
-                        "the UI role asks for DejaVu Sans");
+                        "the UI role asks for Inter");
     expectations.expect(ui.weight() == QFont::Medium, "the UI role is weight 500");
 
     const auto small = kit::font(kit::TypeRole::UiSmall);

@@ -30,7 +30,8 @@ target_sources(
         kit/icons.cpp
         kit/mnemonic_style.cpp
         kit/painting.cpp
-        kit/panel_switcher.cpp
+        kit/controls.cpp
+        kit/row.cpp
         kit/radio_group.cpp
         kit/range_selector.cpp
         kit/slider.cpp
@@ -58,6 +59,8 @@ target_sources(
             include/bloom/ui/kit/mnemonic_style.hpp
             include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/panel_switcher.hpp
+            include/bloom/ui/kit/controls.hpp
+            include/bloom/ui/kit/row.hpp
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
@@ -266,9 +269,11 @@ qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
-        kit/third_party/dejavu-sans/DejaVuSans-Bold.ttf
-        kit/third_party/dejavu-sans/DejaVuSans-Oblique.ttf
-        kit/third_party/dejavu-sans/DejaVuSans.ttf
+        kit/third_party/inter/LICENSE
+        kit/third_party/inter/Inter-Regular.ttf
+        kit/third_party/inter/Inter-Medium.ttf
+        kit/third_party/inter/Inter-SemiBold.ttf
+        kit/third_party/inter/manifest.json
         kit/third_party/geist-mono/GeistMono-Medium.ttf
         kit/third_party/geist-mono/GeistMono-Regular.ttf
 )
@@ -295,6 +300,7 @@ target_sources(
         composition_session.cpp
         composition_session_keyframes.cpp
         editor_area.cpp
+        editor_chrome.cpp
         editor_registry.cpp
         frame_export_controller.cpp
         frameless_window_support.cpp

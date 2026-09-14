@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QHash>
+#include <QIconEngine>
 #include <QImage>
 #include <QLatin1StringView>
 #include <QPainter>
@@ -244,15 +245,37 @@ QIcon icon(const IconId id, const IconRole iconRole, const Color role) {
     return icon(id, iconSize(iconRole), role, iconWeight(iconRole));
 }
 
-QIcon icon(const IconId id, const Size size, const Color role, const IconWeight weight) {
-    QIcon result;
-    result.addPixmap(iconPixmap(id, size, role, State::Normal, weight), QIcon::Normal, QIcon::Off);
-    result.addPixmap(iconPixmap(id, size, role, State::Hover, weight), QIcon::Active, QIcon::Off);
-    result.addPixmap(iconPixmap(id, size, role, State::Selected, weight), QIcon::Selected,
-                     QIcon::Off);
-    result.addPixmap(iconPixmap(id, size, role, State::Disabled, weight), QIcon::Disabled,
-                     QIcon::Off);
-    return result;
+namespace {
+class SvgIconEngine final : public QIconEngine {
+  public:
+    SvgIconEngine(IconId id, Color role, IconWeight weight)
+        : id_(id), role_(role), weight_(weight) {}
+    QIconEngine* clone() const override { return new SvgIconEngine(id_, role_, weight_); }
+    QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
+        return scaledPixmap(size, mode, state, 1.0);
+    }
+    QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State, qreal scale) override {
+        const auto state = mode == QIcon::Disabled ? State::Disabled
+                           : mode == QIcon::Normal ? State::Normal
+                                                   : State::Hover;
+        return renderIcon(iconResourcePath(id_, weight_), std::min(size.width(), size.height()),
+                          iconTint(role_, state), scale);
+    }
+    void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode,
+               QIcon::State state) override {
+        const qreal dpr = painter->device()->devicePixelRatioF();
+        const auto value = scaledPixmap(rect.size(), mode, state, dpr);
+        painter->drawPixmap(rect.topLeft(), value);
+    }
+
+  private:
+    IconId id_;
+    Color role_;
+    IconWeight weight_;
+};
+} // namespace
+QIcon icon(const IconId id, const Size, const Color role, const IconWeight weight) {
+    return QIcon(new SvgIconEngine(id, role, weight));
 }
 
 std::size_t iconCacheEntryCount() { return static_cast<std::size_t>(cache().size()); }

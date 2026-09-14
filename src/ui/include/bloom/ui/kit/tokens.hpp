@@ -134,7 +134,18 @@ enum class Spacing : int {
 
 // Control and chrome extents.
 enum class Size : int {
-    ControlCompact = 22,
+    HeaderRow = 32,
+    FooterRow = 32,
+    ListRow = 32,
+    PropertyRow = 28,
+    IconChrome = 16,
+    IconControl = 20,
+    ToggleCell = 24,
+    DropdownWidth = 100,
+    DropdownWidthCompact = 108,
+    DropdownWidthWide = 120,
+    DropdownWidthExpanded = 240,
+    ControlCompact = 26,
     Control = 26,
     ControlRoomy = 32,
     IconSmall = 12,
@@ -142,15 +153,11 @@ enum class Size : int {
     IconLarge = 20,
     TitleBar = 34,
     PanelHeader = 30,
-    // task U8 (issue 131), formal amendment 2, A10: the EditorArea header row's own height (48).
-    // A distinct token from PanelHeader above -- PanelHeader is also node_editor.cpp's card
-    // header height and row-pitch multiplier (kCardHeaderHeight/kNodeRowPitch), completely
-    // unrelated to this panel's own header row, and growing it would have silently resized node
-    // cards on the canvas, a collateral change no design crop covered.
-    EditorHeader = 48,
+    // Compatibility name for panel chrome; node-card PanelHeader is independent.
+    EditorHeader = HeaderRow,
     TimelineRow = 32,
     TimelineBar = 20,
-    TimelineToggleColumn = 80,
+    TimelineToggleColumn = 4 * ToggleCell,
     TimelineNameMin = 120,
     TimelineColumn = 100,
     TimelineWorkArea = 6,
@@ -184,7 +191,7 @@ enum class Size : int {
     PropertiesDropdownWidth = 108,
     PropertiesSearchWidth = 180,
     PropertiesCheckBox = 12,
-    PropertiesSwatchHeight = 20,
+    PropertiesSwatchHeight = 26,
     PropertiesAnchorDot = 8,
     PropertiesStepperWidth = 12,
 };

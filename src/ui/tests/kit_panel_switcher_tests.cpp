@@ -169,10 +169,8 @@ void testTheFieldHugsItsContentRatherThanStretching(Expectations& expectations) 
     expectations.expect(switcher.sizeHint().width() < 150,
                         "the closed field hugs a short label plus one icon");
 
-    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
-    expectations.expect(switcher.sizeHint().height() ==
-                            kit::px(kit::Size::ControlRoomy) + ringMargin,
-                        "formal amendment 2, A10: the field is ControlRoomy (32) tall");
+    expectations.expect(switcher.sizeHint().height() == kit::px(kit::Size::Control),
+                        "formal amendment 2, A10: the field is Control (26) tall");
 
     const QPixmap rendered = switcher.grab();
     expectations.expect(!rendered.isNull(), "the switcher renders offscreen");

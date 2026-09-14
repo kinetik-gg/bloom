@@ -146,7 +146,7 @@ Shadow shadow(const Elevation token) {
     return {};
 }
 
-QString interfaceFontFamily() { return QStringLiteral("DejaVu Sans"); }
+QString interfaceFontFamily() { return QStringLiteral("Inter"); }
 
 QString monospaceFontFamily() { return QStringLiteral("Geist Mono"); }
 

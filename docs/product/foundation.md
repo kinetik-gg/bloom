@@ -23,7 +23,7 @@ remain part of the broader direction but are not commitments for the first imple
   do not create incompatible substitutes for color, image, timeline, or effect interchange.
 - Make all workspace content replaceable editor panels. The menu bar is the only fixed application
   surface.
-- Use Phosphor Icons for interface iconography, DejaVu Sans for interface typography, and
+- Use Phosphor Icons for interface iconography, Inter for interface typography, and
   Geist Mono for monospaced interface text through native, pinned assets.
 - Keep every potentially heavy operation off the UI thread and expose its progress, cancellation,
   failure, and completion state.

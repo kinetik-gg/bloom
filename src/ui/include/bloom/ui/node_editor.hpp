@@ -272,12 +272,11 @@ class NodeGraphicsView final : public QGraphicsView {
 // same terms EditorArea already gives ViewerEditor for the footer alone -- each interface is taken
 // at most once, the moment EditorArea creates this widget, and either can legitimately be absent
 // (a test that constructs a NodeGraphEditor directly, outside an EditorArea, never calls either).
-class NodeGraphEditor final : public QWidget,
-                              public EditorFooterProvider,
-                              public EditorHeaderMenuProvider {
+class NodeGraphEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
   public:
+    [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     explicit NodeGraphEditor(CompositionSession& session, QWidget* parent = nullptr);
     ~NodeGraphEditor() override;
 
@@ -297,15 +296,11 @@ class NodeGraphEditor final : public QWidget,
                        std::optional<document::InputPortRef> input = {},
                        std::optional<document::OutputPortRef> output = {});
 
-    // EditorFooterProvider / EditorHeaderMenuProvider (task NODES-1, deliverables 1 and 4). Both
     // idempotent: a second call, on either, returns nullptr -- the FORMAL AMENDMENT 1 contract
-    // EditorFooterProvider already documents, extended verbatim to the header menu widget.
-    [[nodiscard]] QWidget* takeFooterWidget() override;
-    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
     // Test/diagnostic surface only, mirroring contextMenuForTest(): the persistent Add/View/
     // Select/Node menus this editor builds once and keeps live, regardless of whether
-    // takeHeaderMenuWidget() has actually been called yet. `which` is one of "add", "view",
+
     // "select", "node".
     [[nodiscard]] QMenu* headerMenuForTest(std::string_view which) const;
     // Test/diagnostic surface only: the footer widget's own child controls, by objectName, without
@@ -319,6 +314,7 @@ class NodeGraphEditor final : public QWidget,
     [[nodiscard]] static QString linkStyleSettingsValue(LinkStyle style) noexcept;
 
   private:
+    EditorChromeSpec chrome_;
     void rebuild();
     void updateSelection();
     void sceneSelectionChanged();
@@ -403,7 +399,7 @@ class NodeGraphEditor final : public QWidget,
 
     // Header menus (task NODES-1, deliverable 1): built once in buildHeaderMenus(), lived in for
     // the editor's whole lifetime regardless of whether EditorArea ever calls
-    // takeHeaderMenuWidget() -- a test can reach them directly through headerMenuForTest(). Every
+
     // action below reuses one of the objectNames the canvas context menu already established
     // wherever the same command applies; the exceptions (Select None/Invert/Linked Upstream/Linked
     // Downstream, Frame Selected, Grid Snapping, Link Style) are new and documented in this task's
@@ -413,7 +409,6 @@ class NodeGraphEditor final : public QWidget,
     QMenu* headerSelectMenu_ = nullptr;
     QMenu* headerNodeMenu_ = nullptr;
     QWidget* headerMenuWidget_ = nullptr;
-    bool headerMenuWidgetTaken_ = false;
     QAction* gridSnapAction_ = nullptr;
     std::array<QAction*, 3> linkStyleActions_{};
     QAction* groupAction_ = nullptr;
@@ -429,11 +424,10 @@ class NodeGraphEditor final : public QWidget,
     std::vector<std::pair<QAction*, std::string>> addMenuItems_;
 
     // Footer (task NODES-1, deliverable 4): built once in the constructor, handed away by
-    // takeFooterWidget() exactly once. Kept live (not rebuilt) for the same reason the header menus
+
     // are: the zoom dropdown and selection readout both need to react to session/view state that
     // outlives any one popup.
     QWidget* footerWidget_ = nullptr;
-    bool footerWidgetTaken_ = false;
     kit::KDropdown* footerZoomDropdown_ = nullptr;
     kit::KSwitch* footerSnapSwitch_ = nullptr;
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;

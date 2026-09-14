@@ -5,9 +5,12 @@
 #include <QString>
 #include <QStringView>
 
+#include <QPointer>
 #include <array>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class QEvent;
 class QHBoxLayout;
@@ -18,61 +21,56 @@ class QToolButton;
 class QVBoxLayout;
 
 namespace bloom::ui::kit {
-class KPanelSwitcher;
+class KDropdown;
 } // namespace bloom::ui::kit
 
 namespace bloom::ui {
 
 class EditorRegistry;
 
-// FORMAL AMENDMENT 1 (task C1, after the first report): the footer slot is OPTIONAL, not a
-// reserved strip on every panel. An editor widget that also implements this interface -- multiple
-// inheritance alongside its usual QWidget base, e.g. `class ViewerEditor final : public QWidget,
-// public EditorFooterProvider` -- gets a footer row hosting exactly the widget it hands back;
-// one that does not implement it (or returns nullptr) gets no footer row at all, and its body
-// extends all the way to the panel's own bottom border (still clipped by the rounded corners).
-// Deliberately NOT a new EditorRegistry ABI: EditorDescriptor::create() still returns a single
-// QWidget*, and EditorArea discovers this interface with a dynamic_cast on the widget it already
-// created, so a footer-less editor pays nothing extra to register or construct.
-class EditorFooterProvider {
-  public:
-    virtual ~EditorFooterProvider() = default;
-
-    // Called once, immediately after EditorArea creates the editor widget in rebuildEditor().
-    // Returns the footer widget for EditorArea to host (and take ownership of, by reparenting) in
-    // its own footer slot, or nullptr for an editor with no footer to offer. A provider that has
-    // already given its footer away (or never has one) returns nullptr on every subsequent call.
-    [[nodiscard]] virtual QWidget* takeFooterWidget() = 0;
+// Controls and actions are declared by panels; EditorArea owns materialization and layout.
+struct EditorChromeRowSpec {
+    struct Entry {
+        QWidget* control;
+        bool menu = false;
+        bool visible = true;
+        bool trailing = false;
+    };
+    QString objectName;
+    QString overflowButtonName;
+    QString overflowMenuName;
+    std::vector<Entry> entries;
+    QPointer<QWidget> host;
+    QWidget* owner = nullptr;
+    bool trailing = false;
+    void addWidget(QWidget* control);
+    void addStretch(int = 1) { trailing = true; }
+    QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& name = {},
+                               bool visible = true);
+    QToolButton* addMenu(QMenu* menu, const QString& name, bool visible = true);
+    QMenu* addMenu(const QString& title);
+    void addTopLevelMenu(const QString& title, QMenu* menu) { addMenuButton(title, menu); }
 };
-
-// Task NODES-1: the header's counterpart to EditorFooterProvider, same idempotent "take it once"
-// contract and same reasoning for why it is a seam rather than a new EditorRegistry ABI. An editor
-// widget that also implements this interface -- the node editor is the first -- gets whatever
-// widget it hands back hosted in its own header row, right after the panel switcher and before the
-// stretch that pushes the maximize button to the far right; one that does not implement it (or
-// returns nullptr) gets nothing extra there, exactly as today. What that widget actually shows --
-// how many menus, their contents, and any "too narrow, collapse to one overflow menu" policy -- is
-// entirely the provider's own business: EditorArea only reparents it into the header and gives it
-// room, the same hands-off relationship it already has with a footer widget.
-class EditorHeaderMenuProvider {
-  public:
-    virtual ~EditorHeaderMenuProvider() = default;
-
-    // Called once, immediately after EditorArea creates the editor widget in rebuildEditor().
-    // Returns the header menu widget for EditorArea to host (and take ownership of, by
-    // reparenting) in its header row, or nullptr for an editor with no header menus to offer. A
-    // provider that has already given its widget away (or never has one) returns nullptr on every
-    // subsequent call.
-    [[nodiscard]] virtual QWidget* takeHeaderMenuWidget() = 0;
+struct EditorCanvasChromeSpec {
+    QString objectName;
+    QString gutterName;
+    QWidget* strip = nullptr;
+    QWidget* canvas = nullptr;
+    int gutterWidth = 0;
+    int leadingWidth = 0;
+    QString leadingName;
 };
-
-// Optional header split, measured from the editor body's left edge. The right widget is
-// transferred once, like header menus; EditorArea adds its own border inset to both cells.
-class EditorHeaderSplitProvider {
+struct EditorChromeSpec {
+    EditorChromeRowSpec header;
+    EditorChromeRowSpec footer;
+    QWidget* headerCanvas = nullptr;
+    std::function<int()> splitPosition;
+    std::function<void()> hosted;
+};
+class EditorChromeProvider {
   public:
-    virtual ~EditorHeaderSplitProvider() = default;
-    [[nodiscard]] virtual QWidget* takeHeaderRightWidget() = 0;
-    [[nodiscard]] virtual int headerSplitPosition() const = 0;
+    virtual ~EditorChromeProvider() = default;
+    [[nodiscard]] virtual EditorChromeSpec& editorChrome() = 0;
 };
 
 class EditorArea final : public QFrame {
@@ -81,6 +79,13 @@ class EditorArea final : public QFrame {
   public:
     explicit EditorArea(const EditorRegistry& registry, std::string_view initialEditorId = {},
                         QString areaId = {}, QWidget* parent = nullptr);
+
+    [[nodiscard]] static QWidget* buildCanvasChrome(const EditorCanvasChromeSpec& spec,
+                                                    QWidget* parent);
+    [[nodiscard]] static QWidget* buildSplitChrome(QWidget* left, QWidget* right, int split,
+                                                   QWidget* parent);
+    [[nodiscard]] static QWidget* buildChromeRow(EditorChromeRowSpec& spec, QWidget* parent,
+                                                 bool footer = false);
 
     [[nodiscard]] const QString& areaId() const noexcept;
     [[nodiscard]] static bool isValidAreaId(QStringView areaId);
@@ -117,13 +122,13 @@ class EditorArea final : public QFrame {
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
-    kit::KPanelSwitcher* editorPicker_ = nullptr;
+    kit::KDropdown* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
     // task WIDTH-1: the widget actually parented into contentLayout_ -- editorWidget_ itself for
     // every canvas editor (node graph, timeline, viewer; they already scale their own content down
     // to whatever room they get), or a QScrollArea wrapping editorWidget_ for Properties, the one
     // editor that is a form rather than a canvas. Tracked separately from editorWidget_ so the
-    // EditorFooterProvider/EditorHeaderMenuProvider dynamic_casts below keep testing the real
+
     // editor widget regardless of whether it is wrapped.
     QWidget* editorHost_ = nullptr;
     // The outer header/content/footer column (task C1, FORMAL AMENDMENT 1): stored so
@@ -142,14 +147,14 @@ class EditorArea final : public QFrame {
     QWidget* headerRight_ = nullptr;
     QHBoxLayout* headerCellsLayout_ = nullptr;
     // Self-containment (task C1, item C5, corrected by FORMAL AMENDMENT 1): OPTIONAL. Non-null
-    // only while the current editor widget implements EditorFooterProvider and offered a real
+
     // footer widget (ViewerEditor is the only one today); nullptr for every other editor, which
     // gets no footer row at all -- its content extends to the panel's own bottom border instead.
     // Owned by EditorArea from the moment it is taken (reparented here in rebuildEditor()),
     // rebuilt every time the editor changes.
     QWidget* footer_ = nullptr;
     // Task NODES-1: the header's own OPTIONAL extra, on the same terms as footer_ above -- non-null
-    // only while the current editor widget implements EditorHeaderMenuProvider and offered a real
+
     // widget (the node editor is the only one today). Lives in headerLayout_, between the panel
     // switcher and the stretch; rebuilt every time the editor changes.
     QWidget* headerMenus_ = nullptr;

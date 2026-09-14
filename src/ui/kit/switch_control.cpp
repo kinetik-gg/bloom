@@ -22,6 +22,7 @@ constexpr int kThumbInset = 2;
 } // namespace
 
 KSwitch::KSwitch(QWidget* parent) : QAbstractButton(parent) {
+    setFixedHeight(px(Size::Control));
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSwitch"));
     setCheckable(true);
@@ -66,8 +67,7 @@ Color KSwitch::borderToken() const {
 
 QSize KSwitch::sizeHint() const {
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {kTrackWidth + ringMargin,
-            std::max(kTrackHeight, px(Size::ControlCompact)) + ringMargin};
+    return {kTrackWidth + ringMargin, px(Size::Control)};
 }
 
 QSize KSwitch::minimumSizeHint() const { return sizeHint(); }
@@ -159,22 +159,23 @@ KCheckBox::KCheckBox(QWidget* parent) : KSwitch(parent) {
     setObjectName(QStringLiteral("kCheckBox"));
     setFixedSize(sizeHint());
 }
-QSize KCheckBox::sizeHint() const {
-    return {px(Size::PropertiesCheckBox), px(Size::PropertiesCheckBox)};
-}
+QSize KCheckBox::sizeHint() const { return {px(Size::Control), px(Size::Control)}; }
 QSize KCheckBox::minimumSizeHint() const { return sizeHint(); }
 void KCheckBox::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const auto state = visualState();
-    fillRoundedSurface(painter, QRectF(rect()),
+    const auto boxSize = px(Size::PropertiesCheckBox);
+    const QRectF box((width() - boxSize) / 2.0, (height() - boxSize) / 2.0, boxSize, boxSize);
+    fillRoundedSurface(painter, box,
                        isEnabled() ? color(isChecked() ? Color::Accent : Color::Field)
                                    : withOpacity(color(isChecked() ? Color::Accent : Color::Field),
                                                  kDisabledOpacity),
                        isChecked() ? QColor{} : color(borderToken()), Radius::Small);
     if (isChecked())
-        painter.drawPixmap(rect(), iconPixmap(IconId::Check, Size::IconSmall,
-                                              inkForState(Color::Foreground, state),
-                                              devicePixelRatioF(), iconWeight(IconRole::Chrome)));
+        painter.drawPixmap(box.topLeft(),
+                           iconPixmap(IconId::Check, Size::IconSmall,
+                                      inkForState(Color::Foreground, state), devicePixelRatioF(),
+                                      iconWeight(IconRole::Chrome)));
 }
 
 } // namespace bloom::ui::kit

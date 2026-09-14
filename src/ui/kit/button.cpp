@@ -49,6 +49,7 @@ namespace {
 KButton::KButton(QWidget* parent) : QAbstractButton(parent) {
     ensureKeyboardFocusTracking(*this);
     setFocusPolicy(Qt::StrongFocus);
+    setFixedHeight(controlExtent());
     setAttribute(Qt::WA_Hover, true);
     setCursor(Qt::PointingHandCursor);
     setFont(kit::font(TypeRole::Ui));
@@ -75,6 +76,7 @@ void KButton::setControlSize(const ControlSize size) {
         return;
     }
     controlSize_ = size;
+    setFixedHeight(controlExtent());
     updateGeometry();
     update();
 }
@@ -220,7 +222,7 @@ QSize KButton::sizeHint() const {
     // controlExtent exactly -- the Spacing::M side padding below is a TEXT button's own margin
     // recipe and does not apply once there is no label to pad.
     if (icon_.has_value() && text().isEmpty()) {
-        return {controlExtent() + ringMargin, controlExtent() + ringMargin};
+        return {controlExtent(), controlExtent()};
     }
 
     const QFontMetrics metrics(font());
@@ -234,13 +236,10 @@ QSize KButton::sizeHint() const {
     if (!text().isEmpty()) {
         width += metrics.horizontalAdvance(text());
     }
-    return {std::max(width, controlExtent()) + ringMargin, controlExtent() + ringMargin};
+    return {std::max(width, controlExtent()) + ringMargin, controlExtent()};
 }
 
-QSize KButton::minimumSizeHint() const {
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {controlExtent() + ringMargin, controlExtent() + ringMargin};
-}
+QSize KButton::minimumSizeHint() const { return {controlExtent(), controlExtent()}; }
 
 void KButton::enterEvent(QEnterEvent* event) {
     if (isEnabled()) {

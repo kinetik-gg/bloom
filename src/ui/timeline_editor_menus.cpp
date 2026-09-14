@@ -1,3 +1,4 @@
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 
 #include <bloom/commands/operations.hpp>
@@ -61,79 +62,6 @@ class TimelineCompositionName final : public QWidget {
     QString name_;
 };
 
-class TimelineHeaderMenuBar final : public QWidget {
-  public:
-    explicit TimelineHeaderMenuBar(QWidget* parent) : QWidget(parent) {
-        setObjectName("timelineHeaderMenus");
-        auto* row = new QHBoxLayout(this);
-        row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(kit::px(kit::Spacing::XXS));
-        setFixedHeight(kit::px(kit::Size::Control));
-        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        overflow_ = new QToolButton(this);
-        overflow_->setObjectName("timelineHeaderOverflowButton");
-        overflow_->setText(QStringLiteral("…"));
-        overflow_->setToolTip(tr("Timeline menus"));
-        overflow_->setAccessibleName(overflow_->toolTip());
-        overflowMenu_ = new QMenu(this);
-        overflowMenu_->setObjectName("timelineHeaderOverflowMenu");
-        overflow_->setMenu(overflowMenu_);
-        configure(*overflow_);
-        row->addWidget(overflow_);
-        overflow_->hide();
-    }
-
-    QToolButton* addMenu(QMenu* menu, const QString& name, const bool showInHeader = true) {
-        auto* button = new QToolButton(this);
-        button->setText(menu->title());
-        button->setObjectName(name);
-        button->setAccessibleName(menu->title());
-        button->setMenu(menu);
-        configure(*button);
-        button->setProperty("headerMenuButton", true);
-        button->setProperty("headerMenuVisible", showInHeader);
-        static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()),
-                                                          button);
-        buttons_.push_back(button);
-        overflowMenu_->addMenu(menu);
-        updateGeometry();
-        return button;
-    }
-
-    QSize sizeHint() const override {
-        int width = 0;
-        for (auto* button : buttons_) {
-            if (!button->property("headerMenuVisible").toBool())
-                continue;
-            width += button->sizeHint().width() + layout()->spacing();
-        }
-        return {width, kit::px(kit::Size::Control)};
-    }
-    QSize minimumSizeHint() const override { return overflow_->sizeHint(); }
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
-        // The parent header reserves its own inter-control gap outside this widget. Account for
-        // that one kit spacing step so the three requested menus remain visible at the 400px
-        // default layer-column split instead of collapsing one row too early.
-        const bool collapsed = width() + kit::px(kit::Spacing::M) < sizeHint().width();
-        for (auto* button : buttons_) {
-            button->setVisible(button->property("headerMenuVisible").toBool() && !collapsed);
-        }
-        overflow_->setVisible(collapsed);
-    }
-
-  private:
-    static void configure(QToolButton& button) {
-        button.setAutoRaise(true);
-        button.setPopupMode(QToolButton::InstantPopup);
-    }
-    std::vector<QToolButton*> buttons_;
-    QToolButton* overflow_ = nullptr;
-    QMenu* overflowMenu_ = nullptr;
-};
-
 std::set<document::NodeId> selectedLayerNodes(const CompositionSession& session) {
     std::set<document::NodeId> nodes;
     for (const auto node : session.selectedNodes()) {
@@ -157,16 +85,13 @@ std::set<document::NodeId> selectedLayerNodes(const CompositionSession& session)
 } // namespace
 
 void TimelineEditor::createHeaderMenus() {
-    headerMenus_ = new QWidget(headerFallback_);
-    auto* row = new QHBoxLayout(headerMenus_);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(kit::px(kit::Spacing::XXS));
-    auto* bar = new TimelineHeaderMenuBar(headerMenus_);
-    row->addWidget(bar);
-    row->addWidget(new TimelineCompositionName(session_, headerMenus_));
-
+    auto* bar = &chrome_.header;
+    bar->owner = this;
+    bar->objectName = "timelineHeaderMenus";
+    bar->overflowButtonName = "timelineHeaderOverflowButton";
+    bar->overflowMenuName = "timelineHeaderOverflowMenu";
     const auto menu = [this](const QString& title, const QString& name) {
-        auto* result = new QMenu(title, headerMenus_);
+        auto* result = kit::makeMenu(title, this);
         result->setObjectName(name);
         return result;
     };
@@ -179,7 +104,6 @@ void TimelineEditor::createHeaderMenus() {
         // One QAction, associated with both disjoint focus trees after header transfer. It has
         // one shortcut registration, so standalone and hosted panels cannot double-trigger it.
         addAction(action);
-        headerMenus_->addAction(action);
         connect(action, &QAction::triggered, this, callback);
         return action;
     };
@@ -238,7 +162,7 @@ void TimelineEditor::createHeaderMenus() {
     deleteLayerAction_->setShortcuts(
         {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)});
     deleteLayerAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    headerMenus_->addAction(deleteLayerAction_);
+    addAction(deleteLayerAction_);
     connect(deleteLayerAction_, &QAction::triggered, this, &TimelineEditor::deleteSelectedLayers);
     splitLayerAction_ = localAction(
         editMenu_, tr("Split at Playhead"), QStringLiteral("timelineSplitLayerAction"),
@@ -268,6 +192,7 @@ void TimelineEditor::createHeaderMenus() {
             &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &TimelineEditor::refreshHeaderMenus);
+    bar->addWidget(new TimelineCompositionName(session_, this));
 }
 
 void TimelineEditor::showEvent(QShowEvent* event) {

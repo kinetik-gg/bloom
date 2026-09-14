@@ -35,12 +35,8 @@ const BundledFontStatus& bundledFontStatus();
 
 // The family list a type role should ask for, best match first, ending in the platform fallback.
 //
-// Whether a role has to name a face explicitly depends on how the upstream family is cut. The
-// bundled interface faces (DejaVu Sans Book/Bold/Oblique) all declare the one family name
-// "DejaVu Sans" and differ by style, so an interface role names that family and QFont's own weight
-// carries the choice of face. The bundled monospaced faces do NOT: the Geist Mono Medium file
-// registers as its own family "Geist Mono Medium", so the value role names that face first and the
-// base family second, or it silently gets Regular.
+// Inter Medium/SemiBold and Geist Mono Medium expose weight-specific static families. Roles
+// name those verified families first, then the shared family and the platform fallback.
 [[nodiscard]] QStringList fontFamiliesForRole(TypeRole role);
 
 } // namespace bloom::ui::kit

@@ -9,6 +9,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -139,26 +140,6 @@ QString safeAreaPresetSetting(const document::CompositionId id) {
 // truncated transport button is a control an artist can see and cannot use; a narrow Viewer simply
 // offers fewer of them, and widening the panel brings them back. Nothing important is lost by that:
 // the window status bar carries the state that has to stay on screen regardless.
-void layoutFooterControls(const std::vector<QWidget*>& controls, const QRectF& bar) {
-    const int right = static_cast<int>(bar.right()) - kit::px(kit::Spacing::S);
-    int x = static_cast<int>(bar.left()) + kit::px(kit::Spacing::S);
-    for (auto* control : controls) {
-        if (control == nullptr) {
-            continue;
-        }
-        const auto hint = control->sizeHint();
-        if (x + hint.width() > right) {
-            control->hide();
-            continue;
-        }
-        const int y =
-            static_cast<int>(bar.top()) + (static_cast<int>(bar.height()) - hint.height() + 1) / 2;
-        control->setGeometry(x, y, hint.width(), hint.height());
-        control->show();
-        x += hint.width() + kit::px(kit::Spacing::XS);
-    }
-}
-
 // The footer's own icon-only transport button: a plain QToolButton carrying a kit icon at the
 // Control role, the same "QToolButton + kit::icon()" idiom the timeline transport used before this
 // moved (and EditorArea's header chrome still uses). NOT kit::KButton, which is not a QToolButton
@@ -167,7 +148,7 @@ void layoutFooterControls(const std::vector<QWidget*>& controls, const QRectF& b
 QToolButton* makeTransportButton(const kit::IconId iconId, const QString& toolTip,
                                  const QString& accessibleName, const QString& objectName,
                                  QWidget* parent) {
-    auto* button = new QToolButton(parent);
+    auto* button = new kit::KIconButton(parent);
     button->setObjectName(objectName);
     button->setIcon(kit::icon(iconId, kit::IconRole::Control));
     const int box = kit::px(kit::iconSize(kit::IconRole::Control));
@@ -316,192 +297,6 @@ void drawFrameShadow(QPainter& painter, const QRectF& displayRect) {
     }
     painter.restore();
 }
-
-// Paints the footer's surface and its top hairline, and nothing else. Task VIEW-1 moved the
-// colour-state chip, the dropped-frame count and the cache progress to the window status bar
-// (window_status_bar.hpp): they describe the application's state, not the frame in this panel, and
-// they have to stay visible whether or not a Viewer is open.
-void paintStatusBarSurface(QPainter& painter, const QRectF& bar) {
-    painter.save();
-    painter.fillRect(bar, kit::color(kit::Color::Surface));
-    painter.setPen(QPen(kit::color(kit::Color::Border), 1.0));
-    painter.drawLine(bar.topLeft(), bar.topRight());
-    painter.restore();
-}
-
-// FORMAL AMENDMENT 1 (task C1), reshaped by task VIEW-1: the viewer's footer. It exists for the
-// whole life of the ViewerEditor that built it -- as a child positioned inside the canvas's own
-// bottom strip until takeFooterWidget() hands it to EditorArea, and as that caller's own footer
-// slot afterwards. There is exactly ONE copy of the bar either way, which is the point: the
-// pre-VIEW-1 arrangement painted the strip into ViewerEditor's paintEvent() AND into a separate
-// widget, and the two had to be kept in agreement by hand.
-class ViewerFooter final : public QWidget {
-  public:
-    explicit ViewerFooter(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("viewerFooter"));
-        setAccessibleName(ViewerEditor::tr("Viewer controls"));
-        setFixedHeight(kit::px(kit::Size::Control));
-    }
-
-    // The controls, left to right, in the order the artist reads them. Stored rather than
-    // discovered from children() so the order is this file's decision and not Qt's creation order.
-    void setControls(std::vector<QWidget*> controls) {
-        controls_ = std::move(controls);
-        layoutControls();
-    }
-
-    void layoutControls() {
-        layoutFooterControls(controls_, QRectF(rect()));
-        update();
-    }
-
-  protected:
-    void resizeEvent(QResizeEvent*) override { layoutControls(); }
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        paintStatusBarSurface(painter, QRectF(rect()));
-    }
-
-  private:
-    std::vector<QWidget*> controls_;
-};
-
-// Header menus follow the Nodes header idiom: the selectors remain in one horizontal row while
-// the two text menus move into one trailing overflow menu when the area is too narrow. A menu is
-// never clipped or wrapped, and the overflow action reuses the same QMenu/actions.
-class ViewerHeaderMenuBar final : public QWidget {
-  public:
-    explicit ViewerHeaderMenuBar(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("viewerHeaderMenuBar"));
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        layout_ = new QHBoxLayout(this);
-        layout_->setContentsMargins(kit::px(kit::Spacing::XS), 0, kit::px(kit::Spacing::XS), 0);
-        layout_->setSpacing(kit::px(kit::Spacing::XS));
-    }
-
-    void addWidget(QWidget* widget) { layout_->addWidget(widget); }
-    void addStretch() { layout_->addStretch(1); }
-
-    QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& objectName) {
-        auto* button = new QToolButton(this);
-        button->setObjectName(objectName);
-        button->setText(title);
-        button->setMenu(menu);
-        button->setPopupMode(QToolButton::InstantPopup);
-        button->setAutoRaise(true);
-        button->setProperty("headerMenuButton", true);
-        button->setAccessibleName(title);
-        layout_->addWidget(button);
-        menuButtons_.push_back(button);
-        menus_.push_back(menu);
-        return button;
-    }
-
-    void finish() {
-        overflowButton_ = new QToolButton(this);
-        overflowButton_->setObjectName(QStringLiteral("viewerHeaderOverflowButton"));
-        overflowButton_->setText(QStringLiteral("…"));
-        overflowButton_->setToolTip(tr("More viewer menus"));
-        overflowButton_->setAccessibleName(tr("More viewer menus"));
-        overflowButton_->setPopupMode(QToolButton::InstantPopup);
-        overflowButton_->setAutoRaise(true);
-        overflowMenu_ = new QMenu(overflowButton_);
-        overflowMenu_->setObjectName(QStringLiteral("viewerHeaderOverflowMenu"));
-        for (auto* menu : menus_) {
-            overflowMenu_->addMenu(menu);
-        }
-        overflowButton_->setMenu(overflowMenu_);
-        layout_->addWidget(overflowButton_);
-        overflowButton_->hide();
-        updateCollapse();
-    }
-
-    void refreshCollapse() { updateCollapse(); }
-
-    // Stable on purpose: the parent layout must never see this bar's minimum change when the
-    // menus collapse, or it re-lays the bar out, which resizes it, which re-evaluates the
-    // collapse, which changes the minimum again -- the unbounded recursion that took the whole
-    // application down on the owner's desktop (2026-09-14). The minimum is the collapsed shape:
-    // margins, the overflow button, and every non-menu widget at its own minimum.
-    [[nodiscard]] QSize minimumSizeHint() const override {
-        if (overflowButton_ == nullptr) {
-            return QWidget::minimumSizeHint();
-        }
-        const QMargins margins = layout_->contentsMargins();
-        int width = margins.left() + margins.right();
-        int items = 0;
-        for (int i = 0; i < layout_->count(); ++i) {
-            auto* widget = layout_->itemAt(i)->widget();
-            if (widget == nullptr) {
-                continue;
-            }
-            const bool isMenuButton =
-                std::find(menuButtons_.begin(), menuButtons_.end(), widget) != menuButtons_.end();
-            if (isMenuButton) {
-                continue;
-            }
-            width += widget == overflowButton_ ? widget->sizeHint().width()
-                                               : widget->minimumSizeHint().width();
-            ++items;
-        }
-        if (items > 1) {
-            width += (items - 1) * layout_->spacing();
-        }
-        return {width, QWidget::minimumSizeHint().height()};
-    }
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
-        updateCollapse();
-    }
-
-  private:
-    // Decides from measurements alone -- never by showing the buttons to see whether they fit --
-    // and only touches visibility when the decision actually changes. Showing and hiding inside a
-    // resize is what re-enters the layout; the guard makes a re-entrant call a no-op rather than
-    // a recursion.
-    void updateCollapse() {
-        if (overflowButton_ == nullptr || updatingCollapse_) {
-            return;
-        }
-        updatingCollapse_ = true;
-        const QMargins margins = layout_->contentsMargins();
-        int needed = margins.left() + margins.right();
-        int items = 0;
-        for (int i = 0; i < layout_->count(); ++i) {
-            auto* widget = layout_->itemAt(i)->widget();
-            if (widget == nullptr || widget == overflowButton_) {
-                continue;
-            }
-            needed += widget->sizeHint().width();
-            ++items;
-        }
-        if (items > 1) {
-            needed += (items - 1) * layout_->spacing();
-        }
-        const bool collapse = needed > width();
-        // Diagnostics for the regression test: the width the menus need, and the decision.
-        setProperty("collapseThreshold", needed);
-        setProperty("collapsed", collapse);
-        if (collapse != collapsed_) {
-            collapsed_ = collapse;
-            for (auto* button : menuButtons_) {
-                button->setVisible(!collapse);
-            }
-            overflowButton_->setVisible(collapse);
-        }
-        updatingCollapse_ = false;
-    }
-
-    QHBoxLayout* layout_ = nullptr;
-    std::vector<QToolButton*> menuButtons_;
-    std::vector<QMenu*> menus_;
-    QToolButton* overflowButton_ = nullptr;
-    QMenu* overflowMenu_ = nullptr;
-    bool collapsed_ = false;
-    bool updatingCollapse_ = false;
-};
 
 } // namespace
 
@@ -789,16 +584,19 @@ ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& avail
 }
 
 void ViewerEditor::buildHeader() {
-    auto* bar = new ViewerHeaderMenuBar(this);
-    headerMenuWidget_ = bar;
+    auto* bar = &chrome_.header;
+    bar->owner = this;
+    bar->objectName = "viewerHeaderMenuBar";
+    bar->overflowButtonName = "viewerHeaderOverflowButton";
+    bar->overflowMenuName = "viewerHeaderOverflowMenu";
 
-    compositionSelector_ = new kit::KDropdown(bar);
+    compositionSelector_ = new kit::KDropdown(this);
     compositionSelector_->setObjectName(QStringLiteral("viewerCompositionSelector"));
     compositionSelector_->setAccessibleName(tr("Composition"));
     compositionSelector_->setToolTip(tr("Choose the composition shown in the viewer"));
     compositionSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    compositionSelector_->setMinimumWidth(120);
-    compositionSelector_->setMaximumWidth(240);
+    compositionSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
+    compositionSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
     connect(compositionSelector_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) {
                 if (index < 0) {
@@ -812,7 +610,7 @@ void ViewerEditor::buildHeader() {
             });
     bar->addWidget(compositionSelector_);
 
-    compositionMenuButton_ = new QToolButton(bar);
+    compositionMenuButton_ = new kit::KIconButton(this);
     compositionMenuButton_->setObjectName(QStringLiteral("viewerCompositionMenuButton"));
     compositionMenuButton_->setIcon(kit::icon(kit::IconId::ContextMenu, kit::IconRole::Chrome));
     compositionMenuButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
@@ -822,7 +620,7 @@ void ViewerEditor::buildHeader() {
     compositionMenuButton_->setAutoRaise(true);
     compositionMenuButton_->setFixedSize(
         QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
-    auto* compositionMenu = new QMenu(bar);
+    auto* compositionMenu = kit::makeMenu(this);
     compositionMenu->setObjectName(QStringLiteral("viewerCompositionMenu"));
     compositionMenuButton_->setMenu(compositionMenu);
     compositionMenuButton_->setPopupMode(QToolButton::InstantPopup);
@@ -853,13 +651,13 @@ void ViewerEditor::buildHeader() {
     connect(viewerCompositionDeleteAction_, &QAction::triggered, this,
             [this] { (void)deleteComposition(session_, session_.compositionId()); });
 
-    objectSelector_ = new kit::KDropdown(bar);
+    objectSelector_ = new kit::KDropdown(this);
     objectSelector_->setObjectName(QStringLiteral("viewerObjectSelector"));
     objectSelector_->setAccessibleName(tr("Object"));
     objectSelector_->setToolTip(tr("Choose a layer in the current composition"));
     objectSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    objectSelector_->setMinimumWidth(110);
-    objectSelector_->setMaximumWidth(220);
+    objectSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
+    objectSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
     connect(objectSelector_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
         if (index <= 0) {
             session_.clearSelection();
@@ -872,7 +670,7 @@ void ViewerEditor::buildHeader() {
     });
     bar->addWidget(objectSelector_);
 
-    viewerViewMenu_ = new QMenu(tr("View"), bar);
+    viewerViewMenu_ = kit::makeMenu(tr("View"), this);
     viewerViewMenu_->setObjectName(QStringLiteral("viewerViewMenu"));
     viewerFitAction_ = viewerViewMenu_->addAction(tr("Fit"));
     viewerFitAction_->setObjectName(QStringLiteral("viewerFitAction"));
@@ -996,7 +794,7 @@ void ViewerEditor::buildHeader() {
         tr("Pixel Grid"), QStringLiteral("viewerPixelGridAction"), kPixelGridSetting,
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P), &overlayOptions_.pixelGrid);
 
-    viewerSelectMenu_ = new QMenu(tr("Select"), bar);
+    viewerSelectMenu_ = kit::makeMenu(tr("Select"), this);
     viewerSelectMenu_->setObjectName(QStringLiteral("viewerSelectMenu"));
     auto* selectAll = viewerSelectMenu_->addAction(tr("All"));
     selectAll->setObjectName(QStringLiteral("viewerSelectAllAction"));
@@ -1019,10 +817,9 @@ void ViewerEditor::buildHeader() {
 
     bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
     bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
-    bar->finish();
     bar->addStretch();
 
-    fullscreenButton_ = new QToolButton(bar);
+    fullscreenButton_ = new kit::KIconButton(this);
     fullscreenButton_->setObjectName(QStringLiteral("viewerFullscreenButton"));
     fullscreenButton_->setIcon(kit::icon(kit::IconId::Maximize, kit::IconRole::Chrome));
     fullscreenButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
@@ -1044,7 +841,8 @@ void ViewerEditor::buildHeader() {
         }
     });
     bar->addWidget(fullscreenButton_);
-    bar->refreshCollapse();
+    headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
+    headerMenuWidget_->hide(); // The canvas remains full-bleed until EditorArea hosts chrome.
 
     rebuildCompositionSelector();
     rebuildObjectSelector();
@@ -1311,8 +1109,8 @@ void ViewerEditor::zoomOutAtCenter() {
 
 // Builds the footer row and everything in it (task VIEW-1). Called once, from the constructor.
 void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
-    auto* footer = new ViewerFooter(this);
-    statusBarFooter_ = footer;
+    auto* footer = this;
+    chrome_.footer.objectName = "viewerFooter";
 
     // ---- Channel -------------------------------------------------------------------------------
     channelDropdown_ = new kit::KDropdown(footer);
@@ -1465,10 +1263,17 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     timeReadout_ = new ViewerTimecodeReadout(
         session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
 
-    footer->setControls({channelDropdown_, zoomDropdown_, resolutionDropdown_, resolutionReadout_,
-                         backgroundDropdown_, stepToStartButton_, stepBackButton_, playPauseButton_,
-                         stepForwardButton_, stepToEndButton_, loopButton_, ramPreviewButton_,
-                         timeReadout_});
+    for (auto* control : std::initializer_list<QWidget*>{
+             channelDropdown_, zoomDropdown_, resolutionDropdown_, resolutionReadout_,
+             backgroundDropdown_, stepToStartButton_, stepBackButton_, playPauseButton_,
+             stepForwardButton_, stepToEndButton_, loopButton_, ramPreviewButton_, timeReadout_})
+        chrome_.footer.addWidget(control);
+    statusBarFooter_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
+    chrome_.hosted = [this] {
+        statusBarFooterTaken_ = true;
+        updatePreviewResolution();
+        update();
+    };
     layoutStatusBar();
 }
 
@@ -1491,7 +1296,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     wireTransport();
 
     // Every one of these already repainted the status bar for free when it was part of this
-    // widget's own paintEvent; FORMAL AMENDMENT 1 keeps that true once takeFooterWidget() moves it
+
     // out into its own widget by also nudging statusBarFooter_ (a no-op update() call until then,
     // since it starts null).
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
@@ -1574,15 +1379,6 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 }
 
 ViewerEditor::~ViewerEditor() { QObject::disconnect(focusConnection_); }
-
-QWidget* ViewerEditor::takeHeaderMenuWidget() {
-    if (headerMenuWidgetTaken_) {
-        return nullptr;
-    }
-    headerMenuWidgetTaken_ = true;
-    headerMenuWidget_->setParent(nullptr);
-    return headerMenuWidget_;
-}
 
 // Everything the transport needs that is not the construction of its buttons: the shared
 // PlaybackController, the RAM preview command, the four frame-stepping QActions, and the
@@ -1837,22 +1633,6 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
     update();
 }
 
-QWidget* ViewerEditor::takeFooterWidget() {
-    // FORMAL AMENDMENT 1 (task C1): idempotent -- a second call (this ViewerEditor already gave
-    // its footer away) returns nullptr rather than a dangling or duplicate widget. Task VIEW-1: the
-    // footer is not BUILT here any more, only handed over; it has existed since construction.
-    if (statusBarFooterTaken_) {
-        return nullptr;
-    }
-    statusBarFooterTaken_ = true;
-    statusBarFooter_->setParent(nullptr);
-    // canvasRect() is now full-bleed (statusBarRect() returns empty) -- repaint immediately rather
-    // than waiting for the next incidental update().
-    updatePreviewResolution();
-    update();
-    return statusBarFooter_;
-}
-
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {
@@ -1868,12 +1648,12 @@ QString ViewerEditor::timeReadoutTextForTest() const { return timeReadout_->text
 kit::KDropdown* ViewerEditor::zoomDropdownForTest() const noexcept { return zoomDropdown_; }
 
 QRectF ViewerEditor::statusBarRect() const {
-    // FORMAL AMENDMENT 1: once takeFooterWidget() has relocated the status bar to an externally
+
     // hosted footer widget, this widget's own rect no longer reserves any space for it at all.
     if (statusBarFooterTaken_) {
         return {};
     }
-    const qreal barHeight = kit::px(kit::Size::Control);
+    const qreal barHeight = kit::px(kit::Size::FooterRow);
     return QRectF(0.0, static_cast<qreal>(height()) - barHeight, static_cast<qreal>(width()),
                   barHeight);
 }
