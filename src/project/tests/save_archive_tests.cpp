@@ -153,7 +153,7 @@ void testMinimalGreenChain(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
     auto built =
@@ -395,7 +395,7 @@ void testComposedGreenChain(Expectations& expectations) {
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {"vendor.nodes.blur"}},
     };
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
@@ -449,17 +449,17 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    // Bump the root schemaVersion.minor from the current 4 to 5 (the anchor text uniquely
+    // Bump the root schemaVersion.minor from the current 8 to 9 (the anchor text uniquely
     // identifies the root's own schemaVersion object, which the canonical writer always emits
     // first, ahead of "project").
-    const std::string anchor = "\"minor\": 7\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 8\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "RT green chain: root schemaVersion anchor is located in the baseline");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 7").size(), "\"minor\": 8");
+    text.replace(anchorPos, std::string_view("\"minor\": 8").size(), "\"minor\": 9");
 
     // Splice one unknown trailing root member -- a conforming 1.5 writer could have produced
     // this (strictly after every known root member, in ascending UTF-8 key order; there is only
@@ -498,11 +498,11 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 9}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 8};
+                                            .schemaMinor = 9};
 
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -586,13 +586,13 @@ void testVersionDisagreement(Expectations& expectations) {
         }
     }
     {
-        const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
+        const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 9}, .requirements = {}};
         const CanonicalDocumentV1 documentInput{
             .snapshot = &snapshot, .colorSettings = &colorSettings, .schemaMinor = 5};
         auto built =
             buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
         expectations.expect(!built,
-                            "version disagreement (reversed): manifest {1,5} vs. document minor 4 "
+                            "version disagreement (reversed): manifest {1,9} vs. document minor 8 "
                             "fails");
         const auto* failure = built.failure();
         expectations.expect(failure != nullptr &&
@@ -636,7 +636,7 @@ void testRequirementsCoverageFailure(Expectations& expectations) {
     const auto colorSettings = neutralColorSettings();
 
     // No requirement covers "vendor.nodes.blur".
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -689,7 +689,7 @@ minimalCanonicalBytesOrAbort() {
         std::abort();
     }
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
     const auto manifestSize = canonicalManifestSize(manifest);
     if (!manifestSize) {
         std::abort();
@@ -716,7 +716,7 @@ void testCorruptionInjection(Expectations& expectations) {
                                         documentBytes.size());
     const SaveArchiveExpectedContent expected{.manifestBytes = manifestBytes,
                                               .documentBytes = documentBytes,
-                                              .documentSchemaVersion = {1, 7}};
+                                              .documentSchemaVersion = {1, 8}};
 
     // Container-level tamper: flip the document entry's declared CRC. Structure stays a
     // conforming archive; the reader's own independent CRC-32 recomputation disagrees before any
@@ -849,7 +849,7 @@ void withBulkDocumentInput(
                                                          .capabilityId = "vendor.bulk.cap",
                                                          .schemaVersion = {1, 0},
                                                          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
@@ -939,7 +939,7 @@ void testDeterminism(Expectations& expectations) {
     if (!duration.has_value()) {
         return;
     }
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 7}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
 
     auto newProject1 =
         bloom::document::makeNewProject("Untitled Project", "Main Composition", *duration);
