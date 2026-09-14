@@ -230,6 +230,28 @@ void sendMouse(QWidget& widget, const QEvent::Type type, const qreal pixelX, con
     return first < 0 ? -1 : (first + last) / 2;
 }
 
+[[nodiscard]] double luminance(const QColor& color) {
+    return 0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue();
+}
+
+[[nodiscard]] double toggleEdgeLuminance(const QImage& image, const int cellX,
+                                         const int cellWidth) {
+    const int boxSize = bloom::ui::kit::px(bloom::ui::kit::Size::IconMedium);
+    const int left = cellX + (cellWidth - boxSize) / 2;
+    const int top = (bloom::ui::kTimelineRowHeight - boxSize) / 2;
+    double total = 0.0;
+    int samples = 0;
+    for (int offset = 4; offset < boxSize - 3; ++offset) {
+        for (const QPoint point :
+             {QPoint(left + offset, top), QPoint(left + offset, top + boxSize - 1),
+              QPoint(left, top + offset), QPoint(left + boxSize - 1, top + offset)}) {
+            total += luminance(image.pixelColor(point));
+            ++samples;
+        }
+    }
+    return samples == 0 ? 0.0 : total / samples;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The pinned geometry: ONE x origin for the ruler, the lanes, and the work-area strip, and that
 // origin is the layer column's own width -- the owner's "the tick where the playhead is playing
@@ -505,10 +527,10 @@ void testTimelineHeaderMenus(Expectations& expectations) {
               {"timelineSelectButton", QStringLiteral("Select")},
               {"addLayerButton", QStringLiteral("Add")}}}) {
         auto* button = area->findChild<QToolButton*>(QString::fromLatin1(name));
-        expectations.expect(button != nullptr && button->text() == title &&
-                                !button->text().contains(QChar(0x25BE)) &&
-                                !button->text().contains(QChar(0x2304)),
-                            std::string{name} + " keeps a Title Case label without a trailing glyph");
+        expectations.expect(
+            button != nullptr && button->text() == title &&
+                !button->text().contains(QChar(0x25BE)) && !button->text().contains(QChar(0x2304)),
+            std::string{name} + " keeps a Title Case label without a trailing glyph");
     }
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
@@ -963,6 +985,12 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     }
 
     const auto layerId = stack->entries().front().layerId;
+    auto* row = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow")).front();
+    row->clearFocus();
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(row, &leave);
+    const QImage enabledImage = row->grab().toImage();
+    const double enabledEdge = toggleEdgeLuminance(enabledImage, 0, toggleWidth);
     const auto before = fixture.commands.size();
     for (const int index : {0, 2, 3})
         QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
@@ -971,6 +999,15 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     expectations.expect(layer && !layer->enabled && layer->solo && layer->locked &&
                             fixture.commands.size() == before + 3,
                         "eye, solo and lock each commit once while audio remains disabled");
+    const QImage disabledImage = row->grab().toImage();
+    const double disabledEdge = toggleEdgeLuminance(disabledImage, 0, toggleWidth);
+    const double borderLuminance = luminance(ui::kit::color(ui::kit::Color::Border));
+    const double accentLuminance = luminance(ui::kit::color(ui::kit::Color::Accent));
+    expectations.expect(std::abs(enabledEdge - disabledEdge) <= 3.0,
+                        "active and inactive toggle squares keep the same neutral edge");
+    expectations.expect(std::abs(disabledEdge - borderLuminance) <
+                            std::abs(disabledEdge - accentLuminance),
+                        "toggle state is carried by glyph weight, never an Accent outline");
     (void)fixture.session.undo();
     expectations.expect(!fixture.session.composition()->graph().findLayer(layerId)->locked,
                         "lock undoes once");
