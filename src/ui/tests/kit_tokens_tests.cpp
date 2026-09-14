@@ -210,11 +210,11 @@ void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expecta
     expectations.expect(ui.weight() == QFont::Medium, "the UI role is weight 500");
 
     const auto small = kit::font(kit::TypeRole::UiSmall);
-    expectations.expect(small.capitalization() == QFont::AllUppercase,
-                        "the small UI role is uppercase");
+    expectations.expect(small.capitalization() == QFont::MixedCase,
+                        "the small UI role preserves Title Case");
     expectations.expect(small.letterSpacingType() == QFont::PercentageSpacing &&
-                            std::abs(small.letterSpacing() - 107.0) < 1e-9,
-                        "the small UI role tracks +0.07em");
+                            std::abs(small.letterSpacing() - 100.0) < 1e-9,
+                        "the small UI role uses natural tracking");
     expectations.expect(small.weight() == QFont::Medium, "the small UI role is weight 500");
 
     const auto value = kit::font(kit::TypeRole::Value);

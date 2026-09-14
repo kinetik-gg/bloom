@@ -15,6 +15,8 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
 #include <QObject>
@@ -161,6 +163,30 @@ void testChromeModeFromSettingsReadsTheInjectedFile(Expectations& expectations) 
 // testing the retained-but-unused widget standalone rather than through MainWindow. The old
 // "custom chrome" test that exercised a frameless MainWindow with an embedded TitleBar is gone: a
 // frameless MainWindow with a TitleBar can no longer be built at all.
+void testLegacyLayoutMigration(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "migration editors registered");
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+    window.workspaceHost()->resetToSingleArea("bloom.viewer");
+    auto legacy = QJsonDocument::fromJson(window.workspaceHost()->saveLayoutState()).object();
+    legacy["schema"] = 1;
+    QTemporaryDir directory;
+    QSettings settings(directory.filePath("migration.ini"), QSettings::IniFormat);
+    settings.setValue("workspace/compositing/layout",
+                      QJsonDocument(legacy).toJson(QJsonDocument::Compact));
+    expectations.expect(window.restoreApplicationState(settings) ==
+                            WorkspaceLayoutRestoreResult::Restored,
+                        "valid legacy layout migrates");
+    expectations.expect(window.workspaceHost()->areaCount() == 5,
+                        "legacy layout gains all default panels");
+    const auto migrated = window.workspaceHost()->saveLayoutState();
+    expectations.expect(QJsonDocument::fromJson(migrated).object().value("schema").toInt() == 2 &&
+                            migrated.contains("bloom.assets"),
+                        "version 2 pins Assets into the migrated default");
+}
+
 void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
@@ -395,6 +421,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testChromeModeFromSettingsReadsTheInjectedFile(expectations);
+    testLegacyLayoutMigration(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);

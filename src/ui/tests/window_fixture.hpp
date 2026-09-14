@@ -5,6 +5,8 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/document/node_layout.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
@@ -44,6 +46,7 @@ struct WindowFixture {
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
     WindowFixture() {
+        QCoreApplication::setApplicationVersion("0.1.0");
         // Match apps/bloom/main.cpp: the application installs this proxy after the theme.
         QApplication::setStyle(new kit::AltUnderlineProxyStyle());
         if (!settingsDirectory.isValid())
@@ -58,6 +61,17 @@ struct WindowFixture {
             !session.addTextLayer("Bloom grammar", "Hello, Bloom!", 100.0) ||
             !session.setSelectedPosition(720.0, 480.0))
             throw std::runtime_error("Fixture commands failed");
+        // Author the sample graph through the same command as a user arrangement. Production
+        // preserves saved positions, including the compact legacy defaults from layer creation.
+        std::map<document::NodeId, document::Vec2d> positions;
+        for (const auto& [id, layout] :
+             document::defaultNodeLayout(session.composition()->graph().nodes()))
+            positions.emplace(id,
+                              document::Vec2d{layout.position.x * 1.5, layout.position.y * 2.2});
+        commands::Transaction arrange("Arrange sample graph", session.snapshot().revision());
+        arrange.emplace<commands::MoveNodes>(session.compositionId(), std::move(positions));
+        if (!session.executeTransaction(std::move(arrange)).succeeded())
+            throw std::runtime_error("Fixture arrangement failed");
         preview = std::make_unique<CompositionPreviewController>(
             session, scheduler, bridge,
             makeCompositionPreviewPipeline(compiler, evaluator, display, qualified));

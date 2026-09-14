@@ -27,6 +27,8 @@ namespace bloom::ui::kit {
 // Brand is the Bloom logo color and is never used for interface chrome.
 enum class Color : std::uint8_t {
     Background,
+    Canvas,
+    CompositionFrame,
     SurfaceSunken,
     Surface,
     SurfaceRaised,
@@ -134,6 +136,38 @@ enum class Spacing : int {
 
 // Control and chrome extents.
 enum class Size : int {
+    // Owned canvas, dialog and multiline extents; shared by projections and audits.
+    Hairline = 1,
+    NodeGrid = 16,
+    NodeCardMin = 128,
+    NodeCardWidth = 240,
+    NodeTitleBand = 32,
+    NodeSocketDot = 8,
+    NodeLinkHandleMin = 32,
+    NodeColumnGap = 80,
+    NodeRowGap = 24,
+    NodeRerouteDot = 10,
+    SelectionEdge = 2,
+    PlayheadHalfWidth = 5,
+    PlayheadHeight = 6,
+    RulerLabelGap = 10,
+    RulerLabelInset = 3,
+    MinorTick = 4,
+    MajorTick = 8,
+    ViewerChecker = 22,
+    ViewerWorkPadding = 48,
+    ToolColumnWidth = 32,
+    ViewerChannelWidth = 80,
+    ViewerModeWidth = 108,
+    ViewerTimecodeWidth = 104,
+    ViewerZoomWidth = 64,
+    ViewerResolutionWidth = 96,
+    ViewerMinWidth = 220,
+    ViewerMinHeight = 176,
+    MultilineHeight = 78,
+    PropertyLabelCompact = 64,
+    DialogTextWidth = 520,
+    DiagnosticHeight = 140,
     HeaderRow = 32,
     FooterRow = 32,
     ListRow = 32,
@@ -159,6 +193,8 @@ enum class Size : int {
     TimelineBar = 20,
     TimelineToggleColumn = 4 * ToggleCell,
     TimelineNameMin = 120,
+    TimelineNameDefault = 280,
+    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
     TimelineColumn = 100,
     TimelineWorkArea = 6,
     TimelineWorkAreaHandle = 6,
@@ -199,8 +235,20 @@ enum class Size : int {
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }
 [[nodiscard]] constexpr int px(const Size token) noexcept { return static_cast<int>(token); }
 
+// Default Compositing split fractions, independent of physical DPI.
+namespace Layout {
+inline constexpr double SidebarShare = 0.1875;
+inline constexpr double TimelineShare = 0.48;
+inline constexpr double NodesShare = 0.50;
+inline constexpr double PropertiesShare = 0.68;
+inline constexpr int WorkspaceVersion = 2;
+} // namespace Layout
+
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.
+inline constexpr qreal kCompositionFrameWidth = 1.0;
+inline constexpr qreal kKeyDiamondRadius = 4.5;
+inline constexpr qreal kNodeCanvasHalfExtent = 256.0 * 1024;
 inline constexpr qreal kHairlineWidth = 1.0;
 inline constexpr qreal kFocusRingWidth = 1.5;
 inline constexpr qreal kWindowBorderWidth = 1.0;

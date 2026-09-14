@@ -257,3 +257,16 @@ Reproduce with:
 Pinned and reviewed. A change to the icon set -- adding an icon, changing a weight, or moving to
 a new upstream release -- replaces this record wholesale: new release row, new archive digest, new
 file table, new manifest digest.
+
+## GRAMMAR-2 tool glyph intake
+
+Rectangle and Pen use unmodified assets from the same verified v2.0.8 archive.
+
+| Path | SHA-256 |
+| --- | --- |
+| `regular/rectangle.svg` | `0c0d719ced81064b5a466d2dcf39a09077d39309773504d0bdd02b2fdc9a4590` |
+| `regular/pen-nib.svg` | `c13ebf51ee9d5abab7bd1fa4f8b1a6080e56720616d1d47b6e3d335fa135212f` |
+| `fill/rectangle-fill.svg` | `d3eb6bd71a23298000c270589d998bd4c32e2ea345cbf9046aff904b30d41c40` |
+| `fill/pen-nib-fill.svg` | `2f8afef215a9d8148f3197d5a703f0f42aa536dccb395b95b4c7fe5b62873b15` |
+| `bold/rectangle-bold.svg` | `145ee233dcc88fd083bc3fb19d4d2c3435143b4afe72ef900f41dc2877f7dcab` |
+| `bold/pen-nib-bold.svg` | `a70d66873266f1ec6de530e2b31f9b1c9abd87b762a7f76512283f6b6e0896b5` |

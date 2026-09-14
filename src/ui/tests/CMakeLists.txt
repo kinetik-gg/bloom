@@ -722,6 +722,7 @@ bloom_enable_warnings(bloom_properties_mockup_test)
 bloom_add_test(NAME bloom.ui.properties-mockup COMMAND bloom_properties_mockup_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_ui_grammar_audit_test ui_grammar_audit_tests.cpp)
+target_include_directories(bloom_ui_grammar_audit_test PRIVATE ..)
 target_link_libraries(bloom_ui_grammar_audit_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_ui_grammar_audit_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_ui_grammar_audit_test)

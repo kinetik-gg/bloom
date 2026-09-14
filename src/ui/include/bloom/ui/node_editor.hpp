@@ -173,7 +173,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
     std::unique_ptr<NodeInteraction> interaction_;
     LinkStyle linkStyle_ = LinkStyle::Spline;
     bool snapEnabled_ = false;
-    qreal gridSize_ = 16.0;
+    qreal gridSize_ = kit::px(kit::Size::NodeGrid);
 };
 
 // The graph canvas. Its navigation conventions are the Viewer's, deliberately and structurally:

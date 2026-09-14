@@ -1,4 +1,6 @@
 #include <bloom/ui/composition_commands.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <memory>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -56,7 +58,7 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
 
     auto* form = new QFormLayout(&dialog);
     NewCompositionFields fields;
-    fields.name = new QLineEdit(&dialog);
+    fields.name = new kit::KLineEdit(&dialog);
     fields.name->setObjectName(QStringLiteral("assetsNameField"));
     fields.name->setText(
         QObject::tr("Composition %1").arg(session.snapshot().project().compositions().size() + 1));
@@ -90,7 +92,7 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
                                                      current->duration().denominator()));
     form->addRow(QObject::tr("Duration (frames)"), fields.duration);
 
-    fields.error = new QLabel(&dialog);
+    fields.error = new kit::KLabel(&dialog);
     fields.error->setObjectName(QStringLiteral("newCompositionErrorLabel"));
     fields.error->setWordWrap(true);
     fields.error->hide();

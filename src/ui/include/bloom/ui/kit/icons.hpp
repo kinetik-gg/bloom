@@ -86,6 +86,8 @@ enum class IconId : std::uint8_t {
     AlignLeft,
     AlignCenter,
     AlignRight,
+    Rectangle,
+    Pen,
     Snap,
 };
 

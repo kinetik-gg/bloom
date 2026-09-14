@@ -8,10 +8,12 @@
 #include <QWheelEvent>
 #include <algorithm>
 #include <bloom/document/project.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 #include <cmath>
+#include <memory>
 
 namespace bloom::ui {
 std::vector<TimelineKeyframePanel::LaneKey> TimelineKeyframePanel::laneKeys() const {
@@ -384,7 +386,8 @@ void TimelineKeyframePanel::contextMenuEvent(QContextMenuEvent* event) {
         session_.selection().keyframes.end())
         session_.selectKeyframe(hit->selection.curveId, hit->selection.keyframeId);
     cancelGesture();
-    QMenu menu(this);
+    std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
+    auto& menu = *menuOwner;
     for (const auto mode :
          {document::KeyframeInterpolation::Hold, document::KeyframeInterpolation::Linear,
           document::KeyframeInterpolation::EaseInOut}) {

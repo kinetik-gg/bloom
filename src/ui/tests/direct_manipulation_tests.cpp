@@ -408,17 +408,8 @@ void sendRelease(QWidget& widget, const QPointF& local) {
     sendMouse(widget, QEvent::MouseButtonRelease, local, Qt::LeftButton, Qt::NoButton);
 }
 
-// Mirrors ViewerEditor::currentMapping()'s display-rect derivation so the test can compute the
-// expected composition displacement the same way production code does, without hardcoding it.
-//
-// Task U3 (issue #119), decision 2, THE SEAM: canvasRect() replaces the pre-U3 28px-inset
-// viewerFrame() (the canvas is now full-bleed, minus only the bottom status bar strip -- see
-// ViewerEditor::canvasRect()/statusBarRect() in viewer_editor.cpp), and
-// viewTransformedDisplayRect(..., transform) replaces the unconditional fitDisplayRect() call --
-// the frozen mapping rectangle now reflects the ACTIVE view transform at gesture begin, not always
-// the fit-to-window rectangle. `transform` defaults to the identity Fit transform, so every
-// pre-existing call site below (all at implicit zoom 1x/pan 0) is unchanged in behavior.
-QRectF expectedDisplayRect(const QWidget& viewer,
+// Use the production padded work area with the frozen transform at gesture begin.
+QRectF expectedDisplayRect(const bloom::ui::ViewerEditor& viewer,
                            const bloom::ui::CompositionPreviewController& controller,
                            const bloom::ui::ViewTransform& transform = {}) {
     using namespace bloom;
@@ -433,8 +424,7 @@ QRectF expectedDisplayRect(const QWidget& viewer,
     if (!extent) {
         return {};
     }
-    const qreal statusBarHeight = ui::kit::px(ui::kit::Size::Control);
-    const QRectF frameRect = QRectF(viewer.rect()).adjusted(0.0, 0.0, 0.0, -statusBarHeight);
+    const QRectF frameRect = viewer.canvasRectForTest();
     return ui::viewTransformedDisplayRect(frameRect, *extent.value(), format.pixelAspect(),
                                           transform);
 }

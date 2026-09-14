@@ -13,7 +13,7 @@
 #include <cmath>
 namespace bloom::ui {
 namespace {
-constexpr qreal kCanvasHalfExtent = 256.0 * 1024;
+constexpr qreal kCanvasHalfExtent = kit::kNodeCanvasHalfExtent;
 constexpr int kWheelDetent = 120;
 } // namespace
 // --- NodeGraphicsView --------------------------------------------------------------------------

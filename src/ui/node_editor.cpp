@@ -189,12 +189,44 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
         }
     }
 
+    // Only nodes without artist-authored layout use this measured presentation grid.
+    // Preserve the document's topological row/column grouping, but allow the real kit rows
+    // to determine cell extents so newly visible controls cannot overlap adjacent cards.
+    std::map<double, qreal> columnWidths, rowHeights;
+    std::vector<std::pair<NodeItem*, document::NodeLayoutRecord>> unplaced;
+    for (auto* graphicsItem : items()) {
+        auto* card = dynamic_cast<NodeItem*>(graphicsItem);
+        if (!card || composition->nodeLayout().contains(card->id()))
+            continue;
+        const auto& position = defaults.at(card->id());
+        columnWidths[position.position.x] =
+            std::max(columnWidths[position.position.x], card->cardRect().width());
+        rowHeights[position.position.y] =
+            std::max(rowHeights[position.position.y], card->cardRect().height());
+        unplaced.emplace_back(card, position);
+    }
+    qreal offset = 0;
+    for (auto& [key, extent] : columnWidths) {
+        const auto next = offset + extent + kit::px(kit::Size::NodeColumnGap);
+        extent = offset;
+        offset = next;
+    }
+    offset = 0;
+    for (auto& [key, extent] : rowHeights) {
+        const auto next = offset + extent + kit::px(kit::Size::NodeRowGap);
+        extent = offset;
+        offset = next;
+    }
+    for (const auto& [card, position] : unplaced)
+        card->setPos(columnWidths.at(position.position.x), rowHeights.at(position.position.y));
+
     rebuildGroups(*composition);
     rebuildEdges(*composition);
     updateGroupGeometry();
     const QRectF bounds = itemsBoundingRect();
     setSceneRect(bounds.isEmpty() ? QRectF(-kNodeSceneMargin, -kNodeSceneMargin,
-                                           kNodeSceneMargin * 2.0, kNodeSceneMargin * 2.0)
+                                           (kNodeSceneMargin + kNodeSceneMargin),
+                                           (kNodeSceneMargin + kNodeSceneMargin))
                                   : bounds.adjusted(-kNodeSceneMargin, -kNodeSceneMargin,
                                                     kNodeSceneMargin, kNodeSceneMargin));
 }

@@ -32,6 +32,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QTest>
 #include <QTextEdit>
 #include <QToolButton>
@@ -1083,13 +1084,10 @@ void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& exp
     finishFixture(fixture, expectations);
 }
 
-// Readout (design decision 3): the label tracks frame index / exact time across an exact frame
-// time, a genuinely subframe exact time (honest, not hidden/rounded away), and a composition switch
-// (which resets session time to exact zero -- docs/architecture/animation-and-time.md, "Session
-// Time And Scrubbing": "Switching compositions resets the session time to exact zero in version
-// 1").
+// Frame preference follows session time and resets with the active composition.
 void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectations& expectations) {
     using namespace bloom;
+    QSettings{}.setValue(QStringLiteral("timeline/time-format"), QStringLiteral("frames"));
     auto newProject = makeTestProject("Readout Format", time(4));
     expectations.expect(newProject.project.addComposition(secondComposition(time(4), testFormat())),
                         "a second composition is added to the project");
@@ -1104,25 +1102,22 @@ void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectatio
         return;
     }
 
-    expectations.expect(readout->text() == QStringLiteral("Frame 0 · 0.000s"),
+    expectations.expect(readout->text() == QStringLiteral("0"),
                         "the readout starts at exact frame 0 / 0.000s");
 
     expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
                         "session time advances to exactly frame one's time");
-    expectations.expect(readout->text() == QStringLiteral("Frame 1 · 0.040s"),
+    expectations.expect(readout->text() == QStringLiteral("1"),
                         "the readout tracks currentTimeChanged() at an exact frame time");
 
     expectations.expect(fixture.session.setCurrentTime(time(1, 3)),
                         "session time moves to a genuinely subframe exact time (1/3 s)");
-    expectations.expect(readout->text() == QStringLiteral("Frame 8 · 0.333s"),
-                        "a subframe time displays its true nearest-index / truncated-exact-seconds "
-                        "reading rather than hiding that it is not frame-aligned (1/3 s truncates "
-                        "to 0.333s, never rounding up to overstate it, and 1/3 s is nearest to "
-                        "frame index 8 at this fixture's 25 fps rate)");
+    expectations.expect(readout->text() == QStringLiteral("8"),
+                        "frame preference shows the nearest frame index at 25 fps");
 
     expectations.expect(fixture.session.setComposition(document::CompositionId::fromRaw(2)),
                         "switching composition succeeds");
-    expectations.expect(readout->text() == QStringLiteral("Frame 0 · 0.000s"),
+    expectations.expect(readout->text() == QStringLiteral("0"),
                         "the readout resets to frame 0 / 0.000s across a composition switch, "
                         "matching CompositionSession's own session-time reset");
 

@@ -37,8 +37,8 @@ void testLayoutSelectionAndSockets() {
         return image.pixelColor(64, 1);
     };
     expect(outlinePixel(a) == kit::color(kit::Color::Accent) &&
-               outlinePixel(b) == kit::color(kit::Color::Foreground),
-           "selected and primary outlines paint the exact Accent and Foreground tokens above the "
+               outlinePixel(b) == kit::color(kit::Color::Accent),
+           "selected and primary outlines paint the exact Accent token above the "
            "header");
     f.session.clearSelection();
     const auto before = f.stack.size();

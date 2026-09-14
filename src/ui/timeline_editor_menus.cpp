@@ -32,7 +32,8 @@ class TimelineCompositionName final : public QWidget {
         : QWidget(parent), session_(session), dropdown_(new kit::KDropdown(this)) {
         setObjectName("timelineCompositionName");
         setAccessibleName(tr("Composition"));
-        setMinimumWidth(kit::px(kit::Size::TimelineColumn) - 3 * kit::px(kit::Spacing::M));
+        setMinimumWidth(kit::px(kit::Size::TimelineColumn) -
+                        (kit::px(kit::Spacing::M) + kit::px(kit::Spacing::XL)));
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         auto* layout = new QHBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -120,11 +121,12 @@ void TimelineEditor::createHeaderMenus() {
     auto* view = menu(tr("View"), QStringLiteral("timelineViewMenu"));
     localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),
                 QKeySequence(Qt::CTRL | Qt::Key_0), [this] { ruler_->zoomToFit(); });
-    localAction(view, tr("Zoom In"), QStringLiteral("timelineZoomInAction"), QKeySequence::ZoomIn,
-                [this] { ruler_->zoomBy(1.25, (ruler_->width() - 1) / 2.0); });
-    localAction(view, tr("Zoom Out"), QStringLiteral("timelineZoomOutAction"),
-                QKeySequence::ZoomOut,
-                [this] { ruler_->zoomBy(0.8, (ruler_->width() - 1) / 2.0); });
+    localAction(
+        view, tr("Zoom In"), QStringLiteral("timelineZoomInAction"), QKeySequence::ZoomIn,
+        [this] { ruler_->zoomBy(1.25, (ruler_->width() - kit::px(kit::Size::Hairline)) / 2.0); });
+    localAction(
+        view, tr("Zoom Out"), QStringLiteral("timelineZoomOutAction"), QKeySequence::ZoomOut,
+        [this] { ruler_->zoomBy(0.8, (ruler_->width() - kit::px(kit::Size::Hairline)) / 2.0); });
     view->addSeparator();
     auto* formats = new QActionGroup(view);
     formats->setExclusive(true);

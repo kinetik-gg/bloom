@@ -1,4 +1,6 @@
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <memory>
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -28,64 +30,24 @@ constexpr int kTransientMessageMs = 5'000;
     return QStringLiteral("%1").arg(static_cast<double>(bytes) / kMebibyte, 0, 'f', 1);
 }
 
-// The colour-state pill: a rounded, token-coloured fill with the state's own text. Its own widget
-// rather than a QLabel with a stylesheet so the token colour is read at paint time and follows a
-// theme change without a restyle pass.
-class StatusColorChip final : public QWidget {
+class StatusColorChip final : public kit::KLabel {
   public:
-    explicit StatusColorChip(QWidget* parent) : QWidget(parent) {
-        setObjectName(QStringLiteral("windowStatusBarColorChip"));
-        setFixedHeight(kit::px(kit::Size::ControlCompact));
+    explicit StatusColorChip(QWidget* parent) : KLabel(QString{}, parent, kit::TypeRole::UiSmall) {
+        setObjectName("windowStatusBarColorChip");
     }
-
     void setState(const PreviewColorState& state) {
-        if (state_.text == state.text && state_.colorToken == state.colorToken) {
-            return;
-        }
-        state_ = state;
-        setAccessibleName(state_.text);
-        setToolTip(state_.text);
-        updateGeometry();
-        update();
+        setText(state.text);
+        setAccessibleName(state.text);
+        setToolTip(state.text);
+        auto colors = palette();
+        colors.setColor(QPalette::WindowText, kit::color(state.colorToken));
+        setPalette(colors);
     }
-
-    [[nodiscard]] QString text() const { return state_.text; }
-
-    [[nodiscard]] QSize sizeHint() const override {
-        const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
-        return {metrics.horizontalAdvance(state_.text) + 2 * kit::px(kit::Spacing::S),
-                kit::px(kit::Size::ControlCompact)};
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        if (state_.text.isEmpty()) {
-            return;
-        }
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setFont(kit::font(kit::TypeRole::Ui));
-        const QColor color = kit::color(state_.colorToken);
-        const QRectF pill = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        painter.setPen(QPen(color.lighter(125), 1.0));
-        painter.setBrush(kit::withOpacity(color, 0.855));
-        painter.drawRoundedRect(pill, kit::radiusPx(kit::Radius::Small, height()),
-                                kit::radiusPx(kit::Radius::Small, height()));
-        painter.setPen(kit::color(kit::Color::Foreground));
-        const qreal inset = kit::px(kit::Spacing::S);
-        painter.drawText(pill.adjusted(inset, 0.0, -inset, 0.0), Qt::AlignVCenter | Qt::AlignLeft,
-                         painter.fontMetrics().elidedText(
-                             state_.text, Qt::ElideRight,
-                             static_cast<int>(std::max<qreal>(0.0, pill.width() - 2 * inset))));
-    }
-
-  private:
-    PreviewColorState state_{};
 };
 
 QLabel* makeCell(const QString& objectName, const kit::TypeRole role, const kit::Color ink,
                  QWidget* parent) {
-    auto* label = new QLabel(parent);
+    auto* label = new kit::KLabel(parent);
     label->setObjectName(objectName);
     label->setFont(kit::font(role));
     QPalette palette = label->palette();
@@ -176,7 +138,7 @@ QString previewCacheText(const CompositionPreviewController& previewController) 
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
                                  QWidget* parent)
-    : QWidget(parent), session_(session), previewController_(previewController) {
+    : kit::KSurface(parent), session_(session), previewController_(previewController) {
     setObjectName(QStringLiteral("windowStatusBar"));
     setAccessibleName(tr("Application status"));
     setFixedHeight(kit::px(kit::Size::Control));
@@ -187,13 +149,13 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
 
     auto* chip = new StatusColorChip(this);
     colorChip_ = chip;
-    previewState_ = makeCell(QStringLiteral("windowStatusBarPreviewState"), kit::TypeRole::Ui,
+    previewState_ = makeCell(QStringLiteral("windowStatusBarPreviewState"), kit::TypeRole::UiSmall,
                              kit::Color::Muted, this);
-    droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"), kit::TypeRole::Value,
-                              kit::Color::Warn, this);
-    cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::Value,
-                      kit::Color::Accent, this);
-    message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::Ui,
+    droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"),
+                              kit::TypeRole::UiSmall, kit::Color::Warn, this);
+    cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::UiSmall,
+                      kit::Color::Muted, this);
+    message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
                         kit::Color::Foreground, this);
     message_->setAccessibleName(tr("Status message"));
     version_ = makeCell(QStringLiteral("windowStatusBarVersion"), kit::TypeRole::UiSmall,
@@ -201,12 +163,12 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     version_->setAccessibleName(tr("Bloom version"));
     version_->setText(QCoreApplication::applicationVersion());
 
+    layout->addWidget(version_);
     layout->addWidget(colorChip_);
     layout->addWidget(previewState_);
     layout->addWidget(droppedFrames_);
     layout->addWidget(cache_);
     layout->addWidget(message_, 1);
-    layout->addWidget(version_, 0, Qt::AlignRight);
 
     transientTimer_ = new QTimer(this);
     transientTimer_->setSingleShot(true);
@@ -236,6 +198,8 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
 
 void WindowStatusBar::refreshPreviewCells() {
     if (previewController_ == nullptr) {
+        static_cast<StatusColorChip*>(colorChip_)
+            ->setState({tr("Color state unavailable"), kit::Color::Warn});
         return;
     }
     const auto& preview = previewController_->state();
@@ -243,7 +207,7 @@ void WindowStatusBar::refreshPreviewCells() {
 
     previewState_->setText(previewActivityText(preview));
     QPalette statePalette = previewState_->palette();
-    statePalette.setColor(QPalette::WindowText, kit::color(previewActivityColor(preview)));
+    statePalette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
     previewState_->setPalette(statePalette);
 
     const QString dropped = droppedFrameText(*previewController_);
@@ -295,13 +259,5 @@ QString WindowStatusBar::cacheTextForTest() const { return cache_->text(); }
 QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 
 QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
-
-void WindowStatusBar::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    QPainter painter(this);
-    painter.fillRect(rect(), kit::color(kit::Color::Surface));
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
-    painter.drawLine(QPointF(0.0, 0.5), QPointF(static_cast<qreal>(width()), 0.5));
-}
 
 } // namespace bloom::ui

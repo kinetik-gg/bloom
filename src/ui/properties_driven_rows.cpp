@@ -12,7 +12,9 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
+#include <memory>
 
 namespace bloom::ui {
 namespace {
@@ -107,7 +109,7 @@ void PropertiesEditor::configureDrivenRows() {
             row->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(
                 row, &QWidget::customContextMenuRequested, row, [this, row](const QPoint& point) {
-                    auto* menu = new QMenu(row);
+                    auto* menu = kit::makeMenu(row);
                     menu->setObjectName("propertiesRowContextMenu");
                     menu->setAttribute(Qt::WA_DeleteOnClose);
                     auto* action = menu->addAction(tr("Reset to default"));
@@ -157,7 +159,7 @@ void PropertiesEditor::configureDrivenRows() {
             jump->setIconId(kit::IconId::Link);
             jump->setFixedHeight(kit::px(kit::Size::ControlCompact));
             layout->addWidget(jump);
-            auto* value = new QLabel(display);
+            auto* value = new kit::KLabel(display);
             value->setObjectName("propertiesDrivenValue");
             value->setFont(kit::font(kit::TypeRole::Value));
             value->setTextFormat(Qt::PlainText);

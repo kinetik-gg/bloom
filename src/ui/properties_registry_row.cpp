@@ -12,10 +12,12 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <limits>
+#include <memory>
 
 namespace bloom::ui {
 PropertiesRowVisibility propertiesRowVisibility(const std::string_view role,
@@ -86,7 +88,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(selector_);
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
-        integer_ = new QLineEdit(controls);
+        integer_ = new kit::KLineEdit(controls);
         integer_->setObjectName("propertiesRegistryInteger");
         integer_->setAccessibleName(label);
         integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
@@ -100,7 +102,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(toggle_);
         connect(toggle_, &kit::KSwitch::toggled, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::String) {
-        text_ = new QLineEdit(controls);
+        text_ = new kit::KLineEdit(controls);
         text_->setObjectName("propertiesRegistryString");
         text_->setFont(kit::font(kit::TypeRole::Value));
         text_->setFixedHeight(kit::px(kit::Size::ControlCompact));
@@ -110,7 +112,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             multiline_ = new QPlainTextEdit(this);
             multiline_->setObjectName("propertiesRegistryMultiline");
             multiline_->setFont(kit::font(kit::TypeRole::Value));
-            multiline_->setFixedHeight(kit::px(kit::Size::Control) * 3);
+            multiline_->setFixedHeight(kit::px(kit::Size::MultilineHeight));
             multiline_->installEventFilter(this);
             multiline_->hide();
             auto* expand = new kit::KButton(controls);

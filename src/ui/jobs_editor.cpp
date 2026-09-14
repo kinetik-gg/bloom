@@ -1,4 +1,7 @@
 #include <bloom/ui/jobs_editor.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <memory>
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
@@ -114,11 +117,12 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     auto* controls = new QWidget(this);
     controls->setObjectName("jobsControls");
     auto* controlsLayout = new QHBoxLayout(controls);
-    controlsLayout->setContentsMargins(8, 5, 8, 5);
-    controlsLayout->setSpacing(6);
-    auto* title = new QLabel(tr("Jobs"), controls);
+    controlsLayout->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS),
+                                       kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS));
+    controlsLayout->setSpacing(kit::px(kit::Spacing::Gutter));
+    auto* title = new kit::KLabel(tr("Jobs"), controls);
     title->setObjectName("editorSectionTitle");
-    cancelButton_ = new QPushButton(tr("Cancel"), controls);
+    cancelButton_ = new kit::KButton(tr("Cancel"), controls);
     cancelButton_->setObjectName("cancelSelectedJobButton");
     cancelButton_->setAccessibleName(tr("Cancel selected job"));
     cancelButton_->setAccessibleDescription(
@@ -160,7 +164,7 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     details_->setReadOnly(true);
     details_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
     details_->setMaximumBlockCount(4096);
-    details_->setMinimumHeight(140);
+    details_->setMinimumHeight(kit::px(kit::Size::DiagnosticHeight));
     details_->setPlainText(tr("No jobs have been submitted."));
 
     layout->addWidget(controls);
@@ -169,7 +173,7 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
 
     connect(table_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             &JobsEditor::updateDetails);
-    connect(cancelButton_, &QPushButton::clicked, this, &JobsEditor::cancelSelectedTask);
+    connect(cancelButton_, &kit::KButton::clicked, this, &JobsEditor::cancelSelectedTask);
     connect(&model_, &QAbstractItemModel::modelAboutToBeReset, this, &JobsEditor::captureSelection);
     connect(&model_, &QAbstractItemModel::modelReset, this, &JobsEditor::restoreSelection);
     connect(&model_, &QAbstractItemModel::dataChanged, this, &JobsEditor::updateDetails);

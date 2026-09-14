@@ -1,4 +1,6 @@
+#include "node_editor_items.hpp"
 #include "window_fixture.hpp"
+#include <QGraphicsView>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -9,6 +11,7 @@
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <iostream>
 
 namespace {
@@ -60,7 +63,10 @@ int run(int argc, char** argv) {
                 ++controls;
             }
             if (qobject_cast<kit::KRow*>(widget)) {
-                expect(widget->height() == kit::px(kit::Size::ListRow), widget, "list row token");
+                expect(widget->height() == kit::px(widget->property("headerRow").toBool()
+                                                       ? kit::Size::Control
+                                                       : kit::Size::ListRow),
+                       widget, "list row token");
                 if (widget->isVisible()) {
                     for (auto* cell :
                          widget->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
@@ -113,6 +119,86 @@ int run(int argc, char** argv) {
             }
         }
     }
+    auto* status = fixture.window->statusStrip();
+    expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
+    for (auto* cell : status->findChildren<kit::KLabel*>()) {
+        expect(cell->font() == kit::font(kit::TypeRole::UiSmall), cell, "status UiSmall role");
+        expect(cell->height() == kit::px(kit::Size::Control), cell, "status row height");
+    }
+    expect(!status->colorChipTextForTest().isEmpty(), status, "color state is always explicit");
+    auto* tools = fixture.window->findChild<kit::KToolColumn*>("viewerToolColumn");
+    expect(tools && tools->isVisible() && tools->width() == kit::px(kit::Size::ToolColumnWidth),
+           fixture.window.get(), "tool column token");
+    const auto choices = tools->findChildren<kit::KIconToggle*>();
+    expect(choices.size() == 6, tools, "six tool choices");
+    for (auto* choice : choices) {
+        expect(choice->height() == kit::px(kit::Size::Control) && !choice->toolTip().isEmpty(),
+               choice, "tool extent and help");
+        expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
+    }
+    expect(!tools->findChild<kit::KIconToggle*>("viewerTextTool")->isEnabled() &&
+               !tools->findChild<kit::KIconToggle*>("viewerRectangleTool")->isEnabled() &&
+               !tools->findChild<kit::KIconToggle*>("viewerPenTool")->isEnabled(),
+           tools, "unsupported authoring tools disabled");
+    int cards = 0, fields = 0, alignedSockets = 0;
+    for (auto* view : fixture.window->findChildren<QGraphicsView*>()) {
+        if (!view->scene())
+            continue;
+        for (auto* item : view->scene()->items()) {
+            auto* card = dynamic_cast<node_editor::NodeItem*>(item);
+            if (!card || card->data(kNodeItemKindRole).toString() != "node")
+                continue;
+            ++cards;
+            expect(card->cardWidth() >= kit::px(kit::Size::NodeCardWidth), view,
+                   "node card width token floor");
+            expect(card->parameterRowHeight() == kit::px(kit::Size::PropertyRow), view,
+                   "node row pitch");
+            for (auto* child : card->childItems()) {
+                auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                if (!proxy || !proxy->widget() ||
+                    !proxy->widget()->property("nodeParameterRowPitch").isValid())
+                    continue;
+                auto* field = proxy->widget();
+                ++fields;
+                expect(field->height() == kit::px(kit::Size::Control), field,
+                       "node kit control height");
+                expect(card->cardRect().contains(proxy->mapRectToParent(proxy->boundingRect())),
+                       field, "field contained in node");
+            }
+            for (auto* socket : card->sockets()) {
+                expect(socket->pos().x() == 0 || socket->pos().x() == card->cardWidth(), view,
+                       "socket on card edge");
+                bool hasRole = false, aligned = false;
+                for (auto* child : card->childItems()) {
+                    auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                    if (!proxy || !proxy->widget() ||
+                        !proxy->widget()->property("nodeParameterRowPitch").isValid() ||
+                        proxy->widget()->property("nodeParameterRole").toString() != socket->name)
+                        continue;
+                    hasRole = true;
+                    aligned =
+                        aligned || std::abs(proxy->pos().y() + proxy->widget()->height() / 2.0 -
+                                            socket->pos().y()) < 0.01;
+                }
+                if (hasRole) {
+                    expect(aligned, view, "socket aligned to its kit parameter row");
+                    ++alignedSockets;
+                }
+            }
+        }
+    }
+    expect(cards >= 4 && fields >= 5 && alignedSockets >= 5, fixture.window.get(),
+           "audit real node cards and socket/control pairs");
+    for (int width : {1600, 1920}) {
+        fixture.window->resize(width, 1200);
+        QTest::qWait(20);
+        auto* timeline = fixture.window->findChild<QWidget*>("timelineHeaderMenus");
+        expect(!timeline->property("collapsed").toBool(), timeline,
+               "timeline menus fit at >=1600px");
+        expect(status->isVisible(), status, "status survives window resizing");
+    }
+    std::cout << "Node audit: " << cards << " cards, " << fields << " fields, " << alignedSockets
+              << " aligned sockets\n";
     expect(controls > 30 && icons > 10, fixture.window.get(),
            "audit must inspect real controls and glyphs");
     std::cout << "Audited " << panels.size() << " panels, " << controls << " controls, " << icons

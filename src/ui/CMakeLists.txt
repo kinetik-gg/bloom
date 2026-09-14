@@ -30,6 +30,7 @@ target_sources(
         kit/icons.cpp
         kit/mnemonic_style.cpp
         kit/painting.cpp
+        kit/surfaces.cpp
         kit/controls.cpp
         kit/row.cpp
         kit/radio_group.cpp
@@ -59,6 +60,7 @@ target_sources(
             include/bloom/ui/kit/mnemonic_style.hpp
             include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/panel_switcher.hpp
+            include/bloom/ui/kit/surfaces.hpp
             include/bloom/ui/kit/controls.hpp
             include/bloom/ui/kit/row.hpp
             include/bloom/ui/kit/radio_group.hpp
@@ -158,6 +160,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/warning-circle.svg
         kit/third_party/phosphor-icons/regular/warning.svg
         kit/third_party/phosphor-icons/regular/x.svg
+        kit/third_party/phosphor-icons/regular/pen-nib.svg
+        kit/third_party/phosphor-icons/regular/rectangle.svg
         kit/third_party/phosphor-icons/bold/caret-down-bold.svg
         kit/third_party/phosphor-icons/bold/circle-bold.svg
         kit/third_party/phosphor-icons/bold/caret-left-bold.svg
@@ -208,6 +212,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/warning-bold.svg
         kit/third_party/phosphor-icons/bold/warning-circle-bold.svg
         kit/third_party/phosphor-icons/bold/x-bold.svg
+        kit/third_party/phosphor-icons/bold/pen-nib-bold.svg
+        kit/third_party/phosphor-icons/bold/rectangle-bold.svg
         kit/third_party/phosphor-icons/fill/caret-down-fill.svg
         kit/third_party/phosphor-icons/fill/circle-fill.svg
         kit/third_party/phosphor-icons/fill/caret-left-fill.svg
@@ -258,6 +264,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/warning-circle-fill.svg
         kit/third_party/phosphor-icons/fill/warning-fill.svg
         kit/third_party/phosphor-icons/fill/x-fill.svg
+        kit/third_party/phosphor-icons/fill/pen-nib-fill.svg
+        kit/third_party/phosphor-icons/fill/rectangle-fill.svg
 )
 
 

@@ -15,12 +15,10 @@
 
 namespace bloom::ui {
 PropertiesAnchorGrid::PropertiesAnchorGrid(CompositionSession& session, QWidget* parent)
-    : QWidget(parent), session_(session), timer_(new QTimer(this)) {
+    : kit::KAnchorGrid(parent), session_(session), timer_(new QTimer(this)) {
     setObjectName("propertiesAnchorGrid");
     setAccessibleName(tr("Anchor Point"));
     setFocusPolicy(Qt::StrongFocus);
-    const int pitch = kit::px(kit::Size::PropertiesAnchorDot) + kit::px(kit::Spacing::XS);
-    setFixedSize(pitch * 3, pitch * 3);
     timer_->setInterval(16);
     connect(timer_, &QTimer::timeout, this, [this] { poll(); });
 }
@@ -31,12 +29,6 @@ PropertiesAnchorGrid::~PropertiesAnchorGrid() {
         retire_->store(true);
         retire_->notify_one();
     }
-}
-QRect PropertiesAnchorGrid::pointRect(const int index) const {
-    const int dot = kit::px(kit::Size::PropertiesAnchorDot);
-    const int pitch = dot + kit::px(kit::Spacing::XS);
-    return {index % 3 * pitch + kit::px(kit::Spacing::XXS),
-            index / 3 * pitch + kit::px(kit::Spacing::XXS), dot, dot};
 }
 int PropertiesAnchorGrid::selectedPoint() const {
     const auto value = session_.effectiveVec2Value(document::kAnchorParameterRole);
@@ -214,13 +206,5 @@ void PropertiesAnchorGrid::keyPressEvent(QKeyEvent* event) {
     }
     event->accept();
 }
-void PropertiesAnchorGrid::paintEvent(QPaintEvent*) {
-    QPainter painter(this);
-    for (int index = 0; index < 9; ++index)
-        kit::fillRoundedSurface(
-            painter, pointRect(index),
-            kit::color(index == selectedPoint() ? kit::Color::Keyframe : kit::Color::BorderHover),
-            hasFocus() && index == selectedPoint() ? kit::color(kit::Color::Accent) : QColor{},
-            kit::Radius::Small);
-}
+
 } // namespace bloom::ui

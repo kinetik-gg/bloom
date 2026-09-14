@@ -7,8 +7,10 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <memory>
 
 namespace bloom::ui {
 std::vector<TimelineLayerEntry>
@@ -103,7 +105,7 @@ timelinePropertyEntries(const CompositionSession& session,
 }
 
 TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* parent)
-    : QWidget(parent), session_(session), label_(new QLabel(this)),
+    : QWidget(parent), session_(session), label_(new kit::KLabel(this)),
       diamond_(new KeyframeDiamond(session, "", this)), blending_(new kit::KDropdown(this)),
       alignment_(new kit::KDropdown(this)), color_(new kit::KColorChip(this)) {
     setObjectName("timelinePropertyRow");
@@ -112,7 +114,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                                0);
     layout->setSpacing(kit::px(kit::Spacing::XS));
     label_->setObjectName("timelinePropertyLabel");
-    label_->setFixedWidth(kit::px(kit::Size::ControlRoomy) * 2);
+    label_->setFixedWidth(kit::px(kit::Size::PropertyLabelCompact));
     label_->setFont(kit::font(kit::TypeRole::Ui));
     layout->addWidget(label_);
     diamond_->setObjectName("timelinePropertyDiamond");
@@ -122,7 +124,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         auto* cellLayout = new QHBoxLayout(cell);
         cellLayout->setContentsMargins(0, 0, 0, 0);
         cellLayout->setSpacing(kit::px(kit::Spacing::XXS));
-        auto* component = components_[i] = new QLabel(i == 0 ? "X" : "Y", cell);
+        auto* component = components_[i] = new kit::KLabel(i == 0 ? "X" : "Y", cell);
         component->setObjectName("timelinePropertyComponent");
         component->setFont(kit::font(kit::TypeRole::UiSmall));
         component->setFixedWidth(kit::px(kit::Spacing::M));
@@ -200,7 +202,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                 QVariant::fromValue(static_cast<qulonglong>(entry.parameterId.value())));
     setProperty("role", QString::fromStdString(entry.role));
     const bool group = entry.rowKind == TimelineLayerEntry::Kind::Group;
-    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : kit::px(kit::Size::ControlRoomy) * 2);
+    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : kit::px(kit::Size::PropertyLabelCompact));
     label_->setText(group ? entry.name.toUpper() : entry.name);
     label_->setFont(kit::font(group ? kit::TypeRole::UiSmall : kit::TypeRole::Ui));
     label_->setToolTip(entry.name);

@@ -1,3 +1,5 @@
+#include <bloom/ui/kit/controls.hpp>
+#include <memory>
 // Task PROPS-1, deliverable 1: PropertiesEditor's CONSTRUCTION half.
 //
 // properties_editor.cpp had grown past a thousand lines with two jobs in it: building the panel's
@@ -325,7 +327,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     // The kit has no string field, so the content cell is a plain QLineEdit styled by the
     // application palette. It commits on editingFinished, not on textChanged: a per-keystroke
     // commit would make typing one word a dozen undo steps and a dozen recompiles.
-    textContent_ = new QLineEdit(body);
+    textContent_ = new kit::KLineEdit(body);
     textContent_->setObjectName("textContentEditor");
     textContent_->setAccessibleName(tr("Text content"));
     textContent_->setFont(kit::font(kit::TypeRole::Value));
@@ -389,7 +391,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     multilineLayout->setContentsMargins(0, 0, 0, 0);
     auto* multiline = new QPlainTextEdit(multilineRow);
     multiline->setObjectName("propertiesTextMultiline");
-    multiline->setFixedHeight(kit::px(kit::Size::Control) * 3);
+    multiline->setFixedHeight(kit::px(kit::Size::MultilineHeight));
     multiline->installEventFilter(this);
     auto* expand = new kit::KButton(body);
     expand->setObjectName("propertiesTextExpand");

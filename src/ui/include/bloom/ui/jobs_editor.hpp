@@ -6,7 +6,9 @@
 
 class QModelIndex;
 class QPlainTextEdit;
-class QPushButton;
+namespace bloom::ui::kit {
+class KButton;
+}
 class QTableView;
 
 namespace bloom::ui {
@@ -32,7 +34,7 @@ class JobsEditor final : public QWidget {
     TaskMonitorModel& model_;
     QTableView* table_ = nullptr;
     QPlainTextEdit* details_ = nullptr;
-    QPushButton* cancelButton_ = nullptr;
+    kit::KButton* cancelButton_ = nullptr;
     runtime::TaskId selectedTaskId_;
 };
 

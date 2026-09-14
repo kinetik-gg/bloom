@@ -36,6 +36,10 @@ int main() {
         ++failures;
     if (!uiGrammarViolations("src/ui/tests/example.cpp", "new QToolButton(this);").empty())
         ++failures;
+    check("QRect(0, row, width(), pitch), color(row % 2);", "dimension", 0);
+    check("width() / 2.0; event->angleDelta().y() / 120;", "dimension", 0);
+    check("new QLabel;\nnew QLineEdit;", "raw-control", 2);
+    check("QSize(kit::px(kit::Size::Control), 20);", "dimension", 1);
     const auto lines =
         uiGrammarViolations("apps/bloom/example.cpp", "// comment\n\nnew QSlider(this);");
     if (lines.size() != 1 || lines.front().line != 3)

@@ -4,7 +4,7 @@
 #include <bloom/ui/composition_session.hpp>
 
 #include <QString>
-#include <QWidget>
+#include <bloom/ui/kit/surfaces.hpp>
 
 #include <optional>
 #include <string>
@@ -77,7 +77,7 @@ class CompositionSession;
 // The weights are the kit's own existing two (IconWeight::Regular / Fill) used exactly as
 // docs/ux/visual-language.md's iconography rule states -- "regular is the default visual weight and
 // fill for selected or toggled states" -- so this needs no kit change.
-class KeyframeDiamond final : public QWidget {
+class KeyframeDiamond final : public kit::KDiamond {
     Q_OBJECT
 
   public:
@@ -104,7 +104,6 @@ class KeyframeDiamond final : public QWidget {
     [[nodiscard]] KeyframeDiamondState state() const noexcept { return state_; }
 
   protected:
-    void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;

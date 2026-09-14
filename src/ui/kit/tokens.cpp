@@ -24,6 +24,8 @@ struct ColorEntry {
 // color()/hex() so a rule and a painter can never drift apart.
 constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::Background, 0x111111U},
+    {Color::Canvas, 0x131313U},
+    {Color::CompositionFrame, 0x454545U},
     {Color::SurfaceSunken, 0x0B0B0BU},
     // task U8 (issue 131), formal amendment 1, A2: panel body darkened from 0x161616.
     {Color::Surface, 0x141414U},
@@ -172,8 +174,8 @@ QFont font(const TypeRole role) {
         // transform and +0.07em tracking below are unchanged.
         value.setPointSizeF(pointSizeForDesignPixels(10.5));
         value.setWeight(QFont::Medium);
-        value.setCapitalization(QFont::AllUppercase);
-        value.setLetterSpacing(QFont::PercentageSpacing, 107.0);
+        value.setCapitalization(QFont::MixedCase);
+        value.setLetterSpacing(QFont::PercentageSpacing, 100.0);
         break;
     case TypeRole::Value:
         value.setStyleHint(QFont::Monospace);
