@@ -206,9 +206,12 @@ class CompiledCompositionPlan final {
 
     [[nodiscard]] bool bypassOperationCache() const noexcept { return bypassOperationCache_; }
     [[nodiscard]] bool operationTimeDependent(OperationIndex index) const noexcept {
-        return index.value() >= operationTimeDependent_.size() || operationTimeDependent_[index.value()] != 0;
+        return index.value() >= operationTimeDependent_.size() ||
+               operationTimeDependent_[index.value()] != 0;
     }
-    [[nodiscard]] std::span<const std::uint8_t> valueTimeDependence() const noexcept { return valueTimeDependent_; }
+    [[nodiscard]] std::span<const std::uint8_t> valueTimeDependence() const noexcept {
+        return valueTimeDependent_;
+    }
     [[nodiscard]] document::Revision sourceRevision() const noexcept { return sourceRevision_; }
     [[nodiscard]] document::ProjectId projectId() const noexcept { return projectId_; }
     [[nodiscard]] document::CompositionId compositionId() const noexcept { return compositionId_; }

@@ -1,8 +1,8 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
-#include <deque>
 #include "operation_key.hpp"
+#include <deque>
 
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/core/value_primitives.hpp>
@@ -193,7 +193,8 @@ class Evaluator final {
     void run(const std::span<const runtime::CompiledValueOperation> operations) {
         std::size_t operationIndex = 0;
         for (const auto& operation : operations) {
-            if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested()) return;
+            if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested())
+                return;
             const auto first = operation.firstOutput.value();
             const auto count = static_cast<std::size_t>(operation.outputCount);
             if (count == 0 || first != written_ || first + count > outputs_.size()) {
@@ -207,35 +208,59 @@ class Evaluator final {
             bool valid = true;
             const auto currentOperation = operationIndex++;
             if (memoization_.cache) {
-            key.add(std::string("value")); key.add(memoization_.project); key.add(memoization_.composition);
-            key.add(operation.sourceNodeId); key.add(operation.kernel.index()); key.add(count);
-            const bool dependent = currentOperation >= memoization_.timeDependence.size() ||
-                memoization_.timeDependence[currentOperation] != 0;
-            key.add(dependent);
-            if (dependent) key.add(time_); key.add(rate_);
-            std::visit([&](const auto& kernel) {
-                if constexpr (requires { kernel.operation; }) key.add(kernel.operation);
-                if constexpr (requires { kernel.clampResult; }) key.add(kernel.clampResult);
-                if constexpr (requires { kernel.reduction; }) key.add(kernel.reduction);
-                if constexpr (requires { kernel.interpolation; }) key.add(kernel.interpolation);
-                if constexpr (requires { kernel.color; }) key.add(kernel.color);
-                if constexpr (requires { kernel.componentCount; }) key.add(kernel.componentCount);
-                if constexpr (requires { kernel.promotion; }) key.add(kernel.promotion);
-                if constexpr (requires { kernel.components; }) {
-                    if constexpr (std::is_integral_v<decltype(kernel.components)>) key.add(kernel.components);
-                    else key.add(kernel.components.size());
-                }
-            }, operation.kernel);
-            runtime::forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
-                const auto* value = operandOf(operand);
-                if (value) key.add(*value); else valid = false;
-            });
+                key.add(std::string("value"));
+                key.add(memoization_.project);
+                key.add(memoization_.composition);
+                key.add(operation.sourceNodeId);
+                key.add(operation.kernel.index());
+                key.add(count);
+                const bool dependent = currentOperation >= memoization_.timeDependence.size() ||
+                                       memoization_.timeDependence[currentOperation] != 0;
+                key.add(dependent);
+                if (dependent)
+                    key.add(time_);
+                key.add(rate_);
+                std::visit(
+                    [&](const auto& kernel) {
+                        if constexpr (requires { kernel.operation; })
+                            key.add(kernel.operation);
+                        if constexpr (requires { kernel.clampResult; })
+                            key.add(kernel.clampResult);
+                        if constexpr (requires { kernel.reduction; })
+                            key.add(kernel.reduction);
+                        if constexpr (requires { kernel.interpolation; })
+                            key.add(kernel.interpolation);
+                        if constexpr (requires { kernel.color; })
+                            key.add(kernel.color);
+                        if constexpr (requires { kernel.componentCount; })
+                            key.add(kernel.componentCount);
+                        if constexpr (requires { kernel.promotion; })
+                            key.add(kernel.promotion);
+                        if constexpr (requires { kernel.components; }) {
+                            if constexpr (std::is_integral_v<decltype(kernel.components)>)
+                                key.add(kernel.components);
+                            else
+                                key.add(kernel.components.size());
+                        }
+                    },
+                    operation.kernel);
+                runtime::forEachValueOperand(operation.kernel,
+                                             [&](const CompiledValueOperand& operand) {
+                                                 const auto* value = operandOf(operand);
+                                                 if (value)
+                                                     key.add(*value);
+                                                 else
+                                                     valid = false;
+                                             });
             }
             const auto hit = memoization_.cache && valid
-                ? memoization_.cache->find(key.bytes(), memoization_.revision) : std::nullopt;
+                                 ? memoization_.cache->find(key.bytes(), memoization_.revision)
+                                 : std::nullopt;
             if (hit) {
-                std::copy(hit->values.begin(), hit->values.end(), outputs_.begin() + static_cast<std::ptrdiff_t>(first));
-                if (memoization_.statistics) ++memoization_.statistics->hits;
+                std::copy(hit->values.begin(), hit->values.end(),
+                          outputs_.begin() + static_cast<std::ptrdiff_t>(first));
+                if (memoization_.statistics)
+                    ++memoization_.statistics->hits;
             } else {
                 if (memoization_.statistics) {
                     ++memoization_.statistics->misses;
@@ -244,9 +269,12 @@ class Evaluator final {
                 const auto diagnosticsBefore = diagnostics_.size();
                 evaluateOperation(operation);
                 if (memoization_.cache && valid && diagnosticsBefore == diagnostics_.size()) {
-                    memoization_.cache->store(key.bytes(), memoization_.revision,
-                        {.image = {}, .values = {outputs_.begin() + static_cast<std::ptrdiff_t>(first),
-                                                outputs_.begin() + static_cast<std::ptrdiff_t>(first + count)}});
+                    memoization_.cache->store(
+                        key.bytes(), memoization_.revision,
+                        {.image = {},
+                         .values = {outputs_.begin() + static_cast<std::ptrdiff_t>(first),
+                                    outputs_.begin() +
+                                        static_cast<std::ptrdiff_t>(first + count)}});
                 }
             }
             sampled_.clear();
@@ -898,7 +926,8 @@ ValueGraphEvaluation evaluateValueGraph(const std::span<const CompiledValueOpera
                                         const std::size_t outputCount,
                                         const core::RationalTime time,
                                         const document::FrameRate rate,
-                                        const ValueGraphCurves curves, ValueGraphMemoization memoization) {
+                                        const ValueGraphCurves curves,
+                                        ValueGraphMemoization memoization) {
     Evaluator evaluator(outputCount, time, rate, curves, memoization);
     evaluator.run(operations);
     return evaluator.release();

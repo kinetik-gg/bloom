@@ -1449,11 +1449,13 @@ void testParallelRowBandsAreBitIdenticalToSerial(Expectations& expectations) {
     const auto cached = evaluator.evaluate(plan, request, {});
     expectations.expect(coldBanded.frame() && cached.frame(), "banded cache fixture evaluates");
     if (coldBanded.frame() && cached.frame()) {
-        expectations.expect(std::memcmp(serialPixels.data(), cached.frame()->processImage().pixels().data(),
-                                        serialPixels.size_bytes()) == 0 &&
-                            coldBanded.frame()->operationCacheStatistics().misses == plan->operations().size() &&
-                            cached.frame()->operationCacheStatistics().hits == plan->operations().size(),
-                            "cached banded kernels preserve the uncached serial golden");
+        expectations.expect(
+            std::memcmp(serialPixels.data(), cached.frame()->processImage().pixels().data(),
+                        serialPixels.size_bytes()) == 0 &&
+                coldBanded.frame()->operationCacheStatistics().misses ==
+                    plan->operations().size() &&
+                cached.frame()->operationCacheStatistics().hits == plan->operations().size(),
+            "cached banded kernels preserve the uncached serial golden");
     }
 
     const runtime::CpuReferenceDisplayPreparer displayPreparer;

@@ -4,8 +4,8 @@
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
-#include <bloom/runtime/task_types.hpp>
 #include <bloom/runtime/operation_cache.hpp>
+#include <bloom/runtime/task_types.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -154,7 +154,9 @@ class ProcessFrame final {
     ProcessFrame& operator=(ProcessFrame&&) noexcept = default;
     ~ProcessFrame() = default;
 
-    [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const& noexcept { return statistics_; }
+    [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const& noexcept {
+        return statistics_;
+    }
     [[nodiscard]] const OperationCacheStatistics& operationCacheStatistics() const&& = delete;
     [[nodiscard]] const ProcessFrameIdentity& identity() const& noexcept { return identity_; }
     [[nodiscard]] const ProcessFrameIdentity& identity() const&& = delete;
@@ -166,7 +168,8 @@ class ProcessFrame final {
   private:
     friend class CpuCompositionEvaluator;
 
-    ProcessFrame(ProcessFrameIdentity identity, std::shared_ptr<const render::Rgba32fImage> processImage,
+    ProcessFrame(ProcessFrameIdentity identity,
+                 std::shared_ptr<const render::Rgba32fImage> processImage,
                  OperationCacheStatistics statistics) noexcept;
 
     OperationCacheStatistics statistics_;

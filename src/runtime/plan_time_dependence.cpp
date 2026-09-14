@@ -1,5 +1,5 @@
-#include <bloom/runtime/compiled_plan.hpp>
 #include <algorithm>
+#include <bloom/runtime/compiled_plan.hpp>
 #include <type_traits>
 
 namespace bloom::runtime {
@@ -10,8 +10,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
         bool dependent = std::holds_alternative<CompiledValueTime>(operation.kernel);
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))
-                dependent = dependent || input->value() >= outputs.size() || outputs[input->value()] != 0;
-            else dependent = dependent || !std::holds_alternative<CompiledValue>(operand.source);
+                dependent =
+                    dependent || input->value() >= outputs.size() || outputs[input->value()] != 0;
+            else
+                dependent = dependent || !std::holds_alternative<CompiledValue>(operand.source);
         });
         valueTimeDependent_.push_back(dependent ? 1 : 0);
         for (std::size_t slot = 0; slot < operation.outputCount; ++slot) {
@@ -26,22 +28,29 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
         return operand.source.index() != 0;
     };
     const auto input = [&](OperationIndex index) {
-        return index.value() >= operationTimeDependent_.size() || operationTimeDependent_[index.value()] != 0;
+        return index.value() >= operationTimeDependent_.size() ||
+               operationTimeDependent_[index.value()] != 0;
     };
     operationTimeDependent_.reserve(operations_.size());
     for (const auto& operation : operations_) {
-        const bool dependent = std::visit([&](const auto& step) {
-            using Step = std::decay_t<decltype(step)>;
-            if constexpr (std::is_same_v<Step, CompiledSolid>) return parameter(step.color);
-            else if constexpr (std::is_same_v<Step, CompiledText>)
-                return parameter(step.color) || parameter(step.size);
-            else if constexpr (std::is_same_v<Step, CompiledLayerOutput>)
-                return input(step.input) || parameter(step.position) || parameter(step.anchor) ||
-                       parameter(step.scale) || parameter(step.rotation) || parameter(step.opacity);
-            else if constexpr (std::is_same_v<Step, CompiledMerge>)
-                return std::ranges::any_of(step.entries, [&](const auto& entry) { return input(entry.input); });
-            else return input(step.input);
-        }, operation);
+        const bool dependent = std::visit(
+            [&](const auto& step) {
+                using Step = std::decay_t<decltype(step)>;
+                if constexpr (std::is_same_v<Step, CompiledSolid>)
+                    return parameter(step.color);
+                else if constexpr (std::is_same_v<Step, CompiledText>)
+                    return parameter(step.color) || parameter(step.size);
+                else if constexpr (std::is_same_v<Step, CompiledLayerOutput>)
+                    return input(step.input) || parameter(step.position) ||
+                           parameter(step.anchor) || parameter(step.scale) ||
+                           parameter(step.rotation) || parameter(step.opacity);
+                else if constexpr (std::is_same_v<Step, CompiledMerge>)
+                    return std::ranges::any_of(
+                        step.entries, [&](const auto& entry) { return input(entry.input); });
+                else
+                    return input(step.input);
+            },
+            operation);
         operationTimeDependent_.push_back(dependent ? 1 : 0);
     }
 }

@@ -219,7 +219,8 @@ struct SessionFixture final {
                                                    interactionOverride, context);
             if (result.value() && *result.value() && (*result.value())->frame() &&
                 (*result.value())->frame()->processFrame()) {
-                const auto& statistics = (*result.value())->frame()->processFrame()->operationCacheStatistics();
+                const auto& statistics =
+                    (*result.value())->frame()->processFrame()->operationCacheStatistics();
                 operationHits.fetch_add(statistics.hits);
                 operationMisses.fetch_add(statistics.misses);
             }
@@ -736,34 +737,44 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
 
 void testOperationCacheUnderRamPreview(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Operation Cache", time(24, 25)));
-    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Static solid"), {0.2, 0.4, 0.8, 1}),
-                        "static solid is authored");
-    expectations.expect(fixture.session.addTextLayer(QStringLiteral("Static text"), QStringLiteral("Bloom")),
-                        "static text is authored");
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "static composition is ready");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Static solid"), {0.2, 0.4, 0.8, 1}),
+        "static solid is authored");
+    expectations.expect(
+        fixture.session.addTextLayer(QStringLiteral("Static text"), QStringLiteral("Bloom")),
+        "static text is authored");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "static composition is ready");
     const auto beforeMisses = fixture.operationMisses.load();
     const auto beforeHits = fixture.operationHits.load();
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
-                                       fixture.bridge, fixture.countingPipeline());
+                                        fixture.bridge, fixture.countingPipeline());
     ramPreview.start();
-    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }), "static RAM preview finishes");
-    expectations.expect(ramPreview.cachedFrameCount() == 24 && fixture.operationMisses.load() == beforeMisses &&
-                        fixture.operationHits.load() == beforeHits + 138,
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
+                        "static RAM preview finishes");
+    expectations.expect(ramPreview.cachedFrameCount() == 24 &&
+                            fixture.operationMisses.load() == beforeMisses &&
+                            fixture.operationHits.load() == beforeHits + 138,
                         "23 frame-cache misses reuse all six operations below the frame cache");
     finishFixture(fixture, expectations);
     QTemporaryDir directory;
     expectations.expect(directory.isValid(), "settings test directory exists");
-    if (!directory.isValid()) return;
+    if (!directory.isValid())
+        return;
     QSettings settings(directory.filePath(QStringLiteral("playback.ini")), QSettings::IniFormat);
-    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) == runtime::kDefaultOperationCacheBytes,
+    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) ==
+                            runtime::kDefaultOperationCacheBytes,
                         "missing operation budget defaults to 1 GiB");
     for (const auto* value : {"0", "-1", "invalid", "18446744073709551616"}) {
-        settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QString::fromLatin1(value));
-        expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) == runtime::kDefaultOperationCacheBytes,
+        settings.setValue(QStringLiteral("playback/operation-cache-bytes"),
+                          QString::fromLatin1(value));
+        expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) ==
+                                runtime::kDefaultOperationCacheBytes,
                             "invalid operation budget uses the default");
     }
     settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QStringLiteral("4096"));
-    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) == 4096, "saved budget is honored");
+    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) == 4096,
+                        "saved budget is honored");
 }
 
 } // namespace

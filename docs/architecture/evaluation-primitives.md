@@ -498,3 +498,54 @@ identity, device capability, and fallback are semantic contracts rather than bac
 
 The planned artist-facing vocabulary is maintained in
 [`../product/node-catalogue.md`](../product/node-catalogue.md).
+
+## Operation memoization
+
+The session's `CpuCompositionEvaluator` owns a synchronized, byte-bounded LRU shared by its
+foreground, RAM-preview and background requests. Solid, Text, post-transform Layer Output, Merge,
+Composition Output and individual value-graph operations retain successful results. Image hits
+share immutable pixel storage; they do not copy or rerender it. Absent trimmed-layer images can
+also be retained. Failed value operations rerun so their diagnostics are reproduced. Cancelled or
+failed image operations are never inserted; complete earlier operations remain reusable.
+
+An operation address includes its plan revision and resolved content. The content key includes
+project/composition and source-node identity, operation kind, its own resolved pixel-affecting
+operands, composition format and resolution/proxy. Merge keys include input order and whether a
+slot applies layer blending. Downstream keys include the SHA-256 content hashes of their inputs.
+Exact time participates only for time-dependent operations. Values use their kernel options,
+resolved operands and frame rate; these results are independent of image resolution. Keys encode
+floating-point bits, including signed zero, without rounding or locale-dependent text.
+
+A second lookup by resolved content adopts an unchanged operation into a new revision. Only the
+latest revision address is retained, so editing an unrelated node neither discards sibling images
+nor grows an alias table. An edited solid color invalidates that solid, its transformed Layer
+Output, Merge and Composition Output; the text branch remains reusable. There is no revision-wide
+operation-cache flush. Composition-format or proxy changes produce distinct image keys.
+
+Compilation derives transitive time-dependence metadata for both programs. Curves and Time nodes
+are dependent, as are operations reached through their value outputs, drivers or image inputs.
+Static operations and a Merge of static inputs are invariant. Layer visibility additionally enters
+its resolved key: crossing either half-open trim boundary cannot reuse the opposite visibility
+state. This metadata is derived runtime state and does not change serialized plan identity inputs.
+
+`playback/operation-cache-bytes` sets the session budget, defaulting to 1 GiB when missing, invalid,
+zero or unrepresentable. The cache accounts retained image/value storage and entry/key overhead,
+evicts least-recently-used entries, and refuses an entry larger than the budget without evicting
+useful entries for it. Runtime `setByteBudget(0)` disables retention and releases entries. Images
+already held by an active evaluation or published frame live until those owners release them;
+eviction does not invalidate readers. Shared image storage is conservatively charged for every
+retaining entry. Concurrent misses may independently evaluate the same operation; cache access is
+synchronized, but row kernels never execute under its mutex.
+
+The existing display-frame cache remains the upper level. A frame hit needs no evaluator work;
+a miss consults operation memoization before running kernels. Only display buffers count against
+the frame-cache budget; retained process images count against the separate operation budget.
+`ProcessFrame::operationCacheStatistics()` exposes that request's hits, misses and evaluated node
+IDs for later status-bar use, without introducing UI. Preflight validation, request pixel-storage
+limits, cancellation, progress and row-band execution still apply on cache hits. Memoization
+changes no pixels, identity goldens or evaluator/primitive semantics versions.
+
+Interactive override plans and requests bypass both lookup and insertion, including value results.
+Their temporary gesture values cannot populate the operation cache. `bypassOperationCache` also
+provides a serial uncached reference for verification. Caching is process-local; nothing is persisted
+in the project or on disk.

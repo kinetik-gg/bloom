@@ -551,7 +551,8 @@ template <typename Value>
 [[nodiscard]] PreflightOutcome preflight(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                          const EvaluationRequest& request,
                                          const CancellationToken& cancellation,
-                                         const EvaluationProgressCallback& progress, OperationCache* cache,
+                                         const EvaluationProgressCallback& progress,
+                                         OperationCache* cache,
                                          OperationCacheStatistics* statistics) {
     if (plan == nullptr) {
         return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidRequest,
@@ -1144,7 +1145,8 @@ template <typename Value>
     auto valueGraph = evaluateValueGraph(
         plan->valueOperations(), plan->valueOutputCount(), request.time, plan->format().frameRate(),
         ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves()},
-        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(), &cancellation, plan->valueTimeDependence()});
+        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(),
+         &cancellation, plan->valueTimeDependence()});
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
     }
@@ -1187,8 +1189,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
     CpuRowBandExecutor* const rowBands, OperationCacheStatistics* statistics) const {
     OperationCacheStatistics frameStatistics;
-    if (statistics) *statistics = {};
-    auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache())) ? nullptr : cache_.get();
+    if (statistics)
+        *statistics = {};
+    auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache()))
+                      ? nullptr
+                      : cache_.get();
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -1219,484 +1224,227 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
 
             detail::OperationKey key;
             if (cache) {
-            key.add(plan->projectId()); key.add(plan->compositionId());
-            key.add(plan->format().width()); key.add(plan->format().height());
-            key.add(plan->format().pixelAspect());
-            key.add(plan->format().frameRate());
-            key.add(request.resolution.index());
-            if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
-                key.add(proxy->extent.width()); key.add(proxy->extent.height());
-            }
-            key.add(plan->operationTimeDependent(operationIndex));
-            if (plan->operationTimeDependent(operationIndex)) key.add(request.time);
-            key.add(plan->operations()[index].index());
-            const auto parameter = [&](const auto& operand) {
-                const auto value = detail::resolveParameter(operand, *plan, resolved);
-                key.add(value.has_value());
-                if (value) key.add(value->value);
-            };
-            std::visit([&](const auto& step) {
-                key.add(step.sourceNodeId);
-                using Step = std::decay_t<decltype(step)>;
-                if constexpr (std::is_same_v<Step, CompiledSolid>) parameter(step.color);
-                else if constexpr (std::is_same_v<Step, CompiledText>) {
-                    key.add(step.content); parameter(step.size); parameter(step.color);
-                } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
-                    parameter(step.position); parameter(step.anchor); parameter(step.scale);
-                    parameter(step.rotation); parameter(step.opacity); key.add(step.blendMode);
-                    key.add(request.time >= step.inPoint && (!step.outPoint || request.time < *step.outPoint));
-                } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
-                    key.add(step.entries.size());
-                    for (const auto& entry : step.entries) key.add(entry.layerId.isValid());
+                key.add(plan->projectId());
+                key.add(plan->compositionId());
+                key.add(plan->format().width());
+                key.add(plan->format().height());
+                key.add(plan->format().pixelAspect());
+                key.add(plan->format().frameRate());
+                key.add(request.resolution.index());
+                if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
+                    key.add(proxy->extent.width());
+                    key.add(proxy->extent.height());
                 }
-            }, plan->operations()[index]);
-            forEachInput(plan->operations()[index], [&](OperationIndex input) {
-                key.add(contentHashes[input.value()]);
-            });
-            contentHashes[index] = key.digest();
+                key.add(plan->operationTimeDependent(operationIndex));
+                if (plan->operationTimeDependent(operationIndex))
+                    key.add(request.time);
+                key.add(plan->operations()[index].index());
+                const auto parameter = [&](const auto& operand) {
+                    const auto value = detail::resolveParameter(operand, *plan, resolved);
+                    key.add(value.has_value());
+                    if (value)
+                        key.add(value->value);
+                };
+                std::visit(
+                    [&](const auto& step) {
+                        key.add(step.sourceNodeId);
+                        using Step = std::decay_t<decltype(step)>;
+                        if constexpr (std::is_same_v<Step, CompiledSolid>)
+                            parameter(step.color);
+                        else if constexpr (std::is_same_v<Step, CompiledText>) {
+                            key.add(step.content);
+                            parameter(step.size);
+                            parameter(step.color);
+                        } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
+                            parameter(step.position);
+                            parameter(step.anchor);
+                            parameter(step.scale);
+                            parameter(step.rotation);
+                            parameter(step.opacity);
+                            key.add(step.blendMode);
+                            key.add(request.time >= step.inPoint &&
+                                    (!step.outPoint || request.time < *step.outPoint));
+                        } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
+                            key.add(step.entries.size());
+                            for (const auto& entry : step.entries)
+                                key.add(entry.layerId.isValid());
+                        }
+                    },
+                    plan->operations()[index]);
+                forEachInput(plan->operations()[index],
+                             [&](OperationIndex input) { key.add(contentHashes[input.value()]); });
+                contentHashes[index] = key.digest();
             }
-            const auto hit = cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
+            const auto hit =
+                cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
             if (hit) {
                 ++frameStatistics.hits;
                 slots[index] = hit->image;
-                if (index == request.output.value()) processImage = hit->image;
+                if (index == request.output.value())
+                    processImage = hit->image;
                 reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                    .operation = operationIndex, .completed = 1, .total = 1});
+                                          .operation = operationIndex,
+                                          .completed = 1,
+                                          .total = 1});
             } else {
                 ++frameStatistics.misses;
-                frameStatistics.evaluatedNodes.push_back(operationSubject.nodeId.value_or(document::NodeId{}));
-            std::visit(
-                Overloaded{
-                    [&](const CompiledSolid& solid) {
-                        const auto color = detail::resolveParameter(solid.color, *plan, resolved);
-                        if (!color.has_value()) {
-                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                                          "Solid color could not be resolved", {},
-                                                          operationSubject);
-                            return;
-                        }
-                        const auto pixel =
-                            render::solidPixelFromStraightLinearRec709Scene(color->value);
-                        if (!pixel) {
-                            operationFailure = imageDiagnostic(
-                                *pixel.error(),
-                                detail::parameterSubject(operationSubject, *color, "color"),
-                                "Solid color is not evaluable");
-                            return;
-                        }
-                        auto builder = render::Rgba32fImageBuilder::create(resolved.imageDescriptor,
-                                                                           resolved.imageBytes);
-                        if (!builder) {
-                            operationFailure =
-                                imageDiagnostic(*builder.error(), operationSubject,
-                                                "Solid process image could not be allocated");
-                            return;
-                        }
-                        const auto window = resolved.imageDescriptor.dataWindow();
-                        const auto height = window.extent().height();
-                        reportRowPassStarted(progress, operationIndex, height);
-                        auto& image = *builder.value();
-                        const auto solidPixel = *pixel.value();
-                        const auto outcome =
-                            runRowBandPass(rowBands, cancellation, height, window.originY(),
-                                           [&image, solidPixel,
-                                            &operationSubject](const std::int64_t y) -> RowFailure {
-                                               auto row = image.row(y);
-                                               if (!row) {
-                                                   return imageDiagnostic(
-                                                       *row.error(), operationSubject,
-                                                       "Solid output row could not be addressed");
-                                               }
-                                               render::fillSolidRow(*row.value(), solidPixel);
-                                               return std::nullopt;
-                                           });
-                        if (outcome.cancelled) {
-                            operationCancelled = true;
-                            return;
-                        }
-                        if (outcome.failure.has_value() || outcome.incomplete) {
-                            operationFailure = rowPassFailure(outcome, operationSubject);
-                            return;
-                        }
-                        reportRowPassFinished(progress, operationIndex, height);
-                        auto frozen = std::move(*builder.value()).freeze();
-                        if (!frozen) {
-                            operationFailure =
-                                imageDiagnostic(*frozen.error(), operationSubject,
-                                                "Solid process image could not be published");
-                            return;
-                        }
-                        produced.emplace(std::move(*frozen.value()));
-                    },
-                    [&](const CompiledText& text) {
-                        // A text source produces a full-frame image exactly like a solid, so the
-                        // Layer Output stage transforms and fades it with the same primitive and
-                        // the same five transform parameters. The difference is only what is inside
-                        // the frame: transparent black everywhere except where glyph coverage
-                        // lands.
-                        //
-                        // Placement: the text origin is the frame's own data-window origin, so the
-                        // first line's ascender is flush with the top edge and its pen starts at
-                        // the left edge. The layer transform then moves, turns, and scales the
-                        // whole layer from there, which is why nothing here reads any of it.
-                        const auto size = detail::resolveParameter(text.size, *plan, resolved);
-                        const auto color = detail::resolveParameter(text.color, *plan, resolved);
-                        if (!size.has_value() || !color.has_value()) {
-                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                                          "Text parameter could not be resolved",
-                                                          {}, operationSubject);
-                            return;
-                        }
-                        const auto pixel =
-                            render::solidPixelFromStraightLinearRec709Scene(color->value);
-                        if (!pixel) {
-                            operationFailure = imageDiagnostic(
-                                *pixel.error(),
-                                detail::parameterSubject(operationSubject, *color, "color"),
-                                "Text color is not evaluable");
-                            return;
-                        }
-                        // Proxy evaluation scales the em size per axis by exactly the factors the
-                        // Layer Output stage scales translation by, so a proxy frame is a smaller
-                        // picture of the same composition rather than full-size glyphs in a small
-                        // frame.
-                        const auto rasterParameters = render::TextRasterParameters::create(
-                            size->value * resolved.horizontalScale,
-                            size->value * resolved.verticalScale);
-                        if (!rasterParameters) {
-                            operationFailure = imageDiagnostic(
-                                *rasterParameters.error(),
-                                detail::parameterSubject(operationSubject, *size, "size"),
-                                "Text size is not rasterizable");
-                            return;
-                        }
-                        auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                            text.content, *rasterParameters.value(), request.pixelStorageByteLimit);
-                        if (!coverage) {
-                            operationFailure =
-                                imageDiagnostic(*coverage.error(), operationSubject,
-                                                "Text content could not be rasterized");
-                            operationFailure->subject.parameterId = text.contentParameterId;
-                            operationFailure->subject.field = "content";
-                            return;
-                        }
-                        auto builder = render::Rgba32fImageBuilder::create(
-                            resolved.imageDescriptor, resolved.imageBytes,
-                            render::Rgba32f::transparent());
-                        if (!builder) {
-                            operationFailure =
-                                imageDiagnostic(*builder.error(), operationSubject,
-                                                "Text process image could not be allocated");
-                            return;
-                        }
-                        const auto window = resolved.imageDescriptor.dataWindow();
-                        const auto height = window.extent().height();
-                        const auto& bitmap = *coverage.value();
-                        reportRowPassStarted(progress, operationIndex, height);
-                        auto& image = *builder.value();
-                        const auto textPixel = *pixel.value();
-                        const auto outcome = runRowBandPass(
-                            rowBands, cancellation, height, window.originY(),
-                            [&image, &bitmap, window, textPixel,
-                             &operationSubject](const std::int64_t y) -> RowFailure {
-                                const auto clipped = detail::clipCoverageRow(bitmap, window, y);
-                                if (clipped.coverage.empty()) {
-                                    return std::nullopt;
-                                }
-                                auto outputRow = image.row(y);
-                                if (!outputRow) {
-                                    return imageDiagnostic(
-                                        *outputRow.error(), operationSubject,
-                                        "Text output row could not be addressed");
-                                }
-                                if (const auto rowStatus = render::coverageSolidRow(
-                                        clipped.coverage, textPixel,
-                                        outputRow.value()->subspan(clipped.outputOffset,
-                                                                   clipped.coverage.size()))) {
-                                    return imageDiagnostic(*rowStatus, operationSubject,
-                                                           "Text coverage could not be composited");
-                                }
-                                return std::nullopt;
-                            });
-                        if (outcome.cancelled) {
-                            operationCancelled = true;
-                            return;
-                        }
-                        if (outcome.failure.has_value() || outcome.incomplete) {
-                            operationFailure = rowPassFailure(outcome, operationSubject);
-                            return;
-                        }
-                        reportRowPassFinished(progress, operationIndex, height);
-                        auto frozen = std::move(*builder.value()).freeze();
-                        if (!frozen) {
-                            operationFailure =
-                                imageDiagnostic(*frozen.error(), operationSubject,
-                                                "Text process image could not be published");
-                            return;
-                        }
-                        produced.emplace(std::move(*frozen.value()));
-                    },
-                    [&](const CompiledLayerOutput& layer) {
-                        if (request.time < layer.inPoint ||
-                            (layer.outPoint && request.time >= *layer.outPoint))
-                            return;
-                        const auto position =
-                            detail::resolveParameter(layer.position, *plan, resolved);
-                        const auto anchor = detail::resolveParameter(layer.anchor, *plan, resolved);
-                        const auto scale = detail::resolveParameter(layer.scale, *plan, resolved);
-                        const auto rotation =
-                            detail::resolveParameter(layer.rotation, *plan, resolved);
-                        const auto opacity =
-                            detail::resolveParameter(layer.opacity, *plan, resolved);
-                        if (!position.has_value() || !anchor.has_value() || !scale.has_value() ||
-                            !rotation.has_value() || !opacity.has_value()) {
-                            operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                                          "Layer parameter could not be resolved",
-                                                          {}, operationSubject);
-                            return;
-                        }
-                        // Position is authored in composition coordinates and means "put the layer
-                        // centre here", so the displacement the transform needs is position minus
-                        // that centre. The proxy factor is applied inside render::LayerTransform,
-                        // with the same expression the pre-proxy-aware code used, which is what
-                        // keeps a translate-only layer bit-identical to the previous primitive.
-                        const auto fullCenterX = static_cast<double>(plan->format().width()) / 2.0;
-                        const auto fullCenterY = static_cast<double>(plan->format().height()) / 2.0;
-                        const render::LayerTransform::Authored authored{
-                            .translationX = position->value.x - fullCenterX,
-                            .translationY = position->value.y - fullCenterY,
-                            .anchorX = anchor->value.x,
-                            .anchorY = anchor->value.y,
-                            .scaleX = scale->value.x,
-                            .scaleY = scale->value.y,
-                            .rotationDegrees = rotation->value,
-                            .opacity = opacity->value,
-                        };
-                        // Checked here as well as inside the transform so the diagnostic can name
-                        // the position parameter: a finite position can still scale past the
-                        // representable range on a large proxy.
-                        if (!std::isfinite(authored.translationX * resolved.horizontalScale) ||
-                            !std::isfinite(authored.translationY * resolved.verticalScale)) {
-                            operationFailure = diagnostic(
-                                EvaluationDiagnosticCode::InvalidParameter,
-                                "Layer position produces a non-finite translation", {},
-                                detail::parameterSubject(operationSubject, *position, "position"));
-                            return;
-                        }
-                        if (!slots[layer.input.value()])
-                            return;
-                        auto sourceView = slots[layer.input.value()]->view();
-                        if (!sourceView) {
-                            operationFailure =
-                                imageDiagnostic(*sourceView.error(), operationSubject,
-                                                "Layer source image is unavailable");
-                            return;
-                        }
-                        const auto sourceDescriptor = sourceView.value()->descriptor();
-                        if (!sourceDescriptor.has_value()) {
-                            operationFailure = diagnostic(
-                                EvaluationDiagnosticCode::InternalInvariant,
-                                "Layer source image has no descriptor", {}, operationSubject);
-                            return;
-                        }
-                        // A scale factor of exactly zero collapses the layer to no area at all.
-                        // That is an authorable value -- a scale curve starting from nothing -- not
-                        // an error, so the layer simply contributes no pixels and publishes no
-                        // image, exactly as an entirely off-frame layer does below.
-                        if (authored.scaleX == 0.0 || authored.scaleY == 0.0) {
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = 1,
-                                                      .total = 1});
-                            return;
-                        }
-                        const auto transform = render::LayerTransform::create(
-                            authored, sourceDescriptor->dataWindow(), resolved.horizontalScale,
-                            resolved.verticalScale);
-                        if (!transform) {
-                            operationFailure =
-                                imageDiagnostic(*transform.error(), operationSubject,
-                                                "Layer transform parameters are not evaluable");
-                            return;
-                        }
-                        // The layer's own data window is the transformed bounds clipped to the
-                        // composition: a scaled-down, rotated, or moved layer allocates and
-                        // resamples only the pixels it can actually reach, and a layer the
-                        // transform carries entirely off the frame allocates nothing at all. The
-                        // display window stays the composition's, so the layer remains a picture of
-                        // this composition.
-                        const auto compositionWindow = resolved.imageDescriptor.dataWindow();
-                        const auto layerWindow =
-                            transform.value()->supportBounds(compositionWindow);
-                        if (!layerWindow.has_value()) {
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = 1,
-                                                      .total = 1});
-                            return;
-                        }
-                        const auto layerDescriptor = render::Rgba32fImageDescriptor::create(
-                            *layerWindow, resolved.imageDescriptor.displayWindow(),
-                            resolved.imageDescriptor.pixelAspect());
-                        if (!layerDescriptor) {
-                            operationFailure =
-                                imageDiagnostic(*layerDescriptor.error(), operationSubject,
-                                                "Transformed layer descriptor is invalid");
-                            return;
-                        }
-                        auto builder = render::Rgba32fImageBuilder::create(*layerDescriptor.value(),
-                                                                           resolved.imageBytes);
-                        if (!builder) {
-                            operationFailure =
-                                imageDiagnostic(*builder.error(), operationSubject,
-                                                "Transformed layer image could not be allocated");
-                            return;
-                        }
-                        const auto height = layerWindow->extent().height();
-                        reportRowPassStarted(progress, operationIndex, height);
-                        auto& image = *builder.value();
-                        const auto& source = *sourceView.value();
-                        const auto& layerTransform = *transform.value();
-                        const auto outputWindow = *layerWindow;
-                        const auto outcome = runRowBandPass(
-                            rowBands, cancellation, height, outputWindow.originY(),
-                            [&image, &source, &layerTransform, outputWindow,
-                             &operationSubject](const std::int64_t y) -> RowFailure {
-                                auto outputRow = image.row(y);
-                                if (!outputRow) {
-                                    return imageDiagnostic(
-                                        *outputRow.error(), operationSubject,
-                                        "Layer output row could not be addressed");
-                                }
-                                if (const auto rowStatus = render::layerTransformBilinearRow(
-                                        source, outputWindow, y, layerTransform,
-                                        *outputRow.value())) {
-                                    return imageDiagnostic(
-                                        *rowStatus, operationSubject,
-                                        "Layer transform could not be evaluated");
-                                }
-                                return std::nullopt;
-                            });
-                        if (outcome.cancelled) {
-                            operationCancelled = true;
-                            return;
-                        }
-                        if (outcome.failure.has_value() || outcome.incomplete) {
-                            operationFailure = rowPassFailure(outcome, operationSubject);
-                            return;
-                        }
-                        reportRowPassFinished(progress, operationIndex, height);
-                        auto frozen = std::move(*builder.value()).freeze();
-                        if (!frozen) {
-                            operationFailure =
-                                imageDiagnostic(*frozen.error(), operationSubject,
-                                                "Transformed layer image could not be published");
-                            return;
-                        }
-                        produced.emplace(std::move(*frozen.value()));
-                    },
-                    [&](const CompiledMerge& stack) {
-                        auto builder = render::Rgba32fImageBuilder::create(
-                            resolved.imageDescriptor, resolved.imageBytes,
-                            render::Rgba32f::transparent());
-                        if (!builder) {
-                            operationFailure =
-                                imageDiagnostic(*builder.error(), operationSubject,
-                                                "Layer Stack image could not be allocated");
-                            return;
-                        }
-                        const auto window = resolved.imageDescriptor.dataWindow();
-                        const auto height = window.extent().height();
-                        const std::uint64_t totalRows =
-                            static_cast<std::uint64_t>(height) * stack.entries.size();
-                        std::uint64_t completedRows = 0;
-                        reportRowPassStarted(progress, operationIndex, totalRows);
-                        for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend();
-                             ++entry) {
-                            // A Layer Output that published no image is a layer with no reachable
-                            // pixels -- carried entirely off the frame, or collapsed by a zero
-                            // scale. Compositing nothing over the accumulation is exactly right, so
-                            // the entry is skipped rather than treated as a missing input.
-                            if (!slots[entry->input.value()]) {
-                                completedRows += height;
-                                reportProgress(progress,
-                                               {.stage = EvaluationProgressStage::Operation,
-                                                .operation = operationIndex,
-                                                .completed = completedRows,
-                                                .total = totalRows});
-                                continue;
-                            }
-                            // Only a direct Layer input contributes its blend mode. An elided
-                            // reroute can resolve to a Layer operation while remaining a plain
-                            // image input, so the slot identity also participates in this choice.
-                            const auto* layerOutput = std::get_if<CompiledLayerOutput>(
-                                &plan->operations()[entry->input.value()]);
-                            const auto blendMode = layerOutput && entry->layerId.isValid()
-                                                       ? layerOutput->blendMode
-                                                       : core::BlendMode::Normal;
-                            auto sourceView = slots[entry->input.value()]->view();
-                            if (!sourceView) {
-                                operationFailure =
-                                    imageDiagnostic(*sourceView.error(), operationSubject,
-                                                    "Layer Stack source image is unavailable");
+                frameStatistics.evaluatedNodes.push_back(
+                    operationSubject.nodeId.value_or(document::NodeId{}));
+                std::visit(
+                    Overloaded{
+                        [&](const CompiledSolid& solid) {
+                            const auto color =
+                                detail::resolveParameter(solid.color, *plan, resolved);
+                            if (!color.has_value()) {
+                                operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                              "Solid color could not be resolved",
+                                                              {}, operationSubject);
                                 return;
                             }
-                            const auto sourceDescriptor = sourceView.value()->descriptor();
-                            if (!sourceDescriptor.has_value()) {
-                                operationFailure =
-                                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
-                                               "Layer Stack source image has no descriptor", {},
-                                               operationSubject);
-                                return;
-                            }
-                            // A layer's data window is its own transformed bounds, always inside
-                            // the composition window, so compositing walks only the rows the layer
-                            // occupies and writes into the matching span of each destination row.
-                            const auto sourceWindow = sourceDescriptor->dataWindow();
-                            const auto columnOffset = sourceWindow.originX() - window.originX();
-                            if (columnOffset < 0 ||
-                                sourceWindow.maxXExclusive() > window.maxXExclusive()) {
+                            const auto pixel =
+                                render::solidPixelFromStraightLinearRec709Scene(color->value);
+                            if (!pixel) {
                                 operationFailure = imageDiagnostic(
-                                    render::ImageError::codeOnly(
-                                        render::ImageErrorCode::IncompatibleImageDescriptor),
-                                    operationSubject,
-                                    "Layer Stack source exceeds the composition window");
+                                    *pixel.error(),
+                                    detail::parameterSubject(operationSubject, *color, "color"),
+                                    "Solid color is not evaluable");
                                 return;
                             }
-                            // Entries fold in order, bottom to top, because each one composites
-                            // over what the ones beneath it left behind. The ROWS of one entry are
-                            // independent of each other, so they band; the entries themselves never
-                            // can.
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                resolved.imageDescriptor, resolved.imageBytes);
+                            if (!builder) {
+                                operationFailure =
+                                    imageDiagnostic(*builder.error(), operationSubject,
+                                                    "Solid process image could not be allocated");
+                                return;
+                            }
+                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto height = window.extent().height();
+                            reportRowPassStarted(progress, operationIndex, height);
                             auto& image = *builder.value();
-                            const auto& source = *sourceView.value();
+                            const auto solidPixel = *pixel.value();
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, window.originY(),
-                                [&image, &source, sourceWindow, columnOffset, blendMode,
+                                [&image, solidPixel,
                                  &operationSubject](const std::int64_t y) -> RowFailure {
-                                    if (y < sourceWindow.originY() ||
-                                        y >= sourceWindow.maxYExclusive()) {
+                                    auto row = image.row(y);
+                                    if (!row) {
+                                        return imageDiagnostic(
+                                            *row.error(), operationSubject,
+                                            "Solid output row could not be addressed");
+                                    }
+                                    render::fillSolidRow(*row.value(), solidPixel);
+                                    return std::nullopt;
+                                });
+                            if (outcome.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (outcome.failure.has_value() || outcome.incomplete) {
+                                operationFailure = rowPassFailure(outcome, operationSubject);
+                                return;
+                            }
+                            reportRowPassFinished(progress, operationIndex, height);
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure =
+                                    imageDiagnostic(*frozen.error(), operationSubject,
+                                                    "Solid process image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledText& text) {
+                            // A text source produces a full-frame image exactly like a solid, so
+                            // the Layer Output stage transforms and fades it with the same
+                            // primitive and the same five transform parameters. The difference is
+                            // only what is inside the frame: transparent black everywhere except
+                            // where glyph coverage lands.
+                            //
+                            // Placement: the text origin is the frame's own data-window origin, so
+                            // the first line's ascender is flush with the top edge and its pen
+                            // starts at the left edge. The layer transform then moves, turns, and
+                            // scales the whole layer from there, which is why nothing here reads
+                            // any of it.
+                            const auto size = detail::resolveParameter(text.size, *plan, resolved);
+                            const auto color =
+                                detail::resolveParameter(text.color, *plan, resolved);
+                            if (!size.has_value() || !color.has_value()) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InvalidPlan,
+                                    "Text parameter could not be resolved", {}, operationSubject);
+                                return;
+                            }
+                            const auto pixel =
+                                render::solidPixelFromStraightLinearRec709Scene(color->value);
+                            if (!pixel) {
+                                operationFailure = imageDiagnostic(
+                                    *pixel.error(),
+                                    detail::parameterSubject(operationSubject, *color, "color"),
+                                    "Text color is not evaluable");
+                                return;
+                            }
+                            // Proxy evaluation scales the em size per axis by exactly the factors
+                            // the Layer Output stage scales translation by, so a proxy frame is a
+                            // smaller picture of the same composition rather than full-size glyphs
+                            // in a small frame.
+                            const auto rasterParameters = render::TextRasterParameters::create(
+                                size->value * resolved.horizontalScale,
+                                size->value * resolved.verticalScale);
+                            if (!rasterParameters) {
+                                operationFailure = imageDiagnostic(
+                                    *rasterParameters.error(),
+                                    detail::parameterSubject(operationSubject, *size, "size"),
+                                    "Text size is not rasterizable");
+                                return;
+                            }
+                            auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
+                                text.content, *rasterParameters.value(),
+                                request.pixelStorageByteLimit);
+                            if (!coverage) {
+                                operationFailure =
+                                    imageDiagnostic(*coverage.error(), operationSubject,
+                                                    "Text content could not be rasterized");
+                                operationFailure->subject.parameterId = text.contentParameterId;
+                                operationFailure->subject.field = "content";
+                                return;
+                            }
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                resolved.imageDescriptor, resolved.imageBytes,
+                                render::Rgba32f::transparent());
+                            if (!builder) {
+                                operationFailure =
+                                    imageDiagnostic(*builder.error(), operationSubject,
+                                                    "Text process image could not be allocated");
+                                return;
+                            }
+                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto height = window.extent().height();
+                            const auto& bitmap = *coverage.value();
+                            reportRowPassStarted(progress, operationIndex, height);
+                            auto& image = *builder.value();
+                            const auto textPixel = *pixel.value();
+                            const auto outcome = runRowBandPass(
+                                rowBands, cancellation, height, window.originY(),
+                                [&image, &bitmap, window, textPixel,
+                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                    const auto clipped = detail::clipCoverageRow(bitmap, window, y);
+                                    if (clipped.coverage.empty()) {
                                         return std::nullopt;
                                     }
-                                    auto sourceRow = source.row(y);
-                                    if (!sourceRow) {
+                                    auto outputRow = image.row(y);
+                                    if (!outputRow) {
                                         return imageDiagnostic(
-                                            *sourceRow.error(), operationSubject,
-                                            "Layer Stack source row could not be addressed");
+                                            *outputRow.error(), operationSubject,
+                                            "Text output row could not be addressed");
                                     }
-                                    auto destinationRow = image.row(y);
-                                    if (!destinationRow) {
-                                        return imageDiagnostic(
-                                            *destinationRow.error(), operationSubject,
-                                            "Layer Stack destination row could not be addressed");
-                                    }
-                                    if (const auto rowStatus = render::blendLinearRec709SceneRow(
-                                            blendMode, *sourceRow.value(),
-                                            destinationRow.value()->subspan(
-                                                static_cast<std::size_t>(columnOffset),
-                                                sourceWindow.extent().width()))) {
+                                    if (const auto rowStatus = render::coverageSolidRow(
+                                            clipped.coverage, textPixel,
+                                            outputRow.value()->subspan(clipped.outputOffset,
+                                                                       clipped.coverage.size()))) {
                                         return imageDiagnostic(
                                             *rowStatus, operationSubject,
-                                            "Layer Stack blend could not be evaluated");
+                                            "Text coverage could not be composited");
                                     }
                                     return std::nullopt;
                                 });
@@ -1708,49 +1456,351 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationFailure = rowPassFailure(outcome, operationSubject);
                                 return;
                             }
-                            completedRows += height;
-                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                      .operation = operationIndex,
-                                                      .completed = completedRows,
-                                                      .total = totalRows});
-                        }
-                        if (stack.entries.empty()) {
+                            reportRowPassFinished(progress, operationIndex, height);
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure =
+                                    imageDiagnostic(*frozen.error(), operationSubject,
+                                                    "Text process image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledLayerOutput& layer) {
+                            if (request.time < layer.inPoint ||
+                                (layer.outPoint && request.time >= *layer.outPoint))
+                                return;
+                            const auto position =
+                                detail::resolveParameter(layer.position, *plan, resolved);
+                            const auto anchor =
+                                detail::resolveParameter(layer.anchor, *plan, resolved);
+                            const auto scale =
+                                detail::resolveParameter(layer.scale, *plan, resolved);
+                            const auto rotation =
+                                detail::resolveParameter(layer.rotation, *plan, resolved);
+                            const auto opacity =
+                                detail::resolveParameter(layer.opacity, *plan, resolved);
+                            if (!position.has_value() || !anchor.has_value() ||
+                                !scale.has_value() || !rotation.has_value() ||
+                                !opacity.has_value()) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InvalidPlan,
+                                    "Layer parameter could not be resolved", {}, operationSubject);
+                                return;
+                            }
+                            // Position is authored in composition coordinates and means "put the
+                            // layer centre here", so the displacement the transform needs is
+                            // position minus that centre. The proxy factor is applied inside
+                            // render::LayerTransform, with the same expression the pre-proxy-aware
+                            // code used, which is what keeps a translate-only layer bit-identical
+                            // to the previous primitive.
+                            const auto fullCenterX =
+                                static_cast<double>(plan->format().width()) / 2.0;
+                            const auto fullCenterY =
+                                static_cast<double>(plan->format().height()) / 2.0;
+                            const render::LayerTransform::Authored authored{
+                                .translationX = position->value.x - fullCenterX,
+                                .translationY = position->value.y - fullCenterY,
+                                .anchorX = anchor->value.x,
+                                .anchorY = anchor->value.y,
+                                .scaleX = scale->value.x,
+                                .scaleY = scale->value.y,
+                                .rotationDegrees = rotation->value,
+                                .opacity = opacity->value,
+                            };
+                            // Checked here as well as inside the transform so the diagnostic can
+                            // name the position parameter: a finite position can still scale past
+                            // the representable range on a large proxy.
+                            if (!std::isfinite(authored.translationX * resolved.horizontalScale) ||
+                                !std::isfinite(authored.translationY * resolved.verticalScale)) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InvalidParameter,
+                                    "Layer position produces a non-finite translation", {},
+                                    detail::parameterSubject(operationSubject, *position,
+                                                             "position"));
+                                return;
+                            }
+                            if (!slots[layer.input.value()])
+                                return;
+                            auto sourceView = slots[layer.input.value()]->view();
+                            if (!sourceView) {
+                                operationFailure =
+                                    imageDiagnostic(*sourceView.error(), operationSubject,
+                                                    "Layer source image is unavailable");
+                                return;
+                            }
+                            const auto sourceDescriptor = sourceView.value()->descriptor();
+                            if (!sourceDescriptor.has_value()) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InternalInvariant,
+                                    "Layer source image has no descriptor", {}, operationSubject);
+                                return;
+                            }
+                            // A scale factor of exactly zero collapses the layer to no area at all.
+                            // That is an authorable value -- a scale curve starting from nothing --
+                            // not an error, so the layer simply contributes no pixels and publishes
+                            // no image, exactly as an entirely off-frame layer does below.
+                            if (authored.scaleX == 0.0 || authored.scaleY == 0.0) {
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = 1,
+                                                .total = 1});
+                                return;
+                            }
+                            const auto transform = render::LayerTransform::create(
+                                authored, sourceDescriptor->dataWindow(), resolved.horizontalScale,
+                                resolved.verticalScale);
+                            if (!transform) {
+                                operationFailure =
+                                    imageDiagnostic(*transform.error(), operationSubject,
+                                                    "Layer transform parameters are not evaluable");
+                                return;
+                            }
+                            // The layer's own data window is the transformed bounds clipped to the
+                            // composition: a scaled-down, rotated, or moved layer allocates and
+                            // resamples only the pixels it can actually reach, and a layer the
+                            // transform carries entirely off the frame allocates nothing at all.
+                            // The display window stays the composition's, so the layer remains a
+                            // picture of this composition.
+                            const auto compositionWindow = resolved.imageDescriptor.dataWindow();
+                            const auto layerWindow =
+                                transform.value()->supportBounds(compositionWindow);
+                            if (!layerWindow.has_value()) {
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = 1,
+                                                .total = 1});
+                                return;
+                            }
+                            const auto layerDescriptor = render::Rgba32fImageDescriptor::create(
+                                *layerWindow, resolved.imageDescriptor.displayWindow(),
+                                resolved.imageDescriptor.pixelAspect());
+                            if (!layerDescriptor) {
+                                operationFailure =
+                                    imageDiagnostic(*layerDescriptor.error(), operationSubject,
+                                                    "Transformed layer descriptor is invalid");
+                                return;
+                            }
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                *layerDescriptor.value(), resolved.imageBytes);
+                            if (!builder) {
+                                operationFailure = imageDiagnostic(
+                                    *builder.error(), operationSubject,
+                                    "Transformed layer image could not be allocated");
+                                return;
+                            }
+                            const auto height = layerWindow->extent().height();
+                            reportRowPassStarted(progress, operationIndex, height);
+                            auto& image = *builder.value();
+                            const auto& source = *sourceView.value();
+                            const auto& layerTransform = *transform.value();
+                            const auto outputWindow = *layerWindow;
+                            const auto outcome = runRowBandPass(
+                                rowBands, cancellation, height, outputWindow.originY(),
+                                [&image, &source, &layerTransform, outputWindow,
+                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                    auto outputRow = image.row(y);
+                                    if (!outputRow) {
+                                        return imageDiagnostic(
+                                            *outputRow.error(), operationSubject,
+                                            "Layer output row could not be addressed");
+                                    }
+                                    if (const auto rowStatus = render::layerTransformBilinearRow(
+                                            source, outputWindow, y, layerTransform,
+                                            *outputRow.value())) {
+                                        return imageDiagnostic(
+                                            *rowStatus, operationSubject,
+                                            "Layer transform could not be evaluated");
+                                    }
+                                    return std::nullopt;
+                                });
+                            if (outcome.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (outcome.failure.has_value() || outcome.incomplete) {
+                                operationFailure = rowPassFailure(outcome, operationSubject);
+                                return;
+                            }
+                            reportRowPassFinished(progress, operationIndex, height);
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure = imageDiagnostic(
+                                    *frozen.error(), operationSubject,
+                                    "Transformed layer image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledMerge& stack) {
+                            auto builder = render::Rgba32fImageBuilder::create(
+                                resolved.imageDescriptor, resolved.imageBytes,
+                                render::Rgba32f::transparent());
+                            if (!builder) {
+                                operationFailure =
+                                    imageDiagnostic(*builder.error(), operationSubject,
+                                                    "Layer Stack image could not be allocated");
+                                return;
+                            }
+                            const auto window = resolved.imageDescriptor.dataWindow();
+                            const auto height = window.extent().height();
+                            const std::uint64_t totalRows =
+                                static_cast<std::uint64_t>(height) * stack.entries.size();
+                            std::uint64_t completedRows = 0;
+                            reportRowPassStarted(progress, operationIndex, totalRows);
+                            for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend();
+                                 ++entry) {
+                                // A Layer Output that published no image is a layer with no
+                                // reachable pixels -- carried entirely off the frame, or collapsed
+                                // by a zero scale. Compositing nothing over the accumulation is
+                                // exactly right, so the entry is skipped rather than treated as a
+                                // missing input.
+                                if (!slots[entry->input.value()]) {
+                                    completedRows += height;
+                                    reportProgress(progress,
+                                                   {.stage = EvaluationProgressStage::Operation,
+                                                    .operation = operationIndex,
+                                                    .completed = completedRows,
+                                                    .total = totalRows});
+                                    continue;
+                                }
+                                // Only a direct Layer input contributes its blend mode. An elided
+                                // reroute can resolve to a Layer operation while remaining a plain
+                                // image input, so the slot identity also participates in this
+                                // choice.
+                                const auto* layerOutput = std::get_if<CompiledLayerOutput>(
+                                    &plan->operations()[entry->input.value()]);
+                                const auto blendMode = layerOutput && entry->layerId.isValid()
+                                                           ? layerOutput->blendMode
+                                                           : core::BlendMode::Normal;
+                                auto sourceView = slots[entry->input.value()]->view();
+                                if (!sourceView) {
+                                    operationFailure =
+                                        imageDiagnostic(*sourceView.error(), operationSubject,
+                                                        "Layer Stack source image is unavailable");
+                                    return;
+                                }
+                                const auto sourceDescriptor = sourceView.value()->descriptor();
+                                if (!sourceDescriptor.has_value()) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                                   "Layer Stack source image has no descriptor", {},
+                                                   operationSubject);
+                                    return;
+                                }
+                                // A layer's data window is its own transformed bounds, always
+                                // inside the composition window, so compositing walks only the rows
+                                // the layer occupies and writes into the matching span of each
+                                // destination row.
+                                const auto sourceWindow = sourceDescriptor->dataWindow();
+                                const auto columnOffset = sourceWindow.originX() - window.originX();
+                                if (columnOffset < 0 ||
+                                    sourceWindow.maxXExclusive() > window.maxXExclusive()) {
+                                    operationFailure = imageDiagnostic(
+                                        render::ImageError::codeOnly(
+                                            render::ImageErrorCode::IncompatibleImageDescriptor),
+                                        operationSubject,
+                                        "Layer Stack source exceeds the composition window");
+                                    return;
+                                }
+                                // Entries fold in order, bottom to top, because each one composites
+                                // over what the ones beneath it left behind. The ROWS of one entry
+                                // are independent of each other, so they band; the entries
+                                // themselves never can.
+                                auto& image = *builder.value();
+                                const auto& source = *sourceView.value();
+                                const auto outcome = runRowBandPass(
+                                    rowBands, cancellation, height, window.originY(),
+                                    [&image, &source, sourceWindow, columnOffset, blendMode,
+                                     &operationSubject](const std::int64_t y) -> RowFailure {
+                                        if (y < sourceWindow.originY() ||
+                                            y >= sourceWindow.maxYExclusive()) {
+                                            return std::nullopt;
+                                        }
+                                        auto sourceRow = source.row(y);
+                                        if (!sourceRow) {
+                                            return imageDiagnostic(
+                                                *sourceRow.error(), operationSubject,
+                                                "Layer Stack source row could not be addressed");
+                                        }
+                                        auto destinationRow = image.row(y);
+                                        if (!destinationRow) {
+                                            return imageDiagnostic(*destinationRow.error(),
+                                                                   operationSubject,
+                                                                   "Layer Stack destination row "
+                                                                   "could not be addressed");
+                                        }
+                                        if (const auto rowStatus =
+                                                render::blendLinearRec709SceneRow(
+                                                    blendMode, *sourceRow.value(),
+                                                    destinationRow.value()->subspan(
+                                                        static_cast<std::size_t>(columnOffset),
+                                                        sourceWindow.extent().width()))) {
+                                            return imageDiagnostic(
+                                                *rowStatus, operationSubject,
+                                                "Layer Stack blend could not be evaluated");
+                                        }
+                                        return std::nullopt;
+                                    });
+                                if (outcome.cancelled) {
+                                    operationCancelled = true;
+                                    return;
+                                }
+                                if (outcome.failure.has_value() || outcome.incomplete) {
+                                    operationFailure = rowPassFailure(outcome, operationSubject);
+                                    return;
+                                }
+                                completedRows += height;
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = completedRows,
+                                                .total = totalRows});
+                            }
+                            if (stack.entries.empty()) {
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = 1,
+                                                .total = 1});
+                            }
+                            auto frozen = std::move(*builder.value()).freeze();
+                            if (!frozen) {
+                                operationFailure =
+                                    imageDiagnostic(*frozen.error(), operationSubject,
+                                                    "Layer Stack image could not be published");
+                                return;
+                            }
+                            produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledCompositionOutput& output) {
+                            processImage = slots[output.input.value()];
+                            slots[output.input.value()].reset();
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
                                                       .operation = operationIndex,
                                                       .completed = 1,
                                                       .total = 1});
-                        }
-                        auto frozen = std::move(*builder.value()).freeze();
-                        if (!frozen) {
-                            operationFailure =
-                                imageDiagnostic(*frozen.error(), operationSubject,
-                                                "Layer Stack image could not be published");
-                            return;
-                        }
-                        produced.emplace(std::move(*frozen.value()));
+                        },
                     },
-                    [&](const CompiledCompositionOutput& output) {
-                        processImage = slots[output.input.value()];
-                        slots[output.input.value()].reset();
-                        reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
-                                                  .operation = operationIndex,
-                                                  .completed = 1,
-                                                  .total = 1});
-                    },
-                },
-                plan->operations()[index]);
+                    plan->operations()[index]);
 
-            if (operationCancelled || cancellation.isCancellationRequested()) {
-                return EvaluationResult::cancelled();
-            }
-            if (operationFailure.has_value()) {
-                return EvaluationResult::failed(std::move(*operationFailure));
-            }
-            if (produced.has_value()) {
-                slots[index] = std::make_shared<const render::Rgba32fImage>(std::move(*produced));
-            }
-            if (cache) cache->store(key.bytes(), plan->sourceRevision(),
-                {.image = index == request.output.value() ? processImage : slots[index], .values = {}});
+                if (operationCancelled || cancellation.isCancellationRequested()) {
+                    return EvaluationResult::cancelled();
+                }
+                if (operationFailure.has_value()) {
+                    return EvaluationResult::failed(std::move(*operationFailure));
+                }
+                if (produced.has_value()) {
+                    slots[index] =
+                        std::make_shared<const render::Rgba32fImage>(std::move(*produced));
+                }
+                if (cache)
+                    cache->store(
+                        key.bytes(), plan->sourceRevision(),
+                        {.image = index == request.output.value() ? processImage : slots[index],
+                         .values = {}});
             }
             if (index != request.output.value()) {
                 forEachInput(plan->operations()[index], [&](const OperationIndex input) {
@@ -1785,7 +1835,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         auto frame = std::shared_ptr<const ProcessFrame>(
             new ProcessFrame(std::move(identity), std::move(processImage), frameStatistics));
-        if (statistics) *statistics = std::move(frameStatistics);
+        if (statistics)
+            *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame));
     } catch (const std::bad_alloc&) {
         return unexpectedAllocationFailure();

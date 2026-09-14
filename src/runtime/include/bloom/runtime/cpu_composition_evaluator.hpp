@@ -25,6 +25,7 @@ class CpuCompositionEvaluator final {
                                             EvaluationProgressCallback progress = {},
                                             CpuRowBandExecutor* rowBands = nullptr,
                                             OperationCacheStatistics* statistics = nullptr) const;
+
   private:
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();
 };

@@ -4,9 +4,9 @@
 
 namespace bloom::runtime {
 
-CompiledCompositionPlan::CompiledCompositionPlan(
-    CompiledCompositionPlanDefinition definition)
-    : bypassOperationCache_(definition.bypassOperationCache), sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
+CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefinition definition)
+    : bypassOperationCache_(definition.bypassOperationCache),
+      sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
       compositionId_(definition.compositionId), format_(definition.format),
       operations_(std::move(definition.operations)), output_(definition.output),
       scalarCurves_(std::move(definition.scalarCurves)),
