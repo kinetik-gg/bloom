@@ -87,6 +87,24 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
+        kit/third_party/phosphor-icons/bold/arrow-counter-clockwise-bold.svg
+        kit/third_party/phosphor-icons/bold/arrow-square-out-bold.svg
+        kit/third_party/phosphor-icons/bold/dots-six-vertical-bold.svg
+        kit/third_party/phosphor-icons/bold/text-align-center-bold.svg
+        kit/third_party/phosphor-icons/bold/text-align-left-bold.svg
+        kit/third_party/phosphor-icons/bold/text-align-right-bold.svg
+        kit/third_party/phosphor-icons/fill/arrow-counter-clockwise-fill.svg
+        kit/third_party/phosphor-icons/fill/arrow-square-out-fill.svg
+        kit/third_party/phosphor-icons/fill/dots-six-vertical-fill.svg
+        kit/third_party/phosphor-icons/fill/text-align-center-fill.svg
+        kit/third_party/phosphor-icons/fill/text-align-left-fill.svg
+        kit/third_party/phosphor-icons/fill/text-align-right-fill.svg
+        kit/third_party/phosphor-icons/regular/arrow-counter-clockwise.svg
+        kit/third_party/phosphor-icons/regular/arrow-square-out.svg
+        kit/third_party/phosphor-icons/regular/dots-six-vertical.svg
+        kit/third_party/phosphor-icons/regular/text-align-center.svg
+        kit/third_party/phosphor-icons/regular/text-align-left.svg
+        kit/third_party/phosphor-icons/regular/text-align-right.svg
         kit/third_party/phosphor-icons/regular/caret-down.svg
         kit/third_party/phosphor-icons/regular/caret-left.svg
         kit/third_party/phosphor-icons/regular/caret-right.svg

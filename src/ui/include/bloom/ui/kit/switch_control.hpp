@@ -12,7 +12,7 @@ class QPropertyAnimationHolder;
 // A two-state toggle whose thumb slides between the ends with the Fast motion. Under the
 // reduced-motion kill switch it jumps to the end state instead, because a toggle that cannot
 // animate must still be a toggle.
-class KSwitch final : public QAbstractButton {
+class KSwitch : public QAbstractButton {
     Q_OBJECT
     // The animated quantity, exposed as a property so QPropertyAnimation can drive it and a test
     // can read where the thumb actually is rather than inferring it from the checked state.
@@ -48,6 +48,18 @@ class KSwitch final : public QAbstractButton {
 
     qreal thumbPosition_ = 0.0;
     bool hovered_ = false;
+};
+
+// Square checkbox presentation with the same keyboard and checked-state contract.
+class KCheckBox final : public KSwitch {
+    Q_OBJECT
+  public:
+    explicit KCheckBox(QWidget* parent = nullptr);
+    [[nodiscard]] QSize sizeHint() const override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
 };
 
 } // namespace bloom::ui::kit

@@ -3,8 +3,11 @@
 #include "node_editor_items.hpp"
 
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
@@ -60,33 +63,30 @@ class PropertyRowLabel final : public QLabel {
     int preferredWidth_;
 };
 
+class PropertyRow final : public QWidget {
+  public:
+    PropertyRow(QLabel* label, QWidget* parent) : QWidget(parent), label_(label) {}
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override {
+        label_->setFixedWidth(kit::px(width() < kit::px(kit::Size::PanelMinWidth)
+                                          ? kit::Size::PropertiesLabelMinWidth
+                                          : kit::Size::PropertiesLabelWidth));
+        QWidget::resizeEvent(event);
+    }
+
+  private:
+    QLabel* label_;
+};
+
 } // namespace
 
-int labelColumnWidth() {
-    // Every label the panel's hand-crafted rows can show. A generic registry row (deliverable 3)
-    // measures nothing new here on purpose: its label is whatever the registry named the parameter,
-    // and PropertyRowLabel elides anything wider than this column rather than widening the panel.
-    static const std::array<QString, 21> kLabels{
-        QObject::tr("Position"), QObject::tr("Anchor"),       QObject::tr("Scale"),
-        QObject::tr("Rotation"), QObject::tr("Opacity"),      QObject::tr("Blending"),
-        QObject::tr("RGBA"),     QObject::tr("Alpha"),        QObject::tr("Encoding"),
-        QObject::tr("Name"),     QObject::tr("Format"),       QObject::tr("Frame Rate"),
-        QObject::tr("Duration"), QObject::tr("Pixel Aspect"), QObject::tr("Content"),
-        QObject::tr("Size"),     QObject::tr("Color"),        QObject::tr("Font"),
-        QObject::tr("Visible"),  QObject::tr("Solo"),         QObject::tr("Locked"),
-    };
-    const QFontMetrics metrics(kit::font(kit::TypeRole::Ui));
-    int widest = 0;
-    for (const auto& label : kLabels) {
-        widest = std::max(widest, metrics.horizontalAdvance(label));
-    }
-    return widest;
-}
+int labelColumnWidth() { return kit::px(kit::Size::PropertiesLabelWidth); }
 
 QLabel* makeRowLabel(const QString& text, QWidget* parent) {
     auto* label = new PropertyRowLabel(text, labelColumnWidth(), parent);
     label->setObjectName(QStringLiteral("propertiesRowLabel"));
-    label->setFont(kit::font(kit::TypeRole::Ui));
+    label->setFont(kit::font(kit::TypeRole::UiSmall));
     QPalette palette = label->palette();
     palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
     label->setPalette(palette);
@@ -96,23 +96,38 @@ QLabel* makeRowLabel(const QString& text, QWidget* parent) {
 
 QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator,
                 const std::initializer_list<QWidget*> values) {
-    auto* row = new QWidget(sectionParent);
+    auto* row = new PropertyRow(label, sectionParent);
     row->setObjectName(QStringLiteral("propertiesRow"));
     row->setProperty("rowLabel", label->toolTip());
-    row->setMinimumHeight(kit::px(kit::Size::Control));
+    row->setMinimumHeight(kit::px(kit::Size::ControlCompact));
+    row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),
-                               kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS));
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(kit::px(kit::Spacing::XS));
+    label->setFixedWidth(labelColumnWidth());
     layout->addWidget(label);
-    if (indicator != nullptr) {
-        layout->addWidget(indicator);
-    }
-    // Task P2 (owner review 2026-09-12): the row is a plain, non-painting container -- every hover
-    // and focus affordance comes from the kit control itself, never from this widget.
+    bool expanding = false;
     for (auto* value : values) {
-        layout->addWidget(value, 1);
+        if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
+            dropdown->setFixedWidth(kit::px(kit::Size::PropertiesDropdownWidth));
+            dropdown->setFixedHeight(kit::px(kit::Size::ControlCompact));
+        }
+        if (auto* chip = qobject_cast<kit::KColorChip*>(value))
+            chip->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
+                               kit::px(kit::Size::PropertiesSwatchHeight));
+        const bool flexible =
+            qobject_cast<kit::KSlider*>(value) || value->maximumWidth() == QWIDGETSIZE_MAX;
+        expanding = expanding || flexible;
+        layout->addWidget(value, flexible ? 1 : 0, Qt::AlignVCenter);
     }
+    if (!expanding)
+        layout->addStretch(1);
+    auto* slot = indicator ? indicator : new QWidget(row);
+    slot->setFixedWidth(kit::px(kit::Size::PropertiesDiamondColumn));
+    auto policy = slot->sizePolicy();
+    policy.setRetainSizeWhenHidden(true);
+    slot->setSizePolicy(policy);
+    layout->addWidget(slot, 0, Qt::AlignVCenter);
     section->addWidget(row);
     return row;
 }
@@ -144,6 +159,7 @@ QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
 
 kit::KValueField* makeValueCell(const ValueCellSpec& spec, QWidget* parent) {
     auto* field = new kit::KValueField(parent);
+    field->setCompact(true);
     field->setObjectName(spec.objectName);
     field->setAccessibleName(spec.accessibleName);
     field->setRange(spec.minimum, spec.maximum);
@@ -162,23 +178,15 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
                        QWidget* parent) {
     auto* group = new QWidget(parent);
     group->setObjectName(objectName);
-    if (cells.size() > 3) {
-        auto* grid = new QGridLayout(group);
-        grid->setContentsMargins(0, 0, 0, 0);
-        grid->setSpacing(kit::px(kit::Spacing::XS));
-        int index = 0;
-        for (auto* cell : cells) {
-            grid->addWidget(cell, index / 2, index % 2);
-            ++index;
-        }
-        return group;
-    }
     auto* layout = new QHBoxLayout(group);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(kit::px(kit::Spacing::XS));
     for (auto* cell : cells) {
         layout->addWidget(cell);
     }
+    const int width = static_cast<int>(cells.size()) * kit::px(kit::Size::PropertiesFieldWidth) +
+                      (static_cast<int>(cells.size()) - 1) * kit::px(kit::Spacing::XS);
+    group->setMaximumWidth(width);
     return group;
 }
 
@@ -188,6 +196,7 @@ QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip, QWidg
     toggle->setVariant(kit::KButton::Variant::Ghost);
     toggle->setControlSize(kit::KButton::ControlSize::Compact);
     toggle->setIconId(kit::IconId::Link);
+    toggle->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
     toggle->setCheckable(true);
     toggle->setToolTip(tooltip);
     return toggle;

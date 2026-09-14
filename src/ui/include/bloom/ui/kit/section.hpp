@@ -34,6 +34,8 @@ class KSection final : public QWidget {
   public:
     explicit KSection(const QString& title, QWidget* parent = nullptr);
 
+    void addHeaderAction(QWidget* action);
+
     [[nodiscard]] QString title() const;
     void setTitle(const QString& title);
 
@@ -61,6 +63,7 @@ class KSection final : public QWidget {
     void expandAllRequested();
 
   protected:
+    void paintEvent(QPaintEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:

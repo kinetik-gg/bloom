@@ -78,7 +78,7 @@ std::optional<document::LayerId> contextualLayerId(const CompositionSession& ses
 constexpr double kPracticallyUnbounded = 1'000'000.0;
 
 kit::KSwitch* makeToggle(QWidget* parent, const QString& objectName, const QString& accessible) {
-    auto* toggle = new kit::KSwitch(parent);
+    auto* toggle = new kit::KCheckBox(parent);
     toggle->setObjectName(objectName);
     toggle->setAccessibleName(accessible);
     return toggle;
@@ -104,6 +104,13 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     layerLocked_ = makeToggle(body, QStringLiteral("layerLockedSwitch"), tr("Locked"));
     addRow(rows, body, makeRowLabel(tr("Locked"), body), nullptr, layerLocked_);
 
+    auto* parent = new kit::KDropdown(body);
+    parent->setObjectName("propertiesParentDropdown");
+    parent->addItem(tr("None"));
+    parent->setEnabled(false);
+    parent->setToolTip(tr("Layer parenting is not available yet"));
+    addRow(rows, body, makeRowLabel(tr("Parent"), body), nullptr, parent);
+
     // The items are core::kBlendModes in order, named by the one shared vocabulary, with the mode's
     // stored integer as item data so the control never depends on the order it happened to be
     // filled in -- exactly the timeline row's dropdown, because both author the same parameter
@@ -115,7 +122,7 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
         blendMode_->addItem(blendModeDisplayName(mode),
                             QVariant::fromValue(core::blendModeStoredValue(mode)));
     }
-    addRow(rows, body, makeRowLabel(tr("Blending"), body), nullptr, blendMode_);
+    addRow(rows, body, makeRowLabel(tr("Blending Mode"), body), nullptr, blendMode_);
 
     opacity_ = makeValueCell({.objectName = QStringLiteral("opacityEditor"),
                               .accessibleName = tr("Opacity"),
@@ -153,7 +160,7 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
                                   .maximum = kPracticallyUnbounded,
                                   .decimals = 2,
                                   .singleStep = 1.0,
-                                  .unit = QStringLiteral("px")};
+                                  .unit = {}};
 
     auto positionSpec = pixelCell;
     positionSpec.objectName = QStringLiteral("positionXEditor");
@@ -170,7 +177,7 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     positionKeyframe_ = makeKeyframeDiamond(session_, document::kPositionParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Position"), body), positionKeyframe_,
            makeCellGroup(QStringLiteral("positionFieldGroup"),
-                         {positionX_, positionY_, positionLink_}, body));
+                         {positionX_, positionLink_, positionY_}, body));
 
     // Rotation is a single degree field with a 1 degree scrub step. Its range is deliberately wider
     // than one turn: the schema accepts any finite angle so a rotation curve can wind, and a field
@@ -221,7 +228,7 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     scaleLink_->setChecked(true);
     scaleKeyframe_ = makeKeyframeDiamond(session_, document::kScaleParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Scale"), body), scaleKeyframe_,
-           makeCellGroup(QStringLiteral("scaleFieldGroup"), {scaleX_, scaleY_, scaleLink_}, body));
+           makeCellGroup(QStringLiteral("scaleFieldGroup"), {scaleX_, scaleLink_, scaleY_}, body));
 
     // The anchor is in the same pixel space Position is, so it takes Position's range, decimals,
     // step, and unit verbatim.

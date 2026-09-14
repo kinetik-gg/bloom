@@ -5,6 +5,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QWidget>
+#include <bloom/ui/editor_area.hpp>
 
 #include <string_view>
 #include <vector>
@@ -30,11 +31,12 @@ class KSlider;
 class KSwitch;
 } // namespace kit
 
-class PropertiesEditor final : public QWidget {
+class PropertiesEditor final : public QWidget, public EditorHeaderMenuProvider {
     Q_OBJECT
 
   public:
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
+    [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -50,6 +52,7 @@ class PropertiesEditor final : public QWidget {
     std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
     QLineEdit* search_ = nullptr;
+    bool headerTaken_ = false;
     std::vector<PropertiesRegistryRow*> registryRows_;
     QWidget* registryPanel_ = nullptr;
     QString registrySignature_;

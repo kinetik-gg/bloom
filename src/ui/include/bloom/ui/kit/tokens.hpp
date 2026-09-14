@@ -165,6 +165,18 @@ enum class Size : int {
     // to before the row it lives in falls back to the panel's own horizontal scrollbar as a last
     // resort. See kit::KValueField::minimumSizeHint().
     ValueCellMin = 72,
+    PropertiesLabelWidth = 96,
+    PropertiesLabelMinWidth = 72,
+    PropertiesRowPitch = 28,
+    PropertiesDiamondColumn = 20,
+    PropertiesFieldWidth = 72,
+    PropertiesFieldMinWidth = 64,
+    PropertiesDropdownWidth = 108,
+    PropertiesSearchWidth = 180,
+    PropertiesCheckBox = 12,
+    PropertiesSwatchHeight = 20,
+    PropertiesAnchorDot = 8,
+    PropertiesStepperWidth = 12,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }

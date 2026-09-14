@@ -17,15 +17,15 @@ Reviewed: 2026-09-14
 | Modified | No. Every SVG below is byte-identical to its file in the pinned archive. |
 
 The archive SHA-256 above was computed over the exact bytes downloaded from that URL with
-`sha256sum`, not copied from an upstream publication. Task VIEW-1 re-downloaded that archive on
+`sha256sum`, not copied from an upstream publication. Task PROPS-3 re-downloaded that archive on
 2026-09-14, recomputed the digest, and byte-compared every file in the table below against
-`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 144 matched.
+`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 162 matched.
 
 ## What is vendored, and what is not
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 48 of them in three weights (144 files). The three weights are exactly the three the
+embeds 54 of them in three weights (162 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -35,7 +35,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 48 ids, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 54 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -57,6 +57,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 
 | Path | SHA-256 |
 | --- | --- |
+| `regular/arrow-counter-clockwise.svg` | `4eb160d5ae781107c674481ac081962e6bce6281a646129e6c3f960b9dd5dac6` |
+| `regular/arrow-square-out.svg` | `8610e8f5c7d4952ae1ada34ef56fa7cbab1780bc85f25a5c9482b74144790fc8` |
 | `regular/caret-down.svg` | `53f0cf2d0b144ac3cb07e353e0cd0853ffb3ed432d741460ce288edfcb0924b1` |
 | `regular/caret-left.svg` | `623bf248fe21a8170344e168aaac2e174119cea5d7c5d0fb0dc84f581009475f` |
 | `regular/caret-right.svg` | `e6dec01e074807965b7f3146b976a9b5e82c31d9c2c88aeb52e77cc2ab16c1d7` |
@@ -69,6 +71,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/cube.svg` | `7c0f13cb492d0dd212e48ab259dabec4627df32d71aa00ce31b3228c0f35112b` |
 | `regular/cursor.svg` | `f0ba62c40c27b39286904ad57ed71df3fbed8383b9fb4f00643db05a2d601bff` |
 | `regular/diamond.svg` | `7f9ebf5bb51a955c248da77b9b8a50226a7ecd81706b59e78233d7ad2a9d9d45` |
+| `regular/dots-six-vertical.svg` | `01e0c8e778cec9c1c0ff5c2e4aaadc5808a8d1dec0db8b9a51bcd5c5e9c8dcae` |
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
@@ -100,6 +103,9 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/square-split-horizontal.svg` | `d37901731a53cc0edb101f8587af0a8122ad31d4c5b78c45453f1d6c1d26df70` |
 | `regular/square-split-vertical.svg` | `5e720feffbac898b3ae728639b6ab663899aefb6d3e7efba4447afe22840b16c` |
 | `regular/stack.svg` | `ee9eaaeb345e8a28c9662cf8a59147cb86080bd922e41f143444189e0116ea7e` |
+| `regular/text-align-center.svg` | `201520b52ef06531ce8142bf03b216d9df79b3c2ca6b523282ec174e65dd9e9a` |
+| `regular/text-align-left.svg` | `4d166977720d3beb386288a8607fbb36134fef06fdd99496ab09cf2d2da211b5` |
+| `regular/text-align-right.svg` | `ae8417d5e095d6329bb764a8029e94101a70bfdac64e676259ac6879de2549ec` |
 | `regular/text-t.svg` | `00f5cc0ddab2aacaf377ffe956e2ee5375ec3395043d468cbb5937251df7fc69` |
 | `regular/trash.svg` | `e6a830c0409f9e101e3695c981eef98427d39fd01f502b9cbd6900930b01f19c` |
 | `regular/warning-circle.svg` | `e48a90760a68659fd3f06dd9187e471aead4877c72e915339071b2c7f7bd714c` |
@@ -110,6 +116,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 
 | Path | SHA-256 |
 | --- | --- |
+| `fill/arrow-counter-clockwise-fill.svg` | `e3d0f0459b6cbb52c485987d8612d77095202cf96c0b5e39b203686b004d864f` |
+| `fill/arrow-square-out-fill.svg` | `1b26879605d3490b52b0dfa2b5ccaa52cad9e33607011c56f023c3bcb15f2984` |
 | `fill/caret-down-fill.svg` | `33550432966b277d6cf891f4db186357f4a83b1f8a5c7770c6ad6f5dee9b0b34` |
 | `fill/caret-left-fill.svg` | `a6300d93ee3016043fe02af787421093bedd301a0da992337d07b16404e65fa5` |
 | `fill/caret-right-fill.svg` | `c62278a701f1e4c08f424ce4b5cac69c8adb23b496dae489d5545ea7e6c019ef` |
@@ -122,6 +130,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/cube-fill.svg` | `9c681bfc8547fbb142d5df4d69ad923af5c422fea1013e6d69c32cef9ced3de3` |
 | `fill/cursor-fill.svg` | `b66c0ee5273847a03504f4c07b34eda3e8904a8fa9f607a1cc6c5527264c4a59` |
 | `fill/diamond-fill.svg` | `e50d5227db3ca71ba862deb7a6e60b78eb27c7780ed2e2b856c31269b63f4a68` |
+| `fill/dots-six-vertical-fill.svg` | `9386e9649ba767b8c1930156f40dd4425177ceb91ef127d87ce3bcc959888787` |
 | `fill/dots-three-vertical-fill.svg` | `7dd0eff7a0107728f568f08679b5fefb8309534dff749f779fc21805e1b9186c` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
@@ -153,6 +162,9 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/square-split-horizontal-fill.svg` | `cb047582904dc8ae92fe8f4ff9d0bb31df3c74a64bd5b0bc68eb6b2df3445f25` |
 | `fill/square-split-vertical-fill.svg` | `0ace6381e25145a677d0e2841813c292436bd451d3c3c96def9061a82f4cb83b` |
 | `fill/stack-fill.svg` | `549d53f6eaf6a1da0d66be403180199f1578f0651506bfc137ae036b1fc2a60b` |
+| `fill/text-align-center-fill.svg` | `b51ee55d8ba4af72e71389b4d5e1752dd9454252145d68de1f1fca4da67a581d` |
+| `fill/text-align-left-fill.svg` | `74eabe94c4f23f0383e762afbd0bfa89e24f9d4bcffc3a42a4cf129213704851` |
+| `fill/text-align-right-fill.svg` | `fa6c5e073d5a2a85cb3f6be2194354577fe05d2eebb7b4c879be767383b6cea8` |
 | `fill/text-t-fill.svg` | `5ddee68d99ab4598641cf99fb7025cb18e2add9302ae4df31653418066ca0c6d` |
 | `fill/trash-fill.svg` | `f78767cc15e1a7d6eea49c4efb515cf6fceaf07fbc421e8ce18373d07c14b673` |
 | `fill/warning-circle-fill.svg` | `29199dd3ff20a7fc36380dc366c9004fafa98d979649dc2311c5b1f8fd968dac` |
@@ -163,6 +175,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 
 | Path | SHA-256 |
 | --- | --- |
+| `bold/arrow-counter-clockwise-bold.svg` | `b02289073e6510dad9f74d1edfdfdd533ef848154fa6cb910a3302b960b533c2` |
+| `bold/arrow-square-out-bold.svg` | `68348bacc7f539b8d73de92d7c120f22e424b4364374ccab01719ada8c8a12aa` |
 | `bold/caret-down-bold.svg` | `76a97545e1b923bc13bcc15d7bcbb7f5530105e6eaa98a18c1e30d23e3622843` |
 | `bold/caret-left-bold.svg` | `b78b6f532b53b9847340961848cb9e4f5be7e1da07e9dcf11c60cf64aa3986b7` |
 | `bold/caret-right-bold.svg` | `03cadd956d715541432ec8dc2eda1c53ca341af7d3ccecb8dd32c5b9747e290f` |
@@ -175,6 +189,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/cube-bold.svg` | `960f01377a6e286fb39507861a01bb0ff6ff8e5f4b1ac0ded92f6f2bec376e91` |
 | `bold/cursor-bold.svg` | `7339f39dee9b99e0c0412ea73cfd68497ae90faa8cb4a2e07581747af613f945` |
 | `bold/diamond-bold.svg` | `85ec2bc0851b2e1cbaa1deba7a059568688098493f8651949eb45aaebe0b995a` |
+| `bold/dots-six-vertical-bold.svg` | `d2226adc97d9449bad231d06210191e2656eb4eed30e7c194cba9878d9929a3f` |
 | `bold/dots-three-vertical-bold.svg` | `4bb50d6e3099a6599b8800303a2f457954ad557213554761df79ee61b5aa7b9a` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
@@ -206,6 +221,9 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/square-split-horizontal-bold.svg` | `5ed5b554154f007fb01ac44f80e62150c9d30d179ebc105417dfe7589d141eb9` |
 | `bold/square-split-vertical-bold.svg` | `066160d93b66f7d3fdeba9af16a6c15d7bcc9671794ffc67b4ec1a623b7ecf23` |
 | `bold/stack-bold.svg` | `37b696df1b465b89a6a6da07d85011f52c59afd0d07e4e4d02d360f135e52099` |
+| `bold/text-align-center-bold.svg` | `bf2f4a41a844e3c21021852205533c633122d01cc365a3e850380c3ecd22bcbb` |
+| `bold/text-align-left-bold.svg` | `dd5c7e3b673f480ac8ec7a75eaa6aa84d38a8c9dc122e3be7a75bc617c21737a` |
+| `bold/text-align-right-bold.svg` | `f7218b2e4391e0fdd4aada2b93451825617f4a435695e3e1ab8c1fe658be111f` |
 | `bold/text-t-bold.svg` | `ca48a422f871e674081c74d6b29fdfd04b7aa86604e0acdab64387146bc7124b` |
 | `bold/trash-bold.svg` | `14f3fa7bf3588b279a104e6a19b16809fa54f1c2185e2811d3c47cab559f79d5` |
 | `bold/warning-bold.svg` | `c473db9807bb726638eefcdc70554078cd2a195313d87e28a70498531ec106c0` |
@@ -215,10 +233,10 @@ Digests are SHA-256 over the exact checked-in bytes.
 ## Subset manifest digest
 
 A single value covering the whole vendored subset, so a drift in any one asset is one comparison
-away rather than 144:
+away rather than 162:
 
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = fbcac73160d8b97da388830b4660997ab2fd613f9d6a5e97a77c63754bf34e69
+SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = b6a2424a59847c84bf9146e9f361542de03263cb38b5fcea94622ea1d6d96ea7
 ```
 
 Reproduce with:

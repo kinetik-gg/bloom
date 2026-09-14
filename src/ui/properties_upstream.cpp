@@ -94,6 +94,7 @@ void PropertiesEditor::configureUpstream() {
         upstreamPanel_->setObjectName("propertiesUpstreamPanel");
         auto* layout = new QVBoxLayout(upstreamPanel_);
         layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(kit::px(kit::Spacing::S));
         auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
         selectionLayout->insertWidget(selectionLayout->count() - 1, upstreamPanel_);
         int more = 0;
@@ -109,11 +110,16 @@ void PropertiesEditor::configureUpstream() {
             section->setProperty("nodeId",
                                  QVariant::fromValue(static_cast<qulonglong>(id.value())));
             adoptSection(section, {});
-            auto* jump = new kit::KButton(section->body());
+            auto* jump = new kit::KButton(section);
             jump->setObjectName("propertiesJumpToNode");
-            jump->setText(tr("Jump to node"));
+            jump->setIconId(kit::IconId::Jump);
+            jump->setVariant(kit::KButton::Variant::Ghost);
+            jump->setFixedSize(kit::px(kit::Size::ControlCompact),
+                               kit::px(kit::Size::ControlCompact));
+            jump->setToolTip(tr("Jump to node"));
+            jump->setAccessibleName(tr("Jump to node"));
             jump->setProperty("rowLabel", section->title());
-            section->bodyLayout()->addWidget(jump);
+            section->addHeaderAction(jump);
             connect(jump, &kit::KButton::clicked, this,
                     [this, id] { jumpToPropertiesNode(session_, id, this); });
             const auto* definition =

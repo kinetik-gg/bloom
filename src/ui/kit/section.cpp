@@ -1,7 +1,9 @@
 #include <bloom/ui/kit/section.hpp>
 
+#include <QPainter>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAction>
@@ -25,6 +27,7 @@ KButton* makeHeaderButton(QWidget* parent, const QString& objectName) {
     button->setObjectName(objectName);
     button->setVariant(KButton::Variant::Ghost);
     button->setControlSize(KButton::ControlSize::Compact);
+    button->setFixedSize(px(Size::ControlCompact), px(Size::ControlCompact));
     button->setFocusPolicy(Qt::NoFocus);
     return button;
 }
@@ -35,8 +38,9 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("kSection"));
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(px(Spacing::XXS));
+    layout->setContentsMargins(static_cast<int>(kHairlineWidth), static_cast<int>(kHairlineWidth),
+                               static_cast<int>(kHairlineWidth), static_cast<int>(kHairlineWidth));
+    layout->setSpacing(0);
 
     header_ = new QWidget(this);
     header_->setObjectName(QStringLiteral("kSectionHeader"));
@@ -46,7 +50,7 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     // the target, which is how every twirl-down in the application already behaves.
     header_->installEventFilter(this);
     auto* headerLayout = new QHBoxLayout(header_);
-    headerLayout->setContentsMargins(0, 0, 0, 0);
+    headerLayout->setContentsMargins(px(Spacing::XS), 0, px(Spacing::XS), 0);
     headerLayout->setSpacing(px(Spacing::XS));
 
     chevron_ = makeHeaderButton(header_, QStringLiteral("kSectionChevron"));
@@ -60,19 +64,25 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     title_->installEventFilter(this);
     title_->setTextFormat(Qt::PlainText);
-    title_->setFont(kit::font(TypeRole::Ui));
+    auto titleFont = kit::font(TypeRole::UiSmall);
+    titleFont.setWeight(QFont::DemiBold);
+    title_->setFont(titleFont);
     QPalette titlePalette = title_->palette();
     titlePalette.setColor(QPalette::WindowText, color(Color::Foreground));
     title_->setPalette(titlePalette);
     headerLayout->addWidget(title_, 1);
 
     reset_ = makeHeaderButton(header_, QStringLiteral("kSectionReset"));
-    reset_->setText(tr("Reset"));
+    reset_->setIconId(IconId::Reset);
+    reset_->setToolTip(tr("Reset"));
+    reset_->setAccessibleName(tr("Reset"));
     connect(reset_, &KButton::clicked, this, &KSection::resetRequested);
     headerLayout->addWidget(reset_);
 
     menu_ = makeHeaderButton(header_, QStringLiteral("kSectionMenu"));
-    menu_->setIconId(IconId::ContextMenu);
+    menu_->setIconId(IconId::Handle);
+    menu_->setToolTip(tr("Section menu"));
+    menu_->setAccessibleName(tr("Section menu"));
     connect(menu_, &KButton::clicked, this, &KSection::showSectionMenu);
     headerLayout->addWidget(menu_);
 
@@ -81,9 +91,20 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     body_ = new QWidget(this);
     body_->setObjectName(QStringLiteral("kSectionBody"));
     bodyLayout_ = new QVBoxLayout(body_);
-    bodyLayout_->setContentsMargins(0, 0, 0, 0);
-    bodyLayout_->setSpacing(px(Spacing::XS));
+    bodyLayout_->setContentsMargins(px(Spacing::S), px(Spacing::S), px(Spacing::S), px(Spacing::S));
+    bodyLayout_->setSpacing(px(Size::PropertiesRowPitch) - px(Size::ControlCompact));
     layout->addWidget(body_);
+}
+
+void KSection::addHeaderAction(QWidget* action) {
+    auto* layout = qobject_cast<QHBoxLayout*>(header_->layout());
+    layout->insertWidget(layout->indexOf(reset_), action);
+}
+
+void KSection::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    fillRoundedSurface(painter, QRectF(rect()), color(Color::Surface), color(Color::Border),
+                       Radius::Panel);
 }
 
 QString KSection::title() const { return title_->toolTip(); }

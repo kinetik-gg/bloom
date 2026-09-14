@@ -32,6 +32,11 @@ class KValueField final : public QWidget {
   public:
     explicit KValueField(QWidget* parent = nullptr);
 
+    // Compact properties mode places the label inside the field and trims trailing zeroes.
+    void setCompact(bool compact);
+    void setStepper(bool stepper);
+    [[nodiscard]] bool hasStepper() const noexcept { return stepper_; }
+
     void setLabel(const QString& label);
     [[nodiscard]] QString label() const;
 
@@ -134,6 +139,8 @@ class KValueField final : public QWidget {
     void endEdit(bool keep);
     void layOutEditor();
 
+    bool compact_ = false;
+    bool stepper_ = false;
     QString label_;
     QString unit_;
     double minimum_ = 0.0;

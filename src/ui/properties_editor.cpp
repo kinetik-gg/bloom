@@ -143,14 +143,22 @@ QString formatDuration(const TimelineFrameContext& context) {
 
 } // namespace
 
+QWidget* PropertiesEditor::takeHeaderMenuWidget() {
+    if (headerTaken_)
+        return nullptr;
+    headerTaken_ = true;
+    search_->show();
+    return search_;
+}
+
 PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("propertiesEditor");
     setAccessibleName(tr("Properties editor"));
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
+    layout->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::S),
+                               kit::px(kit::Spacing::S), kit::px(kit::Spacing::S));
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     setFocusPolicy(Qt::StrongFocus);
@@ -160,7 +168,13 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     search_->setPlaceholderText(tr("Search properties…"));
     search_->setClearButtonEnabled(true);
     search_->installEventFilter(this);
-    layout->addWidget(search_);
+    search_->setMaximumWidth(kit::px(kit::Size::PropertiesSearchWidth));
+    search_->setMinimumWidth(kit::px(kit::Size::PropertiesFieldMinWidth));
+    search_->setFixedHeight(kit::px(kit::Size::ControlCompact));
+    search_->setFont(kit::font(kit::TypeRole::UiSmall));
+    search_->addAction(kit::icon(kit::IconId::Zoom, kit::IconRole::Chrome),
+                       QLineEdit::TrailingPosition);
+    search_->hide();
     connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
 
     auto* scroll = new QScrollArea(this);

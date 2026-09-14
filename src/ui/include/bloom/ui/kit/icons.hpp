@@ -79,6 +79,13 @@ enum class IconId : std::uint8_t {
     Clock,
     SlidersHorizontal,
     Graph,
+    Reset,
+    Handle,
+    Jump,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add
