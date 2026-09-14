@@ -350,8 +350,12 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         painter->drawText(
             row,
             static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
-            painter->fontMetrics().elidedText(socket->name, Qt::ElideRight,
-                                              static_cast<int>(row.width())));
+            painter->fontMetrics().elidedText(socket->multiInput()
+                                                  ? QStringLiteral("%1 (%2)")
+                                                        .arg(socket->name)
+                                                        .arg(socket->orderedInputs().size())
+                                                  : socket->name,
+                                              Qt::ElideRight, static_cast<int>(row.width())));
     }
 
     // Row labels. The controls themselves are real kit widgets in proxies; only their names are
@@ -533,7 +537,7 @@ void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
         orderedInputs_.empty()
             ? name + QStringLiteral(" · ") + socketKindName(kind) +
                   QCoreApplication::translate(
-                      "node_editor", "\nOrdered multi-input: empty; drop a Layer output here")
+                      "node_editor", "\nOrdered multi-input: empty; drop an image output here")
             : name + QStringLiteral(" · ") + socketKindName(kind) +
                   QCoreApplication::translate(
                       "node_editor", "\nOrdered multi-input: %1 in stack order, topmost first")
@@ -699,7 +703,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                                           kindOf(port.valueKind), input, std::nullopt, this));
         sockets_.back()->setAcceptsAnyKind(kindless);
     }
-    if (definition->layerSlotInput && node.id == composition.graph().layerStack().nodeId()) {
+    if (definition->layerSlotInput && composition.graph().merge(node.id)) {
         // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
         // slot. The slot model underneath is exactly as it was -- these are its own slots, in its
         // own order -- and every edge that terminates on any of them terminates on this one socket.
@@ -709,7 +713,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         // fresh composition's Merge node had no port at all and the artist had nothing to wire the
         // first layer into.
         const auto& port = *definition->layerSlotInput;
-        const auto entries = composition.graph().layerStack().entries();
+        const auto entries = composition.graph().merge(node.id)->entries();
         std::vector<document::InputPortRef> ordered;
         ordered.reserve(entries.size());
         for (const auto& slot : entries)

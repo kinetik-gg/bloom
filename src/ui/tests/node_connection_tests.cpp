@@ -20,6 +20,36 @@ node_editor::NodeEdgeItem* edgeItem(Fixture& fixture, const document::NodeId des
 }
 } // namespace
 void testConnectionsCutAndInsertion() {
+    {
+        Fixture mergeFixture;
+        const auto nested = mergeFixture.add(document::kLayerStackNodeType, {650, 300});
+        const auto first = mergeFixture.add(document::kSolidSourceNodeType, {100, 100});
+        const auto second = mergeFixture.add(document::kSolidSourceNodeType, {100, 400});
+        mergeFixture.drag(mergeFixture.socket(first, false)->scenePos(),
+                          mergeFixture.socket(nested, true)->scenePos());
+        expect(mergeFixture.session.composition()->graph().merge(nested)->entries().size() == 1,
+               "a new Merge pill accepts a plain source");
+        auto* pill = mergeFixture.socket(nested, true);
+        mergeFixture.drag(mergeFixture.socket(second, false)->scenePos(),
+                          pill->scenePos() - QPointF(0, 5));
+        const auto entries = mergeFixture.session.composition()->graph().merge(nested)->entries();
+        expect(entries.size() == 2, "insertion drop creates a second slot");
+        if (entries.size() == 2) {
+            const auto firstSlot = entries.front().slotId;
+            pill = mergeFixture.socket(nested, true);
+            const auto height = pill->rowHeight();
+            mergeFixture.drag(pill->scenePos() - QPointF(0, height / 4),
+                              pill->scenePos() + QPointF(0, height / 2 - 1));
+            expect(mergeFixture.session.composition()
+                           ->graph()
+                           .merge(nested)
+                           ->entries()
+                           .back()
+                           .slotId == firstSlot,
+                   "dragging within a Merge reorders the same stable slot");
+        }
+    }
+
     Fixture f;
     const auto source = f.add(document::kSolidSourceNodeType, {100, 100});
     const auto second = f.add(document::kSolidSourceNodeType, {100, 350});
