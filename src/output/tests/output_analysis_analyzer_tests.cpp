@@ -110,7 +110,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         pngDigest && pngDigest.preimageByteCount() == 1922 &&
             hasDigest(pngDigest.digest(),
-                      "06d66a210e9f7db1e7e7d262947810f8141624c23abe350de317e4a375093158"),
+                      "b80e593b1af7c70983d4f1e5bb9bcc69ccb6acde87c5516e1319c321e6ee8a70"),
         "the analyzer-produced PNG report preserves the independent digest golden");
 
     auto exrInputValue = exrInput(descriptor());
@@ -138,7 +138,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         exrDigest && exrDigest.preimageByteCount() == 1485 &&
             hasDigest(exrDigest.digest(),
-                      "2875eeba68fc4bc030fbd727e84001ba1943b46ff30b4ded8e1c9a679c2770db"),
+                      "b63e86e000030a9a25b43e8d26e22e34151f47dc279e83775287139922603f09"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 }
 

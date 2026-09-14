@@ -521,7 +521,7 @@ class CompilePass final {
             if (!slotInputDefinition.requiredPerSlot) {
                 continue;
             }
-            for (const auto& entry : graph.layerStack().entries()) {
+            for (const auto& entry : graph.merge(node->id)->entries()) {
                 if (mutedLayer(entry))
                     continue;
                 if (cancelled()) {

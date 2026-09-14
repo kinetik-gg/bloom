@@ -111,9 +111,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // reproducing EVERY previously checked-in golden set byte for byte when fed its own version
 // numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
-    "2875eeba68fc4bc030fbd727e84001ba1943b46ff30b4ded8e1c9a679c2770db";
+    "b63e86e000030a9a25b43e8d26e22e34151f47dc279e83775287139922603f09";
 constexpr std::string_view kExpectedPngDigest =
-    "06d66a210e9f7db1e7e7d262947810f8141624c23abe350de317e4a375093158";
+    "b80e593b1af7c70983d4f1e5bb9bcc69ccb6acde87c5516e1319c321e6ee8a70";
 
 class Expectations final {
   public:
@@ -167,7 +167,7 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
         core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNodeId, {{kLayerSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});

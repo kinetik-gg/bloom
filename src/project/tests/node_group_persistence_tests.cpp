@@ -253,9 +253,14 @@ void multipleMergeRoundTrip() {
     auto snapshot = authored.document->snapshot();
     auto draft = authored.document->draft(snapshot);
     auto& graph = draft.project().findComposition(authored.compositionId)->graph();
-    const auto nested = *draft.ids().allocateNode();
-    const auto slot = *draft.ids().allocateLayerSlot();
-    const auto edge = *draft.ids().allocateEdge();
+    const auto nestedId = draft.ids().allocateNode();
+    const auto slotId = draft.ids().allocateLayerSlot();
+    const auto edgeId = draft.ids().allocateEdge();
+    if (!nestedId || !slotId || !edgeId)
+        throw std::logic_error("Merge ids");
+    const auto nested = *nestedId;
+    const auto slot = *slotId;
+    const auto edge = *edgeId;
     expect(graph.addNode({nested, std::string(document::kLayerStackNodeType), {}, 1}),
            "add nested Merge");
     expect(graph.layerStack().append({slot, {}}) &&

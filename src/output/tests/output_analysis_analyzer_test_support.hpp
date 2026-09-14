@@ -143,7 +143,7 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         runtime::CompiledScalarParameter{kRotationParameterId, document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{kOpacityParameterId, 1.0}, kBlendModeParameterId,
         core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         kStackNodeId, {{kLayerSlotId, kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(2)});

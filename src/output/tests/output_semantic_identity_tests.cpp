@@ -66,11 +66,11 @@ using namespace std::chrono_literals;
 // animation slice moved the plan to 2 and sampling to 2; the values below are the oracle's output
 // for that combination (evaluator/primitive 5, plan 2, animation 2), never the implementation's.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "06d66a210e9f7db1e7e7d262947810f8141624c23abe350de317e4a375093158";
+    "b80e593b1af7c70983d4f1e5bb9bcc69ccb6acde87c5516e1319c321e6ee8a70";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "baafa3b4f8b848ada18c3ec6808423a47bcb5ece7f386657368bf7c603126b5d";
+    "505db1d513bb4cd2d74f2d25d8329e68a236d528af01bc8a40a0a2c2c6b6cb96";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "7fe60cc67fb0efb3d6cc2b27a535789a27ba8be426da78fea3abc49c4ac93935";
+    "bed6ee60292336daf5126c6f6367bf3abd75fe1873bc76ff6d4f22b34f809041";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
@@ -407,7 +407,7 @@ tinyFrameWithPixelAspect(const core::PixelAspectRatio pixelAspect) {
                                          document::kDefaultRotationDegrees},
         runtime::CompiledScalarParameter{test::kOpacityParameterId, 1.0},
         test::kBlendModeParameterId, core::kDefaultBlendMode});
-    operations.emplace_back(runtime::CompiledLayerStack{
+    operations.emplace_back(runtime::CompiledMerge{
         test::kStackNodeId,
         {{test::kLayerSlotId, test::kLayerId, runtime::OperationIndex::fromRaw(1)}}});
     operations.emplace_back(runtime::CompiledCompositionOutput{

@@ -46,20 +46,19 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
                               .animationCurveId = std::nullopt,
                               .keyframeId = std::nullopt,
                               .field = {}};
-    std::visit(
-        Overloaded{
-            [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
-            [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
-            [&subject](const CompiledLayerOutput& layer) {
-                subject.nodeId = layer.sourceNodeId;
-                subject.layerId = layer.layerId;
-            },
-            [&subject](const CompiledLayerStack& stack) { subject.nodeId = stack.sourceNodeId; },
-            [&subject](const CompiledCompositionOutput& output) {
-                subject.nodeId = output.sourceNodeId;
-            },
-        },
-        operation);
+    std::visit(Overloaded{
+                   [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+                   [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
+                   [&subject](const CompiledLayerOutput& layer) {
+                       subject.nodeId = layer.sourceNodeId;
+                       subject.layerId = layer.layerId;
+                   },
+                   [&subject](const CompiledMerge& stack) { subject.nodeId = stack.sourceNodeId; },
+                   [&subject](const CompiledCompositionOutput& output) {
+                       subject.nodeId = output.sourceNodeId;
+                   },
+               },
+               operation);
     return subject;
 }
 
@@ -368,7 +367,7 @@ enum class ScalarDomain : std::uint8_t {
                 }
                 return true;
             },
-            [&plan, index, &failure](const CompiledLayerStack& stack) {
+            [&plan, index, &failure](const CompiledMerge& stack) {
                 for (const auto& entry : stack.entries) {
                     if (entry.input.value() >= index) {
                         failure = diagnostic(
@@ -379,7 +378,9 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto* layer =
                         std::get_if<CompiledLayerOutput>(&plan.operations()[entry.input.value()]);
-                    if (layer == nullptr || layer->layerId != entry.layerId) {
+                    if (entry.layerId.isValid()
+                            ? (layer == nullptr || layer->layerId != entry.layerId)
+                            : layer != nullptr) {
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack entry does not match its layer output", {},
@@ -390,8 +391,7 @@ enum class ScalarDomain : std::uint8_t {
                 return true;
             },
             [&plan, index, &failure](const CompiledCompositionOutput& output) {
-                if (output.input.value() >= index || !std::holds_alternative<CompiledLayerStack>(
-                                                         plan.operations()[output.input.value()])) {
+                if (output.input.value() >= index) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Composition Output has an invalid stack input", {},
@@ -906,7 +906,7 @@ template <typename Value>
                                registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
                                               operationSubject));
                        },
-                       [](const CompiledLayerStack&) {},
+                       [](const CompiledMerge&) {},
                        [](const CompiledCompositionOutput&) {},
                    },
                    plan->operations()[index]);
@@ -1536,7 +1536,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         }
                         produced.emplace(std::move(*frozen.value()));
                     },
-                    [&](const CompiledLayerStack& stack) {
+                    [&](const CompiledMerge& stack) {
                         auto builder = render::Rgba32fImageBuilder::create(
                             resolved.imageDescriptor, resolved.imageBytes,
                             render::Rgba32f::transparent());
@@ -1575,14 +1575,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // picture rather than report anything.
                             const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                 &plan->operations()[entry->input.value()]);
-                            if (layerOutput == nullptr) {
-                                operationFailure =
-                                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
-                                               "Layer Stack entry does not name a Layer Output", {},
-                                               operationSubject);
-                                return;
-                            }
-                            const auto blendMode = layerOutput->blendMode;
+                            const auto blendMode =
+                                layerOutput ? layerOutput->blendMode : core::BlendMode::Normal;
                             auto sourceView = slots[entry->input.value()]->view();
                             if (!sourceView) {
                                 operationFailure =
