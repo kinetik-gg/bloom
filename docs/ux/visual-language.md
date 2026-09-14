@@ -210,6 +210,17 @@ viewer editors need no such wrapping -- their own canvases already scale down to
 get, unwrapped. Node cards keep their own, separate minimum-width rule and are out of this task's
 scope entirely.
 
+### Viewer content bounds
+
+For each selected layer, paint a 1 px `Accent` polygon and a solid filled 6 px diameter anchor dot.
+Geometry follows the same composition-to-view transform as the image, including zoom, pan and pixel
+aspect; line width and dot diameter stay in screen design pixels. This is canvas painting with no
+object names. It reads geometry retained by the delivered process frame, including cached frames.
+
+Text Alignment uses the existing `nodeOperandSelector` in node cards and the new
+`timelinePropertyAlignment` dropdown in source property rows. Width, Height, Line Height, and Letter
+Spacing reuse generic scalar cells and animation diamonds. Existing object names are unchanged.
+
 ### Viewer footer
 
 One row, `Size::Control` tall, on `Surface` with a `Border` hairline along its top edge. Left to

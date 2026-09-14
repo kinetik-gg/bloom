@@ -37,16 +37,16 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.6`.
+The container version remains `1.0`; the current document schema is `1.7`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.6.schema.json` and `schemas/project/document-1.6.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.6` and
-`urn:kinetik:bloom:schema:project-document:1.6`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.6`. Every historical artifact from `1.0` through `1.5`, manifest and
+`schemas/project/manifest-1.7.schema.json` and `schemas/project/document-1.7.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.7` and
+`urn:kinetik:bloom:schema:project-document:1.7`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.7`. Every historical artifact from `1.0` through `1.6`, manifest and
 document, remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
 
@@ -779,8 +779,8 @@ A node's own `schemaVersion` is independent of the document's. A document may th
 at an older registered schema version than this build knows, and that is an expected, non-exceptional
 state: it is what every file written before a node type gained a parameter contains.
 
-Such a node is upgraded in memory between trusted decode and reconstruction, never refused and never
-routed to preservation. The rule:
+Node-specific lossless upgrades run between trusted decode and reconstruction. Versions whose
+semantics cannot be converted losslessly remain registered compatibility versions. The rule:
 
 - The upgrade runs before any record is installed, so the live document model only ever sees current
   truth and every existing checked adder and validation applies unchanged.
@@ -1098,3 +1098,24 @@ An absent `merges` field means no additional Merges. Slot IDs remain project-uni
 in allocator high-water validation. Output wiring determines the timeline Merge independently of
 the primary persistence record. Historical schema artifacts remain unchanged; 1.6 checkers reduce
 the new artifacts to 1.5 and run the complete historical ladder.
+
+
+## Content Bounds In Document 1.7
+
+The `1.6` → `1.7` DOM migration upgrades each Solid v1 to v2, adding Scalar `width` and `height`
+parameters equal to that composition's format. IDs are allocated above the persisted parameter high
+water, bindings are ordered by role, and the high water is raised. Numeric tokens outside the owned
+rewrite are copied unchanged; malformed input and exhausted IDs fail through the migration runner.
+Saving/reopening 1.7 repeats neither injection nor coordinate conversion.
+
+Text v1, Layer v3, and Merge v1 are retained as explicit compatibility versions. Their frame clipping,
+control-character glyph lookup, and original animated/driven pivot arithmetic are preserved. New
+Text v2, Layer v4, and Merge v2 use local content bounds. This is a deliberate exception to full
+coordinate conversion: a constant rewrite cannot preserve old clipped images or a pivot whose offset
+depends on animated content bounds. There is no implicit conversion when an old file is opened.
+
+The document/manifest 1.7 artifacts retain the 1.6 JSON shape and generic typed parameter vocabulary;
+node versions and the node registry define the new per-role contracts. Historical artifacts are
+unchanged. `content_bounds_migration_tests` compares every RGBA32F bit of a pinned 1.6 fixture with
+off-centre rotated/scaled Solid and clipped Text, including an animated anchor, before migration,
+after migration, and after saving/reopening 1.7.
