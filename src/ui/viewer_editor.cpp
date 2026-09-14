@@ -2,6 +2,8 @@
 
 #include "composition_editor_support.hpp"
 
+#include <bloom/ui/window_status_bar.hpp>
+
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -167,77 +169,6 @@ QImage remapChannels(const QImage& source, const ViewerChannel channel) {
 
 constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
 
-QString previewStatusText(const CompositionPreviewState& state) {
-    switch (state.activity) {
-    case PreviewActivity::Rendering:
-        return state.freshness == FrameFreshness::Stale
-                   ? ViewerEditor::tr("Rendering current frame · Previous frame shown")
-                   : ViewerEditor::tr("Rendering current frame");
-    case PreviewActivity::Ready:
-        return ViewerEditor::tr("Current frame ready");
-    case PreviewActivity::Unsupported:
-        return state.freshness == FrameFreshness::Stale
-                   ? ViewerEditor::tr("Preview unsupported · Previous frame shown")
-                   : ViewerEditor::tr("Preview unsupported");
-    case PreviewActivity::Cancelled:
-        return state.freshness == FrameFreshness::Stale
-                   ? ViewerEditor::tr("Preview cancelled · Previous frame shown")
-                   : ViewerEditor::tr("Preview cancelled");
-    case PreviewActivity::Failed:
-        return state.freshness == FrameFreshness::Stale
-                   ? ViewerEditor::tr("Preview failed · Previous frame shown")
-                   : ViewerEditor::tr("Preview failed");
-    }
-    return ViewerEditor::tr("Preview unavailable");
-}
-
-QColor previewStatusColor(const PreviewActivity activity) {
-    switch (activity) {
-    case PreviewActivity::Rendering:
-        return kit::color(kit::Color::Accent);
-    case PreviewActivity::Ready:
-        return kit::color(kit::Color::Ok);
-    case PreviewActivity::Unsupported:
-        return kit::color(kit::Color::Warn);
-    case PreviewActivity::Cancelled:
-        return kit::color(kit::Color::Muted);
-    case PreviewActivity::Failed:
-        return kit::color(kit::Color::Error);
-    }
-    return kit::color(kit::Color::Muted);
-}
-
-// Ok/Warn/Error color-state chip (decision 3). The qualified/unqualified determination is
-// ALWAYS driven by the currently-displayed frame's own isOcioQualified() bit -- never by
-// `activity` -- so a retained qualified frame keeps reading as qualified even while a later,
-// unrelated request is in flight (the "never a silent relabel" contract, unchanged from the
-// original top-row label this replaces). PreviewActivity::Failed overrides to Error and shows the
-// controller's own fail-closed diagnostic message (docs/architecture/color-management.md, "Any
-// state other than Ready is fail-closed for qualified processing"): every Failed case this
-// codebase currently produces reaches this state with an already-unqualified retained frame (or
-// none at all), so this is additive, not a behavior change for the Ok/Warn cases the original
-// label already covered. A theoretical "was qualified, then a later unrelated request failed"
-// frame would still show the Error text rather than "Qualified" here -- a deliberate
-// simplification, not exercised by any existing pipeline path.
-struct ColorChipState final {
-    QString text;
-    kit::Color colorToken;
-};
-
-ColorChipState colorChipStateFor(const CompositionPreviewState& preview) {
-    if (preview.activity == PreviewActivity::Failed) {
-        return {preview.message.isEmpty() ? ViewerEditor::tr("Color state unavailable")
-                                          : preview.message,
-                kit::Color::Error};
-    }
-    const auto bufferView =
-        preview.frame != nullptr ? preview.frame->displayBufferView() : std::nullopt;
-    if (bufferView.has_value() && bufferView->isOcioQualified) {
-        return {ViewerEditor::tr("Qualified · Bloom Neutral"), kit::Color::Ok};
-    }
-    return {ViewerEditor::tr("Reference (unqualified)"), kit::Color::Warn};
-}
-
 // What the Resolution control is ACTUALLY delivering. The dropdown says which policy is chosen;
 // this says what that policy resolved to, which for Auto is the only place the effective factor is
 // visible at all. Task VIEW-1 dropped the frame/time half of this string: the exact frame and time
@@ -252,26 +183,6 @@ QString viewerResolutionText(const CompositionPreviewController& controller) {
     return policy == runtime::PreviewResolutionPolicy::Auto
                ? ViewerEditor::tr("Auto · %1").arg(factor)
                : ViewerEditor::tr(kResolutionNames[static_cast<std::size_t>(policy)]);
-}
-
-// The footer's dropped-frame text, or an empty string when nothing honest can be said: counting is
-// armed only between play() and pause(), so outside a playback run this reports nothing rather than
-// a stale or invented figure.
-[[nodiscard]] QString droppedFrameText(const CompositionPreviewController& previewController) {
-    if (!previewController.isCountingDroppedFrames()) {
-        return {};
-    }
-    return ViewerEditor::tr("%1 dropped").arg(previewController.droppedFrameCount());
-}
-
-// The footer's RAM preview progress, or an empty string when no run is caching -- the same honesty
-// rule droppedFrameText() follows: outside a run the footer says nothing rather than "0/0".
-[[nodiscard]] QString ramPreviewText(const CompositionPreviewController& previewController) {
-    const auto& progress = previewController.ramPreviewProgress();
-    if (!progress.has_value()) {
-        return {};
-    }
-    return ViewerEditor::tr("Caching %1/%2").arg(progress->cachedFrames).arg(progress->totalFrames);
 }
 
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
@@ -348,128 +259,15 @@ void drawFrameShadow(QPainter& painter, const QRectF& displayRect) {
     painter.restore();
 }
 
-// Fills `chipRect` exactly with a rounded, token-colored pill carrying `text` -- the shared
-// low-level primitive behind both the canvas activity chip and the status bar's zoom-independent
-// color-state chip (drawStatusChip() below computes ITS OWN chipRect and delegates here).
-void paintChip(QPainter& painter, const QRectF& chipRect, const QString& text, const QColor color) {
-    if (chipRect.isEmpty()) {
-        return;
-    }
-    const QString elided = painter.fontMetrics().elidedText(
-        text, Qt::ElideRight, static_cast<int>(std::max<qreal>(0.0, chipRect.width() - 16.0)));
-    painter.setPen(QPen(color.lighter(125), 1.0));
-    painter.setBrush(kit::withOpacity(color, 0.855));
-    painter.drawRoundedRect(chipRect, 4.0, 4.0);
-    painter.setPen(kit::color(kit::Color::Foreground));
-    painter.drawText(chipRect.adjusted(8.0, 0.0, -8.0, 0.0), Qt::AlignVCenter | Qt::AlignLeft,
-                     elided);
-}
-
-void drawStatusChip(QPainter& painter, const QRectF& available, const QString& text,
-                    const QColor color, const Qt::Alignment horizontalAlignment) {
-    constexpr qreal chipHeight = 24.0;
-    const qreal maximumWidth = std::max<qreal>(0.0, available.width() - 24.0);
-    const QString elided = painter.fontMetrics().elidedText(
-        text, Qt::ElideRight, static_cast<int>(std::max<qreal>(0.0, maximumWidth - 16.0)));
-    const qreal width =
-        std::min<qreal>(maximumWidth, painter.fontMetrics().horizontalAdvance(elided) + 16.0);
-    const qreal left = horizontalAlignment.testFlag(Qt::AlignRight)
-                           ? available.right() - width - 12.0
-                           : available.left() + 12.0;
-    paintChip(painter, QRectF(left, available.top() + 10.0, width, chipHeight), text, color);
-}
-
-void drawDiagnosticBanner(QPainter& painter, const QRectF& available, const QString& message) {
-    if (message.isEmpty()) {
-        return;
-    }
-    const QRectF banner =
-        available.adjusted(24.0, available.height() * 0.38, -24.0, -available.height() * 0.38);
-    painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
-    painter.setBrush(kit::withOpacity(kit::color(kit::Color::Surface), 0.88));
-    painter.drawRoundedRect(banner, 5.0, 5.0);
-    painter.setPen(kit::color(kit::Color::Foreground));
-    const QString visible = painter.fontMetrics().elidedText(
-        message, Qt::ElideRight, static_cast<int>(std::max<qreal>(0.0, banner.width() - 20.0)));
-    painter.drawText(banner.adjusted(10.0, 0.0, -10.0, 0.0), Qt::AlignCenter, visible);
-}
-
-// Paints the footer's surface, hairline, color-state chip, dropped-frame count and RAM-preview
-// progress into `bar`. `lastControl` is the rightmost laid-out control in the same coordinate space
-// as `bar`; the right-anchored readouts never cross its right edge.
-void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* lastControl,
-                           const CompositionPreviewController& previewController) {
+// Paints the footer's surface and its top hairline, and nothing else. Task VIEW-1 moved the
+// colour-state chip, the dropped-frame count and the cache progress to the window status bar
+// (window_status_bar.hpp): they describe the application's state, not the frame in this panel, and
+// they have to stay visible whether or not a Viewer is open.
+void paintStatusBarSurface(QPainter& painter, const QRectF& bar) {
     painter.save();
     painter.fillRect(bar, kit::color(kit::Color::Surface));
     painter.setPen(QPen(kit::color(kit::Color::Border), 1.0));
     painter.drawLine(bar.topLeft(), bar.topRight());
-
-    // Right: the color-state chip (decision 3) -- the contract-preserved qualified/unqualified
-    // indicator this whole status bar exists partly to relocate. Computed fresh every paint from
-    // live preview state, exactly like the top-row label it replaces, so it is never a step behind
-    // or a silent relabel.
-    painter.setFont(kit::font(kit::TypeRole::Ui));
-    const auto chipState = colorChipStateFor(previewController.state());
-    const qreal chipHeight = std::max<qreal>(16.0, bar.height() - 6.0);
-    const qreal chipTop = bar.top() + (bar.height() - chipHeight) / 2.0;
-    const qreal chipLeftBound =
-        lastControl != nullptr
-            ? static_cast<qreal>(lastControl->geometry().right()) + kit::px(kit::Spacing::L)
-            : bar.left();
-    const qreal maxChipWidth = std::max<qreal>(0.0, bar.width() * 0.4);
-    const QString elidedChipText = painter.fontMetrics().elidedText(
-        chipState.text, Qt::ElideRight,
-        static_cast<int>(std::max<qreal>(0.0, maxChipWidth - 16.0)));
-    const qreal chipWidth = std::min<qreal>(
-        maxChipWidth, painter.fontMetrics().horizontalAdvance(elidedChipText) + 16.0);
-    const qreal chipLeft =
-        std::max<qreal>(chipLeftBound, bar.right() - chipWidth - kit::px(kit::Spacing::S));
-    const QRectF chipRect(chipLeft, chipTop,
-                          std::max<qreal>(0.0, bar.right() - chipLeft - kit::px(kit::Spacing::S)),
-                          chipHeight);
-    paintChip(painter, chipRect, chipState.text, kit::color(chipState.colorToken));
-
-    // The two right-anchored measurements, in the monospaced role every numeric surface uses
-    // (kit::TypeRole::Value -- kit/tokens.hpp).
-    painter.setFont(kit::font(kit::TypeRole::Value));
-    painter.setPen(kit::color(kit::Color::Foreground));
-    qreal centerRight = chipRect.left() - kit::px(kit::Spacing::S);
-
-    // Task S5, item 3b: the dropped-frame counter, shown ONLY while a playback run is counting.
-    // It sits immediately left of the color chip, in the same monospaced role the frame readout
-    // uses, and is deliberately a count rather than a rate -- see
-    // CompositionPreviewController::droppedFrameCount() for exactly what it counts and what it
-    // does not claim. Zero dropped frames still shows "0 dropped" during playback: silence would
-    // read as "not measured", which is a different statement.
-    // RAM preview progress sits furthest left of the right-anchored readouts, so the chip and the
-    // dropped-frame count keep the positions they already had while a run is caching.
-    const QString cachingText = ramPreviewText(previewController);
-
-    const QString droppedText = droppedFrameText(previewController);
-    if (!droppedText.isEmpty()) {
-        const qreal droppedWidth = painter.fontMetrics().horizontalAdvance(droppedText);
-        const qreal droppedLeft = std::max<qreal>(chipLeftBound, centerRight - droppedWidth);
-        painter.setPen(previewController.droppedFrameCount() == 0 ? kit::color(kit::Color::Muted)
-                                                                  : kit::color(kit::Color::Warn));
-        painter.drawText(QRectF(droppedLeft, bar.top(),
-                                std::max<qreal>(0.0, centerRight - droppedLeft), bar.height()),
-                         Qt::AlignVCenter | Qt::AlignRight, droppedText);
-        centerRight = droppedLeft - kit::px(kit::Spacing::S);
-        painter.setPen(kit::color(kit::Color::Foreground));
-    }
-
-    if (!cachingText.isEmpty()) {
-        const qreal cachingWidth = painter.fontMetrics().horizontalAdvance(cachingText);
-        const qreal cachingLeft = std::max<qreal>(chipLeftBound, centerRight - cachingWidth);
-        painter.setPen(kit::color(kit::Color::Accent));
-        painter.drawText(QRectF(cachingLeft, bar.top(),
-                                std::max<qreal>(0.0, centerRight - cachingLeft), bar.height()),
-                         Qt::AlignVCenter | Qt::AlignRight, cachingText);
-        centerRight = cachingLeft - kit::px(kit::Spacing::S);
-        painter.setPen(kit::color(kit::Color::Foreground));
-    }
-    Q_UNUSED(centerRight)
-
     painter.restore();
 }
 
@@ -481,8 +279,7 @@ void paintStatusBarSurface(QPainter& painter, const QRectF& bar, const QWidget* 
 // widget, and the two had to be kept in agreement by hand.
 class ViewerFooter final : public QWidget {
   public:
-    ViewerFooter(CompositionPreviewController& previewController, QWidget* parent)
-        : QWidget(parent), previewController_(previewController) {
+    explicit ViewerFooter(QWidget* parent) : QWidget(parent) {
         setObjectName(QStringLiteral("viewerFooter"));
         setAccessibleName(ViewerEditor::tr("Viewer controls"));
         setFixedHeight(kit::px(kit::Size::Control));
@@ -504,12 +301,10 @@ class ViewerFooter final : public QWidget {
     void resizeEvent(QResizeEvent*) override { layoutControls(); }
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        paintStatusBarSurface(painter, QRectF(rect()),
-                              controls_.empty() ? nullptr : controls_.back(), previewController_);
+        paintStatusBarSurface(painter, QRectF(rect()));
     }
 
   private:
-    CompositionPreviewController& previewController_;
     std::vector<QWidget*> controls_;
 };
 
@@ -800,7 +595,7 @@ ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& avail
 
 // Builds the footer row and everything in it (task VIEW-1). Called once, from the constructor.
 void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
-    auto* footer = new ViewerFooter(previewController_, this);
+    auto* footer = new ViewerFooter(this);
     statusBarFooter_ = footer;
 
     // ---- Channel -------------------------------------------------------------------------------
@@ -1308,18 +1103,6 @@ ViewerBackground ViewerEditor::backgroundForTest() const noexcept { return backg
 
 QString ViewerEditor::timeReadoutTextForTest() const { return timeReadout_->text(); }
 
-QString ViewerEditor::statusBarDroppedFrameTextForTest() const {
-    return droppedFrameText(previewController_);
-}
-
-QString ViewerEditor::statusBarRamPreviewTextForTest() const {
-    return ramPreviewText(previewController_);
-}
-
-QString ViewerEditor::statusBarColorChipTextForTest() const {
-    return colorChipStateFor(previewController_.state()).text;
-}
-
 kit::KDropdown* ViewerEditor::zoomDropdownForTest() const noexcept { return zoomDropdown_; }
 
 QRectF ViewerEditor::statusBarRect() const {
@@ -1475,7 +1258,6 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
 
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle displayedFrame = preview.frame;
-    bool drewPixels = false;
     if (displayedFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
@@ -1523,38 +1305,16 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
-                    drewPixels = true;
                 }
             }
         }
     }
 
-    // Evaluation-pending/activity chip: always the subtle chip, never a banner (decision 5) --
-    // unchanged from before except that the redundant large centered duplicate of this same text
-    // (previously drawn whenever no pixels were available yet) is gone.
-    drawStatusChip(painter, frame, previewStatusText(preview), previewStatusColor(preview.activity),
-                   Qt::AlignLeft);
-    // Failure states keep their existing typed surfacing (already token-driven) when stale pixels
-    // are still being shown alongside them.
-    if (drewPixels && preview.activity != PreviewActivity::Ready &&
-        preview.activity != PreviewActivity::Rendering) {
-        drawDiagnosticBanner(painter, frame, preview.message);
-    }
-
-    if (session_.selection().contextualLayer.has_value()) {
-        const QString name = layerName(*composition, *session_.selection().contextualLayer);
-        const QRectF selectionStatus(frame.left() + 12.0, frame.bottom() - 38.0,
-                                     frame.width() - 24.0, 26.0);
-        painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
-        painter.setBrush(kit::color(kit::Color::SurfaceRaised));
-        painter.drawRoundedRect(selectionStatus, 4.0, 4.0);
-        painter.setPen(kit::color(kit::Color::Foreground));
-        const QString status = tr("Selected: %1 · evaluated bounds unavailable").arg(name);
-        painter.drawText(
-            selectionStatus.adjusted(8.0, 0.0, -8.0, 0.0), Qt::AlignVCenter | Qt::AlignLeft,
-            painter.fontMetrics().elidedText(status, Qt::ElideRight,
-                                             static_cast<int>(selectionStatus.width() - 16.0)));
-    }
+    // Task VIEW-1: nothing is painted over the pixels any more. The readiness chip, the failure
+    // banner, and the "Selected: ... · evaluated bounds unavailable" strip all covered part of the
+    // frame to say something that was not about the frame's own content -- the first two are cells
+    // in the window status bar now, and the third claimed nothing the Properties panel does not
+    // already show. A viewer canvas shows the composition; everything else reports elsewhere.
 }
 
 void ViewerEditor::updatePreviewAccessibility() {
@@ -1571,9 +1331,10 @@ void ViewerEditor::updatePreviewAccessibility() {
         frameDescription = tr("Previous composition pixels are displayed and marked out of date");
         break;
     }
-    // Single source of wording with the painted status bar chip (colorChipStateFor()) -- the
-    // accessible description and the visible chip can never drift apart.
-    const QString colorStateDescription = colorChipStateFor(preview).text;
+    // Single source of wording with the window status bar's own chip (previewColorState()) -- the
+    // accessible description and the visible chip can never drift apart, even though they are in
+    // two different widgets now.
+    const QString colorStateDescription = previewColorState(preview).text;
     setAccessibleDescription(
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
 }

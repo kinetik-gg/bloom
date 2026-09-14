@@ -14,11 +14,13 @@ class QStackedWidget;
 
 namespace bloom::ui {
 
+class CompositionPreviewController;
 class CompositionSession;
 class EditorRegistry;
 class FrameExportController;
 class ProjectHost;
 class RamPreviewController;
+class WindowStatusBar;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
 
@@ -48,9 +50,14 @@ class MainWindow final : public QMainWindow {
     // `ramPreview` is the Composition menu's RAM Preview command (task PERF1, item 3), the same
     // controller the Timeline's transport button reaches. Null leaves the menu item present and
     // disabled, which is what a window built without one should show.
+    // `previewController` feeds the window status bar's preview cells (task VIEW-1) -- the colour
+    // state, readiness, dropped frames and cache progress. Null builds the strip with those cells
+    // empty rather than absent, which is what a window without a preview pipeline should show.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
-               RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
+               RamPreviewController* ramPreview = nullptr,
+               CompositionPreviewController* previewController = nullptr,
+               QWidget* parent = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -61,6 +68,9 @@ class MainWindow final : public QMainWindow {
     // can assert the switch without depending on QWidget::isVisible(), which only reports
     // correctly once the top-level window itself has been shown.
     [[nodiscard]] bool isShowingReadOnlyPlaceholder() const noexcept;
+    // The one persistent reporting surface (task VIEW-1). Exposed so a test can read what the
+    // window is currently saying without grabbing pixels.
+    [[nodiscard]] WindowStatusBar* statusStrip() const noexcept { return statusStrip_; }
 
   signals:
     void shutdownRequested();
@@ -93,11 +103,17 @@ class MainWindow final : public QMainWindow {
     FrameExportController& frameExportController_;
     // Borrowed, may be null; the command itself is owned by the application composition root.
     RamPreviewController* ramPreview_ = nullptr;
+    // Borrowed, may be null; owned by the application composition root, and read only by the
+    // window status bar's preview cells.
+    CompositionPreviewController* previewController_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     QMenu* compositionMenu_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
+    // A kit strip under the workspace, NOT QMainWindow::statusBar(): that brings its own chrome,
+    // size grip and item model, none of which the Kinetik language wants.
+    WindowStatusBar* statusStrip_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
     QLabel* readOnlyPlaceholderFileNameLabel_ = nullptr;

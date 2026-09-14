@@ -299,6 +299,7 @@ target_sources(
         timeline_work_area.cpp
         timeline_navigation.cpp
         viewer_editor.cpp
+        window_status_bar.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
     PUBLIC
@@ -335,6 +336,7 @@ target_sources(
             include/bloom/ui/timeline_frame_math.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/viewer_editor.hpp
+            include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
 )
 

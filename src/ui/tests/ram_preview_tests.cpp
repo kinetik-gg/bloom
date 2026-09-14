@@ -29,7 +29,7 @@
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
-#include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -630,8 +630,9 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Cancel", time(24, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the cancellation fixture renders its first frame");
-    ui::ViewerEditor viewer(fixture.session, fixture.controller);
-
+    // ADAPTED for task VIEW-1: RAM preview progress reports in the WINDOW STATUS BAR now, not the
+    // viewer footer -- it is application state, and it has to stay visible whether or not a Viewer
+    // is open. The free function the strip's own cell calls is what is read here.
     // Pause the run's FIRST preparation on the worker. Frame zero is already cached -- the
     // fixture's own opening frame -- so the run counts that one without rendering it and pauses on
     // frame one, which is exactly one frame into a twenty-four frame range.
@@ -643,14 +644,15 @@ void testRamPreviewCancellationKeepsWhatItCached(Expectations& expectations) {
                         "the run reaches its first uncached frame on the worker");
     expectations.expect(ramPreview.isCaching() && ramPreview.cachedFrameCount() == 1,
                         "one frame of the range is cached at the rendezvous");
-    expectations.expect(viewer.statusBarRamPreviewTextForTest() == QStringLiteral("Caching 1/24"),
-                        "the Viewer footer reports the run's own progress while it caches");
+    expectations.expect(ui::previewCacheText(fixture.controller) == QStringLiteral("Caching 1/24"),
+                        "the status bar reports the run's own progress while it caches");
 
     ramPreview.cancel();
     fixture.gate.release();
     expectations.expect(!ramPreview.isCaching(), "cancelling ends the run at once");
-    expectations.expect(viewer.statusBarRamPreviewTextForTest().isEmpty(),
-                        "the footer says nothing about a run that is not caching");
+    expectations.expect(
+        !ui::previewCacheText(fixture.controller).startsWith(QStringLiteral("Caching")),
+        "and stops claiming a run once one is no longer caching");
     expectations.expect(ramPreview.cachedFrameCount() == 1,
                         "a cancelled run keeps every frame it had already cached");
     expectations.expect(waitUntil([&] {

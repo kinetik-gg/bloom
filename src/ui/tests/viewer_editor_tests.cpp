@@ -25,6 +25,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -329,8 +330,8 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
         "the status surface reports the reference (unqualified) color state before "
         "readiness");
     expectations.expect(
-        viewer.statusBarColorChipTextForTest() == QStringLiteral("Reference (unqualified)"),
-        "the status bar's own color chip text (decision 3) agrees with the accessible description");
+        ui::previewColorState(controller.state()).text == QStringLiteral("Reference (unqualified)"),
+        "the window status bar's own color chip text agrees with the accessible description");
 
     auto resolution = color::resolveBloomNeutralV1BuiltIn(
         color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
@@ -365,8 +366,9 @@ void testViewerRendersQualifiedFrameAndReportsColorState(Expectations& expectati
         viewer.accessibleDescription().contains(QStringLiteral("Qualified · Bloom Neutral")),
         "the status surface reports the qualified color state once the frame is qualified");
     expectations.expect(
-        viewer.statusBarColorChipTextForTest() == QStringLiteral("Qualified · Bloom Neutral"),
-        "the status bar's own color chip text (decision 3) agrees with the accessible description");
+        ui::previewColorState(controller.state()).text ==
+            QStringLiteral("Qualified · Bloom Neutral"),
+        "the window status bar's own color chip text agrees with the accessible description");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
@@ -425,9 +427,10 @@ void testViewerStatusSurfaceReflectsFailClosedColorState(Expectations& expectati
     expectations.expect(
         viewer.accessibleDescription().contains(controller.state().message),
         "the status surface's message reflects the controller's own fail-closed diagnostic");
-    expectations.expect(viewer.statusBarColorChipTextForTest() == controller.state().message,
+    expectations.expect(ui::previewColorState(controller.state()).text ==
+                            controller.state().message,
                         "the status bar's Error chip shows the fail-closed diagnostic verbatim "
-                        "(decision 3: \"Error text on fail-closed\")");
+                        "(\"Error text on fail-closed\")");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
@@ -560,9 +563,10 @@ void testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(Expectations& 
     // existing bottom status bar" -- not a duplicate, the SAME control).
     expectations.expect(fixture.viewer.zoomDropdownForTest()->parentWidget() == firstCall,
                         "the zoom dropdown is reparented into the returned footer widget");
-    expectations.expect(
-        fixture.viewer.statusBarColorChipTextForTest() == QStringLiteral("Reference (unqualified)"),
-        "the color-state chip's own text is still computed correctly once hosted externally");
+    expectations.expect(ui::previewColorState(fixture.controller.state()).text ==
+                            QStringLiteral("Reference (unqualified)"),
+                        "the color-state wording is unchanged now that the chip reports from the "
+                        "window status bar instead of this footer");
 
     firstCall->resize(400, ui::kit::px(ui::kit::Size::Control));
     QCoreApplication::processEvents();
@@ -606,18 +610,17 @@ void testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(Expectations& expe
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the dropped-frame readout fixture reaches its first ready frame");
 
-    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest().isEmpty(),
+    expectations.expect(ui::droppedFrameText(fixture.controller).isEmpty(),
                         "the footer says nothing about dropped frames outside a playback run, "
                         "because nothing is measuring");
 
     fixture.controller.beginDroppedFrameCounting();
-    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest() ==
-                            QStringLiteral("0 dropped"),
+    expectations.expect(ui::droppedFrameText(fixture.controller) == QStringLiteral("0 dropped"),
                         "once a run is counting the footer reports the count even at zero -- "
                         "silence would read as 'not measured', which is a different statement");
 
     fixture.controller.endDroppedFrameCounting();
-    expectations.expect(fixture.viewer.statusBarDroppedFrameTextForTest().isEmpty(),
+    expectations.expect(ui::droppedFrameText(fixture.controller).isEmpty(),
                         "and it falls silent again when the run ends");
 
     fixture.controller.beginShutdown();

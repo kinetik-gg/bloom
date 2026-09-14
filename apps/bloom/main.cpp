@@ -21,6 +21,7 @@
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -177,7 +178,7 @@ int main(int argc, char* argv[]) {
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController, &ramPreviewController);
+                                 frameExportController, &ramPreviewController, &previewController);
     auto& playback = previewController.playbackController();
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
