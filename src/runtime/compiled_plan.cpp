@@ -5,7 +5,7 @@
 namespace bloom::runtime {
 
 CompiledCompositionPlan::CompiledCompositionPlan(
-    CompiledCompositionPlanDefinition definition) noexcept
+    CompiledCompositionPlanDefinition definition)
     : sourceRevision_(definition.sourceRevision), projectId_(definition.projectId),
       compositionId_(definition.compositionId), format_(definition.format),
       operations_(std::move(definition.operations)), output_(definition.output),
@@ -15,7 +15,9 @@ CompiledCompositionPlan::CompiledCompositionPlan(
       valueOperations_(std::move(definition.valueOperations)),
       valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
-      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {}
+      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {
+    analyzeTimeDependence();
+}
 
 CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() const {
     return {.sourceRevision = sourceRevision_,

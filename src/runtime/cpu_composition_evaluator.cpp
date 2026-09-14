@@ -1144,7 +1144,7 @@ template <typename Value>
     auto valueGraph = evaluateValueGraph(
         plan->valueOperations(), plan->valueOutputCount(), request.time, plan->format().frameRate(),
         ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves()},
-        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(), &cancellation});
+        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(), &cancellation, plan->valueTimeDependence()});
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
     }
@@ -1221,11 +1221,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             key.add(plan->projectId()); key.add(plan->compositionId());
             key.add(plan->format().width()); key.add(plan->format().height());
             key.add(plan->format().pixelAspect());
+            key.add(plan->format().frameRate());
             key.add(request.resolution.index());
             if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
                 key.add(proxy->extent.width()); key.add(proxy->extent.height());
             }
-            key.add(request.time);
+            key.add(plan->operationTimeDependent(operationIndex));
+            if (plan->operationTimeDependent(operationIndex)) key.add(request.time);
             key.add(plan->operations()[index].index());
             const auto parameter = [&](const auto& operand) {
                 const auto value = detail::resolveParameter(operand, *plan, resolved);

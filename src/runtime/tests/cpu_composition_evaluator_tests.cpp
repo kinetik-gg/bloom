@@ -1800,8 +1800,9 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
-    testOperationMemoization(expectations);
     try {
+        testOperationMemoization(expectations);
+        testOperationTimeInvariance(expectations);
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);

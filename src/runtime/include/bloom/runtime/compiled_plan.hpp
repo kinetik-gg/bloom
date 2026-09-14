@@ -194,7 +194,7 @@ struct CompiledCompositionPlanDefinition final {
 // per-frame plan copy because no public API can mutate the published fields or vector storage.
 class CompiledCompositionPlan final {
   public:
-    explicit CompiledCompositionPlan(CompiledCompositionPlanDefinition definition) noexcept;
+    explicit CompiledCompositionPlan(CompiledCompositionPlanDefinition definition);
 
     CompiledCompositionPlan(const CompiledCompositionPlan&) = delete;
     CompiledCompositionPlan& operator=(const CompiledCompositionPlan&) = delete;
@@ -202,6 +202,10 @@ class CompiledCompositionPlan final {
     CompiledCompositionPlan& operator=(CompiledCompositionPlan&&) = delete;
     ~CompiledCompositionPlan() = default;
 
+    [[nodiscard]] bool operationTimeDependent(OperationIndex index) const noexcept {
+        return index.value() >= operationTimeDependent_.size() || operationTimeDependent_[index.value()] != 0;
+    }
+    [[nodiscard]] std::span<const std::uint8_t> valueTimeDependence() const noexcept { return valueTimeDependent_; }
     [[nodiscard]] document::Revision sourceRevision() const noexcept { return sourceRevision_; }
     [[nodiscard]] document::ProjectId projectId() const noexcept { return projectId_; }
     [[nodiscard]] document::CompositionId compositionId() const noexcept { return compositionId_; }
@@ -244,6 +248,9 @@ class CompiledCompositionPlan final {
                            const CompiledCompositionPlan&) = default;
 
   private:
+    void analyzeTimeDependence();
+    std::vector<std::uint8_t> operationTimeDependent_;
+    std::vector<std::uint8_t> valueTimeDependent_;
     document::Revision sourceRevision_;
     document::ProjectId projectId_;
     document::CompositionId compositionId_;

@@ -73,6 +73,7 @@ struct ValueGraphMemoization final {
     document::ProjectId project;
     document::CompositionId composition;
     const CancellationToken* cancellation = nullptr;
+    std::span<const std::uint8_t> timeDependence;
 };
 
 // Evaluates every operation in order. `operations` must already be topologically ordered (the

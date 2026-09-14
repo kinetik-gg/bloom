@@ -191,6 +191,7 @@ class Evaluator final {
     }
 
     void run(const std::span<const runtime::CompiledValueOperation> operations) {
+        std::size_t operationIndex = 0;
         for (const auto& operation : operations) {
             if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested()) return;
             const auto first = operation.firstOutput.value();
@@ -205,7 +206,11 @@ class Evaluator final {
             runtime::detail::OperationKey key;
             key.add(std::string("value")); key.add(memoization_.project); key.add(memoization_.composition);
             key.add(operation.sourceNodeId); key.add(operation.kernel.index()); key.add(count);
-            key.add(time_); key.add(rate_);
+            const bool dependent = operationIndex >= memoization_.timeDependence.size() ||
+                memoization_.timeDependence[operationIndex] != 0;
+            ++operationIndex;
+            key.add(dependent);
+            if (dependent) key.add(time_); key.add(rate_);
             std::visit([&](const auto& kernel) {
                 if constexpr (requires { kernel.operation; }) key.add(kernel.operation);
                 if constexpr (requires { kernel.clampResult; }) key.add(kernel.clampResult);

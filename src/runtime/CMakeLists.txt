@@ -33,6 +33,7 @@ target_sources(
     PRIVATE
         compile_diagnostics.cpp
         compiled_plan.cpp
+        plan_time_dependence.cpp
         curve_compilation.cpp
         snapshot_compiler.cpp
         snapshot_compiler_lowering.ipp
