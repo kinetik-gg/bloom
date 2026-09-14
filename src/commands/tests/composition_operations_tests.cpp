@@ -172,6 +172,36 @@ void testDuplicateCompositionRemapsDeepDocumentState(TestContext& test) {
                 "DuplicateComposition redo restores the exact copied IDs and revision parity");
 }
 
+void testSafeAreaSettingsAreUndoableAndDuplicated(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto settings = document::SafeAreaSettings{.action = 0.93, .title = 0.90};
+
+    Transaction setSafeAreas("Set Safe Areas", document.snapshot().revision());
+    setSafeAreas.emplace<SetCompositionSafeAreas>(kCompositionId, settings);
+    const auto changed = stack.execute(std::move(setSafeAreas));
+    const auto* authored = document.snapshot().project().findComposition(kCompositionId);
+    test.expect(changed.changed() && authored != nullptr && authored->safeAreas() == settings,
+                "SetCompositionSafeAreas writes the validated composition setting");
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().findComposition(kCompositionId)->safeAreas() ==
+                        document::SafeAreaSettings{},
+                "SetCompositionSafeAreas is one undoable edit");
+    test.expect(stack.redo().changed() &&
+                    document.snapshot().project().findComposition(kCompositionId)->safeAreas() ==
+                        settings,
+                "SetCompositionSafeAreas redo restores the exact percentages");
+
+    Transaction duplicate("Duplicate Composition", document.snapshot().revision());
+    duplicate.emplace<DuplicateComposition>(kCompositionId);
+    const auto result = stack.execute(std::move(duplicate));
+    const auto copyId = result.outputId<document::CompositionId>(kDuplicateCompositionOutput)
+                            .value_or(document::CompositionId{});
+    const auto* copy = document.snapshot().project().findComposition(copyId);
+    test.expect(copy != nullptr && copy->safeAreas() == settings,
+                "DuplicateComposition carries per-composition safe-area settings");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -181,6 +211,7 @@ int main() {
         bloom::commands::test::testAddCompositionBuildsTopologyAndUndoRedo(test);
         bloom::commands::test::testDeleteCompositionGuardsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
+        bloom::commands::test::testSafeAreaSettingsAreUndoableAndDuplicated(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

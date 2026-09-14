@@ -202,6 +202,20 @@ class SetCompositionFormat final : public Operation {
     document::CompositionFormat format_;
 };
 
+class SetCompositionSafeAreas final : public Operation {
+  public:
+    SetCompositionSafeAreas(document::CompositionId compositionId,
+                            document::SafeAreaSettings settings)
+        : compositionId_(compositionId), settings_(settings) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::SafeAreaSettings settings_;
+};
+
 class SetParameterSource final : public Operation {
   public:
     SetParameterSource(document::CompositionId compositionId, document::ParameterId parameterId,

@@ -58,12 +58,13 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     NewCompositionFields fields;
     fields.name = new QLineEdit(&dialog);
     fields.name->setObjectName(QStringLiteral("assetsNameField"));
-    fields.name->setText(QObject::tr("Composition %1")
-                             .arg(session.snapshot().project().compositions().size() + 1));
+    fields.name->setText(
+        QObject::tr("Composition %1").arg(session.snapshot().project().compositions().size() + 1));
     form->addRow(QObject::tr("Name"), fields.name);
 
     const auto* current = session.composition();
-    const auto currentFormat = current == nullptr ? document::CompositionFormat{} : current->format();
+    const auto currentFormat =
+        current == nullptr ? document::CompositionFormat{} : current->format();
     fields.width = new QSpinBox(&dialog);
     fields.width->setObjectName(QStringLiteral("assetsWidthField"));
     fields.width->setRange(1, static_cast<int>(document::CompositionFormat::kMaximumDimension));
@@ -84,9 +85,9 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     fields.duration->setObjectName(QStringLiteral("assetsDurationField"));
     fields.duration->setRange(1, 1'000'000);
     fields.duration->setValue(current == nullptr
-                                   ? 10
-                                   : static_cast<int>(current->duration().numerator() /
-                                                      current->duration().denominator()));
+                                  ? 10
+                                  : static_cast<int>(current->duration().numerator() /
+                                                     current->duration().denominator()));
     form->addRow(QObject::tr("Duration (frames)"), fields.duration);
 
     fields.error = new QLabel(&dialog);
@@ -114,14 +115,13 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
         return std::nullopt;
     }
 
-    const auto rate = document::FrameRate::create(
-        static_cast<std::uint32_t>(fields.frameRate->value()), 1);
-    const auto format = rate.has_value()
-                            ? document::CompositionFormat::create(
-                                  static_cast<std::uint32_t>(fields.width->value()),
-                                  static_cast<std::uint32_t>(fields.height->value()),
-                                  currentFormat.pixelAspect(), *rate)
-                            : std::nullopt;
+    const auto rate =
+        document::FrameRate::create(static_cast<std::uint32_t>(fields.frameRate->value()), 1);
+    const auto format = rate.has_value() ? document::CompositionFormat::create(
+                                               static_cast<std::uint32_t>(fields.width->value()),
+                                               static_cast<std::uint32_t>(fields.height->value()),
+                                               currentFormat.pixelAspect(), *rate)
+                                         : std::nullopt;
     if (!rate.has_value() || !format.has_value()) {
         return std::nullopt;
     }
@@ -176,10 +176,9 @@ bool renameComposition(CompositionSession& session, const document::CompositionI
         return false;
     }
     bool accepted = false;
-    const QString name = QInputDialog::getText(parent, QObject::tr("Rename Composition"),
-                                               QObject::tr("Name"), QLineEdit::Normal,
-                                               QString::fromStdString(composition->name()),
-                                               &accepted);
+    const QString name = QInputDialog::getText(
+        parent, QObject::tr("Rename Composition"), QObject::tr("Name"), QLineEdit::Normal,
+        QString::fromStdString(composition->name()), &accepted);
     if (!accepted || !document::isValidHumanFacingName(name.toUtf8().toStdString())) {
         return false;
     }

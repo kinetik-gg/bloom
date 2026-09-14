@@ -208,6 +208,34 @@ width, and RGBA fields use two columns. The body scrolls vertically without requ
 scrolling. The node graph, timeline, and viewer retain their existing canvas and wrapper behavior;
 node cards retain their separate minimum-width rule.
 
+### Viewer header
+
+The Viewer header keeps the panel switcher first, followed by the compact composition selector
+(`viewerCompositionSelector`), its trailing composition-command button, the active object selector
+(`viewerObjectSelector`), View and Select menu buttons, and the fullscreen toggle
+(`viewerFullscreenButton`). The composition selector lists document compositions; the object
+selector lists the current composition's layer display names and shows `None` when selection is
+empty. New, Duplicate, Delete, and Rename Composition use the same command path as Assets and the
+main Composition menu. F11 remains owned by the main window and is named in the fullscreen
+button's tooltip and accessible label.
+
+Viewer header menus never wrap or clip. When the available width cannot hold both menu buttons,
+they are replaced by one `…` overflow button containing the same View and Select menus. The
+composition and object selectors remain visible and elide their closed-field text within their
+own bounds.
+
+### Viewer overlays
+
+Viewer guides are display-only paint layered above the delivered composition pixels; they never
+enter a cached frame, export, or project render. All guide toggles are off by default. Safe Areas
+draw action-safe and title-safe rectangles, with Broadcast (4:3, 90%/80%), HD (16:9, 93%/90%,
+EBU R95), Cinema, Social (centre 1:1 and 4:5 crops), and Custom presets. Safe-area percentages
+are stored on the composition; the remaining guide toggles are viewer display preferences.
+Centre Cross and Thirds use the transformed composition rectangle. `viewerRulers` paints top and
+left composition-pixel rulers that follow zoom and pan, and Pixel Grid appears only at 400% or
+above. Guide lines and selected bounds use relative brightness/semantic kit colors so their
+readability survives background and zoom changes.
+
 ### Viewer content bounds
 
 For each selected layer, paint a 1 px `Accent` polygon and a solid filled 6 px diameter anchor dot.

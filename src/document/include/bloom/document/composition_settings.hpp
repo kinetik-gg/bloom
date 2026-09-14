@@ -2,11 +2,24 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <numeric>
 #include <optional>
 
 namespace bloom::document {
+
+struct SafeAreaSettings final {
+    double action = 0.90;
+    double title = 0.80;
+
+    [[nodiscard]] bool isValid() const noexcept {
+        return std::isfinite(action) && std::isfinite(title) && action > 0.0 && action <= 1.0 &&
+               title > 0.0 && title <= action;
+    }
+
+    friend bool operator==(const SafeAreaSettings&, const SafeAreaSettings&) noexcept = default;
+};
 
 class FrameRate final {
   public:

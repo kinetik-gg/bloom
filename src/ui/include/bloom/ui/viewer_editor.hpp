@@ -4,6 +4,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QCursor>
 #include <QImage>
@@ -270,6 +271,11 @@ class ViewerEditor final : public QWidget,
     void invertObjectSelection();
     void zoomInAtCenter();
     void zoomOutAtCenter();
+    void applySafeAreaPreset(ViewerSafeAreaPreset preset);
+    void showCustomSafeAreaDialog();
+    void updateOverlayActions();
+    [[nodiscard]] double effectiveZoom(const QRectF& displayRect,
+                                       const DisplayGeometry& geometry) const;
     // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
     // state (issue #105, design decision 4: "button/icon state reflects transport state via a
     // signal"), unchanged except for which panel hosts the button.
@@ -376,6 +382,14 @@ class ViewerEditor final : public QWidget,
     QAction* viewerCompositionDuplicateAction_ = nullptr;
     QAction* viewerCompositionDeleteAction_ = nullptr;
     QAction* viewerCompositionRenameAction_ = nullptr;
+    QAction* safeAreasAction_ = nullptr;
+    QAction* centreCrossAction_ = nullptr;
+    QAction* thirdsAction_ = nullptr;
+    QAction* rulersAction_ = nullptr;
+    QAction* pixelGridAction_ = nullptr;
+    QMenu* safeAreaPresetMenu_ = nullptr;
+    std::array<QAction*, 5> safeAreaPresetActions_{};
+    ViewerOverlayOptions overlayOptions_{};
 };
 
 } // namespace bloom::ui

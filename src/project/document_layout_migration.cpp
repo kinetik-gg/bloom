@@ -126,7 +126,15 @@ bool layout(const JsonValue& composition, Buffer& output) {
 // constant-value kind ("vec3") and a new parameter-source kind ("driver"), and a 1.3 file can
 // contain neither -- the step exists so the chain has no hole, not because a 1.3 document is
 // missing anything.
-enum class Step { NodeLayout, NodeGroups, AnimationBreadth, ValueGraph, LayerTimeline, Merges };
+enum class Step {
+    NodeLayout,
+    NodeGroups,
+    AnimationBreadth,
+    ValueGraph,
+    LayerTimeline,
+    Merges,
+    SafeAreas
+};
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
@@ -135,8 +143,11 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
         step == Step::Merges)
         return false;
-    if (scope == Scope::Composition)
-        return value.findMember(step == Step::NodeLayout ? "nodeLayout" : "nodeGroups") != nullptr;
+    if (scope == Scope::Composition) {
+        return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
+                                : step == Step::NodeGroups ? "nodeGroups"
+                                                           : "safeAreas") != nullptr;
+    }
     return scope == Scope::HighestIssued && value.findMember("nodeGroup") != nullptr;
 }
 
@@ -146,6 +157,12 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     append(output, "{");
     bool first = true;
     for (const auto& member : value.objectMembers()) {
+        if (scope == Scope::Composition && step == Step::SafeAreas && member.key() == "workArea") {
+            if (!first)
+                append(output, ",");
+            first = false;
+            append(output, "\"safeAreas\":{\"action\":0.9,\"title\":0.8}");
+        }
         if (!first)
             append(output, ",");
         first = false;
@@ -161,7 +178,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::AnimationBreadth ? "{\"major\":1,\"minor\":3}"
                            : step == Step::ValueGraph       ? "{\"major\":1,\"minor\":4}"
                            : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
-                                                            : "{\"major\":1,\"minor\":6}");
+                           : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
+                                                            : "{\"major\":1,\"minor\":8}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -196,6 +214,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
         } else if (step == Step::NodeGroups) {
             // A 1.1 file has no groups: the feature did not exist, so there is nothing to infer.
             append(output, ",\"nodeGroups\":[]");
+        } else if (step == Step::SafeAreas && value.findMember("workArea") == nullptr) {
+            append(output, ",\"safeAreas\":{\"action\":0.9,\"title\":0.8}");
         }
     }
     if (scope == Scope::HighestIssued && step == Step::NodeGroups)
@@ -261,6 +281,13 @@ MigrationStepOutcome migrateLayerTimelineV1_4(const JsonValue& root, std::pmr::m
 MigrationStepOutcome migrateMergesV1_5(const JsonValue& root, std::pmr::memory_resource*,
                                        Buffer& output) {
     if (!sourceVersionIs(root, "5") || !transform(root, Scope::Root, Step::Merges, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateViewerSafeAreasV1_7(const JsonValue& root, std::pmr::memory_resource*,
+                                                Buffer& output) {
+    if (!sourceVersionIs(root, "7") || !transform(root, Scope::Root, Step::SafeAreas, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

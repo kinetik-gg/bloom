@@ -37,16 +37,16 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.7`.
+The container version remains `1.0`; the current document schema is `1.8`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.7.schema.json` and `schemas/project/document-1.7.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.7` and
-`urn:kinetik:bloom:schema:project-document:1.7`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.7`. Every historical artifact from `1.0` through `1.6`, manifest and
+`schemas/project/manifest-1.8.schema.json` and `schemas/project/document-1.8.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.8` and
+`urn:kinetik:bloom:schema:project-document:1.8`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.8`. Every historical artifact from `1.0` through `1.7`, manifest and
 document, remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
 
@@ -356,7 +356,7 @@ are not project truth and are absent from `document.json`.
 | Object | Required members in writer order |
 | --- | --- |
 | project | `id`, `name`, `colorSettings`, `compositions` |
-| composition | `id`, `name`, `duration`, `format`, `parameters`, `animationCurves`, `graph` |
+| composition | `id`, `name`, `duration`, `format`, `parameters`, `animationCurves`, `graph`, `nodeLayout`, `nodeGroups`, optional `safeAreas`, optional `workArea` |
 | composition format | `width`, `height`, `pixelAspect`, `frameRate` |
 | rational/pixel aspect/frame rate | `numerator`, `denominator` |
 
@@ -1121,3 +1121,15 @@ off-centre rotated/scaled Solid and clipped Text, including an animated anchor, 
 after migration, and after saving/reopening 1.7, at full 41×47 and proxy 7×3 resolution.
 Composition-sized Solid dimensions use the exact proxy extent to avoid rounding an extra column or
 row into the legacy pivot.
+
+## Viewer Safe Areas In Document 1.8
+
+The `1.7` → `1.8` migration appends an optional `safeAreas` object to each composition, before
+`workArea` when that member is present. It contains `action`, then `title`, as finite normalized
+percentages in `(0, 1]`, with `title <= action`; migrated compositions receive the default
+`action: 0.9`, `title: 0.8` pair. The canonical writer omits that default pair and emits authored
+non-default settings in the same position, so old canonical bytes remain stable while custom
+safe-area choices are durable across save/reopen. Missing `safeAreas` in a 1.8 document has the
+same default meaning. Preset selection and custom edits are ordinary undoable composition
+commands. These values affect viewer guide painting only: they never alter render pixels, cached
+frames, exports, or evaluation.

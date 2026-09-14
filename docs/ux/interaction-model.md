@@ -57,6 +57,13 @@ playback also shows the overlay without re-rendering. Empty content or another c
 
 | Binding | Action |
 | --- | --- |
+| Composition selector | Switches the shared session to the chosen document composition and clears selection/time-local state as usual |
+| Object selector | Selects the chosen current-composition layer; `None` clears selection |
+| View → Fit / Actual Size / Zoom In / Zoom Out | Uses the viewer transform and shows the existing shortcut beside each item |
+| View → Safe Areas / Centre Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
+| View → Safe Area Preset | Applies Broadcast, HD, Cinema, Social, or validated Custom percentages in one undoable composition edit |
+| Select → All / None / Invert | Selects, clears, or inverts the current composition's layer boundaries |
+| Composition menu / selector trailing menu | New, Duplicate, Rename, and Delete Composition; Delete refuses the last composition |
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
@@ -96,6 +103,11 @@ the one entry form that needs no parsing rules of its own. Frames / Timecode wri
 `timeline/time-format` preference the Timeline's own View menu writes, so the ruler's tick labels
 and this readout cannot disagree about the format. Exact composition seconds stay visible beside
 either reading.
+
+The guide toggles use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`, `Ctrl+Shift+T`,
+`Ctrl+Shift+R`, and `Ctrl+Shift+P` for Centre Cross, Thirds, Rulers, and Pixel Grid. A pixel grid
+is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
+they are not part of the display buffer or any export.
 
 ## Assets
 

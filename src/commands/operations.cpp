@@ -200,6 +200,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
     document::Composition composition(ids->composition, name, source.duration(), std::move(graph),
                                       source.format());
     composition.setWorkArea(source.workArea());
+    composition.setSafeAreas(source.safeAreas());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);
@@ -765,6 +766,26 @@ OperationResult SetCompositionFormat::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     }
     composition->setFormat(format_);
+    return OperationResult::applied();
+}
+
+std::string_view SetCompositionSafeAreas::typeId() const noexcept {
+    return "bloom.composition.set-safe-areas";
+}
+
+OperationResult SetCompositionSafeAreas::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    if (composition == nullptr) {
+        return invalidComposition(compositionId_);
+    }
+    if (!settings_.isValid()) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Composition safe areas are invalid");
+    }
+    if (composition->safeAreas() == settings_) {
+        return OperationResult::noChange();
+    }
+    composition->setSafeAreas(settings_);
     return OperationResult::applied();
 }
 

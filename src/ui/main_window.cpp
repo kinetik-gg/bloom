@@ -272,7 +272,8 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     duplicateCompositionAction_ = compositionMenu.addAction("Duplicate Composition");
     duplicateCompositionAction_->setObjectName("compositionDuplicateAction");
     connect(duplicateCompositionAction_, &QAction::triggered, this, [this] {
-        if (const auto id = duplicateComposition(compositionSession_, compositionSession_.compositionId());
+        if (const auto id =
+                duplicateComposition(compositionSession_, compositionSession_.compositionId());
             id.has_value()) {
             (void)compositionSession_.setComposition(*id);
         }

@@ -5,6 +5,8 @@
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -28,11 +30,15 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QIntValidator>
 #include <QKeyEvent>
 #include <QKeySequence>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -87,6 +93,43 @@ constexpr auto kBackgroundSetting = "viewer/background";
 // than a shared model.
 constexpr auto kTimeFormatSetting = "timeline/time-format";
 constexpr auto kLoopSetting = "playback/loop";
+constexpr auto kSafeAreasSetting = "viewer/overlay/safe-areas";
+constexpr auto kCentreCrossSetting = "viewer/overlay/centre-cross";
+constexpr auto kThirdsSetting = "viewer/overlay/thirds";
+constexpr auto kRulersSetting = "viewer/overlay/rulers";
+constexpr auto kPixelGridSetting = "viewer/overlay/pixel-grid";
+
+QString safeAreaPresetName(const ViewerSafeAreaPreset preset) {
+    switch (preset) {
+    case ViewerSafeAreaPreset::Broadcast:
+        return QStringLiteral("Broadcast");
+    case ViewerSafeAreaPreset::Hd:
+        return QStringLiteral("HD");
+    case ViewerSafeAreaPreset::Cinema:
+        return QStringLiteral("Cinema");
+    case ViewerSafeAreaPreset::Social:
+        return QStringLiteral("Social");
+    case ViewerSafeAreaPreset::Custom:
+        return QStringLiteral("Custom");
+    }
+    return QStringLiteral("Broadcast");
+}
+
+ViewerSafeAreaPreset safeAreaPresetFromName(const QString& name) {
+    if (name == QStringLiteral("HD"))
+        return ViewerSafeAreaPreset::Hd;
+    if (name == QStringLiteral("Cinema"))
+        return ViewerSafeAreaPreset::Cinema;
+    if (name == QStringLiteral("Social"))
+        return ViewerSafeAreaPreset::Social;
+    if (name == QStringLiteral("Custom"))
+        return ViewerSafeAreaPreset::Custom;
+    return ViewerSafeAreaPreset::Broadcast;
+}
+
+QString safeAreaPresetSetting(const document::CompositionId id) {
+    return QStringLiteral("viewer/overlay/safe-area-preset/%1").arg(id.value());
+}
 
 // Lays `controls` out left to right inside `bar`, each at its own size hint, vertically centred.
 // A manual layout rather than a QHBoxLayout because the bar paints its own surface and hairline and
@@ -337,6 +380,7 @@ class ViewerHeaderMenuBar final : public QWidget {
     }
 
     void addWidget(QWidget* widget) { layout_->addWidget(widget); }
+    void addStretch() { layout_->addStretch(1); }
 
     QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& objectName) {
         auto* button = new QToolButton(this);
@@ -371,6 +415,8 @@ class ViewerHeaderMenuBar final : public QWidget {
         overflowButton_->hide();
         updateCollapse();
     }
+
+    void refreshCollapse() { updateCollapse(); }
 
   protected:
     void resizeEvent(QResizeEvent* event) override {
@@ -740,20 +786,19 @@ void ViewerEditor::buildHeader() {
     viewerCompositionDuplicateAction_->setObjectName(
         QStringLiteral("viewerDuplicateCompositionAction"));
     connect(viewerCompositionDuplicateAction_, &QAction::triggered, this, [this] {
-        if (const auto id = duplicateComposition(session_, session_.compositionId()); id.has_value()) {
+        if (const auto id = duplicateComposition(session_, session_.compositionId());
+            id.has_value()) {
             (void)session_.setComposition(*id);
         }
     });
     viewerCompositionRenameAction_ = compositionMenu->addAction(tr("Rename Composition…"));
     viewerCompositionRenameAction_->setObjectName(QStringLiteral("viewerRenameCompositionAction"));
-    connect(viewerCompositionRenameAction_, &QAction::triggered, this, [this] {
-        (void)renameComposition(session_, session_.compositionId(), this);
-    });
+    connect(viewerCompositionRenameAction_, &QAction::triggered, this,
+            [this] { (void)renameComposition(session_, session_.compositionId(), this); });
     viewerCompositionDeleteAction_ = compositionMenu->addAction(tr("Delete Composition"));
     viewerCompositionDeleteAction_->setObjectName(QStringLiteral("viewerDeleteCompositionAction"));
-    connect(viewerCompositionDeleteAction_, &QAction::triggered, this, [this] {
-        (void)deleteComposition(session_, session_.compositionId());
-    });
+    connect(viewerCompositionDeleteAction_, &QAction::triggered, this,
+            [this] { (void)deleteComposition(session_, session_.compositionId()); });
 
     objectSelector_ = new kit::KDropdown(bar);
     objectSelector_->setObjectName(QStringLiteral("viewerObjectSelector"));
@@ -813,16 +858,17 @@ void ViewerEditor::buildHeader() {
         channelGroup->addAction(action);
     }
     channelGroup->actions().front()->setChecked(true);
-    connect(channelGroup, &QActionGroup::triggered, this,
-            [this](QAction* action) { setChannel(static_cast<ViewerChannel>(action->data().toInt())); });
+    connect(channelGroup, &QActionGroup::triggered, this, [this](QAction* action) {
+        setChannel(static_cast<ViewerChannel>(action->data().toInt()));
+    });
 
     auto* backgroundMenu = viewerViewMenu_->addMenu(tr("Background"));
     backgroundMenu->setObjectName(QStringLiteral("viewerBackgroundMenu"));
     auto* backgroundGroup = new QActionGroup(backgroundMenu);
     backgroundGroup->setExclusive(true);
     for (int index = 0; index < static_cast<int>(kBackgroundNames.size()); ++index) {
-        auto* action = backgroundMenu->addAction(
-            tr(kBackgroundNames[static_cast<std::size_t>(index)]));
+        auto* action =
+            backgroundMenu->addAction(tr(kBackgroundNames[static_cast<std::size_t>(index)]));
         action->setObjectName(QStringLiteral("viewerBackground%1Action").arg(index));
         action->setCheckable(true);
         action->setData(index);
@@ -832,6 +878,70 @@ void ViewerEditor::buildHeader() {
     connect(backgroundGroup, &QActionGroup::triggered, this, [this](QAction* action) {
         setBackground(static_cast<ViewerBackground>(action->data().toInt()));
     });
+
+    viewerViewMenu_->addSeparator();
+    safeAreasAction_ = viewerViewMenu_->addAction(tr("Safe Areas"));
+    safeAreasAction_->setObjectName(QStringLiteral("viewerSafeAreasAction"));
+    safeAreasAction_->setCheckable(true);
+    safeAreasAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_S));
+    safeAreasAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    overlayOptions_.safeAreas = QSettings().value(kSafeAreasSetting, false).toBool();
+    safeAreasAction_->setChecked(overlayOptions_.safeAreas);
+    addAction(safeAreasAction_);
+    connect(safeAreasAction_, &QAction::toggled, this, [this](const bool enabled) {
+        overlayOptions_.safeAreas = enabled;
+        QSettings().setValue(kSafeAreasSetting, enabled);
+        update();
+    });
+
+    safeAreaPresetMenu_ = viewerViewMenu_->addMenu(tr("Safe Area Preset"));
+    safeAreaPresetMenu_->setObjectName(QStringLiteral("viewerSafeAreaPresetMenu"));
+    const std::array<std::pair<QString, ViewerSafeAreaPreset>, 5> presets{{
+        {tr("Broadcast (4:3)"), ViewerSafeAreaPreset::Broadcast},
+        {tr("HD (16:9)"), ViewerSafeAreaPreset::Hd},
+        {tr("Cinema"), ViewerSafeAreaPreset::Cinema},
+        {tr("Social"), ViewerSafeAreaPreset::Social},
+        {tr("Custom…"), ViewerSafeAreaPreset::Custom},
+    }};
+    for (std::size_t index = 0; index < presets.size(); ++index) {
+        auto* action = safeAreaPresetMenu_->addAction(presets[index].first);
+        action->setObjectName(QStringLiteral("viewerSafeArea%1Action").arg(index));
+        action->setCheckable(true);
+        safeAreaPresetActions_[index] = action;
+        connect(action, &QAction::triggered, this,
+                [this, preset = presets[index].second] { applySafeAreaPreset(preset); });
+    }
+
+    const auto addOverlayToggle = [this](const QString& label, const QString& objectName,
+                                         const QString& setting, const QKeySequence& shortcut,
+                                         bool* state) {
+        auto* action = viewerViewMenu_->addAction(label);
+        action->setObjectName(objectName);
+        action->setCheckable(true);
+        action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        *state = QSettings().value(setting, false).toBool();
+        action->setChecked(*state);
+        addAction(action);
+        connect(action, &QAction::toggled, this, [state, setting](const bool enabled) {
+            *state = enabled;
+            QSettings().setValue(setting, enabled);
+        });
+        connect(action, &QAction::toggled, this, [this] { update(); });
+        return action;
+    };
+    centreCrossAction_ = addOverlayToggle(
+        tr("Centre Cross"), QStringLiteral("viewerCentreCrossAction"), kCentreCrossSetting,
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), &overlayOptions_.centreCross);
+    thirdsAction_ =
+        addOverlayToggle(tr("Thirds"), QStringLiteral("viewerThirdsAction"), kThirdsSetting,
+                         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T), &overlayOptions_.thirds);
+    rulersAction_ =
+        addOverlayToggle(tr("Rulers"), QStringLiteral("viewerRulers"), kRulersSetting,
+                         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), &overlayOptions_.rulers);
+    pixelGridAction_ = addOverlayToggle(
+        tr("Pixel Grid"), QStringLiteral("viewerPixelGridAction"), kPixelGridSetting,
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P), &overlayOptions_.pixelGrid);
 
     viewerSelectMenu_ = new QMenu(tr("Select"), bar);
     viewerSelectMenu_->setObjectName(QStringLiteral("viewerSelectMenu"));
@@ -855,12 +965,9 @@ void ViewerEditor::buildHeader() {
     connect(invert, &QAction::triggered, this, &ViewerEditor::invertObjectSelection);
 
     bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
-    bar->addMenuButton(tr("Select"), viewerSelectMenu_,
-                       QStringLiteral("viewerSelectMenuButton"));
+    bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
     bar->finish();
-    bar->addWidget(new QWidget(bar));
-    bar->layout()->itemAt(bar->layout()->count() - 1)->widget()->setSizePolicy(
-        QSizePolicy::Expanding, QSizePolicy::Preferred);
+    bar->addStretch();
 
     fullscreenButton_ = new QToolButton(bar);
     fullscreenButton_->setObjectName(QStringLiteral("viewerFullscreenButton"));
@@ -872,7 +979,8 @@ void ViewerEditor::buildHeader() {
     fullscreenButton_->setAutoRaise(true);
     fullscreenButton_->setCheckable(true);
     fullscreenButton_->setChecked(window() != nullptr && window()->isFullScreen());
-    fullscreenButton_->setFixedSize(QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
+    fullscreenButton_->setFixedSize(
+        QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
     connect(fullscreenButton_, &QToolButton::clicked, this, [this] {
         if (window() == nullptr) {
             return;
@@ -883,6 +991,7 @@ void ViewerEditor::buildHeader() {
         }
     });
     bar->addWidget(fullscreenButton_);
+    bar->refreshCollapse();
 
     rebuildCompositionSelector();
     rebuildObjectSelector();
@@ -949,6 +1058,143 @@ void ViewerEditor::updateCompositionActions() {
     viewerCompositionDuplicateAction_->setEnabled(hasComposition);
     viewerCompositionRenameAction_->setEnabled(hasComposition);
     viewerCompositionDeleteAction_->setEnabled(hasComposition && hasSeveral);
+}
+
+void ViewerEditor::updateOverlayActions() {
+    const auto* composition = session_.composition();
+    if (composition != nullptr) {
+        overlayOptions_.safeAreaSettings = composition->safeAreas();
+        const QString saved =
+            QSettings().value(safeAreaPresetSetting(composition->id())).toString();
+        if (!saved.isEmpty()) {
+            overlayOptions_.safeAreaPreset = safeAreaPresetFromName(saved);
+        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.93) < 0.0001 &&
+                   std::abs(overlayOptions_.safeAreaSettings.title - 0.90) < 0.0001) {
+            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Hd;
+        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.90) < 0.0001 &&
+                   std::abs(overlayOptions_.safeAreaSettings.title - 0.85) < 0.0001) {
+            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Cinema;
+        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.90) < 0.0001 &&
+                   std::abs(overlayOptions_.safeAreaSettings.title - 0.80) < 0.0001) {
+            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
+        } else {
+            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
+        }
+    } else {
+        overlayOptions_.safeAreaSettings = {};
+        overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
+    }
+    if (safeAreasAction_ != nullptr) {
+        const QSignalBlocker blocker(safeAreasAction_);
+        safeAreasAction_->setChecked(overlayOptions_.safeAreas);
+        safeAreasAction_->setEnabled(composition != nullptr);
+    }
+    if (safeAreaPresetMenu_ != nullptr) {
+        safeAreaPresetMenu_->setEnabled(composition != nullptr);
+        for (std::size_t index = 0; index < safeAreaPresetActions_.size(); ++index) {
+            const QSignalBlocker blocker(safeAreaPresetActions_[index]);
+            safeAreaPresetActions_[index]->setChecked(
+                static_cast<int>(overlayOptions_.safeAreaPreset) == static_cast<int>(index));
+        }
+    }
+}
+
+void ViewerEditor::applySafeAreaPreset(const ViewerSafeAreaPreset preset) {
+    if (preset == ViewerSafeAreaPreset::Custom) {
+        showCustomSafeAreaDialog();
+        return;
+    }
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return;
+    }
+    document::SafeAreaSettings settings{};
+    switch (preset) {
+    case ViewerSafeAreaPreset::Broadcast:
+        settings = {.action = 0.90, .title = 0.80};
+        break;
+    case ViewerSafeAreaPreset::Hd:
+        settings = {.action = 0.93, .title = 0.90};
+        break;
+    case ViewerSafeAreaPreset::Cinema:
+        settings = {.action = 0.90, .title = 0.85};
+        break;
+    case ViewerSafeAreaPreset::Social:
+        settings = {.action = 0.90, .title = 0.80};
+        break;
+    case ViewerSafeAreaPreset::Custom:
+        return;
+    }
+    commands::Transaction transaction(QStringLiteral("Set Safe Area Preset").toStdString(),
+                                      session_.snapshot().revision());
+    transaction.emplace<commands::SetCompositionSafeAreas>(composition->id(), settings);
+    if (session_.executeTransaction(std::move(transaction)).succeeded()) {
+        overlayOptions_.safeAreaPreset = preset;
+        QSettings().setValue(safeAreaPresetSetting(composition->id()), safeAreaPresetName(preset));
+        updateOverlayActions();
+        update();
+    }
+}
+
+void ViewerEditor::showCustomSafeAreaDialog() {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("viewerSafeAreaDialog"));
+    dialog.setWindowTitle(tr("Custom Safe Areas"));
+    auto* form = new QFormLayout(&dialog);
+    auto* action = new QDoubleSpinBox(&dialog);
+    action->setObjectName(QStringLiteral("viewerActionSafeAreaField"));
+    action->setRange(1.0, 100.0);
+    action->setDecimals(1);
+    action->setSuffix(QStringLiteral("%"));
+    action->setValue(composition->safeAreas().action * 100.0);
+    form->addRow(tr("Action"), action);
+    auto* title = new QDoubleSpinBox(&dialog);
+    title->setObjectName(QStringLiteral("viewerTitleSafeAreaField"));
+    title->setRange(1.0, 100.0);
+    title->setDecimals(1);
+    title->setSuffix(QStringLiteral("%"));
+    title->setValue(composition->safeAreas().title * 100.0);
+    form->addRow(tr("Title"), title);
+    auto* error = new QLabel(&dialog);
+    error->setObjectName(QStringLiteral("viewerSafeAreaErrorLabel"));
+    error->hide();
+    form->addRow(error);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->setObjectName(QStringLiteral("viewerSafeAreaDialogButtons"));
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, action, title, error] {
+        if (title->value() > action->value()) {
+            error->setText(QObject::tr("Title safe area must not exceed Action safe area."));
+            error->show();
+            return;
+        }
+        dialog.accept();
+    });
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const document::SafeAreaSettings settings{action->value() / 100.0, title->value() / 100.0};
+    commands::Transaction transaction(QStringLiteral("Set Custom Safe Areas").toStdString(),
+                                      session_.snapshot().revision());
+    transaction.emplace<commands::SetCompositionSafeAreas>(composition->id(), settings);
+    if (session_.executeTransaction(std::move(transaction)).succeeded()) {
+        overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
+        QSettings().setValue(safeAreaPresetSetting(composition->id()),
+                             safeAreaPresetName(ViewerSafeAreaPreset::Custom));
+        updateOverlayActions();
+        update();
+    }
+}
+
+double ViewerEditor::effectiveZoom(const QRectF& displayRect,
+                                   const DisplayGeometry& geometry) const {
+    const QRectF actual = actualPixelRect(canvasRect(), geometry.extent, geometry.pixelAspect);
+    return actual.width() > 0.0 ? displayRect.width() / actual.width() : 1.0;
 }
 
 void ViewerEditor::selectAllObjects() {
@@ -1199,6 +1445,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         rebuildCompositionSelector();
         rebuildObjectSelector();
         updateCompositionActions();
+        updateOverlayActions();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -1209,6 +1456,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         rebuildCompositionSelector();
         rebuildObjectSelector();
         updateCompositionActions();
+        updateOverlayActions();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -1269,6 +1517,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     updatePreviewResolution();
     updatePreviewAccessibility();
+    updateOverlayActions();
 }
 
 ViewerEditor::~ViewerEditor() { QObject::disconnect(focusConnection_); }
@@ -1495,7 +1744,8 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
     // away from should not keep a whole frame resident.
     channelView_ = QImage();
     channelViewFrame_.reset();
-    if (channelDropdown_ != nullptr && channelDropdown_->currentIndex() != static_cast<int>(channel)) {
+    if (channelDropdown_ != nullptr &&
+        channelDropdown_->currentIndex() != static_cast<int>(channel)) {
         const QSignalBlocker blocker(channelDropdown_);
         channelDropdown_->setCurrentIndex(static_cast<int>(channel));
     }
@@ -1764,26 +2014,13 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                     painter.setPen(QPen(kit::color(kit::Color::BorderHover), 1.0));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawRect(displayRect.adjusted(0.0, 0.0, -1.0, -1.0));
-                    if (displayedFrame->processIdentity().plan) {
-                        const auto& format = displayedFrame->processIdentity().plan->format();
-                        const auto toScreen = [&](const document::Vec2d point) {
-                            return QPointF(
-                                displayRect.left() + point.x * displayRect.width() /
-                                                         static_cast<double>(format.width()),
-                                displayRect.top() + point.y * displayRect.height() /
-                                                        static_cast<double>(format.height()));
-                        };
-                        for (const auto& bounds : previewController_.selectedLayerBounds()) {
-                            painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
-                            QPolygonF polygon;
-                            for (const auto point : bounds.polygon)
-                                polygon << toScreen(point);
-                            painter.setBrush(Qt::NoBrush);
-                            painter.drawPolygon(polygon);
-                            painter.setBrush(kit::color(kit::Color::Accent));
-                            painter.setPen(Qt::NoPen);
-                            painter.drawEllipse(toScreen(bounds.anchor), 3.0, 3.0);
-                        }
+                    if (geometry.has_value()) {
+                        const auto bounds = previewController_.selectedLayerBounds();
+                        paintViewerOverlays(painter, frame, displayRect,
+                                            QSize(static_cast<int>(geometry->extent.width()),
+                                                  static_cast<int>(geometry->extent.height())),
+                                            effectiveZoom(displayRect, *geometry), overlayOptions_,
+                                            bounds);
                     }
                 }
             }
