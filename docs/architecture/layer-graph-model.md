@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-13
+Updated: 2026-09-14
 
 ## Purpose
 
@@ -33,12 +33,12 @@ same graph. Neither workflow is treated as a simplified import/export view of th
 
 ## Working Graph Shape
 
-The working representation combines an explicit per-layer graph boundary with one ordered stack:
+A composition has one Output and any number of ordinary image Merge nodes:
 
 ```text
-Source -> Effects / Mask / Transform -> Layer Output --+
-Source -> Effects / Mask / Transform -> Layer Output --+-> Layer Stack -> Composition Output
-Shared or custom graph ----------------> Layer Output --+
+Source -> Layer --+-> Merge A --+-> Merge B -> Output
+Source ----------+            |
+Source -> Layer --------------+
 ```
 
 ### Layer Output
@@ -58,34 +58,42 @@ a clear topology preview or warning. An explicit future `Create Layer from Selec
 insert a boundary around an existing output, but it must reference the existing graph rather than
 copy or translate it.
 
-### Layer Stack
+### Merge
 
-A `Layer Stack` is a native graph operator with one ordered collection of stable entries. Each layer
-entry has a stable slot ID. Graph connections target `(stack node ID, slot ID, input role)`, never an
-array index such as `input 3`.
+Merge (`bloom.layer-stack`, the preserved durable type ID) has `Many` cardinality. Each Merge
+owns an ordered collection of stable slots addressed by `(merge node ID, slot ID, content)`.
+Every slot has exactly one image edge. Layer Output, Solid, Text, another Merge, and image reroutes
+are valid sources. A slot records its direct Layer identity when its source is a Layer Output;
+plain image slots have no Layer identity. A Layer may participate once in each Merge, and membership
+is optional. An unconnected Layer contributes no pixels to Output.
 
-Entry ZERO is the TOPMOST layer: the stack folds from its last entry to its first, so the entry list
-reads in the order the Timeline lists its rows and the Merge pill draws its segments. A newly added
-layer therefore lands at the FRONT of the list, on top of everything already there -- `AddSolidLayer`
-and `AddTextLayer` insert it there rather than appending. Appending put every new layer underneath
-every existing one, which is why an artist who added a layer and changed its blend mode saw nothing
-change: the layer they had just made had only the composition's transparent backdrop beneath it, and
-over transparency every separable mode folds to Normal.
+Entry zero is topmost, matching the pill and timeline. Evaluation folds the list bottom to top,
+preserving existing single-Merge documents exactly. Each Layer input supplies its own transform,
+opacity, blend mode, half-open range, enabled and solo state. Plain image inputs composite with
+Normal blending at full opacity. Merge inputs are topologically evaluated before their consumers.
+Nested grouping preserves the flattened result for Normal-over composition; arbitrary non-Normal
+blends are not associative and grouping may intentionally change their backdrop.
 
-Reordering a layer changes only the ordered entry structure. Source, matte, parent, parameter, and
-selection references use stable IDs and must not change merely because the row moved.
+Solo is composition-wide across all Layer boundaries: any solo Layer suppresses non-solo Layers in
+every Merge, including nested Merges. Plain image inputs have no solo flag and remain active.
+A disabled Merge produces transparency and does not traverse its inputs. Its enabled flag differs
+from node mute, whose existing first-image-input bypass semantics remain available.
 
-The stack evaluator preserves declared compositing order because blend operations are generally not
-associative. Independent upstream sources may evaluate concurrently before the ordered blend fold.
+The timeline follows the Merge directly connected to Output. Its direct Layers are editable rows;
+a direct nested Merge is one collapsed `DataComposition` row named by the Merge's display name,
+with only enabled editable among the layer toggles. Plain source inputs are collapsed image rows.
+Nested contents are never flattened into the outer timeline. Output with no direct Merge has no
+timeline rows. Properties lists the selected Merge's own inputs in topmost-first order; Layer blend
+and opacity are editable, while plain-image Normal/100% values are read-only.
 
-There is no parallel `Composition::layers` collection that mirrors the stack and no persistent
-generated chain of Merge nodes that must be synchronized with it.
+Only Output and the Merge directly feeding it are protected from removal. Other Merges can be
+added, duplicated, disconnected or deleted through ordinary commands. There is no secondary layer
+list or generated Merge chain to synchronize. Composition-as-source is deferred.
 
-The precise ownership of time mapping and enable parameters between the Layer Output boundary and its
-stable stack entry remains an implementation detail for the document spike. Each property must still
-have exactly one owning `ParameterId` and one evaluation meaning. The BLEND parameter's ownership is
-settled: it belongs to the Layer Output boundary (see "Blending" below), because a blend mode is a
-property of the layer, while a stack entry is the ordering of layers.
+Plan semantics is 3: `CompiledMergeInput` admits an absent Layer identity and a plain image
+operation, changing the previous Layer-only operand grammar. Evaluator and primitive versions
+remain 5 because existing pixel behavior is unchanged. Output identity goldens are independently
+re-derived for plan 3, animation 2, evaluator 5 and primitives 5.
 
 ### Layer Transform
 
@@ -464,13 +472,11 @@ preserving every graph and stack identity. An identical name is a no-op.
 sockets of connectable kind. It replaces the existing edge at that input, retaining its EdgeId, or
 allocates one new edge. A link into an OPERAND socket is written as the parameter's driver binding
 rather than as an edge. The entire proposed graph is validated before publication; same-time cycles
-are refused with `GraphCycle`. A slot's content must still come from its matching Layer Output
-boundary.
+are refused with `GraphCycle`. A slot accepts any image output and records a Layer identity only for a direct Layer boundary.
 
 A `LayerStackInputRef` destination whose `slotId` is the INVALID sentinel means "a new slot here":
 `ConnectPorts` allocates the slot, appends it, moves it before `insertBefore` when one is given, and
-connects the Layer Output's image output to it -- one transaction, one undo. The source must be a Layer
-Output boundary that does not already hold a slot. **Connecting a Layer to Merge is what creates its
+connects the image output to it -- one transaction, one undo. A Layer may have one slot per Merge. **Connecting a Layer to Merge is what creates its
 stack slot**, which is why the editor needs no separate command for it and why the Merge card carries
 its ordered multi-input even when the stack is empty.
 
@@ -547,11 +553,12 @@ accepts that reference, so every slot edge is still projected as its own wire. N
 ordering record changes shape.
 
 While a link drag is in flight over the pill, a caret marks which position in the order the pointer is
-at -- and the pill now ACCEPTS the drop, because a drop there is what creates the slot. A Layer
+at -- and the pill now ACCEPTS the drop, because a drop there is what creates the slot. An image
 output released on the pill lands a new slot at the caret's position (upper half of a slot means above
 it, lower half below it, past the last one appends). A press ON the pill picks up the link of the slot
 under the pointer, so a slot's content can be detached, transferred, or re-dropped at another position
-in the order; a press where there is no slot starts from the "new slot" sentinel instead.
+in the order. Reordering within one pill issues `ReorderMergeInput(mergeId, slotId, newIndex)`
+and preserves the slot and edge IDs; a body drop appends. A press where there is no slot starts from the "new slot" sentinel instead.
 
 ### Node Categories
 
@@ -750,9 +757,8 @@ that READS another composition's output -- not to an output port on this one.
 ### Node Cardinality
 
 `NodeDefinition::cardinality` declares how many instances of a node type one composition may hold.
-`Many` is the default. `OnePerComposition` marks a structural singleton, and exactly two built-in
-types carry it: the `Layer Stack` operator and the `Composition Output` endpoint. A second one is not
-a graph a composition can mean.
+`Many` is the default, including Merge. Only the `Composition Output` endpoint is
+`OnePerComposition`.
 
 `AddNode` enforces it and refuses with the type it refused, so every Add surface -- keyboard, menu,
 search -- inherits one rule instead of keeping its own copy. The Add search reads the refusal back
