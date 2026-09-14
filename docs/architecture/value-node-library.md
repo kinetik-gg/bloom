@@ -122,6 +122,46 @@ carries no socket.
 | Vector 2 To Vector 3 | `vector` Vector2, `z` Scalar (0) | `result` Vector3 | Supplies Z |
 | Vector 3 To Vector 2 | `vector` Vector3 | `result` Vector2 | DROPS Z. Not a projection: a perspective divide is a different operation with a camera behind it |
 
+## Time Conversions
+
+Category `Utilities`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
+`frame` output is computed from, so the two can never disagree about which frame an instant falls
+in.
+
+| Node | Inputs | Outputs | Notes |
+| --- | --- | --- | --- |
+| Seconds To Frames | `seconds` Scalar | `result` Integer | `floor(seconds * rate)`. Floored, not rounded: the frame an instant falls INSIDE is the frame being rendered. NaN answers 0; an unreachable magnitude saturates |
+| Frames To Seconds | `frames` Integer | `result` Scalar | `frames / rate`, exact at a frame-aligned time |
+| Seconds To Timecode | `seconds` Scalar | `result` String | Non-drop `HH:MM:SS:FF` |
+| Timecode To Seconds | `text` String, `fallback` Scalar | `value` Scalar, `valid` Boolean | Safe parse; accepts `HH:MM:SS:FF`, `MM:SS:FF` and `SS:FF` |
+
+### Drop-frame timecode is NOT supported
+
+Bloom's timecode is NON-DROP, and that is documented rather than approximated. A drop-frame count is
+a different mapping from frame numbers to wall clock -- it skips two labels a minute to keep a 29.97
+count near real time -- and a node that printed `HH:MM:SS:FF` while meaning drop-frame would name a
+different frame than the one it showed.
+
+The frame field therefore counts to the rate's NOMINAL whole-number frame count: 24 at 24, 25 at 25,
+30 at 30000/1001. At a fractional rate the label drifts from wall clock, which is exactly what
+non-drop timecode does -- one wall-clock second at 29.97 is `00:00:00:29`, not `00:00:01:00`.
+
+`;` in place of the last separator is the conventional spelling OF drop-frame, so `00:00:02;12` is
+refused rather than read as non-drop.
+
+### Timecode reading rules
+
+- Fields are read from the RIGHT, so the last is always frames. `02:12` is `SS:FF`, `01:30:00` is
+  `MM:SS:FF`.
+- Each field is one or more ASCII digits and nothing else: no sign inside a field, no spaces around
+  the separators.
+- An optional `+` or `-` may lead the WHOLE label. A negative time prints one leading `-` rather
+  than a sign on one field.
+- A field past its own modulus names no instant and is refused: minutes and seconds at 60 or more,
+  a frame field at or past the nominal count.
+- Hours are NOT wrapped at 24 and not truncated to two digits. A composition may legitimately be
+  longer than a day, and a label that silently rolled over would name the wrong instant.
+
 ### Why these are nodes rather than implicit coercions
 
 The connect-time promotion whitelist (`layer-graph-model.md`, **Socket Kinds And Promotion**) admits

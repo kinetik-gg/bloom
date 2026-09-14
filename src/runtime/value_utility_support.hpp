@@ -181,5 +181,6 @@ selectorAt(const ValueUtilityInvocation& invocation, const std::size_t index,
 // The family entry points. One per deliverable's worth of kernels, so no single translation unit
 // carries the whole library.
 [[nodiscard]] ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

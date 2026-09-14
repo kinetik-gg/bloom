@@ -139,7 +139,22 @@ constexpr std::array<ValueUtilityOperand, 3> kVector3ToStringOperands{
 
 // The table. Ordered as the conversions read: to text, out of text, between the numeric kinds, then
 // between the structured kinds.
-constexpr std::array<ValueUtilityDescriptor, 20> kDescriptors{
+// ---------------------------------------------------------------------------------------------
+// Deliverable 2: time conversions
+// ---------------------------------------------------------------------------------------------
+
+constexpr std::array<ValueUtilityOperand, 1> kSecondsOperand{ValueUtilityOperand{
+    .role = bloom::document::kSecondsPortName, .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityOperand, 1> kFramesOperand{ValueUtilityOperand{
+    .role = bloom::document::kFramesPortName, .kind = SocketValueKind::Integer}};
+
+constexpr std::array<ValueUtilityOperand, 2> kTimecodeToSecondsOperands{
+    ValueUtilityOperand{.role = bloom::document::kTextPortName, .kind = SocketValueKind::String},
+    ValueUtilityOperand{.role = bloom::document::kFallbackPortName,
+                        .kind = SocketValueKind::Scalar}};
+
+constexpr std::array<ValueUtilityDescriptor, 24> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -203,6 +218,19 @@ constexpr std::array<ValueUtilityDescriptor, 20> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kVector3ToVector2NodeType, "Vector 3 To Vector 2",
                            ValueUtilityKernel::Vector3ToVector2, NodeCategory::Utilities,
                            kVector3Operand, kNoSelectors, kVector2Result},
+
+    ValueUtilityDescriptor{bloom::document::kSecondsToFramesNodeType, "Seconds To Frames",
+                           ValueUtilityKernel::SecondsToFrames, NodeCategory::Utilities,
+                           kSecondsOperand, kNoSelectors, kIntegerResult},
+    ValueUtilityDescriptor{bloom::document::kFramesToSecondsNodeType, "Frames To Seconds",
+                           ValueUtilityKernel::FramesToSeconds, NodeCategory::Utilities,
+                           kFramesOperand, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kSecondsToTimecodeNodeType, "Seconds To Timecode",
+                           ValueUtilityKernel::SecondsToTimecode, NodeCategory::Utilities,
+                           kSecondsOperand, kNoSelectors, kStringResult},
+    ValueUtilityDescriptor{bloom::document::kTimecodeToSecondsNodeType, "Timecode To Seconds",
+                           ValueUtilityKernel::TimecodeToSeconds, NodeCategory::Utilities,
+                           kTimecodeToSecondsOperands, kNoSelectors, kParsedScalar},
 };
 
 } // namespace

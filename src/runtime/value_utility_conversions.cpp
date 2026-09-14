@@ -226,6 +226,10 @@ ValueUtilityOutcome evaluateValueConversion(const ValueUtilityInvocation& invoca
         outcome.outputs[0] = document::Vec2d{vector.x, vector.y};
         break;
     }
+    default:
+        // evaluateValueUtility()'s own switch is exhaustive over every kernel and routes each to
+        // exactly one family, so nothing outside this one reaches here.
+        break;
     }
     noteMalformedOperand(outcome, reader);
     return outcome;

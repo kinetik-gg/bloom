@@ -58,6 +58,11 @@ enum class ValueUtilityKernel : std::uint8_t {
     Vector3ToVector2,
     Vector2ToString,
     Vector3ToString,
+    // Time conversions (deliverable 2).
+    SecondsToFrames,
+    FramesToSeconds,
+    SecondsToTimecode,
+    TimecodeToSeconds,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -84,6 +89,11 @@ inline constexpr std::string_view kVector2ToVector3NodeType = "bloom.vector2-to-
 inline constexpr std::string_view kVector3ToVector2NodeType = "bloom.vector3-to-vector2";
 inline constexpr std::string_view kVector2ToStringNodeType = "bloom.vector2-to-string";
 inline constexpr std::string_view kVector3ToStringNodeType = "bloom.vector3-to-string";
+
+inline constexpr std::string_view kSecondsToFramesNodeType = "bloom.seconds-to-frames";
+inline constexpr std::string_view kFramesToSecondsNodeType = "bloom.frames-to-seconds";
+inline constexpr std::string_view kSecondsToTimecodeNodeType = "bloom.seconds-to-timecode";
+inline constexpr std::string_view kTimecodeToSecondsNodeType = "bloom.timecode-to-seconds";
 
 // ---------------------------------------------------------------------------------------------
 // The selector vocabularies
@@ -208,5 +218,15 @@ inline constexpr std::string_view kFallbackPortName = "fallback";
 inline constexpr std::string_view kValidPortName = "valid";
 inline constexpr std::string_view kModeParameterRole = "mode";
 inline constexpr std::string_view kRadixParameterRole = "radix";
+inline constexpr std::string_view kSecondsPortName = "seconds";
+inline constexpr std::string_view kFramesPortName = "frames";
+
+// DROP-FRAME TIMECODE IS NOT SUPPORTED, and is documented as unsupported rather than approximated.
+// A drop-frame count is a different mapping from frame numbers to wall clock -- it skips two labels
+// a minute to keep a 29.97 count near real time -- and a node that printed `HH:MM:SS:FF` while
+// meaning drop-frame would name a different frame than the one it showed. Bloom's timecode is
+// NON-DROP: the frame field counts at the rate's NOMINAL integer frame count, and the label drifts
+// from wall clock at a fractional rate exactly as non-drop timecode is supposed to.
+inline constexpr char kTimecodeFieldSeparator = ':';
 
 } // namespace bloom::document

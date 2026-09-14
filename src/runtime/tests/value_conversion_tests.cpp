@@ -40,16 +40,21 @@ class Expectations final {
 
 // One kernel call from plain values, which is all a library node's evaluation is: the plan's
 // bookkeeping is the Evaluator's, and every operation here is a pure function of its operands.
-[[nodiscard]] ValueUtilityOutcome run(const Kernel kernel, const std::vector<CompiledValue>& values,
-                                      const std::vector<std::int64_t>& selectors = {}) {
+[[nodiscard]] ValueUtilityOutcome runAt(const document::FrameRate rate, const Kernel kernel,
+                                        const std::vector<CompiledValue>& values,
+                                        const std::vector<std::int64_t>& selectors = {}) {
     std::vector<const CompiledValue*> operands;
     operands.reserve(values.size());
     for (const auto& value : values) {
         operands.push_back(&value);
     }
-    return runtime::evaluateValueUtility({kernel, operands, selectors,
-                                          core::RationalTime::fromInteger(0),
-                                          document::FrameRate::framesPerSecond24()});
+    return runtime::evaluateValueUtility(
+        {kernel, operands, selectors, core::RationalTime::fromInteger(0), rate});
+}
+
+[[nodiscard]] ValueUtilityOutcome run(const Kernel kernel, const std::vector<CompiledValue>& values,
+                                      const std::vector<std::int64_t>& selectors = {}) {
+    return runAt(document::FrameRate::framesPerSecond24(), kernel, values, selectors);
 }
 
 template <typename Value>
@@ -359,6 +364,107 @@ void testMalformedOperands(Expectations& expectations) {
                         "an operand the plan never supplied is reported, not read");
 }
 
+// The composition frame rate is the ONE rate these read: a Seconds To Frames node and a Time node
+// must never disagree about which frame an instant falls in.
+void testTimeConversions(Expectations& expectations) {
+    const auto rate = document::FrameRate::framesPerSecond24();
+    struct FrameCase final {
+        double seconds;
+        std::int64_t frames;
+    };
+    static const FrameCase kFrames[]{
+        {0.0, 0},
+        {1.0, 24},
+        {2.5, 60},
+        {-1.0, -24},
+        // Floored, not rounded: the frame an instant falls INSIDE is the frame being rendered.
+        {0.999, 23},
+        {-0.5, -12},
+        // The edges: NaN names no frame, and an unreachable magnitude saturates.
+        {std::numeric_limits<double>::quiet_NaN(), 0},
+        {std::numeric_limits<double>::infinity(), std::numeric_limits<std::int64_t>::max()},
+    };
+    for (const auto& item : kFrames) {
+        expectations.expect(
+            holds(runAt(rate, Kernel::SecondsToFrames, {item.seconds}), 0, item.frames),
+            "Seconds To Frames floors at the composition rate");
+    }
+    expectations.expect(
+        holds(runAt(rate, Kernel::FramesToSeconds, {std::int64_t{24}}), 0, 1.0) &&
+            holds(runAt(rate, Kernel::FramesToSeconds, {std::int64_t{12}}), 0, 0.5) &&
+            holds(runAt(rate, Kernel::FramesToSeconds, {std::int64_t{-24}}), 0, -1.0),
+        "Frames To Seconds is its exact inverse at a frame-aligned time");
+
+    struct TimecodeCase final {
+        double seconds;
+        std::string_view label;
+    };
+    static const TimecodeCase kLabels[]{
+        {0.0, "00:00:00:00"},
+        {1.0, "00:00:01:00"},
+        {2.5, "00:00:02:12"},
+        {60.0, "00:01:00:00"},
+        {3600.0, "01:00:00:00"},
+        // Hours are not wrapped at 24: a composition may be longer than a day.
+        {90000.0, "25:00:00:00"},
+        // A negative time carries one sign on the whole label rather than on a field.
+        {-1.0, "-00:00:01:00"},
+        {-0.5, "-00:00:00:12"},
+    };
+    for (const auto& item : kLabels) {
+        expectations.expect(holds(runAt(rate, Kernel::SecondsToTimecode, {item.seconds}), 0,
+                                  std::string(item.label)),
+                            "Seconds To Timecode writes non-drop HH:MM:SS:FF");
+    }
+
+    struct ParsedTimecode final {
+        std::string_view label;
+        bool valid;
+        double seconds;
+    };
+    static const ParsedTimecode kParsed[]{
+        {"00:00:02:12", true, 2.5},
+        {"02:12", true, 2.5},
+        {"01:30:00", true, 90.0},
+        {"  00:00:01:00  ", true, 1.0},
+        {"-00:00:01:00", true, -1.0},
+        {"", false, -7.0},
+        {"12", false, -7.0},
+        {"00:00:00:24", false, -7.0},
+        {"00:00:60:00", false, -7.0},
+        {"00:70:00:00", false, -7.0},
+        // `;` before the frame field MEANS drop-frame, which Bloom does not support, so reading it
+        // as non-drop would name a different frame than the label does.
+        {"00:00:02;12", false, -7.0},
+        {"00:00:0a:12", false, -7.0},
+        {"00:00:-2:12", false, -7.0},
+        {"1:2:3:4:5", false, -7.0},
+        {"00::02:12", false, -7.0},
+    };
+    for (const auto& item : kParsed) {
+        const auto outcome =
+            runAt(rate, Kernel::TimecodeToSeconds, {std::string(item.label), -7.0});
+        expectations.expect(holds(outcome, 0, item.seconds) && holds(outcome, 1, item.valid) &&
+                                !outcome.failed,
+                            "Timecode To Seconds reads its three forms and falls back otherwise");
+    }
+
+    // A fractional rate counts the frame field to its NOMINAL whole number, which is what non-drop
+    // timecode is: the label drifts from wall clock, and drop-frame -- the correction -- is not
+    // supported.
+    const auto broadcast = document::FrameRate::create(30000, 1001);
+    expectations.expect(broadcast.has_value(), "29.97 is a rate a composition may hold");
+    if (broadcast.has_value()) {
+        expectations.expect(holds(runAt(*broadcast, Kernel::SecondsToTimecode, {1.0}), 0,
+                                  std::string("00:00:00:29")),
+                            "one wall-clock second at 29.97 is 29 non-drop frames, not a second");
+        const auto refused =
+            runAt(*broadcast, Kernel::TimecodeToSeconds, {std::string("00:00:00:30"), -7.0});
+        expectations.expect(holds(refused, 1, false),
+                            "a frame field at the nominal count names no frame");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -368,6 +474,7 @@ int main() {
     testSafeParsing(expectations);
     testNumericConversions(expectations);
     testStructuredConversions(expectations);
+    testTimeConversions(expectations);
     testMalformedOperands(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
