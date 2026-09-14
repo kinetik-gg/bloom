@@ -148,7 +148,7 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 | `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
 | `PanelMinWidth` | `300` | Every `EditorArea`'s own strict minimum width, in Figma design px |
-| `ValueCellMin` | `72` | The floor a Properties value cell (`kit::KValueField`) may shrink to before its row falls back to horizontal scrolling |
+| `ValueCellMin` | `72` | The numeric floor a Properties value cell (`kit::KValueField`) retains at the panel minimum |
 
 `MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
 and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
@@ -201,14 +201,12 @@ Properties is the one hosted editor that is a *form* rather than a canvas, so `E
 inside a `QScrollArea` with `Qt::Ignored` on the horizontal axis (the scroll area's own minimum
 width never asks the panel's content layout for more room than it already has) and
 `widgetResizable` set, so the real `PropertiesEditor` widget is actually resized down to whatever
-width the panel currently has. Inside that width, Properties degrades in this order before ever
-scrolling: each row's label column elides (`Qt::ElideRight`, the untruncated name lives in the
-tooltip), then every value cell shrinks toward `ValueCellMin`; only once a row still doesn't fit at
-that floor does the panel's own scroll area fall back to a horizontal scrollbar, alongside the
-vertical one its sections already use to scroll past a short panel. The node graph, timeline, and
-viewer editors need no such wrapping -- their own canvases already scale down to whatever room they
-get, unwrapped. Node cards keep their own, separate minimum-width rule and are out of this task's
-scope entirely.
+width the panel currently has. Properties owns an inner body scroll area beneath its search
+header. At the 300-design-pixel minimum, row labels elide (`Qt::ElideRight`, with full names in
+tooltips), numeric cells retain `ValueCellMin`, short component prefixes claim their measured glyph
+width, and RGBA fields use two columns. The body scrolls vertically without requiring horizontal
+scrolling. The node graph, timeline, and viewer retain their existing canvas and wrapper behavior;
+node cards retain their separate minimum-width rule.
 
 ### Viewer content bounds
 
@@ -295,7 +293,7 @@ separate from the layout contract.
 New object names: `propertiesSearchField`, `propertiesScrollArea`, `propertiesScrollBody`,
 `propertiesRegistryPanel`, `propertiesSection_registry`, `propertiesRegistryRow`,
 `propertiesRegistryDiamond`, `propertiesRegistryEnum`, `propertiesRegistryBool`,
-`propertiesRegistryMultiline`, `propertiesRegistryString`, `propertiesRegistryValue`,
+`propertiesRegistryMultiline`, `propertiesRegistryString`, `propertiesRegistryInteger`, `propertiesRegistryValue`,
 `propertiesRegistryColor`, `propertiesRegistryColorExpand`, `propertiesTextMultiline`,
 `propertiesTextExpand`, `propertiesUpstreamPanel`, `propertiesSection_upstream-<node-id>`,
 `propertiesJumpToNode`, `propertiesMoreUpstream`, `propertiesDrivenDisplay`, `propertiesDriverLink`,

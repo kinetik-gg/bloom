@@ -2,6 +2,7 @@
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -244,6 +245,11 @@ void PropertiesEditor::resetRoles(const std::vector<std::string_view>& roles) {
     // Every write goes through the SAME session setter the row itself uses, so a Reset is one
     // ordinary, undoable authoring command and never a second write path into the document.
     for (const auto role : roles) {
+        const auto* parameter = session_.parameterForSelection(role);
+        if (parameter && std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+            resetPropertiesParameter(session_, parameter->id);
+            continue;
+        }
         const auto fallback = registryDefaultFor(session_, role);
         if (!fallback.has_value()) {
             continue;
@@ -292,7 +298,9 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::FocusOut && watched->objectName() == "propertiesTextMultiline" &&
         !rebuilding_) {
         if (auto* text = qobject_cast<QPlainTextEdit*>(watched))
-            (void)session_.setSelectedTextContent(text->toPlainText());
+            (void)session_.setParameterValue(
+                document::ParameterId::fromRaw(text->property("parameterId").toULongLong()),
+                text->toPlainText().toStdString(), tr("Set Text"));
     }
     if (event->type() == QEvent::MouseButtonRelease && !rebuilding_) {
         if (watched == opacitySlider_) {
@@ -305,6 +313,8 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void PropertiesEditor::rebuild() {
+    if (rebuilding_)
+        return;
     rebuilding_ = true;
     configureObjectToggles();
     configurePosition();
@@ -391,6 +401,8 @@ void PropertiesEditor::configureMergeInputs() {
         rowLayout->setContentsMargins(0, 0, 0, 0);
         auto* name = new QLabel(node_editor::nodeDisplayName(*composition, *source), row);
         name->setTextFormat(Qt::PlainText);
+        name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        row->setProperty("rowLabel", name->text());
         name->setObjectName(QStringLiteral("mergeInputName"));
         rowLayout->addWidget(name, 1);
         auto* blend = new kit::KDropdown(row);
@@ -403,6 +415,10 @@ void PropertiesEditor::configureMergeInputs() {
             std::distance(core::kBlendModes.begin(), std::ranges::find(core::kBlendModes, mode))));
         const auto* boundary = composition->graph().findLayer(entry.layerId);
         blend->setEnabled(boundary && !boundary->locked);
+        for (const auto& binding : source->parameters)
+            if (binding.role == document::kBlendModeParameterRole)
+                blend->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
+                                                      binding.parameterId.value())));
         rowLayout->addWidget(blend);
         const auto layerId = entry.layerId;
         connect(blend, &kit::KDropdown::currentIndexChanged, row, [this, layerId](int index) {
@@ -419,6 +435,8 @@ void PropertiesEditor::configureMergeInputs() {
             for (const auto& binding : source->parameters)
                 if (binding.role == document::kOpacityParameterRole)
                     opacityId = binding.parameterId;
+        opacity->setProperty("parameterId",
+                             QVariant::fromValue(static_cast<qulonglong>(opacityId.value())));
         const auto value = opacityId.isValid() ? session_.effectiveScalarValue(opacityId)
                                                : std::optional<double>{1.0};
         opacity->setValue(value.value_or(1.0) * 100);
@@ -659,27 +677,6 @@ void PropertiesEditor::configureDocumentProperties() {
     const auto context = frameContextFor(session_);
     documentDuration_->setText(context.has_value() ? formatDuration(*context)
                                                    : QStringLiteral("—"));
-}
-
-void PropertiesEditor::filterRows() {
-    const auto query = search_->text();
-    for (auto* section : sections_) {
-        bool any = false;
-        auto* rows = section->bodyLayout();
-        for (int index = 0; index < rows->count(); ++index) {
-            auto* row = rows->itemAt(index)->widget();
-            if (!row)
-                continue;
-            const auto label = row->property("rowLabel").toString();
-            if (label.isEmpty())
-                continue;
-            const bool match = label.contains(query, Qt::CaseInsensitive);
-            row->setVisible(match);
-            any = any || match;
-        }
-        section->setVisible(query.isEmpty() || any);
-        section->body()->setVisible(!section->isCollapsed() || !query.isEmpty());
-    }
 }
 
 } // namespace bloom::ui

@@ -1,10 +1,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QGraphicsItem>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -19,11 +21,14 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <iostream>
+#include <limits>
 using namespace bloom;
 namespace {
 int failures = 0;
@@ -49,9 +54,12 @@ document::NodeId addNode(ui::CompositionSession& session, std::string_view type)
 void connectNodes(ui::CompositionSession& session, document::NodeId source, document::NodeId target,
                   const char* port) {
     commands::Transaction transaction("Connect", session.snapshot().revision());
-    transaction.emplace<commands::ConnectPorts>(session.compositionId(),
-                                                document::OutputPortRef{source, "value"},
-                                                document::NodeInputRef{target, port});
+    const auto* node = session.composition()->graph().findNode(source);
+    const auto* definition =
+        document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+    transaction.emplace<commands::ConnectPorts>(
+        session.compositionId(), document::OutputPortRef{source, definition->outputs.front().name},
+        document::NodeInputRef{target, port});
     expect(session.executeNodeTransaction(std::move(transaction)).changed(),
            "connect upstream fixture");
 }
@@ -92,7 +100,7 @@ void upstreamRows() {
     }
     expect(value && value->text() == "0",
            "detached driven graph resolves through background evaluator");
-    expect(drivenRow &&
+    expect(drivenRow && drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink") &&
                drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink")->text() == "Math",
            "driven row names the driver node");
     if (drivenRow) {
@@ -131,6 +139,16 @@ void upstreamRows() {
         expect(item && QLineF(center, item->sceneBoundingRect().center()).length() < 3,
                "Jump centers the canvas on its node");
     }
+    const auto vector = addNode(session, document::kVector2MathNodeType);
+    connectNodes(session, fourth, vector, "a");
+    session.selectNode(vector);
+    value = panel->findChild<QLabel*>("propertiesDrivenValue");
+    wait.restart();
+    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expect(value && value->text() == "0, 0", "driver display applies scalar-to-vector promotion");
 }
 void widthRule() {
     auto project = document::makeNewProject("Width", "Main", core::RationalTime::fromInteger(10));
@@ -151,12 +169,19 @@ void widthRule() {
            "body scrolls vertically at narrow size");
     if (!scroll)
         return;
+    if (scroll->widget()->width() > scroll->viewport()->width())
+        std::cerr << "WIDTH viewport=" << scroll->viewport()->width()
+                  << " body=" << scroll->widget()->width()
+                  << " min=" << scroll->widget()->minimumSizeHint().width() << '\n';
     expect(scroll->widget()->width() <= scroll->viewport()->width(),
            "body never exceeds viewport width");
     bool elided = false;
     for (auto* child : scroll->widget()->findChildren<QWidget*>()) {
         if (!child->isVisible() || child->isWindow())
             continue;
+        if (child->minimumSizeHint().width() > scroll->viewport()->width())
+            std::cerr << "WIDE " << child->objectName().toStdString() << " width=" << child->width()
+                      << " min=" << child->minimumSizeHint().width() << '\n';
         expect(child->width() <= scroll->viewport()->width(),
                "no visible child is wider than viewport");
         if (auto* field = qobject_cast<ui::kit::KValueField*>(child))
@@ -167,6 +192,64 @@ void widthRule() {
             elided = elided || label->text().endsWith(QChar(0x2026));
     }
     expect(elided, "narrow labels elide instead of stretching viewport");
+}
+void genericKinds() {
+    auto project = document::makeNewProject("Kinds", "Main", core::RationalTime::fromInteger(10));
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    ui::PropertiesEditor panel(session);
+    for (const auto type : {document::kScalarValueNodeType, document::kIntegerValueNodeType,
+                            document::kBooleanValueNodeType, document::kStringValueNodeType,
+                            document::kVector2ValueNodeType, document::kVector3ValueNodeType,
+                            document::kColorValueNodeType, document::kVector2MathNodeType}) {
+        const auto nodeId = addNode(session, type);
+        session.selectNode(nodeId);
+        const auto* node = session.selectedNode();
+        const auto* definition =
+            document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+        expect(panel.findChildren<QWidget*>("propertiesRegistryRow").size() ==
+                   static_cast<qsizetype>(definition->parameters.size()),
+               "every value-node registry parameter renders, including scale operands");
+        auto* valueRow = row(panel, "value");
+        if (!valueRow)
+            continue;
+        const auto parameter =
+            document::ParameterId::fromRaw(valueRow->property("parameterId").toULongLong());
+        if (type == document::kIntegerValueNodeType) {
+            auto* field = valueRow->findChild<QLineEdit*>("propertiesRegistryInteger");
+            expect(field != nullptr, "integer has an exact decimal field");
+            if (field) {
+                field->setText("9223372036854775807");
+                Q_EMIT field->editingFinished();
+            }
+            const auto* record = session.composition()->parameters().find(parameter);
+            const auto& constant = std::get<document::ConstantValueSource>(record->source);
+            expect(std::get<std::int64_t>(constant.value) ==
+                       std::numeric_limits<std::int64_t>::max(),
+                   "integer field preserves all int64 digits");
+        } else if (type == document::kBooleanValueNodeType) {
+            auto* toggle = valueRow->findChild<ui::kit::KSwitch*>();
+            expect(toggle != nullptr, "boolean renders a switch");
+            if (toggle)
+                toggle->setChecked(true);
+        } else if (type == document::kColorValueNodeType) {
+            expect(valueRow->findChild<ui::kit::KColorChip*>() &&
+                       valueRow->findChildren<ui::kit::KValueField*>().size() == 4,
+                   "color has a picker chip and four expanded components");
+            expect(session.setParameterValue(parameter, core::Color4d{2, -1, 0.5, 0.25}, "Color"),
+                   "HDR generic color authors through session");
+            const auto fields = valueRow->findChildren<ui::kit::KValueField*>();
+            expect(fields[0]->value() == 2 && fields[1]->value() == -1,
+                   "generic components retain HDR and negative values");
+        } else if (type == document::kVector2ValueNodeType ||
+                   type == document::kVector3ValueNodeType) {
+            expect(valueRow->findChildren<ui::kit::KValueField*>().size() ==
+                       (type == document::kVector2ValueNodeType ? 2 : 3),
+                   "vectors render every component");
+        }
+    }
 }
 void registryRows() {
     auto project =
@@ -213,6 +296,8 @@ void registryRows() {
     search->setText("not a property");
     expect(!panel.findChild<ui::kit::KSection*>("propertiesSection_text")->isVisible(),
            "empty sections hide");
+    panel.activateWindow();
+    QCoreApplication::processEvents();
     search->setFocus();
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(search, &escape);
@@ -229,15 +314,43 @@ void registryRows() {
             dropdown->setCurrentIndex(2);
         expect(session.canUndo(), "enum edit uses command history");
     }
+    const auto layer = std::get<document::LayerId>(session.selection().primary);
+    const auto boundary = session.boundaryNodeForLayer(layer);
+    expect(boundary.has_value(), "text layer has a boundary node");
+    if (!boundary)
+        return;
+    session.selectNode(*boundary);
+    auto* upstream = panel.findChild<QWidget*>("propertiesUpstreamPanel");
+    expect(upstream && upstream->findChildren<ui::kit::KSection*>().size() == 1,
+           "image input exposes one source section when its boundary node is selected");
+    expect(upstream && upstream->findChild<QPlainTextEdit*>("propertiesRegistryMultiline"),
+           "upstream Text content uses the generic multiline editor");
+    std::vector<document::NodeId> terminals;
+    for (const auto& node : session.composition()->graph().nodes())
+        if (node.typeId == document::kLayerStackNodeType ||
+            node.typeId == document::kCompositionOutputNodeType)
+            terminals.push_back(node.id);
+    for (auto terminal : terminals) {
+        session.selectNode(terminal);
+        upstream = panel.findChild<QWidget*>("propertiesUpstreamPanel");
+        expect(!upstream || upstream->findChildren<ui::kit::KSection*>().empty(),
+               "Merge and Output stop upstream traversal");
+    }
 }
 } // namespace
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
+    genericKinds();
     registryRows();
     upstreamRows();
     widthRule();
     QSettings().clear();
     return failures ? 1 : 0;
+}
+
+catch (const std::exception& error) {
+    std::cerr << error.what() << "\n";
+    return 1;
 }

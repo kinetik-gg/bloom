@@ -46,6 +46,12 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             selector_->addItem(name, QVariant::fromValue(stored));
         layout->addWidget(selector_, 1);
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
+    } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
+        integer_ = new QLineEdit(controls);
+        integer_->setObjectName("propertiesRegistryInteger");
+        integer_->setAccessibleName(label);
+        layout->addWidget(integer_, 1);
+        connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
         toggle_ = new kit::KSwitch(controls);
         toggle_->setObjectName("propertiesRegistryBool");
@@ -144,7 +150,7 @@ void PropertiesRegistryRow::refresh() {
             field->setEnabled(editable);
     for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(toggle_),
                           static_cast<QWidget*>(color_), static_cast<QWidget*>(text_),
-                          static_cast<QWidget*>(multiline_)})
+                          static_cast<QWidget*>(multiline_), static_cast<QWidget*>(integer_)})
         if (control)
             control->setEnabled(editable);
     if (parameter) {
@@ -160,6 +166,8 @@ void PropertiesRegistryRow::refresh() {
         if (auto* scalar = std::get_if<double>(&value); scalar && fields_[0])
             fields_[0]->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
+            if (integer_)
+                integer_->setText(QString::number(static_cast<qlonglong>(*integer)));
             if (fields_[0])
                 fields_[0]->setValue(static_cast<double>(*integer));
             if (selector_) {
@@ -198,7 +206,7 @@ void PropertiesRegistryRow::refresh() {
 }
 
 void PropertiesRegistryRow::reset() {
-    (void)session_.setParameterValue(parameter_, definition_.defaultValue, tr("Reset Parameter"));
+    resetPropertiesParameter(session_, parameter_);
     refresh();
 }
 
@@ -208,7 +216,15 @@ void PropertiesRegistryRow::commit() {
     document::ParameterValue value = definition_.defaultValue;
     if (selector_)
         value = selector_->itemData(selector_->currentIndex()).value<std::int64_t>();
-    else if (toggle_)
+    else if (integer_) {
+        bool valid = false;
+        const auto integer = integer_->text().toLongLong(&valid);
+        if (!valid) {
+            refresh();
+            return;
+        }
+        value = static_cast<std::int64_t>(integer);
+    } else if (toggle_)
         value = toggle_->isChecked();
     else if (text_)
         value = text_->text().toStdString();

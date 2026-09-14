@@ -11,6 +11,32 @@
 
 namespace bloom::ui {
 namespace {
+runtime::CompiledValue promotedValue(const runtime::CompiledValue& value, std::string_view schema) {
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        for (const auto& parameter : definition.parameters) {
+            if (parameter.schemaKey != schema)
+                continue;
+            if (parameter.valueKind == document::ParameterValueKind::Integer) {
+                if (const auto* boolean = std::get_if<bool>(&value))
+                    return static_cast<std::int64_t>(*boolean);
+            }
+            if (parameter.valueKind == document::ParameterValueKind::Float64) {
+                if (const auto* integer = std::get_if<std::int64_t>(&value))
+                    return static_cast<double>(*integer);
+                if (const auto* boolean = std::get_if<bool>(&value))
+                    return static_cast<double>(*boolean);
+            }
+            if (const auto* scalar = std::get_if<double>(&value)) {
+                if (parameter.valueKind == document::ParameterValueKind::Vec2d)
+                    return document::Vec2d{*scalar, *scalar};
+                if (parameter.valueKind == document::ParameterValueKind::Vec3d)
+                    return document::Vec3d{*scalar, *scalar, *scalar};
+            }
+            return value;
+        }
+    }
+    return value;
+}
 QString valueText(const runtime::CompiledValue& value) {
     return std::visit(
         [](const auto& held) -> QString {
@@ -46,12 +72,8 @@ PropertiesDrivenValues::~PropertiesDrivenValues() {
         return;
     task_.cancel();
     scheduler_->beginShutdown();
-    // Destruction must never join a compiling worker on the UI thread. The detached reaper owns
-    // only the Qt-free scheduler; no widget, session, or callback survives into it.
-    std::thread([scheduler = std::move(scheduler_)] {
-        while (!scheduler->isQuiescent())
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }).detach();
+    retire_->store(true);
+    retire_->notify_one();
 }
 void PropertiesDrivenValues::request(std::vector<document::ParameterId> parameters) {
     parameters_ = std::move(parameters);
@@ -70,7 +92,15 @@ void PropertiesDrivenValues::start() {
         auto config = runtime::TaskSchedulerConfig::defaults();
         config.cpuWorkerCount = 1;
         config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
-        scheduler_ = std::make_unique<runtime::TaskScheduler>(config);
+        scheduler_ = std::make_shared<runtime::TaskScheduler>(config);
+        retire_ = std::make_shared<std::atomic_bool>(false);
+        // Start the Qt-free reaper while construction can report a thread-start failure. Closing
+        // the panel only requests cancellation; it never creates or joins a thread.
+        std::thread([scheduler = scheduler_, retire = retire_] {
+            retire->wait(false);
+            while (!scheduler->isQuiescent())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }).detach();
     }
     const auto snapshot = session_.snapshot();
     const auto compositionId = session_.compositionId();
@@ -123,7 +153,8 @@ void PropertiesDrivenValues::start() {
                             operation.firstOutput.value() +
                             static_cast<std::size_t>(output - definition->outputs.begin());
                         if (index < evaluated.outputs.size())
-                            (*values)[id] = valueText(evaluated.outputs[index]);
+                            (*values)[id] = valueText(
+                                promotedValue(evaluated.outputs[index], parameter->schemaKey));
                     }
                     for (const auto& diagnostic : evaluated.diagnostics)
                         if (diagnostic.nodeId == driver->sourceNodeId)
@@ -151,6 +182,16 @@ void PropertiesDrivenValues::poll() {
         if (activeGeneration_ == generation_) {
             if (ready && result->value())
                 ready(**result->value());
+            else if (ready) {
+                Values unavailable;
+                const auto message =
+                    result->diagnostics().empty()
+                        ? tr("Unavailable")
+                        : QString::fromStdString(result->diagnostics().front().summary);
+                for (auto id : parameters_)
+                    unavailable[id] = message;
+                ready(unavailable);
+            }
             timer_->stop();
         } else
             start();

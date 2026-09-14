@@ -7,6 +7,11 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});
     };
+    if (schemaKey == document::kBlendModeParameterSchemaKey) {
+        for (const auto mode : core::kBlendModes)
+            add(blendModeDisplayName(mode), core::blendModeStoredValue(mode));
+        return items;
+    }
     if (schemaKey == document::kTextAlignmentParameterSchemaKey) {
         add(QObject::tr("Left"), 0);
         add(QObject::tr("Center"), 1);

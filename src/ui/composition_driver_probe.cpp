@@ -84,7 +84,7 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
                     document::NodeInputRef{
                         reduce, probe.operand(reduce, document::ParameterValueKind::Vec3d)}))
                 return {};
-            output = {reduce, std::string(document::kValuePortName)};
+            output = {reduce, std::string(document::kResultPortName)};
         }
         const auto image = probe.add(type);
         if (!probe.connect(output, document::NodeInputRef{image, probe.operand(image, valueKind)}))

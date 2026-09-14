@@ -73,10 +73,12 @@ void PropertiesEditor::configureUpstream() {
     QString signature;
     for (const auto& [id, depth] : nodes) {
         const auto* node = composition->graph().findNode(id);
-        signature += QString("%1/%2/%3;")
+        signature += QString("%1/%2/%3/%4/%5;")
                          .arg(id.value())
                          .arg(depth)
-                         .arg(node_editor::nodeDisplayName(*composition, *node));
+                         .arg(node_editor::nodeDisplayName(*composition, *node))
+                         .arg(QString::fromStdString(node->typeId))
+                         .arg(node->schemaVersion);
     }
     if (signature != upstreamSignature_) {
         if (upstreamPanel_) {

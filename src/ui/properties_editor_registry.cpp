@@ -2,6 +2,8 @@
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
+#include <QLabel>
+#include <QLineEdit>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/document/project.hpp>
@@ -14,13 +16,21 @@ void PropertiesEditor::configureRegistryRows() {
     const auto* node = session_.selectedNode();
     if (const auto* layer = std::get_if<document::LayerId>(&session_.selection().primary))
         node = directSourceNode(session_, *layer);
-    const auto signature = node ? QString("%1/%2/%3")
-                                      .arg(node->id.value())
-                                      .arg(QString::fromStdString(node->typeId))
-                                      .arg(node->schemaVersion)
-                                : QString{};
+    auto signature = node ? QString("%1/%2/%3")
+                                .arg(node->id.value())
+                                .arg(QString::fromStdString(node->typeId))
+                                .arg(node->schemaVersion)
+                          : QString{};
+    if (node)
+        for (const auto& binding : node->parameters)
+            signature += QString("/%1:%2")
+                             .arg(QString::fromStdString(binding.role))
+                             .arg(binding.parameterId.value());
     if (signature != registrySignature_) {
         for (auto* row : registryRows_) {
+            for (auto* section : sections_)
+                disconnect(section, nullptr, row, nullptr);
+            row->setEnabled(false);
             row->hide();
             row->setParent(nullptr);
             row->deleteLater();
@@ -60,12 +70,13 @@ void PropertiesEditor::configureRegistryRows() {
                 // Only these roles already have purpose-built rows. Everything else comes from
                 // the definition, including future source parameters and value-node operands.
                 const bool handcrafted =
-                    declared.role == document::kPositionParameterRole ||
-                    declared.role == document::kAnchorParameterRole ||
-                    declared.role == document::kScaleParameterRole ||
-                    declared.role == document::kRotationParameterRole ||
-                    declared.role == document::kOpacityParameterRole ||
-                    declared.role == document::kBlendModeParameterRole ||
+                    (definition->lowering == document::NodeLoweringKind::LayerOutput &&
+                     (declared.role == document::kPositionParameterRole ||
+                      declared.role == document::kAnchorParameterRole ||
+                      declared.role == document::kScaleParameterRole ||
+                      declared.role == document::kRotationParameterRole ||
+                      declared.role == document::kOpacityParameterRole ||
+                      declared.role == document::kBlendModeParameterRole)) ||
                     (definition->lowering == document::NodeLoweringKind::Solid &&
                      declared.role == document::kSolidColorParameterRole) ||
                     (definition->lowering == document::NodeLoweringKind::Text &&
@@ -86,7 +97,32 @@ void PropertiesEditor::configureRegistryRows() {
             }
         }
     }
+    if (registryPanel_)
+        registryPanel_->setVisible(!registryRows_.empty());
     for (auto* row : registryRows_)
         row->refresh();
 }
+void PropertiesEditor::filterRows() {
+    const auto query = search_->text();
+    for (auto* section : sections_) {
+        bool any = false;
+        auto* rows = section->bodyLayout();
+        for (int index = 0; index < rows->count(); ++index) {
+            auto* row = rows->itemAt(index)->widget();
+            if (!row)
+                continue;
+            const auto label = row->property("rowLabel").toString();
+            if (label.isEmpty())
+                continue;
+            const bool match = label.contains(query, Qt::CaseInsensitive);
+            row->setVisible(match);
+            any = any || match;
+        }
+        section->setVisible(query.isEmpty() || any);
+        section->body()->setVisible(!section->isCollapsed() || !query.isEmpty());
+    }
+    if (auto* more = findChild<QLabel*>("propertiesMoreUpstream"))
+        more->setVisible(more->text().contains(query, Qt::CaseInsensitive));
+}
+
 } // namespace bloom::ui

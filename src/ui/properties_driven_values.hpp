@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <atomic>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -22,7 +23,8 @@ class PropertiesDrivenValues final : public QObject {
     void poll();
     void start();
     CompositionSession& session_;
-    std::unique_ptr<runtime::TaskScheduler> scheduler_;
+    std::shared_ptr<runtime::TaskScheduler> scheduler_;
+    std::shared_ptr<std::atomic_bool> retire_;
     runtime::TaskHandle<std::shared_ptr<Values>> task_;
     QTimer* timer_;
     std::vector<document::ParameterId> parameters_;

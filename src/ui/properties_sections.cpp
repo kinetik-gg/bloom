@@ -103,7 +103,7 @@ QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWi
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),
                                kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    layout->setSpacing(kit::px(kit::Spacing::XS));
     layout->addWidget(label);
     if (indicator != nullptr) {
         layout->addWidget(indicator);
@@ -165,7 +165,7 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     if (cells.size() > 3) {
         auto* grid = new QGridLayout(group);
         grid->setContentsMargins(0, 0, 0, 0);
-        grid->setSpacing(kit::px(kit::Spacing::S));
+        grid->setSpacing(kit::px(kit::Spacing::XS));
         int index = 0;
         for (auto* cell : cells) {
             grid->addWidget(cell, index / 2, index % 2);
@@ -175,7 +175,7 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     }
     auto* layout = new QHBoxLayout(group);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    layout->setSpacing(kit::px(kit::Spacing::XS));
     for (auto* cell : cells) {
         layout->addWidget(cell);
     }

@@ -372,8 +372,13 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
             multiline->setPlainText(textContent_->text());
     });
     connect(expand, &kit::KButton::toggled, multiline, [this, multiline](bool expanded) {
-        if (expanded)
+        if (expanded) {
+            const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+            multiline->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
+                                                      parameter ? parameter->id.value() : 0)));
+            multiline->setEnabled(parameter && textContent_->isEnabled());
             multiline->setPlainText(textContent_->text());
+        }
     });
 }
 

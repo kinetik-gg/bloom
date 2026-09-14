@@ -53,6 +53,10 @@ void resetRow(CompositionSession& session, const RowTarget& target) {
                                         QObject::tr("Reset Parameter"));
 }
 } // namespace
+void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter) {
+    if (const auto target = targetFor(session, parameter))
+        resetRow(session, *target);
+}
 void PropertiesEditor::configureDrivenRows() {
     // Give hand-crafted rows the same parameter identity carried by registry rows.
     const std::array<std::pair<const char*, std::string_view>, 10> handcrafted{
@@ -91,6 +95,7 @@ void PropertiesEditor::configureDrivenRows() {
     }
     auto rows = findChildren<QWidget*>("propertiesRow");
     rows.append(findChildren<QWidget*>("propertiesRegistryRow"));
+    rows.append(findChildren<QWidget*>("mergeInputRow"));
     std::vector<document::ParameterId> driven;
     for (auto* row : rows) {
         // The inner presentation rows of a generic row inherit its outer context menu.
@@ -106,9 +111,12 @@ void PropertiesEditor::configureDrivenRows() {
                     menu->setAttribute(Qt::WA_DeleteOnClose);
                     auto* action = menu->addAction(tr("Reset to default"));
                     action->setObjectName("propertiesResetToDefault");
+                    const auto contextId = row->property("contextParameterId").toULongLong();
                     const auto target = targetFor(
                         session_,
-                        document::ParameterId::fromRaw(row->property("parameterId").toULongLong()));
+                        document::ParameterId::fromRaw(
+                            contextId ? contextId : row->property("parameterId").toULongLong()));
+                    row->setProperty("contextParameterId", QVariant{});
                     action->setEnabled(target && !session_.composition()->nodeLocked(target->node));
                     if (target)
                         connect(action, &QAction::triggered, this,
@@ -123,6 +131,7 @@ void PropertiesEditor::configureDrivenRows() {
             child->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(child, &QWidget::customContextMenuRequested, row,
                     [row, child](const QPoint& point) {
+                        row->setProperty("contextParameterId", child->property("parameterId"));
                         Q_EMIT row->customContextMenuRequested(
                             row->mapFromGlobal(child->mapToGlobal(point)));
                     });
@@ -141,6 +150,12 @@ void PropertiesEditor::configureDrivenRows() {
             display->setObjectName("propertiesDrivenDisplay");
             auto* layout = new QVBoxLayout(display);
             layout->setContentsMargins(0, 0, 0, 0);
+            if (row->objectName() == "propertiesRegistryRow") {
+                auto* label =
+                    properties::makeRowLabel(row->property("rowLabel").toString(), display);
+                label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+                layout->addWidget(label);
+            }
             auto* jump = new kit::KButton(display);
             jump->setObjectName("propertiesDriverLink");
             jump->setVariant(kit::KButton::Variant::Ghost);
@@ -180,9 +195,10 @@ void PropertiesEditor::configureDrivenRows() {
             const auto* node = composition->graph().findNode(driver->sourceNodeId);
             jump->setText(node ? node_editor::nodeDisplayName(*composition, *node)
                                : tr("Missing driver"));
+            jump->setToolTip(jump->text());
             jump->setProperty("nodeId", QVariant::fromValue(
                                             static_cast<qulonglong>(driver->sourceNodeId.value())));
-            auto* value = display->findChild<QLabel*>();
+            auto* value = display->findChild<QLabel*>("propertiesDrivenValue");
             value->setProperty("parameterId",
                                QVariant::fromValue(static_cast<qulonglong>(id.value())));
             value->setText(tr("Resolving…"));

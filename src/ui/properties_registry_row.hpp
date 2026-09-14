@@ -7,6 +7,7 @@ class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
 class CompositionSession;
+void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
 class KeyframeDiamond;
 namespace kit {
@@ -35,6 +36,7 @@ class PropertiesRegistryRow final : public QWidget {
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;
     QLineEdit* text_ = nullptr;
+    QLineEdit* integer_ = nullptr;
     QPlainTextEdit* multiline_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
     bool refreshing_ = false;

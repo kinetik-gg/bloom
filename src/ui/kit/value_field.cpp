@@ -22,8 +22,8 @@
 namespace bloom::ui::kit {
 namespace {
 
-// The width the label column claims before the cell begins.
-constexpr int kLabelColumnWidth = 72;
+// Long labels share a capped column; short component labels claim only their glyph width.
+constexpr int kMaximumLabelColumnWidth = 72;
 
 // The cell's own horizontal padding: the inset the painted value AND the inline editor both use, so
 // the number sits at one x whichever of the two is drawing it.
@@ -93,6 +93,9 @@ QLineEdit#kValueFieldEditor {
 
 void KValueField::setLabel(const QString& label) {
     label_ = label;
+    updateGeometry();
+    if (editing_)
+        layOutEditor();
     update();
 }
 
@@ -180,15 +183,20 @@ QLineEdit* KValueField::lineEdit() const noexcept { return editor_; }
 
 QString KValueField::displayedValue() const { return QString::number(value_, 'f', decimals_); }
 
+int KValueField::labelColumnWidth() const {
+    return std::min(kMaximumLabelColumnWidth,
+                    QFontMetrics(kit::font(TypeRole::Ui)).horizontalAdvance(label_));
+}
+
 QRectF KValueField::labelRect() const {
     if (label_.isEmpty()) {
         return {};
     }
-    return {0.0, 0.0, static_cast<qreal>(kLabelColumnWidth), static_cast<qreal>(height())};
+    return {0.0, 0.0, static_cast<qreal>(labelColumnWidth()), static_cast<qreal>(height())};
 }
 
 QRectF KValueField::cellRect() const {
-    const qreal left = label_.isEmpty() ? 0.0 : kLabelColumnWidth + px(Spacing::S);
+    const qreal left = label_.isEmpty() ? 0.0 : labelColumnWidth() + px(Spacing::S);
     // The whole remaining width and the WHOLE height. This cell reserves no focus-ring strip: its
     // focus affordance is its own single border (kit::borderForInteraction), stroked on the cell's
     // own edge, so a margin outside that edge would be reserved for something nothing draws. An
@@ -236,7 +244,7 @@ QSize KValueField::sizeHint() const {
     if (!unit_.isEmpty()) {
         cellWidth += valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
     }
-    const int labelWidth = label_.isEmpty() ? 0 : kLabelColumnWidth + px(Spacing::S);
+    const int labelWidth = label_.isEmpty() ? 0 : labelColumnWidth() + px(Spacing::S);
     // Exactly the control height -- no ring margin, for the same reason cellRect() reserves none.
     return {labelWidth + cellWidth, px(Size::Control)};
 }
@@ -248,7 +256,7 @@ QSize KValueField::minimumSizeHint() const {
     // above all) is narrower than every field's combined preferred width. That floor is
     // Size::ValueCellMin, not the range's own widest string, so a narrow panel degrades every cell
     // in it to the same legible width instead of each row committing to its own.
-    const int labelWidth = label_.isEmpty() ? 0 : kLabelColumnWidth + px(Spacing::S);
+    const int labelWidth = label_.isEmpty() ? 0 : labelColumnWidth() + px(Spacing::S);
     return {labelWidth + px(Size::ValueCellMin), px(Size::Control)};
 }
 
@@ -514,7 +522,7 @@ void KValueField::paintEvent(QPaintEvent* event) {
         painter.setPen(inkForState(Color::Muted, state));
         const QFontMetrics metrics(painter.font());
         painter.drawText(labelRect(), Qt::AlignVCenter | Qt::AlignLeft,
-                         metrics.elidedText(label_, Qt::ElideRight, kLabelColumnWidth));
+                         metrics.elidedText(label_, Qt::ElideRight, labelColumnWidth()));
     }
 
     const QRectF cell = cellRect();
