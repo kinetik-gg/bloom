@@ -51,7 +51,7 @@ timelinePropertyEntries(const CompositionSession& session,
             add(*boundary, document::kAnchorParameterRole, QObject::tr("Anchor"));
             add(*boundary, document::kScaleParameterRole, QObject::tr("Scale"));
             add(*boundary, document::kRotationParameterRole, QObject::tr("Rotation"));
-            group(QObject::tr("Appearance"));
+            group(QObject::tr("Object"));
             add(*boundary, document::kOpacityParameterRole, QObject::tr("Opacity"));
             add(*boundary, document::kBlendModeParameterRole, QObject::tr("Blending"));
         }

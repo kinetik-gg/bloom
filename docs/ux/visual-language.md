@@ -220,6 +220,34 @@ object names. It reads geometry retained by the delivered frame, including displ
 Text Alignment uses the existing `nodeOperandSelector` in node cards and the new
 `timelinePropertyAlignment` dropdown in source property rows. Width, Height, Line Height, and Letter
 Spacing reuse generic scalar cells and animation diamonds. Existing object names are unchanged.
+### Properties sections
+
+The Properties panel groups its rows into `kit::KSection` -- a header row of
+`[chevron][Title Case title][spring][Reset]["..." menu]` above a collapsible body. The title is
+Title Case rather than the uppercase `editorSectionTitle` micro-type used elsewhere, because this
+header carries controls of its own and uppercase beside two buttons reads as shouting.
+
+A layer is grouped as **Object** (Visible / Solo / Locked switches, Blending, Opacity as a slider
+plus a value cell plus its keyframe diamond), **Transform** (Position X/Y with an axis-link toggle,
+Rotation as slider plus cell, Scale X/Y with a proportional-link toggle that is engaged by default,
+Anchor X/Y), and then one section per source (Solid Source, Text Source). The timeline's twirl-down
+rows use the same group names, so the two surfaces name the same things identically. With nothing
+selected the panel shows only the read-only Composition section.
+
+Collapsed state persists per section under `properties/sections/<id>/collapsed`. A section's Reset
+writes each of that group's parameters back to the value the node definition registry declares as
+its default, through the same session setter the row itself uses, so a Reset is one ordinary
+undoable command. The header menu's Collapse all / Expand all are answered by the panel, which is
+the only thing that knows the full set of sections; a section that has nothing to reset (the
+composition view, a merge's inputs) hides its Reset rather than offering a control that would do
+nothing.
+
+Both sliders share their row's commit with the paired value cell. `kit::KSlider` carries no scrub
+gesture signals, so the ADR 0017 boundary is the pointer release: while the handle is dragged the
+cell mirrors the slider and nothing is written; the release -- or a keyboard step, which is not a
+drag -- is the single commit. The rotation slider spans one turn each way and pins at its ends; the
+cell stays the authority for a wound value past that, which the schema accepts and the slider
+cannot reach.
 
 ### Viewer footer
 

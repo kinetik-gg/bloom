@@ -13,16 +13,20 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
@@ -35,6 +39,7 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointF>
+#include <QSettings>
 #include <QVariant>
 #include <QWidget>
 
@@ -522,6 +527,15 @@ void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
     expectations.expect(anchorValue.has_value() && anchorValue->x == -24.0 && anchorValue->y == 0.0,
                         "editing Anchor X commits through a command and leaves Y alone");
 
+    // Task PROPS-1, deliverable 1: the Scale row carries a proportional-link toggle, ON by default.
+    // Broken here so this half of the case still authors exactly one axis; the linked behaviour is
+    // asserted on its own below, after the undo assertions have counted these three edits.
+    auto* scaleLink = properties.findChild<ui::kit::KButton*>("scaleLinkToggle");
+    expectations.expect(scaleLink != nullptr && scaleLink->isChecked(),
+                        "the Scale row exposes a proportional-link toggle, engaged by default");
+    if (scaleLink != nullptr) {
+        scaleLink->setChecked(false);
+    }
     scaleY->setValue(50.0);
     const auto scaleValue = session.constantVec2Value(ids.scale);
     expectations.expect(scaleValue.has_value() && scaleValue->x == 1.0 && scaleValue->y == 0.5,
@@ -546,6 +560,16 @@ void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
             restoredScale.has_value() && *restoredScale == document::kDefaultScale &&
             restoredRotation.has_value() && *restoredRotation == document::kDefaultRotationDegrees,
         "undo restores the exact identity transform");
+
+    // With the link re-engaged, editing one axis carries the other along at the stored ratio: the
+    // uniform 100/100 identity becomes a uniform 50/50 from a single Y edit.
+    if (scaleLink != nullptr) {
+        scaleLink->setChecked(true);
+    }
+    scaleY->setValue(50.0);
+    const auto linkedScale = session.constantVec2Value(ids.scale);
+    expectations.expect(linkedScale.has_value() && linkedScale->x == 0.5 && linkedScale->y == 0.5,
+                        "a linked scale row carries the other axis along at the stored ratio");
 }
 
 // The Appearance group's Blending row: a real control over a real parameter, one undoable command
@@ -973,6 +997,110 @@ void testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(Expectations& ex
                         "a label-less cell's floor is exactly Size::ValueCellMin");
 }
 
+// Task PROPS-1, deliverable 1: the panel is a stack of kit::KSection groups -- Object, Transform,
+// and one per source -- each with a collapsible body, a persisted collapsed flag, and a header menu
+// whose Collapse all / Expand all the PANEL answers for every section at once.
+void testSectionsGroupCollapseAndPersist(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Sections Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+    properties.resize(properties.sizeHint());
+    properties.show();
+    QCoreApplication::processEvents();
+
+    auto* object = properties.findChild<ui::kit::KSection*>("propertiesSection_object");
+    auto* transform = properties.findChild<ui::kit::KSection*>("propertiesSection_transform");
+    auto* solid = properties.findChild<ui::kit::KSection*>("propertiesSection_solid");
+    expectations.expect(object != nullptr && transform != nullptr && solid != nullptr,
+                        "the panel groups a layer as Object, Transform, and one source section");
+    if (object == nullptr || transform == nullptr || solid == nullptr) {
+        return;
+    }
+    expectations.expect(
+        object->title() == QStringLiteral("Object") &&
+            transform->title() == QStringLiteral("Transform") &&
+            solid->title() == QStringLiteral("Solid Source"),
+        "section titles are Title Case, matching the timeline's own grouping names");
+
+    // Every hand-crafted row still lives inside the section that owns it, so the grouping is real
+    // structure rather than a header painted above an undifferentiated list.
+    expectations.expect(properties.findChild<ui::kit::KValueField*>("opacityEditor") != nullptr &&
+                            object->body()->findChild<ui::kit::KValueField*>("opacityEditor") !=
+                                nullptr,
+                        "the Opacity row lives in the Object section");
+    expectations.expect(transform->body()->findChild<ui::kit::KValueField*>("positionXEditor") !=
+                            nullptr,
+                        "the Position row lives in the Transform section");
+    expectations.expect(solid->body()->findChild<ui::kit::KValueField*>("solidColorRedEditor") !=
+                            nullptr,
+                        "the RGBA row lives in the source section");
+
+    expectations.expect(!object->isCollapsed() && object->body()->isVisible(),
+                        "a section starts expanded");
+    object->setCollapsed(true);
+    QCoreApplication::processEvents();
+    expectations.expect(object->isCollapsed() && !object->body()->isVisible(),
+                        "collapsing a section hides its body");
+    expectations.expect(object->persistenceKey() ==
+                            QStringLiteral("properties/sections/object/collapsed"),
+                        "a section persists its collapsed flag under its own id");
+    expectations.expect(QSettings().value(object->persistenceKey()).toBool(),
+                        "collapsing writes the persisted flag");
+    object->setCollapsed(false);
+    QSettings().remove(QStringLiteral("properties/sections"));
+
+    // Collapse all reaches every section, not just the one whose menu raised it.
+    Q_EMIT transform->collapseAllRequested();
+    QCoreApplication::processEvents();
+    expectations.expect(object->isCollapsed() && transform->isCollapsed() && solid->isCollapsed(),
+                        "Collapse all collapses every section in the panel");
+    Q_EMIT transform->expandAllRequested();
+    QCoreApplication::processEvents();
+    expectations.expect(!object->isCollapsed() && !transform->isCollapsed() &&
+                            !solid->isCollapsed(),
+                        "Expand all expands every section in the panel");
+    QSettings().remove(QStringLiteral("properties/sections"));
+}
+
+// The Object section's Visible/Solo/Locked switches author the layer boundary through the same
+// commands the timeline's toggle strip uses, so one undo reverses either surface identically.
+void testObjectSwitchesAuthorTheLayerBoundary(Expectations& expectations) {
+    auto newProject = document::makeNewProject("Object Toggles", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* visible = properties.findChild<ui::kit::KSwitch*>("layerVisibleSwitch");
+    auto* solo = properties.findChild<ui::kit::KSwitch*>("layerSoloSwitch");
+    auto* locked = properties.findChild<ui::kit::KSwitch*>("layerLockedSwitch");
+    expectations.expect(visible != nullptr && solo != nullptr && locked != nullptr,
+                        "the Object section exposes Visible, Solo and Locked switches");
+    if (visible == nullptr || solo == nullptr || locked == nullptr) {
+        return;
+    }
+    expectations.expect(visible->isChecked() && !solo->isChecked() && !locked->isChecked(),
+                        "the switches read the layer boundary's own flags");
+
+    solo->setChecked(true);
+    const auto* boundary = session.composition()->graph().findLayer(ids.layer);
+    expectations.expect(boundary != nullptr && boundary->solo,
+                        "toggling Solo writes the boundary through a command");
+    expectations.expect(session.canUndo() && session.undo(), "the toggle is one undoable command");
+    const auto* restored = session.composition()->graph().findLayer(ids.layer);
+    expectations.expect(restored != nullptr && !restored->solo, "undo restores the Solo flag");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -994,6 +1122,8 @@ int main(int argc, char** argv) {
     testTextSourceRowsEditThroughCommands(expectations);
     testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(expectations);
     testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(expectations);
+    testSectionsGroupCollapseAndPersist(expectations);
+    testObjectSwitchesAuthorTheLayerBoundary(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";
         return 1;

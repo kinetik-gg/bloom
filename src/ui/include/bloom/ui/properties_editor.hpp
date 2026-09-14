@@ -6,8 +6,12 @@
 
 #include <QWidget>
 
+#include <string_view>
+#include <vector>
+
 class QLabel;
 class QLineEdit;
+class QVBoxLayout;
 
 namespace bloom::ui {
 
@@ -16,8 +20,12 @@ class CompositionSession;
 class KeyframeDiamond;
 
 namespace kit {
+class KButton;
 class KColorChip;
 class KDropdown;
+class KSection;
+class KSlider;
+class KSwitch;
 } // namespace kit
 
 class PropertiesEditor final : public QWidget {
@@ -26,10 +34,14 @@ class PropertiesEditor final : public QWidget {
   public:
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
 
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
   private:
     void rebuild();
     void configureMergeInputs();
     QWidget* mergeInputsPanel_ = nullptr;
+    kit::KSection* mergeSection_ = nullptr;
     // Binds one numeric row's commit to the CELL's own gesture boundary rather than to every value
     // it passes through. ADR 0017: a drag does not mutate the document on pointer motion, and one
     // completed gesture is one undo step -- so a scrub publishes nothing until it is released, and
@@ -50,12 +62,39 @@ class PropertiesEditor final : public QWidget {
             }
         });
     }
+
+    // Task PROPS-1, deliverable 1: the section construction, split out of one constructor that had
+    // grown past four hundred lines. Each appends exactly one kit::KSection to `layout`.
+    void buildObjectSection(QVBoxLayout* layout);
+    void buildTransformSection(QVBoxLayout* layout);
+    void buildSolidSection(QVBoxLayout* layout);
+    void buildTextSection(QVBoxLayout* layout);
+    void buildDocumentSection(QVBoxLayout* layout);
+    void bindCommits();
+
+    // Task PROPS-1, deliverable 1: a slider shares its row's commit with the paired value cell.
+    // KSlider carries no scrub gesture signals of its own, so the ADR 0017 boundary is the pointer
+    // release, caught here: while the handle is dragged the paired cell mirrors the slider and
+    // NOTHING is written; the release -- or a keyboard step, which is not a drag at all -- is the
+    // single commit.
+    void commitOpacityFromControls();
+    void commitRotationFromControls();
+
+    // Registers a section with the panel's own Collapse all / Expand all and per-section Reset.
+    void adoptSection(kit::KSection* section, std::vector<std::string_view> resetRoles);
+    void setAllSectionsCollapsed(bool collapsed);
+    void resetRoles(const std::vector<std::string_view>& roles);
+
     void configurePosition();
     void configureAnchor();
     void configureScale();
     void configureRotation();
     void configureOpacity();
     void configureBlendMode();
+    // Task PROPS-1, deliverable 1: the Object section's Visible/Solo/Locked switches, which author
+    // the layer boundary's own flags through the same SetLayerEnabled/Solo/Locked commands the
+    // timeline's toggle strip already uses -- one write path, two surfaces.
+    void configureObjectToggles();
     void configureSolidColor();
     // Task S3: the Text Source group (content, size, color). Shown exactly when the selection
     // resolves a bloom.text-source, the same isKnownSource + schema-key test configureSolidColor()
@@ -69,14 +108,23 @@ class PropertiesEditor final : public QWidget {
 
     CompositionSession& session_;
 
-    // The selection-driven groups (Transform/Appearance/source-specific), shown together and
+    // The selection-driven groups (Object/Transform/source-specific), shown together and
     // hidden as one unit whenever configureDocumentProperties() shows documentSection_ instead
     // (issue #120, decision 3). Task P1 (owner review 2026-09-12) removed the selection title row
     // and its "Nothing selected" placeholder text entirely -- section headers are the only
     // grouping left, so there is no selectionLabel_ member any more.
     QWidget* selectionSection_ = nullptr;
+    // Every kit::KSection this panel owns, in the order it shows them. The panel, not the section,
+    // answers Collapse all / Expand all: a section knows only itself.
+    std::vector<kit::KSection*> sections_;
+
+    kit::KSwitch* layerVisible_ = nullptr;
+    kit::KSwitch* layerSolo_ = nullptr;
+    kit::KSwitch* layerLocked_ = nullptr;
+
     kit::KValueField* positionX_ = nullptr;
     kit::KValueField* positionY_ = nullptr;
+    kit::KButton* positionLink_ = nullptr;
     // Task S5, item 0: every indicator below is now a clickable KeyframeDiamond rather than the
     // QLabel that only reported a source. The member names are unchanged -- the row they live in
     // and the objectName the tests read are the same -- so only the control kind moved.
@@ -86,12 +134,15 @@ class PropertiesEditor final : public QWidget {
     KeyframeDiamond* anchorKeyframe_ = nullptr;
     kit::KValueField* scaleX_ = nullptr;
     kit::KValueField* scaleY_ = nullptr;
+    kit::KButton* scaleLink_ = nullptr;
     KeyframeDiamond* scaleKeyframe_ = nullptr;
     kit::KValueField* rotation_ = nullptr;
+    kit::KSlider* rotationSlider_ = nullptr;
     KeyframeDiamond* rotationKeyframe_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
+    kit::KSlider* opacitySlider_ = nullptr;
     KeyframeDiamond* opacityKeyframe_ = nullptr;
-    // The Appearance group's second row. A KDropdown rather than a KValueField because the value is
+    // The Object group's blending row. A KDropdown rather than a KValueField because the value is
     // a closed vocabulary, not a number, and it carries no keyframe indicator because the schema
     // declares the blend mode non-animatable -- an indicator column that can never light up would
     // promise a capability that does not exist.

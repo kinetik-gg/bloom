@@ -24,6 +24,7 @@ target_sources(
         kit/color_swatches.cpp
         kit/dropdown.cpp
         kit/search_popup.cpp
+        kit/section.cpp
         kit/dropdown_popup.cpp
         kit/fonts.cpp
         kit/icons.cpp
@@ -50,6 +51,7 @@ target_sources(
             include/bloom/ui/kit/color_swatches.hpp
             include/bloom/ui/kit/dropdown.hpp
             include/bloom/ui/kit/search_popup.hpp
+            include/bloom/ui/kit/section.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
@@ -287,6 +289,8 @@ target_sources(
         project_host.cpp
         ram_preview_controller.cpp
         properties_editor.cpp
+        properties_editor_sections.cpp
+        properties_sections.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
