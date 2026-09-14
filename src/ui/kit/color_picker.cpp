@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -45,7 +46,7 @@ QLineEdit#kColorHexField {
     color: {color.Foreground};
     padding: {space.XXS}px {space.S}px;
 }
-QLineEdit#kColorHexField:focus {
+QLineEdit#kColorHexField[bloomKeyboardFocus="true"] {
     border-color: {color.Accent};
 }
 QLineEdit#kColorHexField:disabled {
@@ -90,6 +91,7 @@ void strokeHairline(QPainter& painter, const QRectF& rect) {
 } // namespace
 
 KColorPicker::KColorPicker(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kColorPicker"));
     buildChrome();
 }

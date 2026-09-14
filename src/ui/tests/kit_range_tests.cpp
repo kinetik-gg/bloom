@@ -140,6 +140,7 @@ void testTheSliderStateMachine(Expectations& expectations) {
     host.activateWindow();
     QCoreApplication::processEvents();
 
+    slider.clearFocus();
     slider.setFocus(Qt::TabFocusReason);
     QCoreApplication::processEvents();
     expectations.expect(slider.visualState() == kit::State::Focused, "focus is its own state");

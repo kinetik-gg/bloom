@@ -306,16 +306,6 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
                         static_cast<double>(color.blue), static_cast<double>(color.alpha)});
             });
 
-    solidAlphaAssociation_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, body);
-    solidAlphaAssociation_->setObjectName("solidAlphaAssociation");
-    solidAlphaAssociation_->setAccessibleName(tr("Solid alpha association"));
-    addRow(rows, body, makeRowLabel(tr("Alpha"), body), nullptr, solidAlphaAssociation_);
-
-    solidColorEncoding_ = makeReadOnlyValueLabel(kit::TypeRole::Ui, body);
-    solidColorEncoding_->setObjectName("solidColorEncoding");
-    solidColorEncoding_->setAccessibleName(tr("Solid color encoding"));
-    addRow(rows, body, makeRowLabel(tr("Encoding"), body), nullptr, solidColorEncoding_);
-
     layout->addWidget(solidColorPanel_);
 }
 

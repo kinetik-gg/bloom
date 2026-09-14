@@ -427,7 +427,7 @@ class TimelineLayerRow final : public QWidget {
                             (height() - kit::px(kit::Size::IconMedium)) / 2,
                             kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
             painter.setBrush(kit::color(kit::Color::ControlSurface));
-            painter.setPen(kit::color(active ? kit::Color::Accent : kit::Color::Border));
+            painter.setPen(kit::color(kit::Color::Border));
             const int radius = kit::radiusPx(kit::Radius::Small, box.width());
             painter.drawRoundedRect(box, radius, radius);
             const auto id = cell == ToggleCell::Visibility

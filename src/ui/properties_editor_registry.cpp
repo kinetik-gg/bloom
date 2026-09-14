@@ -68,6 +68,9 @@ void PropertiesEditor::configureRegistryRows() {
             }
             int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
+                if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
+                    PropertiesRowVisibility::Hidden)
+                    continue;
                 // Only these roles already have purpose-built rows. Everything else comes from
                 // the definition, including future source parameters and value-node operands.
                 const bool handcrafted =

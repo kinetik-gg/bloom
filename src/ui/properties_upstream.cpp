@@ -128,6 +128,9 @@ void PropertiesEditor::configureUpstream() {
             if (!definition)
                 continue;
             for (const auto& declared : definition->parameters) {
+                if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
+                    PropertiesRowVisibility::Hidden)
+                    continue;
                 const auto found = std::ranges::find(node->parameters, declared.role,
                                                      &document::ParameterBinding::role);
                 if (found == node->parameters.end())

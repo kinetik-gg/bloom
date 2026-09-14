@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/button.hpp>
 
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -46,6 +47,7 @@ namespace {
 } // namespace
 
 KButton::KButton(QWidget* parent) : QAbstractButton(parent) {
+    ensureKeyboardFocusTracking(*this);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
     setCursor(Qt::PointingHandCursor);
@@ -120,14 +122,14 @@ State KButton::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (hasFocus()) {
+    if (hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;
 }
 
 Color KButton::borderToken() const {
-    return borderForInteraction(isEnabled(), hasFocus(), hovered_);
+    return borderForInteraction(isEnabled(), hasKeyboardFocus(*this), hovered_);
 }
 
 QColor KButton::fillForState(const State state) const {

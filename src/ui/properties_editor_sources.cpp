@@ -62,10 +62,6 @@ void PropertiesEditor::configureSolidColor() {
     for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
         field->setToolTip(colorTip);
     }
-    solidAlphaAssociation_->setText(tr("Straight (unassociated)"));
-    solidColorEncoding_->setText(
-        QString::fromUtf8(document::kSolidColorEncoding.data(),
-                          static_cast<qsizetype>(document::kSolidColorEncoding.size())));
 }
 
 void PropertiesEditor::configureTextSource() {

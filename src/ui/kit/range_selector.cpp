@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/range_selector.hpp>
 
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -20,6 +21,7 @@ constexpr int kHandleWidth = 8;
 } // namespace
 
 KRangeSelector::KRangeSelector(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kRangeSelector"));
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
@@ -147,7 +149,7 @@ State KRangeSelector::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (hasFocus()) {
+    if (hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;
@@ -250,7 +252,7 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
         const QRectF bounds = handleRect(handle);
         fillRoundedSurface(painter, bounds, handleFill, color(borderForState(state)),
                            Radius::Small);
-        if (hasFocus() && state != State::Disabled && handle == Handle::Lower) {
+        if (hasKeyboardFocus(*this) && state != State::Disabled && handle == Handle::Lower) {
             drawFocusRing(painter, bounds, Radius::Small);
         }
     }

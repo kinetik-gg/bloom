@@ -17,6 +17,9 @@ class KSwitch;
 class KRadioGroup;
 } // namespace kit
 enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Stepper };
+enum class PropertiesRowVisibility : std::uint8_t { Visible, Hidden };
+[[nodiscard]] PropertiesRowVisibility propertiesRowVisibility(std::string_view role,
+                                                              std::string_view schemaKey) noexcept;
 [[nodiscard]] PropertiesRowControl propertiesRowControl(std::string_view schemaKey);
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey);
 class PropertiesRegistryRow final : public QWidget {

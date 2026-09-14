@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/color_chip.hpp>
 
 #include <bloom/ui/kit/color_picker.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -29,6 +30,7 @@ namespace {
 } // namespace
 
 KColorChip::KColorChip(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kColorChip"));
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
@@ -110,7 +112,7 @@ State KColorChip::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (hasFocus()) {
+    if (hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;
@@ -217,7 +219,7 @@ void KColorChip::paintEvent(QPaintEvent* event) {
                            Radius::Small);
     }
 
-    if (hasFocus() && state != State::Disabled) {
+    if (hasKeyboardFocus(*this) && state != State::Disabled) {
         drawFocusRing(painter, bounds, shape_ == Shape::Circle ? Radius::Full : Radius::Small);
     }
 }

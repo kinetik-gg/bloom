@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
 
@@ -40,6 +41,7 @@ constexpr int kLineEditTextMargin = 2;
 } // namespace
 
 KValueField::KValueField(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kValueField"));
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
@@ -241,7 +243,7 @@ QRectF KValueField::cellTextRect() const {
 }
 
 Color KValueField::borderToken() const {
-    return borderForInteraction(isEnabled(), editing_ || hasFocus(), hovered_);
+    return borderForInteraction(isEnabled(), editing_ || hasKeyboardFocus(*this), hovered_);
 }
 
 QColor KValueField::cellBorderColor() const {
@@ -258,7 +260,7 @@ State KValueField::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (editing_ || hasFocus()) {
+    if (editing_ || hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;

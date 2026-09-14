@@ -398,8 +398,6 @@ parameterForRole(const bloom::document::Composition& composition,
     auto* solidColorGreen = properties.findChild<ui::kit::KValueField*>("solidColorGreenEditor");
     auto* solidColorBlue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
     auto* solidColorAlpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
-    auto* solidAlphaAssociation = properties.findChild<QLabel*>("solidAlphaAssociation");
-    auto* solidColorEncoding = properties.findChild<QLabel*>("solidColorEncoding");
     if (!require(solidSourceNode != nullptr &&
                      solidSourceNode->typeId == document::kSolidSourceNodeType,
                  "direct source is the durable solid-source node") ||
@@ -413,11 +411,9 @@ parameterForRole(const bloom::document::Composition& composition,
                      solidColorRed->value() == 0.62 && solidColorGreen->value() == 0.08 &&
                      solidColorBlue->value() == 0.04 && solidColorAlpha->value() == 1.0,
                  "Properties exposes the exact default RGBA through editable value cells") ||
-        !require(solidAlphaAssociation != nullptr &&
-                     solidAlphaAssociation->text() == QStringLiteral("Straight (unassociated)") &&
-                     solidColorEncoding != nullptr &&
-                     solidColorEncoding->text() == QStringLiteral("bloom.reference.linear-srgb"),
-                 "Properties names alpha association and reference encoding explicitly")) {
+        !require(properties.findChild<QLabel*>("solidAlphaAssociation") == nullptr &&
+                     properties.findChild<QLabel*>("solidColorEncoding") == nullptr,
+                 "Properties keeps technical alpha and encoding metadata out of source rows")) {
         return false;
     }
 

@@ -222,6 +222,7 @@ void testTheSwitchStateMachineAndDisabled(Expectations& expectations) {
     host.activateWindow();
     QCoreApplication::processEvents();
 
+    toggle.clearFocus();
     toggle.setFocus(Qt::TabFocusReason);
     QCoreApplication::processEvents();
     expectations.expect(toggle.visualState() == kit::State::Focused, "focus is its own state");

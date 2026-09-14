@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QEnterEvent>
@@ -25,6 +26,7 @@ namespace {
 } // namespace
 
 KDropdown::KDropdown(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kDropdown"));
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
@@ -162,14 +164,14 @@ State KDropdown::visualState() const {
     if (hovered_) {
         return State::Hover;
     }
-    if (hasFocus()) {
+    if (hasKeyboardFocus(*this)) {
         return State::Focused;
     }
     return State::Normal;
 }
 
 Color KDropdown::borderToken() const {
-    return borderForInteraction(isEnabled(), isPopupVisible() || hasFocus(), hovered_);
+    return borderForInteraction(isEnabled(), isPopupVisible() || hasKeyboardFocus(*this), hovered_);
 }
 
 int KDropdown::controlExtent() const {
