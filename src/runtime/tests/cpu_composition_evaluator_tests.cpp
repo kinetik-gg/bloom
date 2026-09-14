@@ -370,6 +370,31 @@ void testNestedMergeEqualsFlat(Expectations& expectations) {
             expectations.expect(pixel(expected, x, y, a) && pixel(actual, x, y, b) && a == b,
                                 "two-level Normal Merge is bit-identical to flattened layers");
         }
+    auto wrappedDefinition = nested->copyDefinition();
+    wrappedDefinition.operations.insert(
+        wrappedDefinition.operations.begin() + 6,
+        layerOutput(document::NodeId::fromRaw(901), document::LayerId::fromRaw(901),
+                    runtime::OperationIndex::fromRaw(5),
+                    {document::ParameterId::fromRaw(901), document::ParameterId::fromRaw(902),
+                     document::ParameterId::fromRaw(903), document::ParameterId::fromRaw(904),
+                     document::ParameterId::fromRaw(905), document::ParameterId::fromRaw(906)},
+                    {}));
+    wrappedDefinition.operations.insert(
+        wrappedDefinition.operations.begin() + 7,
+        runtime::CompiledMerge{
+            document::NodeId::fromRaw(902),
+            {{document::LayerSlotId::fromRaw(902), document::LayerId::fromRaw(901),
+              runtime::OperationIndex::fromRaw(6)}}});
+    std::get<runtime::CompiledCompositionOutput>(wrappedDefinition.operations[8]).input =
+        runtime::OperationIndex::fromRaw(7);
+    wrappedDefinition.output = runtime::OperationIndex::fromRaw(8);
+    const auto wrapped = publishPlan(std::move(wrappedDefinition));
+    const auto wrappedResult = evaluator.evaluate(wrapped, requestFor(*wrapped), {});
+    render::Rgba32f originalPixel = render::Rgba32f::transparent(), wrappedPixel = originalPixel;
+    expectations.expect(pixel(actual, 1, 1, originalPixel) &&
+                            pixel(wrappedResult, 1, 1, wrappedPixel) &&
+                            originalPixel == wrappedPixel,
+                        "a Merge can feed an identity Layer without changing pixels");
     auto plainDefinition = oneSolidPlan()->copyDefinition();
     std::get<runtime::CompiledMerge>(plainDefinition.operations[2]).entries = {
         {kSlotA, {}, runtime::OperationIndex::fromRaw(0)}};

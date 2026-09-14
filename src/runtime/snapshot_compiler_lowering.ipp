@@ -261,9 +261,19 @@ lower(const std::vector<document::NodeId>& order) {
             operations.emplace_back(runtime::CompiledCompositionOutput{nodeId, empty});
             continue;
         }
-        const auto operation = lowerNode(*node, *definition->second, indices);
+        auto operation = lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
             return {};
+        }
+        // Output always publishes a full composition image. A graph wired directly to a
+        // source or Layer gets a derived Normal Merge, including empty/cropped Layer images.
+        // Its zero slot ID is synthetic plan metadata, never a durable document slot.
+        if (auto* output = std::get_if<runtime::CompiledCompositionOutput>(&*operation);
+            output &&
+            !std::holds_alternative<runtime::CompiledMerge>(operations[output->input.value()])) {
+            const auto normalized = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledMerge{nodeId, {{{}, {}, output->input}}});
+            output->input = normalized;
         }
         const auto index = runtime::OperationIndex::fromRaw(operations.size());
         operations.push_back(*operation);

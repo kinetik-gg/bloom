@@ -71,6 +71,9 @@ Entry zero is topmost, matching the pill and timeline. Evaluation folds the list
 preserving existing single-Merge documents exactly. Each Layer input supplies its own transform,
 opacity, blend mode, half-open range, enabled and solo state. Plain image inputs composite with
 Normal blending at full opacity. Merge inputs are topologically evaluated before their consumers.
+Merge outputs can feed a Layer image input. A direct source or Layer connection to Output is
+normalized by a derived Normal Merge so the output remains a full composition image; this creates
+no document node or slot and does not change timeline membership.
 Nested grouping preserves the flattened result for Normal-over composition; arbitrary non-Normal
 blends are not associative and grouping may intentionally change their backdrop.
 

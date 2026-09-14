@@ -498,6 +498,18 @@ void testNestedMergeCompilation(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
     registry.freeze();
+    auto direct = project;
+    auto& directGraph = direct.findComposition(kCompositionId)->graph();
+    require(directGraph.eraseEdge(kOutputEdge) &&
+                directGraph.addEdge(
+                    {kOutputEdge, {kFirstLayerNode, "image"}, NodeInputRef{kOutputNode, "image"}}),
+            "direct Layer output fixture");
+    const auto directResult = compile(std::move(direct), registry);
+    expectations.expect(
+        directResult.plan &&
+            std::holds_alternative<runtime::CompiledMerge>(
+                directResult.plan->operations()[directResult.plan->output().value() - 1]),
+        "direct image Output is normalized to a full composition image");
     const auto result = compile(std::move(project), registry);
     expectations.expect(result.plan && result.diagnostics.empty(),
                         "nested Merges compile without diagnostics");

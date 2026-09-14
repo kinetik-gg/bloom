@@ -315,13 +315,15 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
-                           std::holds_alternative<CompiledText>(input);
+                           std::holds_alternative<CompiledText>(input) ||
+                           std::holds_alternative<CompiledLayerOutput>(input) ||
+                           std::holds_alternative<CompiledMerge>(input);
                 };
                 if (!sourcesAnImage()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Layer Output has an invalid image input",
-                        "The input must name an earlier Solid or Text operation.",
+                        "The input must name an earlier image-producing operation.",
                         subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                     return false;
                 }
@@ -390,7 +392,8 @@ enum class ScalarDomain : std::uint8_t {
                 return true;
             },
             [&plan, index, &failure](const CompiledCompositionOutput& output) {
-                if (output.input.value() >= index) {
+                if (output.input.value() >= index || !std::holds_alternative<CompiledMerge>(
+                                                         plan.operations()[output.input.value()])) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
                         "Composition Output has an invalid stack input", {},
@@ -1425,6 +1428,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 detail::parameterSubject(operationSubject, *position, "position"));
                             return;
                         }
+                        if (!slots[layer.input.value()])
+                            return;
                         auto sourceView = slots[layer.input.value()]->view();
                         if (!sourceView) {
                             operationFailure =
