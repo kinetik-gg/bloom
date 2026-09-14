@@ -56,12 +56,14 @@ void PropertiesAnchorGrid::refresh() {
     const auto* direct = std::get_if<document::LayerId>(&session_.selection().primary);
     layer_ = direct ? std::optional(*direct) : session_.selection().contextualLayer;
     const auto time = session_.currentTime();
-    const auto identity = QString("%1/%2/%3/%4/%5")
+    const auto* anchor = session_.parameterForSelection(document::kAnchorParameterRole);
+    const auto identity = QString("%1/%2/%3/%4/%5/%6")
                               .arg(session_.compositionId().value())
                               .arg(session_.snapshot().revision().value())
                               .arg(layer_ ? layer_->value() : 0)
                               .arg(time.numerator())
-                              .arg(time.denominator());
+                              .arg(time.denominator())
+                              .arg(anchor ? anchor->id.value() : 0);
     update();
     if (identity == identity_)
         return;

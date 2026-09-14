@@ -1,4 +1,3 @@
-#include "../properties_anchor_grid.hpp"
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -46,7 +45,11 @@ void idle(QWidget& widget) {
     QCoreApplication::sendEvent(&widget, &leave);
     settle();
 }
-void waitForBounds(ui::PropertiesAnchorGrid& grid) {
+QRect gridPointRect(const int index) {
+    // Independent design metric: an 8 px dot on a 12 px pitch, inset by 2 px.
+    return {index % 3 * 12 + 2, index / 3 * 12 + 2, 8, 8};
+}
+void waitForBounds(QWidget& grid) {
     QElapsedTimer timer;
     timer.start();
     while (!grid.isEnabled() && timer.elapsed() < 10000) {
@@ -89,7 +92,7 @@ void run() {
     area.show();
     settle();
     auto* panel = area.findChild<ui::PropertiesEditor*>();
-    auto* grid = area.findChild<ui::PropertiesAnchorGrid*>();
+    auto* grid = area.findChild<QWidget*>("propertiesAnchorGrid");
     expect(panel && grid, "panel and anchor grid exist");
     if (!panel || !grid)
         return;
@@ -146,26 +149,36 @@ void run() {
     expect(xRow->findChild<QLabel*>("propertiesRowLabel")->font().capitalization() ==
                QFont::MixedCase,
            "property labels preserve title case");
-    expect(grid->selectedPoint() == 4, "default anchor highlights centre");
+    expect(grid->property("selectedPoint").toInt() == 4, "default anchor highlights centre");
     idle(*grid);
     const auto image = grid->grab().toImage();
-    expect(image.pixelColor(grid->pointRect(4).center()).lightness() >
-               image.pixelColor(grid->pointRect(0).center()).lightness(),
+    expect(image.pixelColor(gridPointRect(4).center()).lightness() >
+               image.pixelColor(gridPointRect(0).center()).lightness(),
            "selected anchor point is brighter");
     const auto before = stack.size();
-    click(*grid, grid->pointRect(0).center());
+    click(*grid, gridPointRect(0).center());
     waitForBounds(*grid);
-    expect(stack.size() == before + 1 && grid->selectedPoint() == 0,
+    expect(stack.size() == before + 1 && grid->property("selectedPoint").toInt() == 0,
            "anchor corner is one undoable edit");
     const auto anchor = session.effectiveVec2Value(document::kAnchorParameterRole);
     expect(anchor && anchor->x == -960 && anchor->y == -540, "corner uses half local dimensions");
     (void)session.setSelectedAnchor(13, 17);
     waitForBounds(*grid);
-    expect(grid->selectedPoint() == -1, "custom anchor clears highlight");
+    expect(grid->property("selectedPoint").toInt() == -1, "custom anchor clears highlight");
     (void)session.setSelectedAnchor(0, 0);
     waitForBounds(*grid);
     const auto layerId = std::get<document::LayerId>(session.selection().primary);
     const auto sourceId = session.directSourceNodeForLayer(layerId);
+    if (sourceId) {
+        session.selectNode(*sourceId);
+        settle();
+        expect(!grid->isEnabled(),
+               "a source-node selection cannot retain the layer's active anchor grid");
+        session.selectLayer(layerId);
+        waitForBounds(*grid);
+        expect(grid->property("selectedPoint").toInt() == 4,
+               "returning to the layer resolves its anchor again");
+    }
     const auto* source = sourceId ? session.composition()->graph().findNode(*sourceId) : nullptr;
     document::ParameterId widthParameter;
     if (source)
@@ -176,7 +189,7 @@ void run() {
     if (widthParameter.isValid()) {
         (void)session.setParameterValue(widthParameter, 200.0, "Resize Solid");
         waitForBounds(*grid);
-        click(*grid, grid->pointRect(5).center());
+        click(*grid, gridPointRect(5).center());
         waitForBounds(*grid);
         const auto resizedAnchor = session.effectiveVec2Value(document::kAnchorParameterRole);
         expect(resizedAnchor && resizedAnchor->x == 100 && resizedAnchor->y == 0,

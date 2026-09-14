@@ -14,6 +14,7 @@ class CompositionSession;
 // Resolves the same immutable local geometry as the viewer, off the UI thread.
 class PropertiesAnchorGrid final : public QWidget {
     Q_OBJECT
+    Q_PROPERTY(int selectedPoint READ selectedPoint)
   public:
     PropertiesAnchorGrid(CompositionSession& session, QWidget* parent);
     ~PropertiesAnchorGrid() override;
