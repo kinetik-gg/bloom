@@ -91,8 +91,7 @@ struct InjectedLayerOutputParameter final {
             if (document::isLegacyRerouteNodeType(node.typeId)) {
                 node.typeId = std::string(document::kRerouteNodeType);
             }
-            if (node.typeId != document::kLayerOutputNodeType ||
-                node.schemaVersion >= document::kLayerOutputNodeSchemaVersion) {
+            if (node.typeId != document::kLayerOutputNodeType || node.schemaVersion >= 3) {
                 continue;
             }
             for (const auto& parameter : injected) {
@@ -120,7 +119,7 @@ struct InjectedLayerOutputParameter final {
                 return left.role != right.role ? left.role < right.role
                                                : left.parameterId < right.parameterId;
             });
-            node.schemaVersion = document::kLayerOutputNodeSchemaVersion;
+            node.schemaVersion = 3;
         }
     }
     return std::nullopt;

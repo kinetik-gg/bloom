@@ -27,6 +27,8 @@ void validateDocumentSchemaV1_5(const json::Value& schema);
 void validateDocumentSchemaV1_6(const json::Value& schema);
 void validateManifestSchemaV1_6(const json::Value& schema);
 void validateManifestSchemaV1_5(const json::Value& schema);
+void validateDocumentSchemaV1_7(const json::Value& schema);
+void validateManifestSchemaV1_7(const json::Value& schema);
 void checkProjectSchemas(const std::filesystem::path& repositoryRoot);
 
 } // namespace bloom::quality

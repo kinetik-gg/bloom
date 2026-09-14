@@ -55,9 +55,16 @@ OperationResult AddNode::apply(document::Draft& draft) const {
         const auto parameterId = draft.ids().allocateParameter();
         if (!parameterId)
             return detail::exhaustedIds();
-        if (!composition->parameters().insert(
-                {*parameterId, parameter.schemaKey,
-                 document::ConstantValueSource{parameter.defaultValue}}))
+        auto value = parameter.defaultValue;
+        if (parameter.schemaKey == document::kSolidWidthParameterSchemaKey)
+            value = static_cast<double>(composition->format().width());
+        else if (parameter.schemaKey == document::kSolidHeightParameterSchemaKey)
+            value = static_cast<double>(composition->format().height());
+        else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
+            value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
+                                    static_cast<double>(composition->format().height()) / 2.0};
+        if (!composition->parameters().insert({*parameterId, parameter.schemaKey,
+                                               document::ConstantValueSource{std::move(value)}}))
             return OperationResult::rejected(
                 OperationIssueCode::InvalidValue,
                 "Node definition default violates its parameter schema");

@@ -114,7 +114,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "built-in definitions register as one startup contribution");
     // ADAPTED (task S7, then FIX1 item I): the five structural node types plus the value library,
     // which is thirty-three now -- the eight per-kind Reroutes became ONE.
-    expectations.expect(registry.definitions().size() == 38,
+    expectations.expect(registry.definitions().size() == 42,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();
@@ -137,7 +137,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
                         "Text is a lowered capability with its own compiled operation");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 3 &&
+        text != nullptr && text->parameters.size() == 6 &&
             text->parameters[0].role == document::kTextParameterRole &&
             text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
             text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
@@ -148,7 +148,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             text->parameters[2].schemaKey == document::kTextColorParameterSchemaKey &&
             text->parameters[2].valueKind == runtime::ParameterValueKind::Color4d,
         "the text schema is exactly content, size, and color, in the registered order");
-    expectations.expect(text != nullptr && text->parameters.size() == 3 &&
+    expectations.expect(text != nullptr && text->parameters.size() == 6 &&
                             text->parameters[1].defaultValue ==
                                 document::ParameterValue{document::kDefaultTextSizePixels} &&
                             text->parameters[2].defaultValue ==
@@ -178,7 +178,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                 [](const auto& parameter) { return parameter.supportsAnimation; }) &&
             !layer->parameters[5].supportsAnimation && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
-            text->parameters.size() == 3 && !text->parameters[0].supportsAnimation &&
+            text->parameters.size() == 6 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
         "animation support is an explicit per-parameter evaluator capability");
     const auto declarationMatchesSchema = [](const auto& definition) {

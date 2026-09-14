@@ -16,6 +16,7 @@ target_sources(
         document_decode.cpp
         document_decode_composition.cpp
         document_decode_internal.hpp
+        document_bounds_migration.cpp
         document_migration.cpp
         document_layout_migration.cpp
         document_decode_layout.cpp
@@ -387,4 +388,12 @@ if(BUILD_TESTING)
             LABELS unit project persistence security
         )
     endif()
+endif()
+
+if(BUILD_TESTING)
+    add_executable(bloom_project_content_bounds_migration_test tests/content_bounds_migration_tests.cpp)
+    target_link_libraries(bloom_project_content_bounds_migration_test PRIVATE bloom_project bloom_commands bloom_runtime_compiler bloom_runtime_evaluator)
+    bloom_enable_warnings(bloom_project_content_bounds_migration_test)
+    bloom_enable_strict_floating_point(bloom_project_content_bounds_migration_test)
+    bloom_add_test(NAME bloom.project.content_bounds_migration COMMAND bloom_project_content_bounds_migration_test LABELS project runtime unit TIMEOUT 30)
 endif()

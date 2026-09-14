@@ -16,16 +16,21 @@
 namespace bloom::document {
 
 inline constexpr std::string_view kSolidColorParameterSchemaKey = "bloom.solid.color";
+inline constexpr std::string_view kSolidWidthParameterSchemaKey = "bloom.solid.width";
+inline constexpr std::string_view kSolidHeightParameterSchemaKey = "bloom.solid.height";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
+// Alignment: 0 = Left, 1 = Center, 2 = Right. Line height is a positive em multiplier;
+// letter spacing is a finite number of full-resolution pixels between adjacent glyphs.
+inline constexpr std::string_view kTextAlignmentParameterSchemaKey = "bloom.text.alignment";
+inline constexpr std::string_view kTextLineHeightParameterSchemaKey = "bloom.text.line-height";
+inline constexpr std::string_view kTextLetterSpacingParameterSchemaKey =
+    "bloom.text.letter-spacing";
 inline constexpr std::string_view kTextColorParameterSchemaKey = "bloom.text.color";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
-// Layer-space anchor, in full-resolution composition pixels, measured from the LAYER CENTRE -- so
-// the default Vec2d{} is exactly "the layer centre" without the schema needing to know any
-// composition format. Scale/rotation turn about this point and it is the one point a layer's
-// position parameter places, which is why the two share an origin: position puts the layer centre
-// at its value, so anchor {0, 0} is that same point. See docs/architecture/layer-graph-model.md,
-// "Layer Transform".
+// Offset from the centre of the source's local content bounds, in full-resolution pixels.
+// Position places that anchor in composition space; scale and rotation act about it.
+// New Layer v4 follows this contract. Persisted Layer v3 retains frame-relative placement.
 inline constexpr std::string_view kAnchorParameterSchemaKey = "bloom.transform.anchor";
 // Unitless per-axis scale factor. 1 is unscaled; a negative factor mirrors the axis; 0 collapses
 // the layer to nothing, which evaluation renders as an empty layer rather than an error.
@@ -169,7 +174,12 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 [[nodiscard]] constexpr bool
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey ||
-           schemaKey == kTextSizeParameterSchemaKey || schemaKey == kScalarValueParameterSchemaKey;
+           schemaKey == kTextSizeParameterSchemaKey ||
+           schemaKey == kScalarValueParameterSchemaKey ||
+           schemaKey == kSolidWidthParameterSchemaKey ||
+           schemaKey == kSolidHeightParameterSchemaKey ||
+           schemaKey == kTextLineHeightParameterSchemaKey ||
+           schemaKey == kTextLetterSpacingParameterSchemaKey;
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -213,6 +223,10 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // is checked separately by each caller because the diagnostic it produces differs.
 [[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
+    if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)
+        return value >= 1.0;
+    if (schemaKey == kTextLineHeightParameterSchemaKey)
+        return value > 0.0;
     if (hasUnitDomainSchemaKey(schemaKey)) {
         return value >= 0.0 && value <= 1.0;
     }

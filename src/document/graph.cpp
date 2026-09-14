@@ -27,6 +27,10 @@ struct ExpectedParameterBinding final {
 constexpr std::array kSolidSourceBindings{
     ExpectedParameterBinding{bloom::document::kSolidColorParameterRole,
                              bloom::document::kSolidColorParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kSolidWidthParameterRole,
+                             bloom::document::kSolidWidthParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kSolidHeightParameterRole,
+                             bloom::document::kSolidHeightParameterSchemaKey},
 };
 constexpr std::array kTextSourceBindings{
     ExpectedParameterBinding{bloom::document::kTextParameterRole,
@@ -35,6 +39,12 @@ constexpr std::array kTextSourceBindings{
                              bloom::document::kTextSizeParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kTextColorParameterRole,
                              bloom::document::kTextColorParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextAlignmentParameterRole,
+                             bloom::document::kTextAlignmentParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextLineHeightParameterRole,
+                             bloom::document::kTextLineHeightParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextLetterSpacingParameterRole,
+                             bloom::document::kTextLetterSpacingParameterSchemaKey},
 };
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,
@@ -55,14 +65,15 @@ constexpr std::array kLayerOutputBindings{
 expectedBindings(const bloom::document::NodeRecord& node) noexcept {
     using namespace bloom::document;
     if (node.typeId == kSolidSourceNodeType &&
-        node.schemaVersion == kSolidSourceNodeSchemaVersion) {
-        return kSolidSourceBindings;
+        (node.schemaVersion == kSolidSourceNodeSchemaVersion || node.schemaVersion == 1)) {
+        return std::span(kSolidSourceBindings).first(node.schemaVersion == 1 ? 1 : 3);
     }
-    if (node.typeId == kTextSourceNodeType && node.schemaVersion == kTextSourceNodeSchemaVersion) {
-        return kTextSourceBindings;
+    if (node.typeId == kTextSourceNodeType &&
+        (node.schemaVersion == kTextSourceNodeSchemaVersion || node.schemaVersion == 1)) {
+        return std::span(kTextSourceBindings).first(node.schemaVersion == 1 ? 3 : 6);
     }
     if (node.typeId == kLayerOutputNodeType &&
-        node.schemaVersion == kLayerOutputNodeSchemaVersion) {
+        (node.schemaVersion == kLayerOutputNodeSchemaVersion || node.schemaVersion == 3)) {
         return kLayerOutputBindings;
     }
     return {};

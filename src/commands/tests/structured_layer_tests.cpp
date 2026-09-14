@@ -83,7 +83,7 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
                       const SolidOutputIds& ids, const std::string_view name,
                       const core::Color4d color, const Vec2d position, const double opacityValue) {
     const auto& value = composition(snapshot);
-    const NodeRecord expectedSolidNode{
+    NodeRecord expectedSolidNode{
         ids.solidNodeId,
         std::string(document::kSolidSourceNodeType),
         {{std::string(document::kSolidColorParameterRole), ids.colorParameterId}},
@@ -157,6 +157,20 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
     };
 
     const auto* solidNode = value.graph().findNode(ids.solidNodeId);
+    if (solidNode)
+        for (const auto& binding : solidNode->parameters) {
+            if (binding.role == "width" || binding.role == "height") {
+                expectedSolidNode.parameters.push_back(binding);
+                const auto* dimension = value.parameters().find(binding.parameterId);
+                test.expect(
+                    dimension &&
+                        std::get<double>(std::get<ConstantValueSource>(dimension->source).value) ==
+                            (binding.role == "width" ? value.format().width()
+                                                     : value.format().height()),
+                    "solid dimensions default to composition size");
+            }
+        }
+    test.expect(expectedSolidNode.parameters.size() == 3, "solid declares both dimensions");
     const auto* layerOutputNode = value.graph().findNode(ids.layerOutputNodeId);
     test.expect(solidNode != nullptr && *solidNode == expectedSolidNode,
                 "solid source should preserve exact type, schema, and color binding");
@@ -260,7 +274,7 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
                 "every parameter in a text branch has its own identity");
 
     const auto& value = composition(document.snapshot());
-    const NodeRecord expectedTextNode{
+    NodeRecord expectedTextNode{
         *textNodeId,
         std::string(document::kTextSourceNodeType),
         {
@@ -271,6 +285,13 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
         document::kTextSourceNodeSchemaVersion,
     };
     const auto* textNode = value.graph().findNode(*textNodeId);
+    if (textNode)
+        for (const auto& binding : textNode->parameters) {
+            if (binding.role == "alignment" || binding.role == "line-height" ||
+                binding.role == "letter-spacing")
+                expectedTextNode.parameters.push_back(binding);
+        }
+    test.expect(expectedTextNode.parameters.size() == 6, "text declares typography parameters");
     test.expect(textNode != nullptr && *textNode == expectedTextNode,
                 "text source should bind content, size, and color in the registered order");
 
@@ -427,7 +448,7 @@ void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {
         test.fail("AddSolidLayer should expose all thirteen typed durable IDs");
         return;
     }
-    test.expect(result.changed() && result.outputs.size() == 13 &&
+    test.expect(result.changed() && result.outputs.size() == 15 &&
                     document.snapshot().project().validate().ok(),
                 "AddSolidLayer should publish one valid topology and every durable ID");
     expectSolidState(test, document.snapshot(), *ids, "Plate", color, Vec2d{320.0, 180.0}, 0.75);

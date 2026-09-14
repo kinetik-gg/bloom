@@ -134,6 +134,10 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
 constantMatchesSchema(const std::string_view schemaKey,
                       const bloom::document::ConstantValueSource& constant) noexcept {
     using namespace bloom::document;
+    if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
+    }
     if (schemaKey == kSolidColorParameterSchemaKey) {
         const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
         return color != nullptr && color->isValid();
@@ -165,6 +169,15 @@ constantMatchesSchema(const std::string_view schemaKey,
         // build belongs in the "cannot be interpreted" path, not in a guess.
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
+    }
+    if (schemaKey == kTextAlignmentParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value <= 2;
+    }
+    if (schemaKey == kTextLineHeightParameterSchemaKey ||
+        schemaKey == kTextLetterSpacingParameterSchemaKey) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
     }
     if (schemaKey == kTextParameterSchemaKey) {
         return std::holds_alternative<std::string>(constant.value);
