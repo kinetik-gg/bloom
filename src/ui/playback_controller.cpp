@@ -99,7 +99,19 @@ void PlaybackController::play() {
     // A later play() after a pause resumes from the CURRENT session time, never the original
     // start (design decision 2) -- read fresh here every time, not cached from a prior play().
     startClock_ = clock_();
+    const auto range = session_.workArea();
+    const auto first = mapping->nearestFrameIndex(range.start);
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, composition->format().frameRate().numerator(),
+                                       composition->format().frameRate().denominator());
+    if (!endMapping)
+        return;
     startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
+    if (session_.currentTime() < range.start || session_.currentTime() >= range.end) {
+        startFrameIndex_ = first;
+        if (const auto time = mapping->timeForFrame(first); time)
+            (void)session_.setCurrentTime(*time.value());
+    }
     appliedOffset_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
 
@@ -167,7 +179,14 @@ void PlaybackController::tick() {
         return;
     }
 
-    const auto frameCount = mapping->maximumFrameIndex() + 1;
+    const auto range = session_.workArea();
+    const auto first = mapping->nearestFrameIndex(range.start);
+    const auto rate = composition->format().frameRate();
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping)
+        return;
+    const auto frameCount = endMapping.value()->maximumFrameIndex() - first + 1;
     if (*frameOffset <= appliedOffset_) {
         // The frame this run is already showing is still the one elapsed time asks for.
         return;
@@ -181,7 +200,7 @@ void PlaybackController::tick() {
     const auto steppedOffset = appliedOffset_ + 1;
     auto nextOffset = *frameOffset;
     if (steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
-        isFrameCached(*mapping, (startFrameIndex_ + steppedOffset) % frameCount)) {
+        isFrameCached(*mapping, first + (startFrameIndex_ - first + steppedOffset) % frameCount)) {
         nextOffset = steppedOffset;
     }
     if (nextOffset > std::numeric_limits<std::uint64_t>::max() - startFrameIndex_) {
@@ -191,7 +210,7 @@ void PlaybackController::tick() {
     // Looping (design decision 2): wraps within [0, duration) via exact modulo of the frame count.
     // The offset is exact in both clocks -- elapsed-derived or one frame on -- so repeated wraps
     // never drift.
-    const auto targetFrameIndex = (startFrameIndex_ + nextOffset) % frameCount;
+    const auto targetFrameIndex = first + (startFrameIndex_ - first + nextOffset) % frameCount;
     previewController_.noteDroppedFrames(nextOffset - appliedOffset_ - 1);
     appliedOffset_ = nextOffset;
 

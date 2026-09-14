@@ -220,6 +220,14 @@ bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& regi
     return true;
 }
 
+const LayerOutputBoundary* CanonicalGraph::findLayer(const LayerId id) const noexcept {
+    const auto found = std::ranges::find(layerOutputs_, id, &LayerOutputBoundary::layerId);
+    return found == layerOutputs_.end() ? nullptr : &*found;
+}
+LayerOutputBoundary* CanonicalGraph::findLayer(const LayerId id) noexcept {
+    return const_cast<LayerOutputBoundary*>(std::as_const(*this).findLayer(id));
+}
+
 bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
     if (!boundary.nodeId.isValid() || !boundary.layerId.isValid() ||
         !isValidHumanFacingName(boundary.name) || !isValidStructuralText(boundary.outputPort)) {

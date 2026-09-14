@@ -99,6 +99,11 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
+        kit/third_party/phosphor-icons/bold/eye-bold.svg
+        kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-bold.svg
+        kit/third_party/phosphor-icons/bold/lock-simple-open-bold.svg
+        kit/third_party/phosphor-icons/bold/check-bold.svg
         kit/third_party/phosphor-icons/regular/eye.svg
         kit/third_party/phosphor-icons/regular/film-slate.svg
         kit/third_party/phosphor-icons/regular/film-strip.svg
@@ -245,6 +250,7 @@ target_sources(
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_work_area.cpp
         timeline_navigation.cpp
         viewer_editor.cpp
         workspace_host.cpp

@@ -21,6 +21,12 @@
 #include <vector>
 
 namespace bloom::ui {
+document::WorkArea CompositionSession::workArea() const noexcept {
+    const auto* current = composition();
+    return current ? current->workArea().value_or(document::WorkArea{{}, current->duration()})
+                   : document::WorkArea{};
+}
+
 namespace {
 
 QString statusMessage(const commands::CommandResult& result) {
@@ -1008,6 +1014,8 @@ CompositionSession::beginPositionInteraction(PositionInteractionMapping mapping)
         return PositionInteractionRejection::NoResolvablePosition;
     }
 
+    if (composition() && composition()->parameterLocked(position->id))
+        return PositionInteractionRejection::LockedLayer;
     document::Vec2d baseValue{};
     if (const auto* constantSource =
             std::get_if<document::ConstantValueSource>(&position->source)) {

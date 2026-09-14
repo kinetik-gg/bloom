@@ -35,9 +35,11 @@ firstImageInput(const document::NodeRecord& node) const {
 }
 
 [[nodiscard]] bool mutedLayer(const document::LayerStackEntry& entry) const {
-    for (const auto& boundary : composition_->graph().layerOutputs()) {
+    const auto boundaries = composition_->graph().layerOutputs();
+    const bool anySolo = std::ranges::any_of(boundaries, &document::LayerOutputBoundary::solo);
+    for (const auto& boundary : boundaries) {
         if (boundary.layerId == entry.layerId)
-            return isMuted(boundary.nodeId);
+            return !boundary.enabled || (anySolo && !boundary.solo) || isMuted(boundary.nodeId);
     }
     return false;
 }

@@ -1,4 +1,6 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -218,6 +220,32 @@ void finishFixture(SessionFixture& fixture, Expectations& expectations) {
 // Controller test 1: play from t=0 advances session time through the exact expected frame times
 // for a synthetic elapsed sequence, including a multi-frame jump that produces exactly ONE session
 // advance (drop-not-slow, never catch-up-frame-by-frame).
+void testWorkAreaLoop(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Work area loop", time(4)));
+    commands::Transaction range("Work area", fixture.session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(1), time(2));
+    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                        "work area accepted");
+    ManualClock clock;
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms,
+        [](std::uint64_t) { return false; });
+    playback.play();
+    expectations.expect(fixture.session.currentTime() == time(1),
+                        "out-of-range playback starts at work-area start");
+    clock.advance(960'000'000ns);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(49, 25),
+                        "work-area final frame included");
+    clock.advance(40'000'000ns);
+    playback.tick();
+    expectations.expect(fixture.session.currentTime() == time(1),
+                        "exclusive end wraps to nonzero work-area start");
+    playback.pause();
+    finishFixture(fixture, expectations);
+}
+
 void testPlayAdvancesExactFrameTimesAndDropsFrames(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Playback Frame Math", time(4)));
@@ -1099,6 +1127,7 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testWorkAreaLoop(expectations);
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
     testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(expectations);
     testLoopWrapExactAfterManyWraps(expectations);

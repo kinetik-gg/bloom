@@ -1166,6 +1166,33 @@ emitInterpolation(EmitState& state,
             !state.ok(writer.stringValue(boundary.outputPort))) {
             return false;
         }
+        for (const auto& [key, time] :
+             {std::pair{"inPoint", boundary.inPoint}, std::pair{"outPoint", boundary.outPoint}}) {
+            if (time == bloom::core::RationalTime{})
+                continue;
+            const PathScope timeScope(state, key);
+            if (!state.ok(writer.memberName(key)) ||
+                !emitRational(state, time.numerator(), time.denominator()))
+                return false;
+        }
+        if (!boundary.enabled &&
+            (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false))))
+            return false;
+        if (boundary.solo &&
+            (!state.ok(writer.memberName("solo")) || !state.ok(writer.booleanValue(true))))
+            return false;
+        if (boundary.locked &&
+            (!state.ok(writer.memberName("locked")) || !state.ok(writer.booleanValue(true))))
+            return false;
+        if (boundary.labelColor) {
+            if (!state.ok(writer.memberName("labelColor")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto channel : *boundary.labelColor)
+                if (!state.ok(writer.integerValue(channel)))
+                    return false;
+            if (!state.ok(writer.endArray()))
+                return false;
+        }
         if (!emitRetainedTrailing(state)) {
             return false;
         }
@@ -1384,6 +1411,20 @@ emitInterpolation(EmitState& state,
     if (!emitGraph(state, composition, compositionIndex) || !emitNodeLayout(state, composition) ||
         !emitNodeGroups(state, composition)) {
         return false;
+    }
+    if (const auto area = composition.workArea()) {
+        const PathScope scope(state, "workArea");
+        if (!state.ok(writer.memberName("workArea")) || !state.ok(writer.beginObject()))
+            return false;
+        for (const auto& [key, time] :
+             {std::pair{"start", area->start}, std::pair{"end", area->end}}) {
+            const PathScope timeScope(state, key);
+            if (!state.ok(writer.memberName(key)) ||
+                !emitRational(state, time.numerator(), time.denominator()))
+                return false;
+        }
+        if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+            return false;
     }
     if (!emitRetainedTrailing(state)) {
         return false;

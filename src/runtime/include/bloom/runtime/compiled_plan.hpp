@@ -131,6 +131,9 @@ struct CompiledLayerOutput {
     document::ParameterId blendModeParameterId;
     core::BlendMode blendMode = core::kDefaultBlendMode;
 
+    core::RationalTime inPoint{};
+    // Absent means full duration; old/default plans retain identical behavior.
+    std::optional<core::RationalTime> outPoint{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

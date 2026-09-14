@@ -32,6 +32,35 @@ void validateProjectUniqueDeclaration(const Id id, const std::size_t composition
 
 namespace bloom::document {
 
+bool Composition::nodeLocked(const NodeId node) const {
+    std::vector<NodeId> pending;
+    for (const auto& layer : graph_.layerOutputs())
+        if (layer.locked)
+            pending.push_back(layer.nodeId);
+    std::unordered_set<NodeId> seen;
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (id == node)
+            return true;
+        if (!seen.insert(id).second)
+            continue;
+        for (const auto& edge : graph_.edges()) {
+            const auto* input = std::get_if<NodeInputRef>(&edge.destination);
+            if (input && input->nodeId == id)
+                pending.push_back(edge.source.nodeId);
+        }
+    }
+    return false;
+}
+bool Composition::parameterLocked(const ParameterId parameter) const {
+    for (const auto& node : graph_.nodes())
+        for (const auto& binding : node.parameters)
+            if (binding.parameterId == parameter && nodeLocked(node.id))
+                return true;
+    return false;
+}
+
 bool Composition::setDuration(const core::RationalTime duration) noexcept {
     if (duration <= core::RationalTime{}) {
         return false;
@@ -51,6 +80,15 @@ ValidationResult Composition::validate() const {
                    "Composition duration must be greater than zero");
     }
 
+    if (workArea_ && (workArea_->start < core::RationalTime{} ||
+                      workArea_->start >= workArea_->end || workArea_->end > duration_))
+        result.add(ValidationCode::InvalidValue, "workArea", "Invalid composition work area");
+    for (const auto& layer : graph_.layerOutputs()) {
+        if (layer.inPoint < core::RationalTime{} || layer.inPoint >= layer.endPoint(duration_) ||
+            layer.endPoint(duration_) > duration_)
+            result.add(ValidationCode::InvalidValue, "graph.layerOutputs.range",
+                       "Invalid layer range");
+    }
     result.append("parameters", parameters_.validate());
     result.append("animationCurves", animationCurves_.validate());
     result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));

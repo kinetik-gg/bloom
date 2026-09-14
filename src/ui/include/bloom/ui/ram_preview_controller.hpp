@@ -92,6 +92,7 @@ class RamPreviewController final : public QObject {
     std::optional<document::Snapshot> snapshot_;
     document::CompositionId compositionId_;
     std::uint64_t nextFrameIndex_ = 0;
+    std::uint64_t firstFrameIndex_ = 0;
     std::uint64_t cachedFrameCount_ = 0;
     std::uint64_t totalFrameCount_ = 0;
     std::uint64_t generation_ = 0;

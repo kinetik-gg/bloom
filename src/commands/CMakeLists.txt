@@ -7,6 +7,7 @@ target_sources(
         command_stack.cpp
         operations.cpp
         node_operations.cpp
+        layer_operations.cpp
         node_duplication.cpp
         node_group_operations.cpp
         node_layout_operations.cpp
@@ -21,6 +22,7 @@ target_sources(
             include/bloom/commands/operation.hpp
             include/bloom/commands/operations.hpp
             include/bloom/commands/node_operations.hpp
+            include/bloom/commands/layer_operations.hpp
             include/bloom/commands/result.hpp
             include/bloom/commands/transaction.hpp
 )

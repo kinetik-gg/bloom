@@ -190,6 +190,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
 
     document::Composition composition(ids->composition, name, source.duration(), std::move(graph),
                                       source.format());
+    composition.setWorkArea(source.workArea());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);
@@ -756,6 +757,8 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
                                          "Parameter " + std::to_string(parameterId_.value()) +
                                              " does not exist");
     }
+    if (composition->parameterLocked(parameterId_))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
     if (parameter->source == source_) {
         return OperationResult::noChange();
     }
@@ -783,6 +786,8 @@ OperationResult MoveLayerBefore::apply(document::Draft& draft) const {
                                          "Layer slot " + std::to_string(slotId_.value()) +
                                              " does not exist");
     }
+    if (const auto* layer = composition->graph().findLayer(moving->layerId); layer && layer->locked)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
     if (beforeSlotId_ == slotId_) {
         return OperationResult::noChange();
     }

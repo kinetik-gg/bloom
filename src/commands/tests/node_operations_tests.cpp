@@ -21,8 +21,8 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
     for (const auto& a : left.project().compositions()) {
         const auto* b = right.project().findComposition(a.id());
         if (!b || a.name() != b->name() || a.duration() != b->duration() ||
-            a.format() != b->format() || a.nodeLayout() != b->nodeLayout() ||
-            a.nodeGroups() != b->nodeGroups() ||
+            a.format() != b->format() || a.workArea() != b->workArea() ||
+            a.nodeLayout() != b->nodeLayout() || a.nodeGroups() != b->nodeGroups() ||
             !std::ranges::equal(a.parameters().records(), b->parameters().records()) ||
             !std::ranges::equal(a.animationCurves().records(), b->animationCurves().records()) ||
             !std::ranges::equal(a.graph().nodes(), b->graph().nodes()) ||
@@ -104,6 +104,62 @@ NodeId addSource(Fixture& fixture) {
     if (!(id.has_value()))
         throw std::logic_error("source fixture adds");
     return *id;
+}
+
+void testLayerToggles(TestContext& test) {
+    Fixture fixture;
+    (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
+                                core::RationalTime::fromInteger(3));
+    refuse<SetWorkArea>(test, fixture, OperationIssueCode::InvalidValue,
+                        core::RationalTime::fromInteger(3), core::RationalTime::fromInteger(1));
+    (void)exercise<ClearWorkArea>(test, fixture);
+    (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId,
+                                       std::array<std::uint8_t, 3>{12, 34, 56});
+    (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::nullopt);
+    (void)exercise<SetLayerEnabled>(test, fixture, kFirstLayerId, false);
+    auto snapshot = fixture.document.snapshot();
+    test.expect(snapshot.project()
+                    .findComposition(kCompositionId)
+                    ->nodeLayout()
+                    .at(kFirstLayerNodeId)
+                    .muted,
+                "visibility synchronizes Layer node mute");
+    (void)exercise<SetLayerSolo>(test, fixture, kFirstLayerId, true);
+    const auto animation = exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
+                                                                 core::RationalTime{});
+    const auto curve = animation.outputId<AnimationCurveId>(kAnimationCurveOutput);
+    (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, true);
+    if (curve)
+        refuse<InsertVec2Keyframe>(test, fixture, OperationIssueCode::InvalidValue, *curve,
+                                   core::RationalTime::fromInteger(1), Vec2d{9, 9});
+    refuse<SetLayerRange>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId,
+                          core::RationalTime{}, core::RationalTime::fromInteger(2));
+    refuse<MoveLayerBefore>(test, fixture, OperationIssueCode::InvalidValue, kFirstSlotId,
+                            std::optional<LayerSlotId>{});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, kFirstPositionId,
+                               ConstantValueSource{Vec2d{9, 9}});
+    (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, false);
+}
+
+void testLayerRanges(TestContext& test) {
+    Fixture fixture;
+    (void)exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
+                                                core::RationalTime{});
+    const auto in = core::RationalTime::fromInteger(1), out = core::RationalTime::fromInteger(4);
+    (void)exercise<SetLayerRange>(test, fixture, kFirstLayerId, in, out);
+    refuse<SetLayerRange>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId, out, in);
+    refuse<SplitLayerAtTime>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId, in);
+    refuse<SplitLayerAtTime>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId,
+                             core::RationalTime::fromInteger(100));
+    const auto split = exercise<SplitLayerAtTime>(test, fixture, kFirstLayerId,
+                                                  core::RationalTime::fromInteger(2));
+    const auto copy = split.outputId<LayerId>("layer");
+    const auto snapshot = fixture.document.snapshot();
+    const auto& graph = snapshot.project().findComposition(kCompositionId)->graph();
+    test.expect(copy && graph.findLayer(*copy)->inPoint == core::RationalTime::fromInteger(2) &&
+                    graph.findLayer(*copy)->outPoint == out &&
+                    graph.findLayer(kFirstLayerId)->outPoint == core::RationalTime::fromInteger(2),
+                "split keeps adjacent half-open ranges and exact undo/redo IDs");
 }
 
 void testValidityQuery(TestContext& test) {
@@ -536,8 +592,17 @@ void testDuplicationOwnershipEdges(TestContext& test) {
         !fixture.document.commit(before.revision(), std::move(draft)).committed())
         throw std::logic_error("driver fixture");
     fixture.stack.clear();
-    refuse<DuplicateNodes>(test, fixture, OperationIssueCode::Unsupported,
-                           std::set<NodeId>{kSecondLayerNodeId}, Vec2d{});
+    const auto drivenCopy =
+        exercise<DuplicateNodes>(test, fixture, std::set<NodeId>{kSecondLayerNodeId}, Vec2d{});
+    const auto copiedOpacity =
+        drivenCopy.outputId<ParameterId>("parameter." + std::to_string(kSecondOpacityId.value()));
+    const auto copiedSnapshot = fixture.document.snapshot();
+    const auto* copiedParameter =
+        copiedOpacity ? composition(copiedSnapshot).parameters().find(*copiedOpacity) : nullptr;
+    test.expect(copiedParameter &&
+                    copiedParameter->source == ParameterSource{DriverBindingSource{
+                                                   *valueNodeId, std::string(kValuePortName)}},
+                "duplicated Layer parameters retain their upstream driver and exact undo/redo");
 }
 
 // Node groups: one transaction each, undo/redo pinned by exercise() above, and the one rule that
@@ -721,6 +786,8 @@ void testNodeGroups(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testLayerToggles(test);
+        bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testWiringAndRename(test);

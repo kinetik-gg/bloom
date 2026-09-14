@@ -1380,6 +1380,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         produced.emplace(std::move(*frozen.value()));
                     },
                     [&](const CompiledLayerOutput& layer) {
+                        if (request.time < layer.inPoint ||
+                            (layer.outPoint && request.time >= *layer.outPoint))
+                            return;
                         const auto position =
                             detail::resolveParameter(layer.position, *plan, resolved);
                         const auto anchor = detail::resolveParameter(layer.anchor, *plan, resolved);

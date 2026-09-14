@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/document/project.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -136,6 +137,7 @@ struct DecodedComposition final {
     DecodedGraph graph;
     document::NodeLayout nodeLayout;
     document::NodeGroups nodeGroups;
+    std::optional<document::WorkArea> workArea{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };

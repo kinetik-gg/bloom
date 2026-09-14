@@ -5,6 +5,8 @@
 // measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
 // all: a cache that works shows up as an invocation count that stops moving.
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -493,6 +495,31 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     finishFixture(fixture, expectations);
 }
 
+void testRamPreviewWorkArea(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM work area", time(7, 25)));
+    commands::Transaction range("Work area", fixture.session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), time(2, 25), time(5, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(range)).changed(),
+                        "work area accepted");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "foreground settled");
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(ram.totalFrameCount() == 3,
+                        "RAM progress counts work-area frames, excluding its offset");
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 3,
+                        "RAM caches exactly its work area");
+    for (int frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
+                            "RAM uses half-open work-area frame bounds");
+    }
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations) {
     // Twenty-four frames at 25 fps: [0, 24/25) holds exactly frame indices 0..23.
     SessionFixture fixture(makeTestProject("RAM Preview Range", time(24, 25)));
@@ -712,6 +739,7 @@ int main(int argc, char** argv) {
         testCacheHitPublishesWithoutEvaluating(expectations);
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
+        testRamPreviewWorkArea(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);
         testRamPreviewCancellationKeepsWhatItCached(expectations);

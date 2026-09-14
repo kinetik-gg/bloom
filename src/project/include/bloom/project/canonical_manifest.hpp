@@ -16,7 +16,7 @@ namespace bloom::project {
 inline constexpr std::string_view kCanonicalManifestFormat = "org.kinetik.bloom.project";
 inline constexpr std::string_view kCanonicalManifestDocumentPath = "document.json";
 inline constexpr document::SchemaVersion kCanonicalManifestContainerVersionV1{1, 0};
-inline constexpr document::SchemaVersion kCanonicalManifestDocumentSchemaVersionV1{1, 4};
+inline constexpr document::SchemaVersion kCanonicalManifestDocumentSchemaVersionV1{1, 5};
 inline constexpr std::size_t kCanonicalManifestMaximumBytes = 1U << 20U;
 inline constexpr std::size_t kCanonicalManifestNoIndex = static_cast<std::size_t>(-1);
 

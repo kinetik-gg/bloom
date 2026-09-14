@@ -3,6 +3,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 
+#include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 
 #include <bloom/ui/kit/tokens.hpp>
@@ -20,6 +21,7 @@ class QAction;
 class QLabel;
 class QScrollBar;
 class QMenu;
+class QContextMenuEvent;
 class QToolButton;
 
 namespace bloom::ui {
@@ -48,6 +50,7 @@ struct TimelineLayerEntry final {
     QString kind;
     // The clip bar's fill, from the data-type palette -- the one thing that now carries kind.
     kit::Color clipColor = kit::Color::Muted;
+    QColor labelColor{};
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
@@ -125,6 +128,7 @@ class TimelineEditor final : public QWidget,
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* deleteLayerAction_ = nullptr;
+    QAction* splitLayerAction_ = nullptr;
     QAction* framesAction_ = nullptr;
     QAction* timecodeAction_ = nullptr;
     bool timecodeFormat_ = false;
@@ -220,11 +224,22 @@ class TimelineLayerStack final : public QWidget {
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     bool event(QEvent* event) override;
 
   private:
     void relayoutRows();
+    void renameLayer(document::LayerId layer);
+    int anchorRow_ = -1;
+    int dragRow_ = -1;
+    int insertionRow_ = -1;
+    QPoint dragStart_{};
+    document::Revision dragRevision_{};
+    QWidget* insertion_ = nullptr;
     // Re-points currentRow_ at whatever layer the session now has selected, so a selection made in
     // another editor (the node canvas, the properties panel) moves this column's current row too.
     void syncCurrentRowFromSelection();
@@ -263,8 +278,18 @@ class TimelineLaneRegion final : public QWidget {
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    struct RangeDrag {
+        document::LayerId layer;
+        document::Revision revision;
+        document::WorkArea original, preview;
+        double pressSeconds;
+        int handle; // -1: in, 0: body, 1: out
+    };
+    std::optional<RangeDrag> drag_{};
+    std::optional<core::RationalTime> guide_{};
     CompositionSession& session_;
     // Scrubbing a lane goes through the ruler's own scrub path, not a second copy of it.
     TimelineRuler& ruler_;

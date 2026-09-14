@@ -110,6 +110,7 @@ struct PositionInteractionMapping final {
 enum class PositionInteractionRejection : std::uint8_t {
     // No layer is the session's primary selection.
     NoLayerSelected,
+    LockedLayer,
     // The selected layer exposes no position parameter, its constant value does not match the
     // Vec2d schema, or its animated curve fails to resolve/sample at the current session time.
     NoResolvablePosition,
@@ -155,6 +156,7 @@ class CompositionSession final : public QObject {
     void clearSelection();
     void selectLayer(document::LayerId layerId);
     void selectNode(document::NodeId nodeId);
+    [[nodiscard]] document::WorkArea workArea() const noexcept;
     [[nodiscard]] const std::set<document::NodeId>& selectedNodes() const noexcept {
         return selectedNodes_;
     }

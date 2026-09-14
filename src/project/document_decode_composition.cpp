@@ -1171,8 +1171,12 @@ template <typename Keyframe, typename DecodeOne>
 // until this closed shape's own match returns, like every other collection element's own shape.
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
-    static constexpr std::array<std::string_view, 4> keys{"nodeId", "layerId", "name",
-                                                          "outputPort"};
+    std::vector<std::string_view> keys{"nodeId", "layerId", "name", "outputPort"};
+    if (state.documentMinor >= 5) {
+        for (const auto* key : {"inPoint", "outPoint", "enabled", "solo", "locked", "labelColor"})
+            if (node.findMember(key))
+                keys.push_back(key);
+    }
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1204,6 +1208,46 @@ template <typename Keyframe, typename DecodeOne>
     out.layerId = layerId;
     out.name = std::string(nameText);
     out.outputPort = std::string(outputPortText);
+    if (const auto* color = node.findMember("labelColor"); color && state.documentMinor >= 5) {
+        const auto values = color->arrayElements();
+        if (color->kind() != JsonValueKind::Array || values.size() != 3) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "labelColor"));
+            return false;
+        }
+        std::array<std::uint8_t, 3> rgb{};
+        for (std::size_t i = 0; i < rgb.size(); ++i) {
+            std::uint32_t channel = 0;
+            if (!decodeUInt32Member(values[i], state,
+                                    joinPathIndex(joinPath(path, "labelColor"), i), 255, channel))
+                return false;
+            if (channel > 255) {
+                state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "labelColor"));
+                return false;
+            }
+            rgb[i] = static_cast<std::uint8_t>(channel);
+        }
+        out.labelColor = rgb;
+    }
+    for (const auto& [key, target] :
+         {std::pair{"enabled", &out.enabled}, std::pair{"solo", &out.solo},
+          std::pair{"locked", &out.locked}}) {
+        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+            const auto flag = value->asBoolean();
+            if (!flag) {
+                state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, key));
+                return false;
+            }
+            *target = *flag;
+        }
+    }
+    for (const auto* key : {"inPoint", "outPoint"}) {
+        if (const auto* value = node.findMember(key); value && state.documentMinor >= 5) {
+            const AttachmentScope rangeScope(state, key);
+            auto& time = std::string_view(key) == "inPoint" ? out.inPoint : out.outPoint;
+            if (!decodeRationalTimeValue(*value, state, joinPath(path, key), time))
+                return false;
+        }
+    }
     return true;
 }
 

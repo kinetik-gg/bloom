@@ -86,6 +86,7 @@ enum class IconId : std::uint8_t {
 enum class IconWeight : std::uint8_t {
     Regular,
     Fill,
+    Bold,
 };
 
 // Every id, in declaration order. Exists so a test can prove the whole vocabulary renders rather

@@ -54,6 +54,14 @@ enum class Color : std::uint8_t {
     DataSequence,
     DataClip,
     DataComposition,
+    Label1,
+    Label2,
+    Label3,
+    Label4,
+    Label5,
+    Label6,
+    Label7,
+    Label8,
     DataImage,
     DataAudio,
     // task S1, item 6: the socket palette. A node socket and the link leaving it identify a
@@ -176,6 +184,7 @@ inline constexpr qreal kWindowBorderWidth = 1.0;
 // Elevation shadows. Flat casts nothing.
 enum class Elevation : std::uint8_t {
     Flat,
+    TimelineBar,
     Popup,
     Dialog,
     Drag,

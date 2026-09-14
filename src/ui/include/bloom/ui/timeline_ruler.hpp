@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/document/document.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -169,15 +170,25 @@ class TimelineNavigator final : public QWidget {
 // narrow it.
 class TimelineWorkAreaStrip final : public QWidget {
     Q_OBJECT
-
   public:
     explicit TimelineWorkAreaStrip(CompositionSession& session, QWidget* parent = nullptr);
+    void setRuler(TimelineRuler& ruler);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    [[nodiscard]] std::optional<TimelineAxis> axis() const;
     CompositionSession& session_;
+    TimelineRuler* ruler_ = nullptr;
+    std::optional<document::WorkArea> preview_{};
+    document::Revision dragRevision_{};
+    bool startHandle_ = false;
 };
 
 // The top of the header's right cell: a work-area strip with the single head marker immediately
