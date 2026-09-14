@@ -409,6 +409,10 @@ void testTimeViewportGestures(Expectations& expectations) {
                             navigator->height() == ui::kit::px(ui::kit::Size::Control),
                         "the navigator uses the Control row height");
     if (navigator != nullptr) {
+        expectations.expect(navigator->isVisible() &&
+                                navigator->windowRect().height() ==
+                                    ui::kit::px(ui::kit::Size::TimelineNavigatorThumb),
+                            "the zoomed navigator shows a 6px thumb");
         const auto window = navigator->windowRect();
         sendMouse(*navigator, QEvent::MouseButtonPress, window.center().x(), window.center().y());
         sendMouse(*navigator, QEvent::MouseMove, window.center().x() + 30, window.center().y());
@@ -452,6 +456,8 @@ void testTimeViewportGestures(Expectations& expectations) {
     axis = getAxis();
     expectations.expect(axis.t0 == before.t0 && axis.t1 == before.t1,
                         "Zoom to Fit restores the entire duration");
+    expectations.expect(navigator == nullptr || !navigator->isVisible(),
+                        "the navigator hides when the complete composition is visible");
     expectations.expect(fixture.session.currentTime() == originalTime &&
                             fixture.session.snapshot().revision() == revision,
                         "all navigation is presentation-only");
@@ -493,6 +499,18 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(addButton != nullptr && header->isAncestorOf(addButton) &&
                             addButton->menu()->objectName() == QStringLiteral("addLayerMenu"),
                         "the existing Add popup is in the header with its original names");
+    expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
+                            ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                                ui::kit::px(ui::kit::Size::TimelineNameMin) +
+                                2 * ui::kit::px(ui::kit::Size::TimelineColumn),
+                        "the default left column is the exact toggle/name/blending/parent sum");
+    expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") !=
+                            nullptr &&
+                            area->findChild<QToolButton*>("timelineKeyframesVisibleButton") !=
+                                nullptr &&
+                            area->findChild<QToolButton*>("timelineGraphEditorButton") != nullptr &&
+                            area->findChild<QToolButton*>("timelineSnappingButton") != nullptr,
+                        "the header exposes the composition selector and timeline tool cluster");
     // Task VIEW-1: the transport cluster this used to inspect lives in the viewer footer now, so
     // the claim it made ("no Undo/Redo buttons down there") is made about what is actually left in
     // the row -- the navigator, and the empty left cell that keeps its time axis aligned.
@@ -590,7 +608,7 @@ void testTimelineHeaderMenus(Expectations& expectations) {
 }
 
 // The playhead is ONE 1px Accent line at ONE x, through the ruler and through every lane, with its
-// single head marker in the work-area row above.
+// single head marker and frame label in the ruler.
 void testPlayheadSpansRulerAndEveryLane(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Playhead Span Test"));
@@ -619,14 +637,13 @@ void testPlayheadSpansRulerAndEveryLane(Expectations& expectations) {
 
     const QImage rulerImage = ruler->grab().toImage();
     const QImage laneImage = lanes->grab().toImage();
-    const QImage workAreaImage = workArea->grab().toImage();
 
     const int rulerX = accentRunCenter(rulerImage, rulerImage.height() - 2);
     const int rowHeight = ui::kTimelineRowHeight;
     const int firstLaneX = accentRunCenter(laneImage, rowHeight / 2);
     const int secondLaneX = accentRunCenter(laneImage, rowHeight + rowHeight / 2);
     const int belowLastLaneX = accentRunCenter(laneImage, 2 * rowHeight + rowHeight / 2);
-    const int markerX = accentRunCenter(workAreaImage, workAreaImage.height() - 5);
+    const int markerX = accentRunCenter(rulerImage, 2);
 
     expectations.expect(rulerX >= 0, "the ruler paints the Accent playhead line");
     expectations.expect(firstLaneX >= 0 && secondLaneX >= 0,
@@ -687,15 +704,15 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
                             "every row spans the whole layer column");
     }
 
-    // Flat, not striped: two adjacent UNSELECTED rows paint the same background. ADAPTED (task
-    // FIX1, item E): a new layer lands on TOP, so the row addSolidLayer selected is row 0 and the
-    // honest unselected pair is rows 1 and 2.
+    // Rows alternate between the two low-contrast surface steps. A new layer lands on TOP, so the
+    // row addSolidLayer selected is row 0 and the unselected pair is rows 1 and 2.
     const QImage laneImage = lanes->grab().toImage();
-    const QColor background = ui::kit::color(ui::kit::Color::Background);
+    const QColor surface = ui::kit::color(ui::kit::Color::Surface);
+    const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
     const int sampleX = laneImage.width() - 4;
-    expectations.expect(near(laneImage.pixelColor(sampleX, 32 + 1), background, 2) &&
-                            near(laneImage.pixelColor(sampleX, 64 + 1), background, 2),
-                        "unselected lanes are FLAT Background -- no alternating stripe");
+    expectations.expect(near(laneImage.pixelColor(sampleX, 32 + 1), raised, 2) &&
+                            near(laneImage.pixelColor(sampleX, 64 + 1), surface, 2),
+                        "lane rows alternate SurfaceRaised and Surface with low contrast");
 
     // The hairline separator closes each row, in Border.
     const QColor border = ui::kit::color(ui::kit::Color::Border);
@@ -813,9 +830,8 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
         expectations.expect(bar->left() == 0 && bar->right() >= lanes->width() - 2,
                             "the bar spans the whole composition range on its lane -- no trim "
                             "feature exists, so a partial bar would be a fiction");
-        expectations.expect(bar->height() == 32 - 2 * ui::kit::px(ui::kit::Spacing::XS),
-                            "the bar is inset inside its 32px lane rather than filling it edge to "
-                            "edge");
+        expectations.expect(bar->height() == ui::kit::px(ui::kit::Size::TimelineBar),
+                            "the bar is the pinned 20px height inside its 32px lane");
         const int sampleY = bar->top() + bar->height() / 2;
         const int sampleX = bar->left() + bar->width() / 2;
         expectations.expect(near(laneImage.pixelColor(sampleX, sampleY), expected, 6),
@@ -833,6 +849,7 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     SessionFixture fixture(makeTestProject("Selection Fill Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
     (void)fixture.session.addSolidLayer(QStringLiteral("B"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addSolidLayer(QStringLiteral("C"), core::Color4d{0.2, 0.3, 0.4, 1.0});
 
     auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
     QWidget host;
@@ -853,7 +870,7 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     expectations.expect(stack->currentRow() == 0, "row 0 is the selected row (test precondition)");
 
     const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
-    const QColor background = ui::kit::color(ui::kit::Color::Background);
+    const QColor surface = ui::kit::color(ui::kit::Color::Surface);
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
 
     const QImage laneImage = lanes->grab().toImage();
@@ -862,11 +879,11 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     // composition range, so every x inside the bar's own band shows the bar, not the row fill.
     const int sampleX = laneImage.width() - 3;
     const QColor selectedLane = laneImage.pixelColor(sampleX, 1);
-    const QColor unselectedLane = laneImage.pixelColor(sampleX, 32 + 1);
+    const QColor unselectedLane = laneImage.pixelColor(sampleX, 64 + 1);
     expectations.expect(near(selectedLane, raised, 4),
                         "the selected row's lane is a SurfaceRaised fill");
-    expectations.expect(near(unselectedLane, background, 4),
-                        "an unselected row's lane stays Background");
+    expectations.expect(near(unselectedLane, surface, 4),
+                        "an unselected row's lane uses the alternating Surface step");
     expectations.expect(!near(selectedLane, accent, 24),
                         "the selected row is NOT accent-filled or accent-outlined");
 
@@ -883,15 +900,14 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
         if (near(fill, raised, 4)) {
             sawRaisedRow = true;
         }
-        if (near(fill, background, 4)) {
+        if (near(fill, surface, 4)) {
             sawPlainRow = true;
         }
         expectations.expect(!near(fill, accent, 24),
                             "no row paints an Accent fill or edge in the left column either");
     }
     expectations.expect(sawRaisedRow && sawPlainRow,
-                        "the left column shows exactly the same selected/unselected fills as the "
-                        "lane beside it, so one row reads as one row");
+                        "the left column alternates the same surface steps as the lane beside it");
 
     delete editor;
     finishFixture(fixture);
@@ -921,10 +937,9 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     // The cell table is shared by the headers and the rows, so one x answers for both.
     const int toggleWidth =
         ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS);
-    const int padding = ui::kit::px(ui::kit::Spacing::XS);
-    static constexpr std::array<const char*, 3> kFragments{"visibility", "solo", "lock"};
-    for (int index = 0; index < 3; ++index) {
-        const int x = padding + index * toggleWidth + toggleWidth / 2;
+    static constexpr std::array<const char*, 4> kFragments{"visibility", "audio", "solo", "lock"};
+    for (int index = 0; index < 4; ++index) {
+        const int x = index * toggleWidth + toggleWidth / 2;
         const QString headerTip = ui::TimelineColumnHeaders::toolTipAtX(x);
         const QString rowTip = stack->toolTipAt(QPoint(x, 16));
         expectations.expect(headerTip == rowTip,
@@ -939,13 +954,13 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
 
     const auto layerId = stack->entries().front().layerId;
     const auto before = fixture.commands.size();
-    for (int index = 0; index < 3; ++index)
+    for (const int index : {0, 2, 3})
         QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
-                          QPoint(padding + index * toggleWidth + toggleWidth / 2, 16));
+                          QPoint(index * toggleWidth + toggleWidth / 2, 16));
     const auto* layer = fixture.session.composition()->graph().findLayer(layerId);
     expectations.expect(layer && !layer->enabled && layer->solo && layer->locked &&
                             fixture.commands.size() == before + 3,
-                        "eye, solo and lock each commit once to the bound layer");
+                        "eye, solo and lock each commit once while audio remains disabled");
     (void)fixture.session.undo();
     expectations.expect(!fixture.session.composition()->graph().findLayer(layerId)->locked,
                         "lock undoes once");
@@ -1068,8 +1083,8 @@ void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
     expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
                         "Parent shows the one honest value \"None\", disabled");
     expectations.expect(!parent->toolTip().isEmpty(), "Parent's disabled state is explained");
-    expectations.expect(blending->height() <= 32 && parent->isHidden(),
-                        "both fit inside the 32px row rather than forcing it taller");
+    expectations.expect(blending->height() <= 32 && parent->isVisible(),
+                        "both fit inside the 32px row and Parent remains visible");
 
     delete editor;
     finishFixture(fixture);
@@ -1101,10 +1116,8 @@ void testKindHasNoColumnButStaysReadable(Expectations& expectations) {
                             stack->entries()[1].kind == QStringLiteral("Solid"),
                         "the stack still derives each layer's kind from project truth");
     // The Name cell's own x: past the four toggle cells.
-    const int nameX =
-        ui::kit::px(ui::kit::Spacing::XS) +
-        4 * (ui::kit::px(ui::kit::Size::IconMedium) + ui::kit::px(ui::kit::Spacing::XS)) +
-        ui::kit::px(ui::kit::Spacing::XS) + 8;
+    const int nameX = ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
+                      ui::kit::px(ui::kit::Spacing::XS) + 8;
     expectations.expect(stack->toolTipAt(QPoint(nameX, 32 + 16)).contains(QStringLiteral("Solid")),
                         "the Solid row names its kind in the tooltip, so removing the Kind COLUMN "
                         "never removed the information");
@@ -1175,9 +1188,9 @@ void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expec
                                                   std::to_string(kLayerCount) + " layers, bound " +
                                                   std::to_string(bound) + ")");
     expectations.expect(rows.size() >= 2, "the pool is not empty either (test sanity)");
-    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size(),
-                        "two KDropdowns per pooled row -- not two per LAYER, which is the whole "
-                        "reason the pool exists");
+    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size() + 1,
+                        "two KDropdowns per pooled row plus the one composition selector -- not "
+                        "two per LAYER, which is the whole reason the pool exists");
 
     // A fixed buffer rather than a growing container: the pool is bounded by the viewport, so the
     // count is known to be small, and main() in this suite must stay non-throwing.
@@ -1780,6 +1793,30 @@ void testOutputMergeRows(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+void writeTimelineScreenshotIfRequested(Expectations& expectations) {
+    const QString destination = qEnvironmentVariable("BLOOM_TIMELINE_SCREENSHOT");
+    if (destination.isEmpty())
+        return;
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("TL-C1 screenshot"));
+    (void)fixture.session.addSolidLayer(QStringLiteral("Solid 1"), core::Color4d{0.2, 0.3, 0.4, 1.0});
+    (void)fixture.session.addTextLayer(QStringLiteral("Text 1"), QStringLiteral("Timeline"));
+    ui::EditorRegistry registry;
+    (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
+                                       return new ui::TimelineEditor(fixture.session,
+                                                                     fixture.controller, parent);
+                                   }});
+    auto* editor = new ui::EditorArea(registry, "bloom.timeline");
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(editor);
+    layoutEditor(host, 1200, 400);
+    expectations.expect(host.grab().save(destination), "the requested timeline screenshot saves");
+    delete editor;
+    finishFixture(fixture);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1813,6 +1850,7 @@ int main(int argc, char** argv) {
         testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);
         testDraggingALaneScrubsThroughTheRulerScrubPath(expectations);
         testClickingTheLeftColumnSelectsAndClears(expectations);
+        writeTimelineScreenshotIfRequested(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: legacy text fixture: " << error.what() << '\n';
         return 1;

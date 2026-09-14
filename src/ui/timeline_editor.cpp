@@ -1498,11 +1498,48 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     headerRight_->addAction(splitLayerAction_);
     workArea_ = new TimelineWorkAreaRow(session_, rulerColumn);
     workArea_->setFixedHeight(kit::px(kit::Size::TimelineWorkArea));
+    auto* timelineTools = new QWidget(rulerColumn);
+    timelineTools->setObjectName(QStringLiteral("timelineHeaderToolCluster"));
+    timelineTools->setFixedHeight(kit::px(kit::Size::ControlCompact));
+    auto* toolsLayout = new QHBoxLayout(timelineTools);
+    toolsLayout->setContentsMargins(0, 0, 0, 0);
+    toolsLayout->setSpacing(kit::px(kit::Spacing::XXS));
+    toolsLayout->addStretch(1);
+    const auto addHeaderToggle = [timelineTools, toolsLayout](const QString& name,
+                                                                const QString& tip,
+                                                                const kit::IconId iconId,
+                                                                const bool checked,
+                                                                const bool enabled) {
+        auto* button = new QToolButton(timelineTools);
+        button->setObjectName(name);
+        button->setAccessibleName(tip);
+        button->setToolTip(tip);
+        button->setCheckable(true);
+        button->setChecked(checked);
+        button->setEnabled(enabled);
+        button->setAutoRaise(true);
+        button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
+                                  enabled ? kit::Color::Foreground : kit::Color::Faint));
+        button->setIconSize(QSize(kit::px(kit::Size::IconMedium),
+                                  kit::px(kit::Size::IconMedium)));
+        button->setFixedSize(kit::px(kit::Size::ControlCompact),
+                             kit::px(kit::Size::ControlCompact));
+        toolsLayout->addWidget(button);
+    };
+    addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
+                    kit::IconId::Keyframe, true, true);
+    addHeaderToggle(QStringLiteral("timelineGraphEditorButton"),
+                    tr("Graph editor is available when a graph exists"), kit::IconId::Graph, false,
+                    false);
+    addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
+                    kit::IconId::Snap, true, true);
     ruler_ = new TimelineRuler(session_, previewController, rulerColumn);
-    ruler_->setFixedHeight(kit::px(kit::Size::EditorHeader) - workArea_->height());
+    ruler_->setFixedHeight(kit::px(kit::Size::EditorHeader) - workArea_->height() -
+                           timelineTools->height());
     ruler_->setTimecodeLabels(timecodeFormat_);
     workArea_->setRuler(*ruler_);
     rulerLayout->addWidget(workArea_);
+    rulerLayout->addWidget(timelineTools);
     rulerLayout->addWidget(ruler_);
     auto* headerGutter = new QWidget(headerRow);
     headerGutter->setObjectName("timelineHeaderScrollGutter");

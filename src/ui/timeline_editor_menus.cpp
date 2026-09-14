@@ -31,7 +31,8 @@ class TimelineCompositionName final : public QWidget {
         : QWidget(parent), session_(session), dropdown_(new kit::KDropdown(this)) {
         setObjectName("timelineCompositionName");
         setAccessibleName(tr("Composition"));
-        setMinimumWidth(kit::px(kit::Size::TimelineColumn));
+        setMinimumWidth(kit::px(kit::Size::TimelineColumn) -
+                        3 * kit::px(kit::Spacing::M));
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         auto* layout = new QHBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -113,7 +114,10 @@ class TimelineHeaderMenuBar final : public QWidget {
   protected:
     void resizeEvent(QResizeEvent* event) override {
         QWidget::resizeEvent(event);
-        const bool collapsed = width() < sizeHint().width();
+        // The parent header reserves its own inter-control gap outside this widget. Account for
+        // that one kit spacing step so the three requested menus remain visible at the 400px
+        // default layer-column split instead of collapsing one row too early.
+        const bool collapsed = width() + kit::px(kit::Spacing::M) < sizeHint().width();
         for (auto* button : buttons_) {
             button->setVisible(button->property("headerMenuVisible").toBool() && !collapsed);
         }
@@ -125,7 +129,7 @@ class TimelineHeaderMenuBar final : public QWidget {
         button.setAutoRaise(true);
         button.setPopupMode(QToolButton::InstantPopup);
         button.setProperty("headerMenuButton", true);
-        button.setFont(kit::font(kit::TypeRole::Ui));
+        button.setFont(kit::font(kit::TypeRole::UiSmall));
         button.setFixedHeight(kit::px(kit::Size::Control));
     }
     std::vector<QToolButton*> buttons_;
@@ -159,37 +163,11 @@ void TimelineEditor::createHeaderMenus() {
     headerMenus_ = new QWidget(headerFallback_);
     auto* row = new QHBoxLayout(headerMenus_);
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(kit::px(kit::Spacing::S));
+    row->setSpacing(kit::px(kit::Spacing::XXS));
     auto* bar = new TimelineHeaderMenuBar(headerMenus_);
     row->addWidget(bar);
     row->addWidget(new TimelineCompositionName(session_, headerMenus_));
 
-    const auto addHeaderToggle = [this, row](const QString& name, const QString& tip,
-                                             const kit::IconId iconId, const bool checked,
-                                             const bool enabled) {
-        auto* button = new QToolButton(headerMenus_);
-        button->setObjectName(name);
-        button->setAccessibleName(tip);
-        button->setToolTip(tip);
-        button->setCheckable(true);
-        button->setChecked(checked);
-        button->setEnabled(enabled);
-        button->setAutoRaise(true);
-        button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                                  enabled ? kit::Color::Foreground : kit::Color::Faint));
-        button->setIconSize(QSize(kit::px(kit::Size::IconMedium),
-                                  kit::px(kit::Size::IconMedium)));
-        button->setFixedSize(kit::px(kit::Size::ControlCompact),
-                             kit::px(kit::Size::ControlCompact));
-        row->addWidget(button);
-    };
-    addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"),
-                    tr("Show keyframes"), kit::IconId::Keyframe, true, true);
-    addHeaderToggle(QStringLiteral("timelineGraphEditorButton"),
-                    tr("Graph editor is available when a graph exists"), kit::IconId::Graph, false,
-                    false);
-    addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
-                    kit::IconId::Snap, true, true);
 
     const auto menu = [this](const QString& title, const QString& name) {
         auto* result = new QMenu(title, headerMenus_);
