@@ -341,7 +341,6 @@ void TimelineEditor::setTimecodeFormat(const bool timecode) {
     QSettings().setValue(QStringLiteral("timeline/time-format"),
                          timecode ? QStringLiteral("timecode") : QStringLiteral("frames"));
     ruler_->setTimecodeLabels(timecode);
-    updateTimeReadout();
 }
 
 } // namespace bloom::ui

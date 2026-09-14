@@ -264,7 +264,8 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const QRectF caretRect(caretColumn.left(), caretColumn.center().y() - caretBox / 2.0, caretBox,
                            caretBox);
     painter.drawPixmap(caretRect.toRect(),
-                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF()));
+                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF(),
+                                  iconWeight(IconRole::Chrome)));
 
     painter.setPen(ink);
     painter.setFont(font());

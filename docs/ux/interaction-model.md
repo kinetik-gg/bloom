@@ -56,6 +56,40 @@ hosts reach with a modifier — bare letters belong to tools.
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
 | `Esc` | Cancel the drag in flight |
+| `Left` / `Right` | Step one frame |
+| `Home` / `End` | Go to start / end |
+
+The transport lives in the Viewer footer: go to start, step back, play/pause, step forward, go to
+end, a loop toggle, and RAM Preview. **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
+`Left`, `Right`, `Home` and `End` all do exactly what they did when the transport sat in the
+Timeline, and each still has one owner: `Space` and RAM Preview's pair are window-wide commands,
+and the four frame-stepping actions are `Qt::WindowShortcut` actions owned by the Viewer.
+
+Those four stand down while focus rests on a widget that consumes the same keys for its own
+navigation -- the Timeline's layer stack does, and marks itself so. Widget focus wins; the step
+action fires otherwise. A disabled action never claims the key, so the focused widget's own
+navigation runs unchanged, and the footer's step buttons are disabled in lockstep so no button is
+ever clickable while it would silently do nothing.
+
+Loop is a real toggle, not a status glyph. With looping on, playback wraps to the start of the work
+area, which is the only behaviour Bloom has ever had; with it off, playback lands on the last frame
+of the range and pauses there. The choice persists in `playback/loop`.
+
+RAM Preview stays its own command and its own button: caching a range and starting playback are
+different things. The play button reports whether the range it is about to play is already cached.
+
+| Gesture or control | Action |
+| --- | --- |
+| Click the frame/time readout | Opens an inline editor seeded with the current frame index |
+| Type a frame number, `Return` | Seeks to that frame's exact mapped time, clamped to the composition's range |
+| `Escape` or focus loss while editing | Cancels; an unparseable entry reverts in silence |
+| Right-click the readout > Frames / Timecode | Switches the reading between a frame index and non-drop timecode |
+
+The readout's editor always takes a frame INDEX, even while the label is showing timecode: it is
+the one entry form that needs no parsing rules of its own. Frames / Timecode writes the same
+`timeline/time-format` preference the Timeline's own View menu writes, so the ruler's tick labels
+and this readout cannot disagree about the format. Exact composition seconds stay visible beside
+either reading.
 
 ## Assets
 
@@ -207,8 +241,6 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drag row | Reorder stable slots at the insertion indicator |
 | Double-click name | Inline rename; Return commits, Escape cancels |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
-| `Left` / `Right` | Step one frame |
-| `Home` / `End` | Go to start / end |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
 | Drag the navigator window | Scroll; drag either window edge to resize the visible range; `Escape` cancels |
@@ -221,8 +253,9 @@ The header offers **Add** (Solid, Text), **View**, **Edit**, and **Select** menu
 application's Undo/Redo actions and shortcuts. Delete in a keyframe lane retains its keyframe
 behavior. Menus collapse into one `…` popup when their available header width is too small.
 
-View → Frames / Timecode changes both ruler labels and the timeline readout, and persists the
-preference in `timeline/time-format`. Frames is the default. Timecode is non-drop `HH:MM:SS:FF`,
+View → Frames / Timecode changes the ruler's labels, and persists the preference in
+`timeline/time-format` -- the same key the Viewer footer's own readout reads and writes, so the two
+surfaces cannot disagree about the format. Frames is the default. Timecode is non-drop `HH:MM:SS:FF`,
 using the nearest nominal integer frame rate for fractional rates; exact composition seconds remain
 visible beside either format. This is a display preference, with no effect on document or render time.
 

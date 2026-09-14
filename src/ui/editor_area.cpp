@@ -37,8 +37,10 @@ namespace {
 
 // task U8, issue #131, formal amendment 2, A9: the header's one remaining icon-only button
 // takes a full IconMedium glyph now (the earlier IconSmall/dense-chrome sizing read as
-// illegible at the button's own corrected size).
-constexpr auto kHeaderIconSize = kit::Size::IconMedium;
+// illegible at the button's own corrected size). Task VIEW-1 renamed that fact into the kit's own
+// Chrome icon role -- every panel-header and panel-switcher glyph is a chrome icon, and the role
+// (not this file) owns both its weight and its 16 px box.
+constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
 
 // task U8, issue #131, formal amendment 1, A5: the panel-switcher glyph per editor kind. Assets
 // reuses Folder (already vendored for the data-kind vocabulary) rather than a duplicate asset. An
@@ -172,7 +174,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
         // task U8, formal amendment 1, A5 (icon) + formal amendment 2, A7 (native item icon
         // rendering via KPanelSwitcher, ported from the old QComboBox::addItem(icon, ...) call).
         const auto iconId = iconForEditorId(editor.id);
-        const QIcon icon = iconId.has_value() ? kit::icon(*iconId, kit::Size::IconMedium) : QIcon{};
+        const QIcon icon = iconId.has_value() ? kit::icon(*iconId, kHeaderIconRole) : QIcon{};
         editorPicker_->addItem(icon, editor.displayName, QString::fromStdString(editor.id));
     }
 
@@ -198,8 +200,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     auto makeHeaderButton = [this](const kit::IconId iconId, const QString& toolTip,
                                    const QString& objectName) {
         auto* button = new QToolButton(header_);
-        button->setIcon(kit::icon(iconId, kHeaderIconSize));
-        button->setIconSize(QSize(kit::px(kHeaderIconSize), kit::px(kHeaderIconSize)));
+        button->setIcon(kit::icon(iconId, kHeaderIconRole));
+        const int iconExtent = kit::px(kit::iconSize(kHeaderIconRole));
+        button->setIconSize(QSize(iconExtent, iconExtent));
         button->setToolTip(toolTip);
         button->setAccessibleName(button->toolTip());
         button->setObjectName(objectName);
@@ -349,7 +352,7 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
     // button, toggling AND restoring fullscreen; wording is Fullscreen/Exit Fullscreen rather than
     // Maximize/Restore, and the context menu's own action stays in lockstep with it.
     maximizeButton_->setIcon(
-        kit::icon(maximized ? kit::IconId::Restore : kit::IconId::Maximize, kHeaderIconSize));
+        kit::icon(maximized ? kit::IconId::Restore : kit::IconId::Maximize, kHeaderIconRole));
     const QString toolTip = maximized ? "Exit Fullscreen" : "Fullscreen";
     maximizeButton_->setToolTip(toolTip);
     maximizeButton_->setAccessibleName(toolTip);

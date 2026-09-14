@@ -89,6 +89,33 @@ enum class IconWeight : std::uint8_t {
     Bold,
 };
 
+// WHERE an icon appears, and therefore how it is drawn (task VIEW-1). Two roles, no more:
+//
+//   Chrome  -- panel headers, menus, and per-item toggles. Phosphor Bold at IconMedium (16 px).
+//   Control -- the transport and the viewer footer. Phosphor Fill at IconLarge (20 px).
+//
+// The ROLE owns the weight and the box; a call site names the role and never the pair. That is the
+// whole point: iconWeight()/iconSize() below are the single definition of both rows, so changing
+// one of them changes every icon of that kind everywhere at once, rather than leaving a scatter of
+// call sites that each remembered a number.
+//
+// A glyph that is one ornament INSIDE another control -- a dropdown's chevron, a menu row's check
+// mark, a radio row's tick -- is not a chrome icon in its own right: its box comes from the host
+// control's own metrics, so it takes only the role's WEIGHT (iconWeight(IconRole::Chrome)) and
+// keeps that box. See docs/ux/visual-language.md, "Iconography".
+enum class IconRole : std::uint8_t {
+    Chrome,
+    Control,
+};
+
+[[nodiscard]] constexpr IconWeight iconWeight(const IconRole role) noexcept {
+    return role == IconRole::Control ? IconWeight::Fill : IconWeight::Bold;
+}
+
+[[nodiscard]] constexpr Size iconSize(const IconRole role) noexcept {
+    return role == IconRole::Control ? Size::IconLarge : Size::IconMedium;
+}
+
 // Every id, in declaration order. Exists so a test can prove the whole vocabulary renders rather
 // than spot-checking the ids someone remembered to list.
 [[nodiscard]] std::span<const IconId> iconIds();
@@ -117,10 +144,17 @@ enum class IconWeight : std::uint8_t {
                                  IconWeight weight = IconWeight::Regular,
                                  qreal devicePixelRatio = 0.0);
 
+// The role-driven spellings of the two above (task VIEW-1). These are what product code calls: the
+// weight and the design-pixel box both come from `iconRole`, so no widget spells either.
+[[nodiscard]] QPixmap iconPixmap(IconId id, IconRole iconRole, Color role,
+                                 State state = State::Normal, qreal devicePixelRatio = 0.0);
+
 // A QIcon carrying the Normal, Active (hover), and Disabled renderings of one id, so an ordinary
 // Qt control gets the whole state machine for free.
 [[nodiscard]] QIcon icon(IconId id, Size size, Color role = Color::Muted,
                          IconWeight weight = IconWeight::Regular);
+
+[[nodiscard]] QIcon icon(IconId id, IconRole iconRole, Color role = Color::Muted);
 
 // Cache introspection, for tests and for a future memory-pressure hook.
 [[nodiscard]] std::size_t iconCacheEntryCount();

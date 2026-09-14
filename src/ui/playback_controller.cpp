@@ -11,6 +11,7 @@
 #include <QThread>
 #include <QWidget>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -79,6 +80,17 @@ void PlaybackController::installWindowShortcut(QWidget& window) {
 }
 
 PlaybackState PlaybackController::state() const noexcept { return state_; }
+
+bool PlaybackController::isLooping() const noexcept { return looping_; }
+
+void PlaybackController::setLooping(const bool looping) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (looping_ == looping) {
+        return;
+    }
+    looping_ = looping;
+    emit loopingChanged(looping_);
+}
 
 void PlaybackController::play() {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -210,7 +222,15 @@ void PlaybackController::tick() {
     // Looping (design decision 2): wraps within [0, duration) via exact modulo of the frame count.
     // The offset is exact in both clocks -- elapsed-derived or one frame on -- so repeated wraps
     // never drift.
-    const auto targetFrameIndex = first + (startFrameIndex_ - first + nextOffset) % frameCount;
+    //
+    // Task VIEW-1 made that wrap conditional rather than unconditional. With looping off, the run
+    // lands on the LAST frame of the work area exactly once and pauses there: it neither wraps nor
+    // freezes still-playing on a frame it already showed, and the offset arithmetic below is the
+    // same exact integer arithmetic either way -- only the reduction differs.
+    const auto rawOffset = startFrameIndex_ - first + nextOffset;
+    const bool pastEnd = !looping_ && rawOffset >= frameCount;
+    const auto targetFrameIndex =
+        looping_ ? first + rawOffset % frameCount : first + std::min(rawOffset, frameCount - 1);
     previewController_.noteDroppedFrames(nextOffset - appliedOffset_ - 1);
     appliedOffset_ = nextOffset;
 
@@ -224,6 +244,11 @@ void PlaybackController::tick() {
     (void)session_.setCurrentTime(*targetTime.value());
     applyingOwnTimeChange_ = false;
     previewController_.presentPlaybackFrame(std::chrono::milliseconds{timer_.interval()});
+    if (pastEnd) {
+        // After the frame is applied and presented, so the artist is left looking at the last
+        // frame of the range rather than at whatever the run showed one tick earlier.
+        pause();
+    }
 }
 
 bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,

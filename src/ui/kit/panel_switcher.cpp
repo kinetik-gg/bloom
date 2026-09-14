@@ -261,7 +261,8 @@ void KPanelSwitcher::paintEvent(QPaintEvent* event) {
     painter.drawPixmap(QRectF(chevronColumn.left(), chevronColumn.center().y() - chevronWidth / 2.0,
                               chevronWidth, chevronWidth)
                            .toRect(),
-                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF()));
+                       iconPixmap(IconId::CaretUpDown, Size::IconSmall, ink, devicePixelRatioF(),
+                                  iconWeight(IconRole::Chrome)));
 
     qreal contentLeft = bounds.left() + fieldEndInset();
     const QIcon icon = currentIcon();

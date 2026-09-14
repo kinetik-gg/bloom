@@ -362,9 +362,19 @@ Opening a project never rewrites its color reference to fit the current machine.
 editable and preserves the unresolved record. Relink or requalification is an explicit command that
 publishes a new durable reference and participates in undo, save, and diagnostics.
 
+The current color state is always visible. It is a chip in the window status bar
+(`windowStatusBarColorChip`), not a label inside any one editor panel: an artist must be able to
+read whether what they are looking at is qualified without having a particular panel open, and the
+window status bar is the one surface that is always present. The chip's qualified/unqualified
+reading is driven by the CURRENTLY DISPLAYED frame's own qualification bit, never by the activity
+of a request in flight, so a retained qualified frame keeps reading as qualified while a later,
+unrelated request is running -- the state is never silently relabelled. The same wording backs the
+Viewer's accessible description, from one definition, so the two cannot drift apart.
+
 Any state other than `Ready` is fail-closed for qualified processing:
 
-- the Viewer may retain its last-good frame, label it stale, and show an actionable color diagnostic;
+- the Viewer may retain its last-good frame, label it stale, and show an actionable color diagnostic
+  in the window status bar;
 - Bloom never substitutes another production display transform automatically;
 - a temporary reference mapper may be selected manually for troubleshooting, but its result is
   visibly `Unqualified` and cannot satisfy a production display or export request;

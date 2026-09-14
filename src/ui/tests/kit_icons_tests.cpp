@@ -48,9 +48,12 @@ using namespace bloom::ui;
     return false;
 }
 
-void testEveryIconIdRendersAtEverySizeInBothWeights(Expectations& expectations) {
+void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) {
     const auto sizes = {kit::Size::IconSmall, kit::Size::IconMedium, kit::Size::IconLarge};
-    const auto weights = {kit::IconWeight::Regular, kit::IconWeight::Fill};
+    // Task VIEW-1 completed the Bold subset, so all three vendored weights are total over the
+    // whole vocabulary -- IconRole::Chrome asks for Bold on every chrome glyph, and a missing file
+    // renders as a silent blank rather than an error.
+    const auto weights = {kit::IconWeight::Regular, kit::IconWeight::Fill, kit::IconWeight::Bold};
     int rendered = 0;
     for (const kit::IconId id : kit::iconIds()) {
         for (const kit::IconWeight weight : weights) {
@@ -73,8 +76,8 @@ void testEveryIconIdRendersAtEverySizeInBothWeights(Expectations& expectations) 
             }
         }
     }
-    expectations.expect(rendered == static_cast<int>(kit::iconIds().size()) * 6,
-                        "every id was rendered at all three sizes in both weights");
+    expectations.expect(rendered == static_cast<int>(kit::iconIds().size()) * 9,
+                        "every id was rendered at all three sizes in all three weights");
     // task U8 (issue 131), formal amendment 1, A5 raised the ceiling: four panel-identity glyphs
     // (Stack/Clock/SlidersHorizontal/Graph) join the curated set, still bounded, not unlimited.
     expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 50,
@@ -176,6 +179,8 @@ void testTheCacheReturnsTheSamePixmapForTheSameIdentity(Expectations& expectatio
          kit::State::Disabled, kit::IconWeight::Regular},
         {1.0, "weight", kit::Size::IconMedium, kit::IconId::Play, kit::Color::Foreground,
          kit::State::Normal, kit::IconWeight::Fill},
+        {1.0, "a third weight", kit::Size::IconMedium, kit::IconId::Play, kit::Color::Foreground,
+         kit::State::Normal, kit::IconWeight::Bold},
         {2.0, "device pixel ratio", kit::Size::IconMedium, kit::IconId::Play,
          kit::Color::Foreground, kit::State::Normal, kit::IconWeight::Regular},
     };
@@ -221,13 +226,56 @@ void testQIconCarriesTheStateMachine(Expectations& expectations) {
     }
 }
 
+// Task VIEW-1: the two icon ROLES are the single definition of "which weight, which box" for every
+// icon in the application. A call site names a role; the role -- not the call site -- resolves the
+// pair, so changing one of the two rows below is an app-wide change by construction.
+void testIconRolesResolveOneWeightAndOneBox(Expectations& expectations) {
+    expectations.expect(kit::iconWeight(kit::IconRole::Chrome) == kit::IconWeight::Bold &&
+                            kit::iconSize(kit::IconRole::Chrome) == kit::Size::IconMedium,
+                        "Chrome (headers, menus, toggles) is Phosphor Bold at 16 px");
+    expectations.expect(kit::iconWeight(kit::IconRole::Control) == kit::IconWeight::Fill &&
+                            kit::iconSize(kit::IconRole::Control) == kit::Size::IconLarge,
+                        "Control (transport, viewer footer) is Phosphor Fill at 20 px");
+    expectations.expect(kit::px(kit::iconSize(kit::IconRole::Chrome)) == 16 &&
+                            kit::px(kit::iconSize(kit::IconRole::Control)) == 20,
+                        "both role boxes are pinned in design pixels, not merely named");
+
+    // The role spellings are the explicit pair, not a second rendering path: same cache identity,
+    // therefore the identical pixmap rather than an equal copy.
+    for (const auto role : {kit::IconRole::Chrome, kit::IconRole::Control}) {
+        const QPixmap viaRole = kit::iconPixmap(kit::IconId::Play, role, kit::Color::Foreground,
+                                                kit::State::Normal, 1.0);
+        const QPixmap viaPair =
+            kit::iconPixmap(kit::IconId::Play, kit::iconSize(role), kit::Color::Foreground,
+                            kit::State::Normal, kit::iconWeight(role), 1.0);
+        expectations.expect(!viaRole.isNull() && viaRole.cacheKey() == viaPair.cacheKey(),
+                            "the role overload resolves to exactly the weight/size pair it names");
+        expectations.expect(viaRole.deviceIndependentSize() ==
+                                QSizeF(kit::px(kit::iconSize(role)), kit::px(kit::iconSize(role))),
+                            "a role-rendered icon is its role's own design-pixel box");
+        expectations.expect(hasVisibleInk(viaRole), "a role-rendered icon carries ink");
+    }
+
+    // Every id has a Bold asset, not just the five the timeline's toggles used to need.
+    for (const kit::IconId id : kit::iconIds()) {
+        expectations.expect(
+            QFile::exists(kit::iconResourcePath(id, kit::IconWeight::Bold)),
+            "every id has a vendored Bold asset, because Chrome asks for Bold everywhere: " +
+                kit::iconResourcePath(id, kit::IconWeight::Bold).toStdString());
+        expectations.expect(kit::iconResourcePath(id, kit::IconWeight::Bold) !=
+                                kit::iconResourcePath(id, kit::IconWeight::Regular),
+                            "Bold resolves to its own file, never a silent fallback to Regular");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     const QApplication application(argc, argv);
     Expectations expectations;
-    testEveryIconIdRendersAtEverySizeInBothWeights(expectations);
+    testEveryIconIdRendersAtEverySizeInEveryWeight(expectations);
+    testIconRolesResolveOneWeightAndOneBox(expectations);
     testIconIdsAreUniqueAndTotal(expectations);
     testTintDiffersByRoleAndByState(expectations);
     testTheCacheReturnsTheSamePixmapForTheSameIdentity(expectations);

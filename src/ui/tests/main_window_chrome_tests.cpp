@@ -8,6 +8,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -18,8 +19,10 @@
 #include <QMenuBar>
 #include <QObject>
 #include <QSettings>
+#include <QStatusBar>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUrl>
 #include <QWidget>
 
@@ -292,6 +295,99 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
                         "help menu: Open Source Licenses opens a real LicensesWindow");
 }
 
+// --- Task VIEW-1: the window status bar --------------------------------------------------------
+
+// A kit strip under the workspace, never QMainWindow's own QStatusBar, and it carries every cell
+// the task names. The preview cells are exercised separately (viewer_editor_tests/ram_preview_tests
+// read the same free functions the strip's cells call); what is proved here is that the strip
+// exists, is the right KIND of thing, reports the version, and clears a notice after five seconds.
+void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "status bar: stand-in editors register");
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+
+    auto* strip = window.findChild<WindowStatusBar*>(QStringLiteral("windowStatusBar"));
+    expectations.expect(strip != nullptr && strip == window.statusStrip(),
+                        "status bar: the window carries one, under the objectName windowStatusBar");
+    if (strip == nullptr) {
+        return;
+    }
+    expectations.expect(window.findChild<QStatusBar*>() == nullptr,
+                        "status bar: and it is NOT QMainWindow's own QStatusBar chrome");
+    expectations.expect(window.centralWidget() != nullptr &&
+                            window.centralWidget()->isAncestorOf(strip),
+                        "status bar: it is a row of the central column, so it stays visible "
+                        "whichever central page is authoritative");
+    for (const char* cell :
+         {"windowStatusBarColorChip", "windowStatusBarPreviewState", "windowStatusBarDroppedFrames",
+          "windowStatusBarCache", "windowStatusBarMessage", "windowStatusBarVersion"}) {
+        expectations.expect(strip->findChild<QWidget*>(QString::fromLatin1(cell)) != nullptr,
+                            std::string{"status bar: it carries the "} + cell + " cell");
+    }
+    expectations.expect(strip->versionTextForTest() == QStringLiteral("0.1.0"),
+                        "status bar: the application version is what the version cell shows");
+}
+
+// A transient notice clears itself; a persistent one does not. The five-second life is asserted by
+// driving the timer rather than by waiting on the wall clock.
+void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "status bar messages: stand-in editors register");
+    // A standalone strip, not the one inside a MainWindow: ProjectHost's own asynchronous startup
+    // publishes activity messages through that window, and this test is about the strip's own
+    // precedence and expiry rules rather than about who happens to be talking to it.
+    WindowStatusBar standalone(fixture.compositionSession, nullptr);
+    auto* strip = &standalone;
+
+    strip->setPersistentMessage(QStringLiteral("Saving…"));
+    expectations.expect(strip->messageTextForTest() == QStringLiteral("Saving…"),
+                        "status bar messages: a persistent message shows");
+
+    strip->showTransientMessage(QStringLiteral("Exported one frame"));
+    expectations.expect(strip->messageTextForTest() == QStringLiteral("Exported one frame"),
+                        "status bar messages: a notice takes precedence while it lasts");
+
+    auto* timer = strip->findChild<QTimer*>();
+    expectations.expect(timer != nullptr && timer->isSingleShot() && timer->isActive() &&
+                            timer->interval() == 5000,
+                        "status bar messages: a notice is armed to clear after exactly five "
+                        "seconds");
+    // The expiry is proved by the CONNECTION rather than by waiting five seconds: disconnect()
+    // returns true only if the pair was actually connected, so this both asserts the wiring and
+    // leaves the test deterministic. It is reconnected immediately afterwards.
+    expectations.expect(timer != nullptr &&
+                            QObject::disconnect(timer, &QTimer::timeout, strip,
+                                                &WindowStatusBar::clearTransientMessage),
+                        "status bar messages: the timeout is what clears the notice");
+    if (timer != nullptr) {
+        QObject::connect(timer, &QTimer::timeout, strip, &WindowStatusBar::clearTransientMessage);
+    }
+    strip->clearTransientMessage();
+    expectations.expect(strip->messageTextForTest() == QStringLiteral("Saving…"),
+                        "status bar messages: when the notice expires the persistent message is "
+                        "what is left, not an empty strip");
+
+    strip->setPersistentMessage(QString{});
+    expectations.expect(strip->messageTextForTest().isEmpty(),
+                        "status bar messages: clearing the persistent message empties the cell");
+}
+
+// A refused command reaches the strip as a notice. CompositionSession::commandRejected() is the one
+// signal every refusal already travels on, so this is the whole wiring.
+void testRejectedCommandsBecomeStatusBarNotices(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "rejected commands: stand-in editors register");
+    WindowStatusBar strip(fixture.compositionSession, nullptr);
+    Q_EMIT fixture.compositionSession.commandRejected(QStringLiteral("Nothing to split"));
+    expectations.expect(strip.messageTextForTest() == QStringLiteral("Nothing to split"),
+                        "rejected commands: the refusal reason is what the strip says");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -303,6 +399,9 @@ int main(int argc, char** argv) {
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
+    testWindowStatusBarIsAKitStripWithEveryCell(expectations);
+    testWindowStatusBarMessagesClearThemselves(expectations);
+    testRejectedCommandsBecomeStatusBarNotices(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
 

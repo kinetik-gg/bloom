@@ -235,8 +235,9 @@ void KRadioGroup::paintSegmented(QPainter& painter) {
         if (const std::optional<IconId> glyph = options_.at(index).icon; glyph.has_value()) {
             const auto box = static_cast<qreal>(px(Size::IconSmall));
             const QRectF iconRect(content.left(), content.center().y() - box / 2.0, box, box);
-            painter.drawPixmap(iconRect.toRect(), iconPixmap(glyph.value(), Size::IconSmall, ink,
-                                                             devicePixelRatioF()));
+            painter.drawPixmap(iconRect.toRect(),
+                               iconPixmap(glyph.value(), Size::IconSmall, ink, devicePixelRatioF(),
+                                          iconWeight(IconRole::Chrome)));
             content.setLeft(iconRect.right() + px(Spacing::XS));
         }
         painter.setPen(ink);

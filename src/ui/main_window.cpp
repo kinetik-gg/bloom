@@ -9,6 +9,7 @@
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAction>
@@ -23,7 +24,6 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QStackedWidget>
-#include <QStatusBar>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -55,17 +55,21 @@ void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                        ProjectHost& projectHost, FrameExportController& frameExportController,
-                       RamPreviewController* const ramPreview, QWidget* parent)
+                       RamPreviewController* const ramPreview,
+                       CompositionPreviewController* const previewController, QWidget* parent)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
-      frameExportController_(frameExportController), ramPreview_(ramPreview) {
+      frameExportController_(frameExportController), ramPreview_(ramPreview),
+      previewController_(previewController) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
 
     createChrome();
-    createMenus(*menuBar_);
     createEditorLayout(editorRegistry);
+    // Before createMenus()/updateFileActions(): every one of those paths can already want to say
+    // something, and the strip is what says it.
     createCentralStack();
+    createMenus(*menuBar_);
     createWorkspaceActions();
     updateEditActions();
 
@@ -81,7 +85,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::saveFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 if (outcome == ProjectHostOperationOutcome::Published) {
-                    statusBar()->showMessage(message, 4000);
+                    statusStrip_->showTransientMessage(message);
                     return;
                 }
                 QMessageBox::warning(this, tr("Save Project"), message);
@@ -89,11 +93,11 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::openFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 if (outcome == ProjectHostOperationOutcome::Published) {
-                    statusBar()->showMessage(message, 4000);
+                    statusStrip_->showTransientMessage(message);
                     return;
                 }
                 if (outcome == ProjectHostOperationOutcome::Cancelled) {
-                    statusBar()->clearMessage();
+                    statusStrip_->clearTransientMessage();
                     return;
                 }
                 QMessageBox::warning(this, tr("Open Project"), message);
@@ -101,11 +105,11 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::copyFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 if (outcome == ProjectHostOperationOutcome::Published) {
-                    statusBar()->showMessage(message, 4000);
+                    statusStrip_->showTransientMessage(message);
                     return;
                 }
                 if (outcome == ProjectHostOperationOutcome::Cancelled) {
-                    statusBar()->clearMessage();
+                    statusStrip_->clearTransientMessage();
                     return;
                 }
                 QMessageBox::warning(this, tr("Save a Copy"), message);
@@ -126,17 +130,19 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
             [this](const FrameExportOutcome outcome, const QString& message) {
                 if (outcome == FrameExportOutcome::Published ||
                     outcome == FrameExportOutcome::PublishedWithWarning) {
-                    statusBar()->showMessage(message, 4000);
+                    statusStrip_->setPersistentMessage({});
+                    statusStrip_->showTransientMessage(message);
                     return;
                 }
                 if (outcome == FrameExportOutcome::Cancelled) {
                     // A cancelled RANGE says how many frames landed, which is information the
                     // artist needs; a cancelled single frame wrote nothing, so it stays silent as
                     // before.
+                    statusStrip_->setPersistentMessage({});
                     if (message.isEmpty()) {
-                        statusBar()->clearMessage();
+                        statusStrip_->clearTransientMessage();
                     } else {
-                        statusBar()->showMessage(message, 4000);
+                        statusStrip_->showTransientMessage(message);
                     }
                     return;
                 }
@@ -147,9 +153,12 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&frameExportController_, &FrameExportController::rangeProgressChanged, this, [this] {
         updateExportAction();
         if (frameExportController_.isExportingRange()) {
-            statusBar()->showMessage(tr("Exporting frame %1 of %2…")
-                                         .arg(frameExportController_.publishedFrameCount() + 1)
-                                         .arg(frameExportController_.totalFrameCount()));
+            // Range progress is a persistent message, not a notice: it describes work that is still
+            // running, so it must not clear itself out from under the artist after five seconds.
+            statusStrip_->setPersistentMessage(
+                tr("Exporting frame %1 of %2…")
+                    .arg(frameExportController_.publishedFrameCount() + 1)
+                    .arg(frameExportController_.totalFrameCount()));
         }
     });
 
@@ -404,21 +413,16 @@ void MainWindow::updateFileActions() {
 
     switch (projectHost_.activity()) {
     case ProjectHostActivity::Saving:
-        statusBar()->showMessage(tr("Saving…"));
+        statusStrip_->setPersistentMessage(tr("Saving…"));
         break;
     case ProjectHostActivity::Opening:
-        statusBar()->showMessage(tr("Opening…"));
+        statusStrip_->setPersistentMessage(tr("Opening…"));
         break;
     case ProjectHostActivity::ResolvingUnsavedChanges:
-        statusBar()->showMessage(tr("Waiting for a decision about unsaved changes…"));
+        statusStrip_->setPersistentMessage(tr("Waiting for a decision about unsaved changes…"));
         break;
     case ProjectHostActivity::Idle:
-        // Never force QMainWindow::statusBar() to lazily create a status bar just to clear a
-        // message that was never shown (e.g. at initial construction, before any project I/O has
-        // ever run): only clear one that already exists.
-        if (auto* bar = findChild<QStatusBar*>()) {
-            bar->clearMessage();
-        }
+        statusStrip_->setPersistentMessage({});
         break;
     }
 }
@@ -488,7 +492,19 @@ void MainWindow::createCentralStack() {
     readOnlyPlaceholderPage_ = createReadOnlyPlaceholderPage();
     centralStack_->addWidget(readOnlyPlaceholderPage_);
     centralStack_->setCurrentWidget(workspaceHost_);
-    setCentralWidget(centralStack_);
+
+    // Task VIEW-1: the window status bar is a row of the central column, below the workspace and
+    // below the read-only placeholder alike -- it reports on the application, so it stays visible
+    // whichever page is authoritative.
+    auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("mainWindowCentralColumn"));
+    auto* column = new QVBoxLayout(central);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(0);
+    statusStrip_ = new WindowStatusBar(compositionSession_, previewController_, central);
+    column->addWidget(centralStack_, 1);
+    column->addWidget(statusStrip_);
+    setCentralWidget(central);
 }
 
 QWidget* MainWindow::createReadOnlyPlaceholderPage() {

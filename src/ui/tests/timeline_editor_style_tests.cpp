@@ -294,8 +294,8 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Header composition with a deliberately long name"));
     ui::EditorRegistry registry;
     (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
-                                       return new ui::TimelineEditor(
-                                           fixture.session, fixture.controller, nullptr, parent);
+                                       return new ui::TimelineEditor(fixture.session,
+                                                                     fixture.controller, parent);
                                    }});
     (void)registry.registerEditor(
         {"bloom.probe", "Probe", [](QWidget* parent) { return new QWidget(parent); }});
@@ -474,8 +474,8 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     QObject::connect(appRedo, &QAction::triggered, &fixture.session, &ui::CompositionSession::redo);
     ui::EditorRegistry registry;
     (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
-                                       return new ui::TimelineEditor(
-                                           fixture.session, fixture.controller, nullptr, parent);
+                                       return new ui::TimelineEditor(fixture.session,
+                                                                     fixture.controller, parent);
                                    }});
     auto* area = new ui::EditorArea(registry, "bloom.timeline");
     auto* layout = new QVBoxLayout(&host);
@@ -493,12 +493,17 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(addButton != nullptr && header->isAncestorOf(addButton) &&
                             addButton->menu()->objectName() == QStringLiteral("addLayerMenu"),
                         "the existing Add popup is in the header with its original names");
-    auto* controls = editor->findChild<QWidget*>("timelineControls");
-    for (const auto* button : controls->findChildren<QToolButton*>()) {
-        expectations.expect(button->text() != QStringLiteral("Undo") &&
-                                button->text() != QStringLiteral("Redo"),
-                            "transport has no Undo or Redo buttons");
-    }
+    // Task VIEW-1: the transport cluster this used to inspect lives in the viewer footer now, so
+    // the claim it made ("no Undo/Redo buttons down there") is made about what is actually left in
+    // the row -- the navigator, and the empty left cell that keeps its time axis aligned.
+    auto* navigatorCell = editor->findChild<QWidget*>("timelineNavigatorLeftCell");
+    expectations.expect(navigatorCell != nullptr &&
+                            navigatorCell->width() == ui::TimelineEditor::layerColumnWidth(),
+                        "the navigator row's left cell still reserves exactly the layer column's "
+                        "width, so the time axis below the lanes stays aligned with them");
+    expectations.expect(editor->findChildren<QToolButton*>("playPauseButton").isEmpty() &&
+                            editor->findChildren<QAction*>("stepForwardAction").isEmpty(),
+                        "and the timeline owns no transport control or action at all any more");
     const auto action = [area](const char* name) {
         auto* result = area->findChild<QAction*>(QLatin1String(name));
         if (result == nullptr) {
@@ -555,13 +560,14 @@ void testTimelineHeaderMenus(Expectations& expectations) {
                         "menus expose their keyboard shortcuts");
     (void)fixture.session.setCurrentTime(time(3));
     action("timelineTimecodeAction")->trigger();
-    auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
-    expectations.expect(readout->text().contains(QStringLiteral("00:00:03:00")) &&
-                            readout->text().contains(QStringLiteral("3.000s")),
-                        "timecode readout preserves the exact seconds alongside non-drop timecode");
+    // Task VIEW-1: the frame/time readout moved to the viewer footer (its own assertions live in
+    // viewer_editor_tests.cpp). What the timeline's View menu still owns is the RULER's label
+    // format and the shared preference both surfaces read -- which is what is checked here.
     expectations.expect(QSettings().value("timeline/time-format").toString() ==
                             QStringLiteral("timecode"),
                         "the display format is persisted under timeline/time-format");
+    expectations.expect(editor->findChildren<QLabel*>("timelineTimeReadout").isEmpty(),
+                        "and the timeline no longer carries a readout of its own");
     for (const auto width : {180, 900}) {
         ruler->resize(width, ruler->height());
         const auto rects = ruler->majorTickLabelRectsForTest();
@@ -570,15 +576,10 @@ void testTimelineHeaderMenus(Expectations& expectations) {
                                 "timecode tick labels never overlap at narrow or wide sizes");
         }
     }
-    {
-        ui::TimelineEditor restoredEditor(fixture.session, fixture.controller);
-        expectations.expect(restoredEditor.findChild<QLabel*>("timelineTimeReadout")->text() ==
-                                readout->text(),
-                            "a new timeline restores the persisted time format");
-    }
     action("timelineFramesAction")->trigger();
-    expectations.expect(readout->text() == QStringLiteral("Frame 72 · 3.000s"),
-                        "Frames restores the existing frame and exact-time readout");
+    expectations.expect(QSettings().value("timeline/time-format").toString() ==
+                            QStringLiteral("frames"),
+                        "Frames restores the persisted frame format");
     auto* bar = area->findChild<QWidget*>("timelineHeaderMenus");
     bar->setFixedWidth(ui::kit::px(ui::kit::Size::Control));
     QCoreApplication::processEvents();
@@ -1427,101 +1428,6 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
     finishFixture(fixture);
 }
 
-void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {
-    using namespace bloom;
-    SessionFixture fixture(makeTestProject("Play Pause Icon Test"));
-
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
-    auto* button = editor->findChild<QToolButton*>("playPauseButton");
-    expectations.expect(button != nullptr, "the play/pause button is reachable by name");
-    if (button == nullptr) {
-        delete editor;
-        finishFixture(fixture);
-        return;
-    }
-
-    const auto playIcon = ui::kit::icon(ui::kit::IconId::Play, ui::kit::Size::IconMedium);
-    const auto pauseIcon = ui::kit::icon(ui::kit::IconId::Pause, ui::kit::Size::IconMedium);
-    const auto size =
-        QSize(ui::kit::px(ui::kit::Size::IconMedium), ui::kit::px(ui::kit::Size::IconMedium));
-    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
-                        "the button starts showing the Play glyph");
-
-    button->click();
-    expectations.expect(button->isChecked() && button->text() == QStringLiteral("Pause"),
-                        "the existing text()/isChecked() contract still flips on click");
-    expectations.expect(button->icon().pixmap(size).toImage() == pauseIcon.pixmap(size).toImage(),
-                        "clicking swaps the icon to Pause alongside the text");
-
-    button->click();
-    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
-                        "clicking again swaps the icon back to Play");
-
-    delete editor;
-    finishFixture(fixture);
-}
-
-// Non-goal guard (decision 5): the loop indicator is a status glyph, never a clickable control.
-void testLoopIndicatorIsNonInteractiveAndHonest(Expectations& expectations) {
-    using namespace bloom;
-    SessionFixture fixture(makeTestProject("Loop Indicator Test"));
-
-    ui::TimelineEditor editor(fixture.session, fixture.controller);
-    auto* indicator = editor.findChild<QLabel*>("timelineLoopIndicator");
-    expectations.expect(indicator != nullptr, "the loop indicator exists");
-    if (indicator == nullptr) {
-        finishFixture(fixture);
-        return;
-    }
-    expectations.expect(editor.findChild<QToolButton*>("timelineLoopIndicator") == nullptr,
-                        "the loop indicator is a QLabel, never a clickable QToolButton");
-    expectations.expect(!indicator->pixmap().isNull(), "the loop indicator carries a glyph");
-    expectations.expect(indicator->toolTip().contains(QStringLiteral("loop"), Qt::CaseInsensitive),
-                        "the tooltip honestly names the always-on looping behavior");
-
-    finishFixture(fixture);
-}
-
-// task U8, issue #131, fix 7: the timeline's icon-only QToolButtons all size to controlExtent
-// square, and (task T1) the whole transport cluster lives inside the LEFT column's own width.
-void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectations) {
-    using namespace bloom;
-    SessionFixture fixture(makeTestProject("Transport Cluster Test"));
-
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
-    QWidget host;
-    auto* layout = new QVBoxLayout(&host);
-    layout->addWidget(editor);
-    layoutEditor(host);
-
-    for (const char* objectName :
-         {"timelineStepBackButton", "playPauseButton", "timelineStepForwardButton"}) {
-        auto* button = editor->findChild<QToolButton*>(QString::fromLatin1(objectName));
-        expectations.expect(button != nullptr, std::string{objectName} + " is reachable by name");
-        if (button == nullptr) {
-            continue;
-        }
-        expectations.expect(button->width() == button->height(),
-                            std::string{objectName} + " is square");
-        expectations.expect(button->width() == ui::kit::px(ui::kit::Size::Control),
-                            std::string{objectName} + " is exactly Size::Control square");
-    }
-
-    auto* controls = editor->findChild<QWidget*>("timelineControls");
-    expectations.expect(
-        controls != nullptr && controls->width() == ui::TimelineEditor::layerColumnWidth(),
-        "the transport/readout cluster occupies exactly the LEFT column's width, so "
-        "nothing in it overhangs the lane region");
-    auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
-    expectations.expect(readout != nullptr && controls != nullptr && readout->isVisible() &&
-                            readout->mapTo(editor, QPoint(0, 0)).x() + readout->width() <=
-                                ui::TimelineEditor::layerColumnWidth(),
-                        "the frame/time readout fits inside that width too");
-
-    delete editor;
-    finishFixture(fixture);
-}
-
 void testPropertyRows(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Property rows"));
@@ -1907,9 +1813,6 @@ int main(int argc, char** argv) {
         testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(expectations);
         testDraggingALaneScrubsThroughTheRulerScrubPath(expectations);
         testClickingTheLeftColumnSelectsAndClears(expectations);
-        testPlayPauseButtonIconSwapsWithState(expectations);
-        testLoopIndicatorIsNonInteractiveAndHonest(expectations);
-        testTransportClusterIsSquareAndInsideTheLeftColumn(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: legacy text fixture: " << error.what() << '\n';
         return 1;

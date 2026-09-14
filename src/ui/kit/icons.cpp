@@ -173,14 +173,19 @@ QString iconResourcePath(const IconId id, const IconWeight weight) {
     if (asset == iconAssets().end()) {
         return {};
     }
-    if (weight == IconWeight::Bold &&
-        (id == IconId::Visible || id == IconId::Hidden || id == IconId::Locked ||
-         id == IconId::Unlocked || id == IconId::Check))
+    // Task VIEW-1: all three vendored weights are now COMPLETE subsets (48 ids each), so this is a
+    // total mapping rather than the five-id Bold exception it used to carry. IconRole::Chrome asks
+    // for Bold on every chrome glyph in the application, and an id without a Bold file would have
+    // rendered as a silent blank.
+    switch (weight) {
+    case IconWeight::Bold:
         return QStringLiteral(":/bloom/kit/phosphor-icons/bold/%1-bold.svg")
             .arg(asset->upstreamName);
-    if (weight == IconWeight::Fill) {
+    case IconWeight::Fill:
         return QStringLiteral(":/bloom/kit/phosphor-icons/fill/%1-fill.svg")
             .arg(asset->upstreamName);
+    case IconWeight::Regular:
+        break;
     }
     return QStringLiteral(":/bloom/kit/phosphor-icons/regular/%1.svg").arg(asset->upstreamName);
 }
@@ -219,6 +224,16 @@ QPixmap iconPixmap(const IconId id, const Size size, const QColor& tint,
 QPixmap iconPixmap(const IconId id, const Size size, const Color role, const State state,
                    const IconWeight weight, const qreal devicePixelRatio) {
     return iconPixmap(id, size, iconTint(role, state), devicePixelRatio, weight);
+}
+
+QPixmap iconPixmap(const IconId id, const IconRole iconRole, const Color role, const State state,
+                   const qreal devicePixelRatio) {
+    return iconPixmap(id, iconSize(iconRole), iconTint(role, state), devicePixelRatio,
+                      iconWeight(iconRole));
+}
+
+QIcon icon(const IconId id, const IconRole iconRole, const Color role) {
+    return icon(id, iconSize(iconRole), role, iconWeight(iconRole));
 }
 
 QIcon icon(const IconId id, const Size size, const Color role, const IconWeight weight) {

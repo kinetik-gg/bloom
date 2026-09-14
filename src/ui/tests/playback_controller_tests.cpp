@@ -640,11 +640,13 @@ void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expecta
 }
 
 // Widget test: the play/pause toggle button and Space application shortcut flip transport state
-// offscreen; Space while a QLineEdit has focus does NOT toggle. TimelineEditor itself owns no
-// QLineEdit (verified by reading composition_editors.cpp), so this builds the closest honest
-// fixture: a plain QLineEdit as a sibling of the real TimelineEditor inside one shown top-level
-// window, so Qt::WindowShortcut's real per-window dispatch (not a synthetic focus check) decides
-// whether Space reaches the action.
+// offscreen; Space while a QLineEdit has focus does NOT toggle. A plain QLineEdit sits as a sibling
+// of the real editor inside one shown top-level window, so Qt::WindowShortcut's real per-window
+// dispatch (not a synthetic focus check) decides whether Space reaches the action.
+//
+// ADAPTED for task VIEW-1 (enumerated in that task's report): the transport moved from the Timeline
+// to the Viewer footer, so the panel built here is a ViewerEditor. Every behavioral claim below is
+// unchanged -- the button's objectName, type, text() and isChecked() contract all moved with it.
 void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Playback Widget", time(4)));
@@ -653,7 +655,7 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
     auto& sharedPlayback = fixture.controller.playbackController();
     sharedPlayback.installWindowShortcut(host);
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("playbackTestProbeLineEdit");
     layout->addWidget(editor);
@@ -699,15 +701,14 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
                         "the focused line edit consumed Space as ordinary text input, confirming "
                         "it -- not a dropped/ignored event -- is what won the key");
 
-    auto* secondTimeline =
-        new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
-    layout->addWidget(secondTimeline);
-    auto* secondButton = secondTimeline->findChild<QToolButton*>("playPauseButton");
+    auto* secondViewer = new ui::ViewerEditor(fixture.session, fixture.controller, nullptr, &host);
+    layout->addWidget(secondViewer);
+    auto* secondButton = secondViewer->findChild<QToolButton*>("playPauseButton");
     expectations.expect(secondButton != nullptr && secondButton->isChecked(),
-                        "a second Timeline reflects the already playing shared transport");
+                        "a second Viewer reflects the already playing shared transport");
     expectations.expect(host.findChildren<QAction*>("playPauseAction").size() == 1,
-                        "multiple Timeline panels do not duplicate Space shortcuts");
-    auto* viewer = new ui::ViewerEditor(fixture.session, fixture.controller, &host);
+                        "multiple Viewer panels do not duplicate Space shortcuts");
+    auto* viewer = new ui::ViewerEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* nodes = new ui::NodeGraphEditor(fixture.session, &host);
     auto* plainButton = new QPushButton(QStringLiteral("Non-text button"), &host);
     layout->addWidget(viewer);
@@ -739,19 +740,19 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
                             plainText->toPlainText() == QStringLiteral(" "),
                         "both multiline editors receive the actual character");
     editor->hide();
-    secondTimeline->hide();
+    secondViewer->hide();
     viewer->setFocus(Qt::OtherFocusReason);
     QCoreApplication::processEvents();
     const auto beforeHidden = sharedPlayback.state();
     QTest::keyClick(viewer, Qt::Key_Space);
     expectations.expect(sharedPlayback.state() != beforeHidden,
-                        "hidden Timelines do not disable Space");
+                        "hidden panels do not disable Space");
     delete editor;
-    delete secondTimeline;
+    delete secondViewer;
     const auto beforeRemoved = sharedPlayback.state();
     QTest::keyClick(viewer, Qt::Key_Space);
     expectations.expect(sharedPlayback.state() != beforeRemoved,
-                        "Space and transport survive removal of every Timeline panel");
+                        "Space and transport survive removal of the panels that showed them");
 
     finishFixture(fixture, expectations);
 }
@@ -759,12 +760,12 @@ void testPlaybackToggleButtonAndSpaceShortcut(Expectations& expectations) {
 // Frame stepping (issue #108, decision 1): Right from t=0 lands exactly on frame one's exact
 // mapped time (1/25 s at this fixture's 25 fps rate), through the SAME CompositionSession::
 // setCurrentTime() mutator the ruler/keyframe gestures already use. Exercised through the real
-// stepForwardAction QAction (TimelineEditor::stepFrame()'s public seam), not a reimplementation of
-// the frame math.
+// stepForwardAction QAction (ViewerEditor::stepFrame()'s public seam -- task VIEW-1 moved the
+// transport there from the Timeline), not a reimplementation of the frame math.
 void testStepForwardFromZeroLandsOnFrameOne(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step Forward", time(4)));
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
     expectations.expect(stepForward != nullptr, "the step-forward action is reachable by name");
     if (stepForward == nullptr) {
@@ -788,7 +789,7 @@ void testStepForwardFromZeroLandsOnFrameOne(Expectations& expectations) {
 void testStepBackwardAtZeroClampsWithNoSignalChurn(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step Clamp", time(4)));
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* stepBackward = editor->findChild<QAction*>("stepBackwardAction");
     expectations.expect(stepBackward != nullptr, "the step-backward action is reachable by name");
     if (stepBackward == nullptr) {
@@ -815,7 +816,7 @@ void testStepBackwardAtZeroClampsWithNoSignalChurn(Expectations& expectations) {
 void testStepToEndLandsAtExactMaxFrame(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step End", time(4)));
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* stepToEnd = editor->findChild<QAction*>("stepToEndAction");
     expectations.expect(stepToEnd != nullptr, "the go-to-end action is reachable by name");
     if (stepToEnd == nullptr) {
@@ -840,7 +841,7 @@ void testStepToStartLandsAtExactZero(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Frame Step Home", time(4)));
     expectations.expect(fixture.session.setCurrentTime(time(50, 25)),
                         "session time moves away from zero first");
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* stepToStart = editor->findChild<QAction*>("stepToStartAction");
     expectations.expect(stepToStart != nullptr, "the go-to-start action is reachable by name");
     if (stepToStart == nullptr) {
@@ -869,7 +870,7 @@ void testStepFromSubframeTimeUsesNearestIndexTieRule(Expectations& expectations)
     SessionFixture fixture(makeTestProject("Frame Step Subframe Tie", time(4)));
     expectations.expect(fixture.session.setCurrentTime(time(1, 50)),
                         "session time moves to the exact halfway-tie subframe time");
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* stepBackward = editor->findChild<QAction*>("stepBackwardAction");
     auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
     expectations.expect(stepBackward != nullptr && stepForward != nullptr,
@@ -906,7 +907,7 @@ void testStepFromSubframeTimeUsesNearestIndexTieRule(Expectations& expectations)
 void testStepDuringPlaybackPausesThenSteps(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step Playback Pause", time(4)));
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* button = editor->findChild<QToolButton*>("playPauseButton");
     auto* stepForward = editor->findChild<QAction*>("stepForwardAction");
     expectations.expect(button != nullptr && stepForward != nullptr,
@@ -941,7 +942,7 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller, nullptr, &host);
     auto* probeLineEdit = new QLineEdit(&host);
     probeLineEdit->setObjectName("frameStepTestProbeLineEdit");
     layout->addWidget(editor);
@@ -1001,6 +1002,12 @@ void testFrameStepShortcutsMoveTimeAndTextEntryFocusWins(Expectations& expectati
 // currentRow()/setCurrentRow()/rowCount() seam instead of
 // currentItem()/setCurrentItem()/topLevelItemCount(). Every behavioral claim below is
 // byte-identical to the pre-T1 version; only the primitive the claim is read off changed.
+//
+// ADAPTED AGAIN for task VIEW-1: the four step actions now belong to the Viewer, so the fixture
+// holds BOTH panels in one window -- which is also the real arrangement the rule has to work in,
+// since the two panels no longer share a class. The reconciliation moved with the actions and is
+// keyed on kDefersTransportKeysProperty, which TimelineLayerStack sets on itself; every claim
+// below is unchanged.
 void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Frame Step Tree Conflict", time(4)));
@@ -1016,20 +1023,22 @@ void testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(Expectations& exp
 
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller, nullptr, &host);
+    auto* timeline = new ui::TimelineEditor(fixture.session, fixture.controller, &host);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller, nullptr, &host);
+    layout->addWidget(timeline);
     layout->addWidget(editor);
     host.show();
     host.activateWindow();
     QCoreApplication::processEvents();
 
-    auto* stack = editor->layerStackForTest();
+    auto* stack = timeline->layerStackForTest();
     expectations.expect(stack != nullptr && stack->rowCount() == 3,
                         "the layer stack has all three rows");
     if (stack == nullptr || stack->rowCount() != 3) {
         finishFixture(fixture, expectations);
         return;
     }
-    expectations.expect(editor->findChild<QWidget*>("layerStackView") == stack,
+    expectations.expect(timeline->findChild<QWidget*>("layerStackView") == stack,
                         "and it is still the widget the layerStackView objectName names");
 
     editor->setFocus();
@@ -1086,7 +1095,7 @@ void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectatio
                         "a second composition is added to the project");
     SessionFixture fixture(std::move(newProject));
 
-    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    auto* editor = new ui::ViewerEditor(fixture.session, fixture.controller);
     auto* readout = editor->findChild<QLabel*>("timelineTimeReadout");
     expectations.expect(readout != nullptr, "the time readout label is reachable by name");
     if (readout == nullptr) {
