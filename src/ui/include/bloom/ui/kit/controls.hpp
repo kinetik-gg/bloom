@@ -36,6 +36,14 @@ class KLabel : public QLabel {
     explicit KLabel(QWidget* parent = nullptr);
     explicit KLabel(const QString& text, QWidget* parent = nullptr, TypeRole role = TypeRole::Ui);
     void setTypeRole(TypeRole role);
+    void setElidedText(const QString& text);
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override;
+
+  private:
+    QString fullText_;
+    bool elides_ = false;
 };
 class KSearchField : public QLineEdit {
     Q_OBJECT

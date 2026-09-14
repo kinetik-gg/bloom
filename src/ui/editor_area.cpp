@@ -471,14 +471,20 @@ void EditorArea::rebuildEditor(int editorIndex) {
         auto& spec = provider->editorChrome();
         if (spec.hosted)
             spec.hosted();
-        footer_ = buildChromeRow(spec.footer, this, true);
-        if (footer_) {
+        if (auto* controls = buildChromeRow(spec.footer, this, true)) {
+            footer_ = new QWidget(this);
             footer_->setObjectName("editorFooter");
+            footer_->setFixedHeight(kit::px(kit::Size::FooterRow));
+            auto* footerLayout = new QVBoxLayout(footer_);
+            footerLayout->setContentsMargins(0, 0, 0, 0);
+            footerLayout->addWidget(controls);
+            controls->show();
             layout_->addWidget(footer_);
         }
         headerMenus_ = buildChromeRow(spec.header, headerLeft_);
         if (headerMenus_) {
             headerLayout_->insertWidget(1, headerMenus_, 1, Qt::AlignVCenter);
+            headerMenus_->show();
             headerLayout_->setStretch(2, 0);
         }
         if (spec.headerCanvas) {

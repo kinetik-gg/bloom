@@ -137,9 +137,12 @@ void run() {
     idle(*solo);
     const auto on = visible->grab().toImage();
     const auto off = solo->grab().toImage();
-    expect(on.pixelColor(3, 3).lightness() > off.pixelColor(3, 3).lightness(),
+    const int inset =
+        (ui::kit::px(ui::kit::Size::Control) - ui::kit::px(ui::kit::Size::PropertiesCheckBox)) / 2;
+    const QPoint fill(inset + 3, inset + 3);
+    expect(on.pixelColor(fill).lightness() > off.pixelColor(fill).lightness(),
            "checked checkbox is brighter than unchecked");
-    expect(on.pixelColor(3, 3).blue() > on.pixelColor(3, 3).red(),
+    expect(on.pixelColor(fill).blue() > on.pixelColor(fill).red(),
            "checked checkbox uses accent blue");
     expect(opacity->displayedValue() == "100", "whole values omit decimal zeroes");
     auto* parent = panel->findChild<ui::kit::KDropdown*>("propertiesParentDropdown");
@@ -200,7 +203,8 @@ void run() {
     }
     for (auto* section : panel->findChildren<ui::kit::KSection*>()) {
         auto* reset = section->findChild<ui::kit::KButton*>("kSectionReset");
-        expect(reset && reset->text().isEmpty() && reset->width() <= 22,
+        expect(reset && reset->text().isEmpty() &&
+                   reset->width() == ui::kit::px(ui::kit::Size::Control),
                "section reset is a compact icon");
         if (reset) {
             idle(*reset);

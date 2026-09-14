@@ -25,6 +25,7 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     EditorChromeSpec chrome_;
     void rebuild();
     void updateSelection();
+    void refreshRowSelection();
     void applyFilter(const QString& text);
     void openComposition(document::CompositionId id);
     void commitRename(QTreeWidgetItem* item, int column);

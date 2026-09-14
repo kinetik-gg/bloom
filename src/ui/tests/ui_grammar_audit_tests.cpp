@@ -58,8 +58,23 @@ int main(int argc, char** argv) {
                 expect(button->height() == kit::px(expected), button, "button role token");
                 ++controls;
             }
-            if (qobject_cast<kit::KRow*>(widget))
+            if (qobject_cast<kit::KRow*>(widget)) {
                 expect(widget->height() == kit::px(kit::Size::ListRow), widget, "list row token");
+                if (widget->isVisible()) {
+                    for (auto* cell :
+                         widget->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
+                        const auto role = cell->property("rowCell").toString();
+                        if (role.isEmpty())
+                            continue;
+                        expect(widget->rect().contains(cell->geometry()), cell,
+                               "row cell must fit inside its row");
+                        expect(cell->width() == kit::px(role == "toggle"
+                                                            ? kit::Size::ToggleCell
+                                                            : kit::Size::DropdownWidth),
+                               cell, "row column pitch");
+                    }
+                }
+            }
             if (qobject_cast<kit::KPropertyRow*>(widget))
                 expect(widget->height() == kit::px(kit::Size::PropertyRow), widget,
                        "property row token");
@@ -91,7 +106,7 @@ int main(int argc, char** argv) {
             if (const auto* toggle = qobject_cast<kit::KIconToggle*>(widget)) {
                 const auto pixmap = toggle->glyphPixmap();
                 expect(pixmap.width() ==
-                           qRound(kit::px(kit::Size::IconChrome) * widget->devicePixelRatioF()),
+                           qRound(kit::px(kit::Size::IconControl) * widget->devicePixelRatioF()),
                        widget, "toggle integer physical glyph box");
                 ++icons;
             }

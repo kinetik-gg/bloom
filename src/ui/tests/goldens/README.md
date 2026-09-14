@@ -20,3 +20,8 @@ Normal ctest runs only compare. Every run also writes `build/grammar1-window-dpr
 
 Initial approval: GRAMMAR-1 introduces shared 26 px controls, 32 px chrome and declared overflow.
 The subsequent Inter and timeline row migrations deliberately re-approve their resulting changes.
+
+GRAMMAR-1 row approval: timeline toggles now occupy four real 24 px kit cells with 20 px SVG
+glyphs. Assets uses the same row's fixed Kind column. Property cards use 28 px rows without
+extra inter-row spacing; narrow rows remove column gaps to retain readable field widths.
+Shared chrome keeps overflow reachable and preserves the declared footer names.

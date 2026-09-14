@@ -1421,6 +1421,7 @@ void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
     expectations.expect(header != nullptr && overflow != nullptr,
                         "the Viewer header has a dedicated overflow affordance");
     if (header != nullptr && overflow != nullptr) {
+        header->show();
         header->resize(160, header->sizeHint().height());
         QCoreApplication::processEvents();
         expectations.expect(!overflow->isHidden(),
@@ -1457,6 +1458,7 @@ void testViewerHeaderCollapseIsStableAcrossResizes(Expectations& expectations) {
     fixture.viewer.show();
     fixture.viewer.resize(1400, 600);
     QCoreApplication::processEvents();
+    header->show();
     const QSize wideMinimum = header->minimumSizeHint();
     bool stateFollowsWidth = true;
     bool minimumIsStable = true;

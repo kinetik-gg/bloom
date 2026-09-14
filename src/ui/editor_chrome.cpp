@@ -45,6 +45,11 @@ class ChromeRow final : public QWidget {
         setPalette(colors);
         for (auto& entry : entries_) {
             entry.control->setParent(this);
+            if (entry.menu) {
+                if (auto* button = qobject_cast<QToolButton*>(entry.control);
+                    button && button->menu())
+                    button->menu()->setParent(this, button->menu()->windowFlags());
+            }
             if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
                 dropdown->setControlSize(kit::KDropdown::ControlSize::Default);
             entry.control->setFixedHeight(kit::px(kit::Size::Control));
@@ -130,8 +135,11 @@ class ChromeRow final : public QWidget {
                 extent = std::max(control->minimumWidth(), preferredWidth - (total - remaining));
             }
             total -= preferredWidth;
-            extent = std::min(extent, std::max(0, remaining));
-            const bool fits = extent > 0;
+            const int reserved = collapsed_ && control != overflow_ ? preferred(overflow_) : 0;
+            extent = std::min(extent, std::max(0, remaining - reserved));
+            const bool fits = extent > 0 && extent >= control->minimumWidth();
+            if (!fits)
+                extent = 0;
             control->setVisible(fits);
             if (fits)
                 control->setGeometry(x, std::midpoint(0, height() - kit::px(kit::Size::Control)),

@@ -605,14 +605,10 @@ licensing, substitution, and missing-dependency workflow.
 
 ### Timeline layer row controls
 
-The layer-stack column is a fixed 80 px toggle strip followed by a flexible Name column (minimum
-120 px), a 100 px Blending column, and a 100 px Parent column. Each toggle is a 16 px square with
-a Border, ControlSurface fill, and semantic Phosphor glyph: visibility, disabled audio, solo, and
-lock. An off glyph uses Regular weight; an on glyph uses Fill weight, while the square's border
-remains neutral in both states. The disabled audio tooltip states that media controls are not
-available yet. The Name cell
-has no swatch; a fixed 16 px chevron sits directly left of the name. Parent is a visible disabled
-Compact dropdown showing `None` with an honest tooltip.
+`kit::KRow` owns the layer table: four `ToggleCell` controls, a flexible Name, and two
+`DropdownWidth` columns. `KIconToggle` rasterizes SVG at the current DPR, with Regular off and
+Fill on. The audio cell is disabled with an explanatory tooltip. A kit disclosure button expands
+properties; Parent is a disabled `KDropdown` showing `None`. The grammar owns all dimensions.
 
 | Row control | Object name | State |
 | --- | --- | --- |
@@ -626,12 +622,12 @@ one write path.
 
 ### Timeline property rows and key summaries
 
-Layer, group-heading and parameter rows share the 32 px `ControlRoomy` pitch and one vertical
+Layer, group-heading and parameter rows share the `ListRow` pitch and one vertical
 scroll offset. A 16 px Phosphor CaretRight/CaretDown beside the layer name discloses expansion.
 Group headings read TRANSFORM, APPEARANCE and SOURCE. Parameter names are indented beneath the
 layer name; the 64 px name column, shared diamond, and inline value column stay on the left of the
-lane divider. The default layer column is 400 px: 80 px toggles plus a 120 px minimum Name and two
-100 px fields. The child-row left inset is derived from the layer control table;
+lane divider. The default layer width is derived from four `ToggleCell`s, `TimelineNameMin` and two
+`DropdownWidth` fields. The child-row left inset is derived from the layer control table;
 control gaps are `Spacing::XS` (4 px), with `Spacing::XXS` (2 px) inside component cells.
 
 Position, Anchor and Scale have compact X/Y labels and two `KValueField` cells on one row.

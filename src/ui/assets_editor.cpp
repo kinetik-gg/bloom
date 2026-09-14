@@ -1,6 +1,8 @@
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/row.hpp>
+#include <memory>
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -61,10 +63,11 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     setAccessibleName(tr("Project assets editor"));
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(7);
+    const int gutter = kit::px(kit::Spacing::S);
+    layout->setContentsMargins(gutter, gutter, gutter, gutter);
+    layout->setSpacing(kit::px(kit::Spacing::Gutter));
 
-    search_ = new QLineEdit(this);
+    search_ = new kit::KSearchField(this);
     search_->setObjectName(QStringLiteral("assetsSearchField"));
     search_->setAccessibleName(tr("Search assets"));
     search_->setPlaceholderText(tr("Search assets…"));
@@ -72,6 +75,7 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
 
     tree_ = new QTreeWidget(this);
     tree_->setObjectName(QStringLiteral("assetsTree"));
+    tree_->setProperty("kitRows", true);
     tree_->setAccessibleName(tr("Assets"));
     tree_->setHeaderLabels({tr("Name"), tr("Kind")});
     tree_->setRootIsDecorated(false);
@@ -80,7 +84,10 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_->header()->setStretchLastSection(false);
-    tree_->setColumnWidth(0, 220);
+    tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tree_->header()->setSectionResizeMode(1, QHeaderView::Fixed);
+    tree_->setColumnWidth(1, kit::px(kit::Size::DropdownWidth));
+    connect(tree_, &QTreeWidget::itemSelectionChanged, this, &AssetsEditor::refreshRowSelection);
     layout->addWidget(tree_, 1);
 
     connect(search_, &QLineEdit::textChanged, this, &AssetsEditor::applyFilter);
@@ -116,6 +123,16 @@ void AssetsEditor::rebuild() {
                       QVariant::fromValue<qulonglong>(composition.id().value()));
         item->setToolTip(0, tr("Composition %1").arg(composition.id().value()));
         item->setFlags(item->flags() | Qt::ItemIsEditable);
+        auto* row = new kit::KRow(tree_);
+        row->setObjectName(QStringLiteral("assetsRow"));
+        row->setName(item->text(0));
+        auto* kind = new kit::KLabel(row);
+        kind->setElidedText(item->text(1));
+        row->setCells({}, nullptr, {kind});
+        row->setAttribute(Qt::WA_TransparentForMouseEvents);
+        item->setSizeHint(0, QSize(0, kit::px(kit::Size::ListRow)));
+        item->setFirstColumnSpanned(true);
+        tree_->setItemWidget(item, 0, row);
     }
     applyFilter(search_->text());
     updateSelection();
@@ -133,10 +150,20 @@ void AssetsEditor::updateSelection() {
         if (!item->isHidden() && compositionIdForItem(item) == session_.compositionId()) {
             tree_->setCurrentItem(item);
             item->setSelected(true);
+            refreshRowSelection();
             return;
         }
     }
     tree_->setCurrentItem(nullptr);
+    refreshRowSelection();
+}
+
+void AssetsEditor::refreshRowSelection() {
+    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+        auto* item = tree_->topLevelItem(index);
+        if (auto* row = qobject_cast<kit::KRow*>(tree_->itemWidget(item, 0)))
+            row->setRowState(index, item->isSelected());
+    }
 }
 
 void AssetsEditor::applyFilter(const QString& text) {
@@ -183,20 +210,20 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     tree_->setCurrentItem(item);
     const auto id = compositionIdForItem(item);
 
-    QMenu menu(this);
-    auto* openAction = menu.addAction(tr("Open"));
+    std::unique_ptr<QMenu> menu(kit::makeMenu(this));
+    auto* openAction = menu->addAction(tr("Open"));
     openAction->setObjectName(QStringLiteral("assetsOpenAction"));
     connect(openAction, &QAction::triggered, this, [this, id] { openComposition(id); });
-    auto* renameAction = menu.addAction(tr("Rename"));
+    auto* renameAction = menu->addAction(tr("Rename"));
     renameAction->setObjectName(QStringLiteral("assetsRenameAction"));
     connect(renameAction, &QAction::triggered, this, [this, item] { tree_->editItem(item, 0); });
-    auto* duplicateAction = menu.addAction(tr("Duplicate"));
+    auto* duplicateAction = menu->addAction(tr("Duplicate"));
     duplicateAction->setObjectName(QStringLiteral("assetsDuplicateAction"));
     connect(duplicateAction, &QAction::triggered, this, [this, id] { duplicateComposition(id); });
-    auto* deleteAction = menu.addAction(tr("Delete"));
+    auto* deleteAction = menu->addAction(tr("Delete"));
     deleteAction->setObjectName(QStringLiteral("assetsDeleteAction"));
     connect(deleteAction, &QAction::triggered, this, [this, id] { deleteComposition(id); });
-    menu.exec(tree_->viewport()->mapToGlobal(position));
+    menu->exec(tree_->viewport()->mapToGlobal(position));
 }
 
 void AssetsEditor::duplicateComposition(const document::CompositionId id) {

@@ -30,11 +30,12 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 | `Size::ListRow` | 32 | List and timeline pitch |
 | `Size::PropertyRow` | 28 | Property pitch |
 | `Size::IconChrome` | 16 | Chrome glyph box |
-| `Size::IconControl` | 20 | Transport glyph box |
+| `Size::IconControl` | 20 | Control and toggle glyph box |
 | `Size::ToggleCell` | 24 | Toggle column pitch |
 | `Size::DropdownWidth` | 100 | List dropdown column |
 | `Size::DropdownWidthCompact` | 108 | Property dropdown |
 | `Size::DropdownWidthWide` | 120 | Header selectors |
+| `Size::DropdownWidthExpanded` | 240 | Header selector cap |
 | `Spacing::XXS / XS / S / M / L / XL / XXL` | 2 / 4 / 8 / 12 / 16 / 24 / 32 | Gutters |
 | `Spacing::Gutter` | 6 | Panel separation |
 

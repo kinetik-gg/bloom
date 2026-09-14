@@ -28,7 +28,7 @@ class PropertyRowLabel final : public KLabel {
 
   protected:
     void resizeEvent(QResizeEvent* event) override {
-        QLabel::resizeEvent(event);
+        KLabel::resizeEvent(event);
         const QFontMetrics metrics(font());
         setText(metrics.elidedText(fullText_, Qt::ElideRight, width()));
     }
@@ -94,10 +94,12 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
 }
 QSize KPropertyRow::minimumSizeHint() const {
     auto size = QWidget::minimumSizeHint();
-    size.setWidth(size.width() - label_->width() + px(Size::PropertiesLabelMinWidth));
+    size.setWidth(size.width() - label_->width() + px(Size::PropertiesLabelMinWidth) -
+                  layout()->spacing() * (layout()->count() - 1));
     return size;
 }
 void KPropertyRow::resizeEvent(QResizeEvent* event) {
+    layout()->setSpacing(width() < px(Size::PanelMinWidth) ? 0 : px(Spacing::XXS));
     label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
                                                                : Size::PropertiesLabelWidth));
     QWidget::resizeEvent(event);
@@ -106,22 +108,46 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     setFixedHeight(px(Size::ListRow));
     row_->setContentsMargins(0, 0, 0, 0);
     row_->setSpacing(0);
+    row_->setSizeConstraint(QLayout::SetNoConstraint);
+    nameCell_ = new QWidget(this);
+    nameCell_->setMinimumWidth(0);
+    nameCell_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    auto* nameLayout = new QHBoxLayout(nameCell_);
+    nameLayout->setContentsMargins(px(Spacing::XS), 0, px(Spacing::XS), 0);
+    nameLayout->setSpacing(0);
+    disclosure_ = new KIconButton(nameCell_);
+    disclosure_->setFixedWidth(px(Size::IconChrome));
+    disclosure_->hide();
+    name_ = new KLabel(nameCell_);
+    name_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    name_->setElidedText({});
+    nameLayout->addWidget(disclosure_, 0, Qt::AlignVCenter);
+    nameLayout->addWidget(name_, 1, Qt::AlignVCenter);
 }
 void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
                     QWidget* trailing) {
     for (auto* cell : toggles) {
         cell->setFixedSize(px(Size::ToggleCell), px(Size::Control));
+        cell->setProperty("rowCell", "toggle");
         row_->addWidget(cell, 0, Qt::AlignVCenter);
     }
-    row_->addWidget(name, 1);
+    row_->addWidget(name ? name : nameCell_, 1);
     for (auto* cell : columns) {
         cell->setFixedSize(px(Size::DropdownWidth), px(Size::Control));
+        cell->setProperty("rowCell", "column");
+        cell->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         row_->addWidget(cell, 0, Qt::AlignVCenter);
     }
     if (trailing) {
         trailing->setFixedWidth(px(Size::ToggleCell));
         row_->addWidget(trailing);
     }
+}
+void KRow::setName(const QString& text, std::optional<IconId> disclosure) {
+    name_->setElidedText(text);
+    disclosure_->setVisible(disclosure.has_value());
+    if (disclosure)
+        disclosure_->setIcon(icon(*disclosure, IconRole::Chrome));
 }
 void KRow::setRowState(int index, bool selected) {
     index_ = index;

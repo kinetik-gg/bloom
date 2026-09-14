@@ -61,6 +61,7 @@ using namespace bloom::ui;
 class FakeFooterProvidingEditor final : public QWidget, public EditorChromeProvider {
   public:
     explicit FakeFooterProvidingEditor(QWidget* parent) : QWidget(parent) {
+        chrome_.footer.objectName = "fakeDeclaredFooter";
         chrome_.footer.addWidget(new kit::KLabel("Footer", this));
         auto* footer = EditorArea::buildChromeRow(chrome_.footer, this, true);
         footer->setProperty("fakeFooterMarker", true);
@@ -391,12 +392,10 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
     if (header == nullptr || picker == nullptr) {
         return;
     }
-    expectations.expect(kit::px(kit::Size::EditorHeader) == 48,
-                        "the header row's own height token is 48");
-    const auto ringMargin = static_cast<int>(std::lround(kit::kFocusRingWidth)) * 2;
-    expectations.expect(picker->sizeHint().height() ==
-                            kit::px(kit::Size::ControlRoomy) + ringMargin,
-                        "the switcher field is ControlRoomy (32) tall");
+    expectations.expect(kit::px(kit::Size::EditorHeader) == 32,
+                        "the header row's own height token is 32");
+    expectations.expect(picker->sizeHint().height() == kit::px(kit::Size::Control),
+                        "the switcher field is Control (26) tall");
 }
 
 double pixelLuminance(const QColor& color) {
@@ -465,9 +464,11 @@ void testAFooterProvidingEditorGetsAHostedFooterNamedEditorFooter(Expectations& 
         return;
     }
     expectations.expect(
-        footer->property("fakeFooterMarker").toBool(),
-        "the hosted footer really is the exact widget the provider handed back, not a copy or a "
-        "wrapper");
+        footer->findChild<QWidget*>("fakeDeclaredFooter") &&
+            footer->findChild<QWidget*>("fakeDeclaredFooter")
+                ->property("fakeFooterMarker")
+                .toBool(),
+        "the footer host retains the exact declared row and its original object name");
 }
 
 // FORMAL AMENDMENT 1: a footer-LESS editor (the plain probe stands in for nodes/properties/assets,

@@ -595,8 +595,8 @@ void ViewerEditor::buildHeader() {
     compositionSelector_->setAccessibleName(tr("Composition"));
     compositionSelector_->setToolTip(tr("Choose the composition shown in the viewer"));
     compositionSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    compositionSelector_->setMinimumWidth(120);
-    compositionSelector_->setMaximumWidth(240);
+    compositionSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
+    compositionSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
     connect(compositionSelector_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) {
                 if (index < 0) {
@@ -656,8 +656,8 @@ void ViewerEditor::buildHeader() {
     objectSelector_->setAccessibleName(tr("Object"));
     objectSelector_->setToolTip(tr("Choose a layer in the current composition"));
     objectSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    objectSelector_->setMinimumWidth(110);
-    objectSelector_->setMaximumWidth(220);
+    objectSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
+    objectSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
     connect(objectSelector_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
         if (index <= 0) {
             session_.clearSelection();
@@ -842,6 +842,7 @@ void ViewerEditor::buildHeader() {
     });
     bar->addWidget(fullscreenButton_);
     headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
+    headerMenuWidget_->hide(); // The canvas remains full-bleed until EditorArea hosts chrome.
 
     rebuildCompositionSelector();
     rebuildObjectSelector();
@@ -1652,7 +1653,7 @@ QRectF ViewerEditor::statusBarRect() const {
     if (statusBarFooterTaken_) {
         return {};
     }
-    const qreal barHeight = kit::px(kit::Size::Control);
+    const qreal barHeight = kit::px(kit::Size::FooterRow);
     return QRectF(0.0, static_cast<qreal>(height()) - barHeight, static_cast<qreal>(width()),
                   barHeight);
 }

@@ -1,4 +1,5 @@
 #include <QPainter>
+#include <QResizeEvent>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -33,7 +34,7 @@ void KIconToggle::setGlyph(IconId id) {
     update();
 }
 QPixmap KIconToggle::glyphPixmap() const {
-    return iconPixmap(glyph_, Size::IconChrome, Color::Muted,
+    return iconPixmap(glyph_, Size::IconControl, Color::Muted,
                       !isEnabled()  ? State::Disabled
                       : isChecked() ? State::Selected
                                     : State::Normal,
@@ -57,8 +58,22 @@ void KIconToggle::paintEvent(QPaintEvent*) {
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {
     setTypeRole(role);
+    setFixedHeight(px(Size::Control));
 }
 void KLabel::setTypeRole(TypeRole role) { setFont(kit::font(role)); }
+void KLabel::setElidedText(const QString& text) {
+    fullText_ = text;
+    elides_ = true;
+    setMinimumWidth(0);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    setToolTip(text);
+    setText(fontMetrics().elidedText(fullText_, Qt::ElideRight, width()));
+}
+void KLabel::resizeEvent(QResizeEvent* event) {
+    QLabel::resizeEvent(event);
+    if (elides_)
+        setText(fontMetrics().elidedText(fullText_, Qt::ElideRight, width()));
+}
 KSearchField::KSearchField(QWidget* parent) : QLineEdit(parent) {
     setFont(kit::font(TypeRole::Ui));
     setFixedHeight(px(Size::Control));

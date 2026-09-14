@@ -144,6 +144,7 @@ enum class Size : int {
     DropdownWidth = 100,
     DropdownWidthCompact = 108,
     DropdownWidthWide = 120,
+    DropdownWidthExpanded = 240,
     ControlCompact = 26,
     Control = 26,
     ControlRoomy = 32,
@@ -152,11 +153,7 @@ enum class Size : int {
     IconLarge = 20,
     TitleBar = 34,
     PanelHeader = 30,
-    // task U8 (issue 131), formal amendment 2, A10: the EditorArea header row's own height (48).
-    // A distinct token from PanelHeader above -- PanelHeader is also node_editor.cpp's card
-    // header height and row-pitch multiplier (kCardHeaderHeight/kNodeRowPitch), completely
-    // unrelated to this panel's own header row, and growing it would have silently resized node
-    // cards on the canvas, a collateral change no design crop covered.
+    // Compatibility name for panel chrome; node-card PanelHeader is independent.
     EditorHeader = HeaderRow,
     TimelineRow = 32,
     TimelineBar = 20,

@@ -398,6 +398,10 @@ QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
     background: {color.Accent};
     color: {color.Foreground};
 }
+QTreeView[kitRows="true"]::item {
+    padding: 0;
+    background: transparent;
+}
 QHeaderView {
     background: {color.Surface};
     border: none;

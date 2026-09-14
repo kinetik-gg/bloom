@@ -150,8 +150,8 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Size::EditorHeader) == 32, "EditorHeader aliases HeaderRow");
     expectations.expect(kit::px(kit::Size::TimelineRow) == 32, "TimelineRow is 32");
     expectations.expect(kit::px(kit::Size::TimelineBar) == 20, "TimelineBar is 20");
-    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 80,
-                        "TimelineToggleColumn is 80");
+    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 96,
+                        "TimelineToggleColumn is four 24 px cells");
     expectations.expect(kit::px(kit::Size::TimelineNameMin) == 120, "TimelineNameMin is 120");
     expectations.expect(kit::px(kit::Size::TimelineColumn) == 100, "TimelineColumn is 100");
     expectations.expect(kit::px(kit::Size::TimelineWorkArea) == 6, "TimelineWorkArea is 6");

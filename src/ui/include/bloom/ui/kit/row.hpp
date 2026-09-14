@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <bloom/ui/kit/controls.hpp>
 #include <initializer_list>
+#include <optional>
 namespace bloom::ui::kit {
 class KPropertyRow final : public QWidget {
     Q_OBJECT
@@ -25,12 +26,17 @@ class KRow : public QWidget {
     void setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
                   QWidget* trailing = nullptr);
     void setRowState(int index, bool selected);
+    void setName(const QString& text, std::optional<IconId> disclosure = std::nullopt);
+    KIconButton* disclosureButton() const { return disclosure_; }
 
   protected:
     void paintEvent(QPaintEvent* event) override;
 
   private:
     QHBoxLayout* row_;
+    QWidget* nameCell_;
+    KLabel* name_;
+    KIconButton* disclosure_;
     int index_ = 0;
     bool selected_ = false;
 };

@@ -1,5 +1,7 @@
 #include "node_editor_items.hpp"
+#include <QSignalBlocker>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 
 #include <bloom/ui/viewer_editor.hpp>
@@ -51,9 +53,11 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -69,7 +73,7 @@ namespace {
 // forbids a raw pixel gap outright -- and the column's own fixed width is their exact sum, which is
 // also the x origin of the ruler, of every lane, and of the work-area strip.
 constexpr int kCellGap = kit::px(kit::Spacing::XS);
-constexpr int kToggleCellWidth = kit::px(kit::Size::IconMedium) + kit::px(kit::Spacing::XS);
+constexpr int kToggleCellWidth = kit::px(kit::Size::ToggleCell);
 constexpr int kToggleCellCount = 4;
 constexpr int kToggleColumnWidth = kit::px(kit::Size::TimelineToggleColumn);
 constexpr int kNameCellMinWidth = kit::px(kit::Size::TimelineNameMin);
@@ -285,35 +289,13 @@ void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixel
 // ---------------------------------------------------------------------------------------------
 // One pooled row of the left layer-stack column.
 //
-// Deliberately not exposed via the header -- TimelineLayerStack owns it exclusively and
-// forward-declares it (`class TimelineLayerRow*`) purely to type its pool -- so this definition
-// must live directly in bloom::ui rather than in an anonymous namespace (which would make it a
-// distinct, unrelated type from that forward declaration). It declares no Q_OBJECT: it has no
-// signals, and it never connects to anything, so it stays free of moc, exactly like
-// TimelineKeyframeRow.
-//
-// Selection, keyboard navigation, and tooltips all belong to the column as a whole, so there is
-// exactly one hit-test and one tooltip table instead of one per row. The row reaches that by
-// HANDLING NOTHING rather than by being WA_TransparentForMouseEvents, which is what it used to be:
-// QWidget::childAt() -- the receiver picking behind every mouse event Qt delivers -- skips a
-// transparent child AND everything under it, so the attribute did not merely forgive the row its
-// own clicks, it made the dropdowns inside it unreachable. The owner's report was exactly that
-// (2026-09-14: "timeline Blending dropdown does nothing on click"); the S6 wiring below was real
-// all along, and no pointer could get to it.
-//
-// What replaces the attribute is Qt's own propagation: this row overrides no mouse or tooltip
-// handler, QWidget's defaults ignore both, and QApplication::notify walks an ignored mouse or help
-// event up to the parent with the position translated -- so a press on the row's blank area still
-// arrives at TimelineLayerStack::mousePressEvent, and a hover still asks its one tooltip table,
-// while a press on a child control is that control's own.
-//
-// It declares no Q_OBJECT: it emits nothing. It does CONNECT its blending dropdown to a lambda, but
-// as the connection's context object rather than as a sender, which needs only QObject -- which
-// QWidget already is -- so the row stays free of moc exactly as TimelineKeyframeRow does.
-class TimelineLayerRow final : public QWidget {
+// Pooled KRow controls project their current binding. Blank-row pointer gestures and actual
+// toggle activations share the stack's selection/command path; dropdowns remain independently
+// reachable. The class lives here because TimelineLayerStack forward-declares its pool type.
+class TimelineLayerRow final : public kit::KRow {
   public:
     TimelineLayerRow(CompositionSession& session, QWidget* parent)
-        : QWidget(parent), session_(&session) {
+        : kit::KRow(parent), session_(&session) {
         setObjectName(QStringLiteral("timelineLayerRow"));
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setFixedHeight(kTimelineRowHeight);
@@ -321,6 +303,21 @@ class TimelineLayerRow final : public QWidget {
         parentDropdown_ = makeDisabledPlaceholderDropdown(
             TimelineEditor::tr("None"), TimelineEditor::tr("Layer parenting does not exist yet"),
             QStringLiteral("layerParentDropdown"), this);
+        QList<QWidget*> cells;
+        for (int index = 0; index < kToggleCellCount; ++index) {
+            auto* toggle = new kit::KIconToggle(toggleIcon(index), this);
+            toggles_[static_cast<std::size_t>(index)] = toggle;
+            toggle->setObjectName(QStringLiteral("timelineLayerToggle%1").arg(index));
+            toggle->setToolTip(toggleToolTip(index));
+            toggle->setAccessibleName(toggleToolTip(index));
+            cells.append(toggle);
+            connect(toggle, &QToolButton::clicked, this,
+                    [this, index] { activateAt(toggleCellX(index) + kToggleCellWidth / 2); });
+        }
+        setCells(cells, nullptr, {blending_, parentDropdown_});
+        disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
+        connect(disclosureButton(), &QToolButton::clicked, this,
+                [this] { activateAt(kNameCellX + kit::px(kit::Spacing::S) + kCellGap); });
         // The connection is made once, for the life of the pooled row, and reads whichever layer
         // the row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed
         // on every scroll step, so capturing a layer id here would author the wrong layer.
@@ -337,15 +334,13 @@ class TimelineLayerRow final : public QWidget {
         });
     }
 
-    // Re-points this pooled row at another layer. No widget is created or destroyed and no layout
-    // is invalidated -- only the painted content, the bound layer, and the two dropdowns' geometry,
-    // which is why a composition with hundreds of layers costs the same handful of widgets as one
-    // with three.
+    // Rebind the same controls when scrolling; signal-blocked projection never authors edits.
     void bind(const TimelineLayerEntry& entry, const bool selected, const int rowIndex) {
-        name_ = entry.name;
-        expanded_ = entry.expanded;
-        selected_ = selected;
-        rowIndex_ = rowIndex;
+        setName(entry.name, entry.imageNodeId.isValid()
+                                ? std::nullopt
+                                : std::optional(entry.expanded ? kit::IconId::CaretDown
+                                                               : kit::IconId::CaretRight));
+        setRowState(rowIndex, selected);
         layerId_ = entry.layerId;
         collapsedImage_ = entry.imageNodeId.isValid();
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
@@ -375,6 +370,15 @@ class TimelineLayerRow final : public QWidget {
                                   ? TimelineEditor::tr("How this layer combines with the layers "
                                                        "beneath it")
                                   : TimelineEditor::tr("This layer does not expose a blend mode"));
+        for (int index = 0; index < kToggleCellCount; ++index) {
+            auto* toggle = toggles_[static_cast<std::size_t>(index)];
+            const QSignalBlocker blocker(toggle);
+            toggle->setChecked(index == 0 ? enabled_ : index == 2 ? solo_ : index == 3 && locked_);
+            toggle->setEnabled(index != 1 && (!collapsedImage_ || index == 0));
+            toggle->setGlyph(index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
+                             : index == 3 ? (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked)
+                                          : toggleIcon(index));
+        }
         binding_ = false;
         update();
     }
@@ -396,78 +400,21 @@ class TimelineLayerRow final : public QWidget {
         QApplication::sendEvent(parentWidget(), &mapped);
         event->accept();
     }
-    void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
-        // Fixed cell geometry, assigned directly rather than through a nested layout: a row is a
-        // fixed table of cells, and a QHBoxLayout per row would re-solve that same table on every
-        // bind and every scroll step for no gain.
-        const int dropdownHeight = std::min(height(), blending_->sizeHint().height());
-        const int top = (height() - dropdownHeight) / 2;
-        blending_->setGeometry(blendingCellX(width()), top, kColumnWidth, dropdownHeight);
-        parentDropdown_->setGeometry(parentCellX(width()), top, kColumnWidth, dropdownHeight);
-    }
-
-    void paintEvent(QPaintEvent* event) override {
-        Q_UNUSED(event)
-        QPainter painter(this);
-        painter.fillRect(rect(), kit::color(rowIndex_ % 2 == 0 ? kit::Color::Surface
-                                                               : kit::Color::SurfaceRaised));
-        if (selected_)
-            painter.fillRect(QRect(0, 0, kit::px(kit::Size::TimelineWorkAreaHandle) / 2, height()),
-                             kit::color(kit::Color::Accent));
-        paintRowSeparator(painter, 0, width());
-
-        for (int index = 0; index < kToggleCellCount; ++index) {
-            const auto cell = static_cast<ToggleCell>(index);
-            const bool active = cell == ToggleCell::Visibility ? enabled_
-                                : cell == ToggleCell::Solo     ? solo_
-                                : cell == ToggleCell::Lock     ? locked_
-                                                               : false;
-            const QRect box(toggleCellX(index) +
-                                (kToggleCellWidth - kit::px(kit::Size::IconMedium)) / 2,
-                            (height() - kit::px(kit::Size::IconMedium)) / 2,
-                            kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
-            painter.setBrush(kit::color(kit::Color::ControlSurface));
-            painter.setPen(kit::color(kit::Color::Border));
-            const int radius = kit::radiusPx(kit::Radius::Small, box.width());
-            painter.drawRoundedRect(box, radius, radius);
-            const auto id = cell == ToggleCell::Visibility
-                                ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
-                            : cell == ToggleCell::Audio ? kit::IconId::AudioOff
-                            : cell == ToggleCell::Solo
-                                ? kit::IconId::Solo
-                                : (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked);
-            const auto weight = active ? kit::IconWeight::Fill : kit::IconWeight::Regular;
-            const auto glyph = kit::iconPixmap(id, kit::Size::IconMedium,
-                                               cell == ToggleCell::Audio ? kit::Color::Faint
-                                               : active                  ? kit::Color::Foreground
-                                                                         : kit::Color::Muted,
-                                               kit::State::Normal, weight);
-            painter.drawPixmap(box, glyph);
-        }
-
-        painter.setFont(kit::font(kit::TypeRole::Ui));
-        painter.setPen(kit::color(kit::Color::Foreground));
-        const auto chevron =
-            kit::iconPixmap(expanded_ ? kit::IconId::CaretDown : kit::IconId::CaretRight,
-                            kit::IconRole::Chrome, kit::Color::Muted);
-        if (!collapsedImage_)
-            painter.drawPixmap(kNameCellX + kCellGap, (height() - chevron.height()) / 2, chevron);
-        const QRect nameRect(kNameCellX + kit::px(kit::Size::IconMedium) + kCellGap, 0,
-                             nameCellWidth(width()) - kit::px(kit::Size::IconMedium) - kCellGap,
-                             height());
-        const QFontMetrics metrics = painter.fontMetrics();
-        painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
-                         metrics.elidedText(name_, Qt::ElideRight, nameRect.width()));
-    }
 
   private:
+    // Reuse the stack's command path for pointer and keyboard activation. Coordinates are
+    // resolved on click so a pooled row always acts on its current binding.
+    void activateAt(int x) {
+        if (binding_)
+            return;
+        const QPoint local(x, std::midpoint(0, height()));
+        QMouseEvent event(QEvent::MouseButtonPress, mapToParent(local), mapToGlobal(local),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(parentWidget(), &event);
+    }
+    std::array<kit::KIconToggle*, kToggleCellCount> toggles_{};
     CompositionSession* session_ = nullptr;
-    QString name_;
     std::optional<document::LayerId> layerId_;
-    int rowIndex_ = 0;
-    bool selected_ = false;
-    bool expanded_ = false;
     bool enabled_ = true, solo_ = false, locked_ = false;
     bool collapsedImage_ = false;
     bool binding_ = false;

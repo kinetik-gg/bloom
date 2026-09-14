@@ -87,6 +87,8 @@ int KDropdown::findData(const QVariant& data) const {
 QVariant KDropdown::currentData() const { return itemData(currentIndex_); }
 
 int KDropdown::addItem(const QIcon& icon, const QString& text, const QVariant& data) {
+    if (objectName() == QStringLiteral("kDropdown"))
+        setObjectName(QStringLiteral("kPanelSwitcher")); // Preserve the icon variant's legacy name.
     const int index = addItem(text, data);
     model_->item(index)->setIcon(icon);
     updateGeometry();
