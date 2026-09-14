@@ -90,6 +90,7 @@ class KeyframeDiamond final : public QWidget {
     // parameters whether or not that node is selected; the Properties panel leaves it unset,
     // because its rows ARE the selection's rows. An invalid id clears the binding.
     void setParameterId(document::ParameterId parameterId);
+    void setRole(std::string role);
 
     // Re-reads the session and repaints. Called from the owning surface's own refresh pass, so a
     // diamond is never a frame behind the row it sits in.

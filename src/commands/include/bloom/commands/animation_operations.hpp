@@ -282,4 +282,69 @@ class ConvertAnimationToConstant final : public Operation {
     std::variant<double, document::Vec2d, core::Color4d> value_;
 };
 
+// Batch edits stage complete curves before publication, allowing selected keys to exchange times
+// without transient collisions. The enclosing transaction provides one atomic undo boundary.
+struct KeyframeAddress {
+    document::AnimationCurveId curveId;
+    document::KeyframeId keyframeId;
+    friend bool operator==(const KeyframeAddress&, const KeyframeAddress&) = default;
+};
+struct KeyframeMove {
+    KeyframeAddress key;
+    core::RationalTime time;
+};
+struct KeyframePaste {
+    document::ParameterId parameterId;
+    core::RationalTime time;
+    std::variant<double, document::Vec2d, core::Color4d> value;
+    document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
+};
+class MoveKeyframes final : public Operation {
+  public:
+    MoveKeyframes(document::CompositionId composition, std::vector<KeyframeMove> keys)
+        : composition_(composition), keys_(std::move(keys)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeMove> keys_;
+};
+class DeleteKeyframes final : public Operation {
+  public:
+    DeleteKeyframes(document::CompositionId composition, std::vector<KeyframeAddress> keys)
+        : composition_(composition), keys_(std::move(keys)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeAddress> keys_;
+};
+class SetKeyframesInterpolation final : public Operation {
+  public:
+    SetKeyframesInterpolation(document::CompositionId composition,
+                              std::vector<KeyframeAddress> keys,
+                              document::KeyframeInterpolation interpolation)
+        : composition_(composition), keys_(std::move(keys)), interpolation_(interpolation) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeAddress> keys_;
+    document::KeyframeInterpolation interpolation_;
+};
+class PasteKeyframes final : public Operation {
+  public:
+    PasteKeyframes(document::CompositionId composition, std::vector<KeyframePaste> keys)
+        : composition_(composition), keys_(std::move(keys)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframePaste> keys_;
+};
+
 } // namespace bloom::commands

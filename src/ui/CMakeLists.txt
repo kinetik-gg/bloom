@@ -224,6 +224,7 @@ target_sources(
         composition_preview_playback.cpp
         composition_preview_result.cpp
         composition_session.cpp
+        composition_session_keyframes.cpp
         editor_area.cpp
         editor_registry.cpp
         frame_export_controller.cpp
@@ -247,9 +248,11 @@ target_sources(
         task_monitor_model.cpp
         task_ui_bridge.cpp
         timeline_editor.cpp
+        timeline_property_rows.cpp
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_keyframe_gestures.cpp
         timeline_work_area.cpp
         timeline_navigation.cpp
         viewer_editor.cpp

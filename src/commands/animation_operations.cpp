@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -578,6 +580,218 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
                                          "Animation could not be converted to a constant");
     }
     return OperationResult::applied();
+}
+
+namespace {
+using CurveEdits = std::map<document::AnimationCurveId, document::AnimationCurveRecord>;
+OperationResult stageKeys(const document::Composition& composition,
+                          const std::vector<KeyframeAddress>& keys, CurveEdits& edits) {
+    std::set<std::pair<document::AnimationCurveId, document::KeyframeId>> seen;
+    for (const auto& key : keys) {
+        if (!seen.emplace(key.curveId, key.keyframeId).second)
+            return OperationResult::rejected(OperationIssueCode::DuplicateId,
+                                             "Duplicate selected key");
+        const auto* curve = composition.animationCurves().find(key.curveId);
+        if (!curve)
+            return invalidCurve(key.curveId);
+        const bool found = std::visit(
+            [&](const auto& record) {
+                return std::ranges::any_of(record.keyframes,
+                                           [&](const auto& k) { return k.id == key.keyframeId; });
+            },
+            *curve);
+        if (!found)
+            return invalidKeyframe(key.keyframeId);
+        edits.emplace(key.curveId, *curve);
+    }
+    return OperationResult::applied();
+}
+OperationResult publishCurves(document::Composition& composition, CurveEdits edits) {
+    auto staged = composition.animationCurves();
+    bool changed = false;
+    for (auto& [id, record] : edits) {
+        std::visit(
+            [](auto& curve) {
+                using Key = typename std::decay_t<decltype(curve.keyframes)>::value_type;
+                std::ranges::sort(curve.keyframes, {}, &Key::time);
+                if (!curve.keyframes.empty())
+                    curve.keyframes.back().outgoingInterpolation =
+                        document::KeyframeInterpolation::Linear;
+            },
+            record);
+        const auto* original = staged.find(id);
+        if (original && *original == record)
+            continue;
+        changed = true;
+        if (!staged.erase(id) || !staged.insert(record))
+            return OperationResult::rejected(OperationIssueCode::InvalidOrder,
+                                             "Key times collide or curve is invalid");
+    }
+    if (!changed)
+        return OperationResult::noChange();
+    composition.animationCurves() = std::move(staged);
+    return OperationResult::applied();
+}
+} // namespace
+
+std::string_view MoveKeyframes::typeId() const noexcept { return "bloom.animation.move-keyframes"; }
+OperationResult MoveKeyframes::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    std::vector<KeyframeAddress> addresses;
+    addresses.reserve(keys_.size());
+    for (const auto& key : keys_)
+        addresses.push_back(key.key);
+    CurveEdits edits;
+    auto result = stageKeys(*composition, addresses, edits);
+    if (result.status == OperationStatus::Rejected)
+        return result;
+    for (const auto& move : keys_) {
+        if (move.time < core::RationalTime::fromInteger(0) || move.time >= composition->duration())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Key time is outside the composition");
+        std::visit(
+            [&](auto& curve) {
+                for (auto& key : curve.keyframes)
+                    if (key.id == move.key.keyframeId)
+                        key.time = move.time;
+            },
+            edits.at(move.key.curveId));
+    }
+    return publishCurves(*composition, std::move(edits));
+}
+
+std::string_view DeleteKeyframes::typeId() const noexcept {
+    return "bloom.animation.delete-keyframes";
+}
+OperationResult DeleteKeyframes::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    CurveEdits edits;
+    auto result = stageKeys(*composition, keys_, edits);
+    if (result.status == OperationStatus::Rejected)
+        return result;
+    // Stage parameter/curve stores together: removing every key restores the earliest key's value.
+    auto parameters = composition->parameters();
+    auto curves = composition->animationCurves();
+    for (auto& [id, record] : edits) {
+        bool valid = std::visit(
+            [&](auto& curve) {
+                const auto fallback = curve.keyframes.front().value;
+                std::erase_if(curve.keyframes, [&](const auto& key) {
+                    return std::ranges::find(keys_, KeyframeAddress{id, key.id}) != keys_.end();
+                });
+                if (curve.keyframes.empty()) {
+                    for (const auto& parameter : composition->parameters().records()) {
+                        const auto* source =
+                            std::get_if<document::AnimationCurveSource>(&parameter.source);
+                        if (source && source->curveId == id &&
+                            !parameters.setSource(parameter.id,
+                                                  document::ConstantValueSource{fallback}))
+                            return false;
+                    }
+                    return curves.erase(id);
+                }
+                return curves.erase(id) && curves.insert(curve);
+            },
+            record);
+        if (!valid)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Keys could not be removed");
+    }
+    if (keys_.empty())
+        return OperationResult::noChange();
+    composition->parameters() = std::move(parameters);
+    composition->animationCurves() = std::move(curves);
+    return OperationResult::applied();
+}
+
+std::string_view SetKeyframesInterpolation::typeId() const noexcept {
+    return "bloom.animation.set-keyframes-interpolation";
+}
+OperationResult SetKeyframesInterpolation::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    if (!validInterpolation(interpolation_))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Unsupported interpolation");
+    CurveEdits edits;
+    auto result = stageKeys(*composition, keys_, edits);
+    if (result.status == OperationStatus::Rejected)
+        return result;
+    for (const auto& address : keys_)
+        std::visit(
+            [&](auto& curve) {
+                for (auto& key : curve.keyframes)
+                    if (key.id == address.keyframeId)
+                        key.outgoingInterpolation = interpolation_;
+            },
+            edits.at(address.curveId));
+    return publishCurves(*composition, std::move(edits));
+}
+
+std::string_view PasteKeyframes::typeId() const noexcept {
+    return "bloom.animation.paste-keyframes";
+}
+OperationResult PasteKeyframes::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    CurveEdits edits;
+    std::set<document::AnimationCurveId> created;
+    for (const auto& paste : keys_) {
+        if (paste.time < core::RationalTime::fromInteger(0) ||
+            paste.time >= composition->duration() || !validInterpolation(paste.interpolation))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Invalid pasted key time or interpolation");
+        const auto* parameter = composition->parameters().find(paste.parameterId);
+        if (!parameter)
+            return invalidParameter(paste.parameterId);
+        const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+        if (!source) {
+            auto result = CreateAnimationForParameter(composition_, paste.parameterId, paste.time)
+                              .apply(draft);
+            if (result.status == OperationStatus::Rejected)
+                return result;
+            parameter = composition->parameters().find(paste.parameterId);
+            source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+            if (!source)
+                return invalidParameter(paste.parameterId);
+            created.insert(source->curveId);
+        }
+        const auto curveId = source->curveId;
+        if (!edits.contains(curveId)) {
+            edits.emplace(curveId, *composition->animationCurves().find(curveId));
+            if (created.contains(curveId))
+                std::visit([](auto& curve) { curve.keyframes.clear(); }, edits.at(curveId));
+        }
+        auto result = std::visit(
+            [&](auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                using Key = typename std::decay_t<decltype(curve.keyframes)>::value_type;
+                using Value = decltype(Key{}.value);
+                const auto* value = std::get_if<Value>(&paste.value);
+                if (!value || !validValueForCurve<Curve>(*composition, curveId, *value))
+                    return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                     "Pasted value does not match parameter");
+                if (std::ranges::any_of(curve.keyframes,
+                                        [&](const auto& key) { return key.time == paste.time; }))
+                    return OperationResult::rejected(OperationIssueCode::InvalidOrder,
+                                                     "Paste time is occupied");
+                const auto id = draft.ids().allocateKeyframe();
+                if (!id)
+                    return exhaustedIds();
+                curve.keyframes.push_back(Key{*id, paste.time, *value, paste.interpolation});
+                return OperationResult::applied();
+            },
+            edits.at(curveId));
+        if (result.status == OperationStatus::Rejected)
+            return result;
+    }
+    return publishCurves(*composition, std::move(edits));
 }
 
 } // namespace bloom::commands

@@ -167,7 +167,7 @@ Assets and Nodes, use the same strip rather than inventing a second chrome treat
 | Panel | Header menus | Body | Footer |
 | --- | --- | --- | --- |
 | Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
-| Timeline | Left cell: switcher, Add/View/Edit/Select, elided composition name (`Type::UI`), fullscreen. Right cell: work-area strip, tick labels, and playhead head | Column headings first; synchronized layer stack and lanes; selected layer's keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
+| Timeline | Left cell: switcher, Add/View/Edit/Select, elided composition name (`Type::UI`), fullscreen. Right cell: work-area strip, tick labels, and playhead head | Column headings first; synchronized layer stack, expanded property rows and their keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
 
 The timeline header splits at exactly the body's layer-column divider. Its ruler begins at the lane
 region's x origin and reserves the same vertical-scrollbar gutter. The ruler lives inside the
@@ -460,6 +460,30 @@ A disabled placeholder always states its reason in its tooltip rather than merel
 unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
 the same order, as does a layer node card's (`nodeBlendModeDropdown`): one set of words, one order,
 one write path.
+
+### Timeline property rows and key summaries
+
+Layer, group-heading and parameter rows share the 32 px `ControlRoomy` pitch and one vertical
+scroll offset. A 16 px Phosphor CaretRight/CaretDown beside the layer name discloses expansion.
+Group headings read TRANSFORM, APPEARANCE and SOURCE. Parameter names are indented beneath the
+layer name; the 64 px name column, shared diamond, and inline value column stay on the left of the
+lane divider. The layer column is 396 px, widened by one `ControlRoomy` token so paired
+values fit their units. The child-row left inset is 112 px, derived from the layer control table;
+control gaps are `Spacing::XS` (4 px), with `Spacing::XXS` (2 px) inside component cells.
+
+Position, Anchor and Scale have compact X/Y labels and two `KValueField` cells on one row.
+Rotation and Opacity use one field; Blending uses `KDropdown` with no animation diamond.
+Source color uses `KColorChip` with exact authored RGBA in its tooltip; text Size uses a numeric
+field. Scale and Opacity display percentages, Rotation degrees, and Position, Anchor and Size
+pixels. Values use the same setters and units as Properties. The left controls are pooled by
+viewport and read values at the session time. Group headings carry no value or diamond.
+
+Each parameter's right-hand lane shares the ruler's time mapping and row center. Hold keys are
+squares, Linear keys diamonds, and Ease In-Out keys circles, in `Keyframe` gold with Accent
+selection. Drag previews are outlined diamonds; box selection uses an Accent outline and a
+15 percent Accent fill, and magnetic snapping displays a vertical guide. A collapsed layer
+paints the union of its key times as 6 px gold diamonds over its bar. These summary diamonds
+have an 8 px hit tolerance and expand the layer; they do not select or move keys.
 
 ### Timeline layer kinds
 

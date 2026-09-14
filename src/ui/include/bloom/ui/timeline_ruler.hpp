@@ -1,5 +1,6 @@
 #pragma once
 #include <bloom/document/document.hpp>
+#include <bloom/ui/composition_session.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -26,6 +27,7 @@ namespace bloom::ui {
 
 class CompositionPreviewController;
 class CompositionSession;
+struct TimelineLayerEntry;
 
 // Shared presentation mapping. The half-open visible range is in seconds and belongs to the
 // editor viewport, never the document. Scrub results always land on exact rational frame times.
@@ -238,13 +240,48 @@ class TimelineKeyframePanel final : public QWidget {
 
   public:
     explicit TimelineKeyframePanel(CompositionSession& session, QWidget* parent = nullptr);
+    void setGridEntries(const std::vector<TimelineLayerEntry>& entries, int scrollOffset);
+    void paintGridOverlay(QPainter& painter, const QWidget& row) const;
+    [[nodiscard]] bool gridMode() const noexcept { return gridMode_; }
     void setRuler(TimelineRuler& ruler);
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;
+    bool event(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
   private:
     void rebuild();
+    bool gridMode_ = false;
+    struct LaneKey {
+        KeyframeSelection selection;
+        core::RationalTime time;
+        document::KeyframeInterpolation interpolation;
+        int row;
+    };
+    [[nodiscard]] std::vector<LaneKey> laneKeys() const;
+    [[nodiscard]] std::optional<LaneKey> hitKey(QPointF position) const;
+    void cancelGesture();
+    void updateRows();
+    std::vector<int> gridRows_;
+    std::vector<document::ParameterId> gridParameters_;
+    int gridScroll_ = 0;
+    QPointF press_;
+    std::optional<LaneKey> pressed_;
+    bool dragging_ = false, boxing_ = false, copying_ = false;
+    std::optional<core::RationalTime> stretchAnchor_;
+    document::Revision gestureRevision_{};
+    std::vector<KeyframeSelection> gestureKeys_;
+    std::vector<commands::KeyframePaste> gestureData_;
+    std::vector<commands::KeyframeMove> moves_;
+    std::optional<QRectF> box_;
+    std::optional<core::RationalTime> snapGuide_;
 
     CompositionSession& session_;
     QVBoxLayout* rowsLayout_ = nullptr;

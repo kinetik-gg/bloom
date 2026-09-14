@@ -148,6 +148,11 @@ KeyframeDiamond::KeyframeDiamond(CompositionSession& session, std::string role, 
     refresh();
 }
 
+void KeyframeDiamond::setRole(std::string role) {
+    role_ = std::move(role);
+    refresh();
+}
+
 void KeyframeDiamond::setParameterId(const document::ParameterId parameterId) {
     auto next = parameterId.isValid() ? std::optional(parameterId) : std::nullopt;
     if (parameterId_ == next) {

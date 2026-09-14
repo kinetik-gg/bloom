@@ -15,6 +15,7 @@
 #include <QWidget>
 
 #include <optional>
+#include <set>
 #include <vector>
 
 class QAction;
@@ -51,6 +52,11 @@ struct TimelineLayerEntry final {
     // The clip bar's fill, from the data-type palette -- the one thing that now carries kind.
     kit::Color clipColor = kit::Color::Muted;
     QColor labelColor{};
+    enum class Kind { Layer, Group, Parameter };
+    Kind rowKind = Kind::Layer;
+    document::ParameterId parameterId{};
+    std::string role{};
+    bool expanded = false;
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
@@ -82,6 +88,7 @@ class TimelineEditor final : public QWidget,
     // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
     // that alignment against one number instead of re-deriving the cell table.
     [[nodiscard]] static int layerColumnWidth();
+    [[nodiscard]] static int propertyNameIndent();
 
     // Test seams (mirroring TimelineRuler::majorTickLabelRectsForTest()'s precedent): the three
     // widgets whose geometry is this task's pinned contract.
@@ -120,6 +127,7 @@ class TimelineEditor final : public QWidget,
     // wired to currentTimeChanged() and compositionChanged().
     void updateTimeReadout();
 
+    std::set<document::LayerId> expandedLayers_;
     CompositionSession& session_;
     QWidget* headerFallback_ = nullptr;
     QWidget* headerMenus_ = nullptr;
@@ -135,7 +143,6 @@ class TimelineEditor final : public QWidget,
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;
-    TimelineKeyframePanel* keyframes_ = nullptr;
     // The two halves of one row grid (task T1), replacing the QTreeWidget this panel used to be.
     TimelineLayerStack* stack_ = nullptr;
     TimelineLaneRegion* lanes_ = nullptr;
@@ -218,6 +225,7 @@ class TimelineLayerStack final : public QWidget {
     // Emitted whenever this column's own viewport height changes, so the editor can re-derive the
     // shared scrollbar's range from the new viewport rather than polling it.
     void viewportResized();
+    void expansionRequested(document::LayerId layer);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -248,6 +256,7 @@ class TimelineLayerStack final : public QWidget {
     QScrollBar& scrollBar_;
     std::vector<TimelineLayerEntry> entries_;
     std::vector<class TimelineLayerRow*> rowPool_;
+    std::vector<class TimelinePropertyRow*> propertyPool_;
     int scrollOffset_ = 0;
     int currentRow_ = -1;
 };
@@ -271,8 +280,13 @@ class TimelineLaneRegion final : public QWidget {
     // The clip bar rect of row `row`, in this widget's own coordinates -- the pinned geometry for
     // "the bar spans the composition range on its own lane".
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
+    [[nodiscard]] std::vector<core::RationalTime> keySummaryTimes(int row) const;
+
+  Q_SIGNALS:
+    void expansionRequested(document::LayerId layer);
 
   protected:
+    void resizeEvent(QResizeEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -281,6 +295,8 @@ class TimelineLaneRegion final : public QWidget {
     void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    QWidget* keyframeArea_ = nullptr;
+    TimelineKeyframePanel* keyframePanel_ = nullptr;
     struct RangeDrag {
         document::LayerId layer;
         document::Revision revision;

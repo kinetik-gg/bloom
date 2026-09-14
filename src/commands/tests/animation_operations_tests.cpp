@@ -615,12 +615,111 @@ void testAnimatedToConstantTransitionUndoRedo(TestContext& test) {
                 "redo reapplies the constant and curve erasure");
 }
 
+void testBatchKeyframeTransactions(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Batch keys", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const std::vector<KeyframePaste> seed{
+        {kOpacityId, time(0, 1), 0.25, document::KeyframeInterpolation::Hold},
+        {kOpacityId, time(1, 1), 0.75, document::KeyframeInterpolation::Linear},
+        {kFirstPositionId, time(0, 1), document::Vec2d{3, 4}},
+        {kFirstPositionId, time(1, 1), document::Vec2d{5, 6}},
+        {kSolidColorId, time(0, 1), core::Color4d{-0.5, 2, 0.25, 1}},
+        {kSolidColorId, time(1, 1), core::Color4d{0.5, 1, 0.75, 1}},
+    };
+    const auto size = stack.size();
+    test.expect(execute.template operator()<PasteKeyframes>(seed).changed() &&
+                    stack.size() == size + 1,
+                "paste across scalar, vector and color is one transaction");
+    const auto seeded = document.snapshot();
+    const auto opacity = animationSource(seeded, kOpacityId);
+    const auto position = animationSource(seeded, kFirstPositionId);
+    const auto color = animationSource(seeded, kSolidColorId);
+    const auto scalar = scalarCurve(seeded, opacity);
+    std::vector<KeyframeMove> moves{
+        {{opacity, scalar.keyframes[0].id}, time(1, 1)},
+        {{opacity, scalar.keyframes[1].id}, time(0, 1)},
+        {{position, vec2Curve(seeded, position).keyframes[0].id}, time(2, 1)},
+        {{color, composition(seeded).animationCurves().findColor4(color)->keyframes[0].id},
+         time(2, 1)}};
+    const auto beforeMove = stack.size();
+    test.expect(
+        execute.template operator()<MoveKeyframes>(moves).changed() &&
+            stack.size() == beforeMove + 1,
+        "batch moves exchange occupied selected times and move all value kinds in one undo step");
+    test.expect(scalarCurve(document.snapshot(), opacity).keyframes[0].id == scalar.keyframes[1].id,
+                "moved IDs remain stable");
+    test.expect(stack.undo().changed() && scalarCurve(document.snapshot(), opacity) == scalar &&
+                    *composition(document.snapshot()).animationCurves().find(color) ==
+                        *composition(seeded).animationCurves().find(color),
+                "one undo restores every moved curve exactly");
+    test.expect(stack.redo().changed(), "batch move redoes");
+    const auto beforeCollision = document.snapshot();
+    moves[0].time = time(0, 1);
+    moves[1].time = time(0, 1);
+    test.expect(execute.template operator()<MoveKeyframes>(moves).status ==
+                        CommandStatus::Rejected &&
+                    document.snapshot().revision() == beforeCollision.revision(),
+                "colliding destination times reject the whole batch");
+    std::vector<KeyframeAddress> selected;
+    for (const auto& record : composition(document.snapshot()).animationCurves().records())
+        std::visit(
+            [&](const auto& curve) {
+                for (const auto& key : curve.keyframes)
+                    selected.push_back({curve.id, key.id});
+            },
+            record);
+    const auto beforeInterpolation = stack.size();
+    test.expect(execute.template operator()<SetKeyframesInterpolation>(
+                           selected, document::KeyframeInterpolation::EaseInOut)
+                        .changed() &&
+                    stack.size() == beforeInterpolation + 1,
+                "all selected interpolations use one transaction");
+    const auto edited = document.snapshot();
+    for (const auto& record : composition(edited).animationCurves().records())
+        std::visit(
+            [&](const auto& curve) {
+                test.expect(curve.keyframes.front().outgoingInterpolation ==
+                                    document::KeyframeInterpolation::EaseInOut &&
+                                curve.keyframes.back().outgoingInterpolation ==
+                                    document::KeyframeInterpolation::Linear,
+                            "final keys stay canonical; every outgoing interval is edited");
+            },
+            record);
+    test.expect(stack.undo().changed() &&
+                    *composition(document.snapshot()).animationCurves().find(opacity) ==
+                        *composition(beforeCollision).animationCurves().find(opacity),
+                "interpolation undo is exact");
+    test.expect(stack.redo().changed(), "interpolation redo succeeds");
+    const auto beforeDelete = stack.size();
+    test.expect(execute.template operator()<DeleteKeyframes>(selected).changed() &&
+                    stack.size() == beforeDelete + 1 &&
+                    composition(document.snapshot()).animationCurves().records().empty(),
+                "delete every selected key restores constants in one transaction");
+    test.expect(stack.undo().changed() &&
+                    *composition(document.snapshot()).animationCurves().find(opacity) ==
+                        *composition(edited).animationCurves().find(opacity),
+                "delete undo restores exact IDs, times, values and interpolation");
+    const auto pasteBase = document.snapshot();
+    auto badPaste = seed;
+    badPaste.front().time = time(3, 1);
+    test.expect(execute.template operator()<PasteKeyframes>(badPaste).status ==
+                        CommandStatus::Rejected &&
+                    document.snapshot().revision() == pasteBase.revision(),
+                "a later paste collision rolls back earlier pasted keys");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testBatchKeyframeTransactions(test);
         bloom::commands::test::testCreateAnimationOutputsUndoAndRedo(test);
         bloom::commands::test::testRejectedTransactionDoesNotConsumeIds(test);
         bloom::commands::test::testScalarKeyOperations(test);

@@ -22,15 +22,18 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
@@ -47,6 +50,7 @@
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -343,6 +347,9 @@ void testTimeViewportGestures(Expectations& expectations) {
     auto* lanes = editor.laneRegionForTest();
     (void)fixture.session.setCurrentTime(time(3));
     expectations.expect(fixture.session.toggleKeyframe("opacity"), "seed an animated key lane");
+    editor.layerStackForTest()->expansionRequested(
+        editor.layerStackForTest()->entries().front().layerId);
+    QCoreApplication::processEvents();
     const auto originalTime = fixture.session.currentTime();
     const auto revision = fixture.session.snapshot().revision();
     const auto getAxis = [ruler](int width = -1) {
@@ -379,7 +386,7 @@ void testTimeViewportGestures(Expectations& expectations) {
     const auto keyRows = keys->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
     expectations.expect(!keyRows.isEmpty(), "an animated key row is present");
     if (!keyRows.isEmpty()) {
-        auto* keyRow = keyRows.front();
+        auto* keyRow = keyRows.at(4);
         const auto keyAxis = getAxis(keyRow->width());
         sendMouse(*keyRow, QEvent::MouseButtonPress, keyAxis.pixelForTime(time(3)),
                   keyRow->height() / 2.0);
@@ -1513,6 +1520,308 @@ void testTransportClusterIsSquareAndInsideTheLeftColumn(Expectations& expectatio
     finishFixture(fixture);
 }
 
+void testPropertyRows(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Property rows"));
+    (void)fixture.session.addSolidLayer("Solid", {0.2, 0.3, 0.4, 1});
+    (void)fixture.session.addTextLayer("Text", "Bloom");
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    editor.resize(1200, 700);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* stack = editor.layerStackForTest();
+    const auto layer = stack->entries().front().layerId;
+    const auto revision = fixture.session.snapshot().revision();
+    const int collapsedCount = stack->rowCount();
+    stack->expansionRequested(layer);
+    QCoreApplication::processEvents();
+    expectations.expect(stack->rowCount() > collapsedCount, "chevron expands child rows");
+    expectations.expect(fixture.session.snapshot().revision() == revision, "expansion is UI state");
+    int positions = 0;
+    for (std::size_t i = 0; i < stack->entries().size(); ++i) {
+        const auto& entry = stack->entries()[i];
+        if (entry.role == document::kPositionParameterRole)
+            ++positions;
+        expectations.expect(stack->rowTop(static_cast<int>(i)) ==
+                                editor.laneRegionForTest()->rowTop(static_cast<int>(i)),
+                            "every child shares its lane y");
+    }
+    expectations.expect(positions == 1, "Position is one parameter row");
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible() ||
+            row->property("role").toString() !=
+                QString::fromStdString(std::string(document::kPositionParameterRole)))
+            continue;
+        const auto id = document::ParameterId::fromRaw(row->property("parameterId").toULongLong());
+        const auto before = fixture.session.effectiveVec2Value(id);
+        const auto fields = row->findChildren<ui::kit::KValueField*>();
+        expectations.expect(fields.size() == 2 && fields.front()->cellRect().width() >= 40,
+                            "one vector row has two usable compact value cells");
+        const auto history = fixture.commands.size();
+        fields.front()->stepBy(1);
+        const auto after = fixture.session.effectiveVec2Value(id);
+        expectations.expect(before && after && after->x == before->x + 1 && after->y == before->y &&
+                                fixture.commands.size() == history + 1,
+                            "inline X commits the exact row parameter through its session setter");
+    }
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible() || row->property("role").toString() != "color")
+            continue;
+        auto* chip = row->findChild<ui::kit::KColorChip*>("timelinePropertyColor");
+        chip->colorChanged({0.25F, 0.5F, 0.75F, 1.0F});
+        expectations.expect(fixture.commands.undoLabel() ==
+                                std::optional<std::string_view>{"Set Text Color"},
+                            "text color row uses the same setter and history label as Properties");
+    }
+    if (const auto path = qEnvironmentVariable("BLOOM_TIMELINE_TEST_IMAGE"); !path.isEmpty())
+        expectations.expect(editor.grab().save(path), "save requested timeline inspection image");
+    auto* panel = editor.findChild<QWidget*>("timelineKeyframePanel");
+    auto* area = editor.findChild<QWidget*>("timelineKeyframeArea");
+    expectations.expect(panel && area && editor.laneRegionForTest()->isAncestorOf(area),
+                        "legacy names resolve inside the integrated lanes");
+    stack->expansionRequested(layer);
+    expectations.expect(stack->rowCount() == collapsedCount, "collapse restores layer rows");
+    finishFixture(fixture);
+}
+
+void testIntegratedKeyGestures(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Lane gestures"));
+    auto& session = fixture.session;
+    (void)session.addSolidLayer("Keys", {0.2, 0.3, 0.4, 1});
+    const auto opacity = session.parameterForSelection(document::kOpacityParameterRole)->id;
+    const auto rotation = session.parameterForSelection(document::kRotationParameterRole)->id;
+    expectations.expect(session.pasteKeyframes({{opacity, time(1), 0.2},
+                                                {opacity, time(3), 0.5},
+                                                {opacity, time(5), 0.8},
+                                                {rotation, time(1), 10.0},
+                                                {rotation, time(3), 30.0},
+                                                {rotation, time(5), 50.0}},
+                                               session.snapshot().revision()),
+                        "seed keys on two parameters");
+    ui::TimelineEditor editor(session, fixture.controller);
+    editor.resize(1400, 700);
+    editor.show();
+    QCoreApplication::processEvents();
+    const auto summary = editor.laneRegionForTest()->keySummaryTimes(0);
+    expectations.expect(summary == std::vector<core::RationalTime>{time(1), time(3), time(5)},
+                        "collapsed summary is the sorted union of all parameter keys");
+    const auto summaryRevision = session.snapshot().revision();
+    const auto summarySelection = session.selection();
+    const auto summaryAxis =
+        editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
+    if (!summaryAxis)
+        throw std::runtime_error("Missing summary axis");
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonPress,
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2.0);
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonRelease,
+              summaryAxis->pixelForTime(time(3)), ui::kTimelineRowHeight / 2.0);
+    expectations.expect(editor.layerStackForTest()->rowCount() > 1 &&
+                            editor.laneRegionForTest()->keySummaryTimes(0).empty(),
+                        "clicking a summary expands its layer and exposes parameter lanes");
+    expectations.expect(session.snapshot().revision() == summaryRevision &&
+                            session.selection() == summarySelection,
+                        "summary click changes only expansion");
+    QCoreApplication::processEvents();
+    auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
+    const auto axis = editor.rulerForTest()->axisForWidth(panel->width());
+    if (!axis)
+        throw std::runtime_error("Missing parameter lane axis");
+    const auto yFor = [&](document::ParameterId parameter) {
+        const auto& entries = editor.layerStackForTest()->entries();
+        for (std::size_t i = 0; i < entries.size(); ++i)
+            if (entries[i].parameterId == parameter)
+                return editor.layerStackForTest()->rowTop(static_cast<int>(i)) +
+                       ui::kTimelineRowHeight / 2;
+        return -1;
+    };
+    const auto mouse = [&](QEvent::Type type, double seconds, int y,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        const QPointF point(axis->pixelForSeconds(seconds), y);
+        QMouseEvent event(type, point, panel->mapToGlobal(point),
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          modifiers);
+        QCoreApplication::sendEvent(panel, &event);
+    };
+    const auto click = [&](double seconds, int y,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        mouse(QEvent::MouseButtonPress, seconds, y, modifiers);
+        mouse(QEvent::MouseButtonRelease, seconds, y, modifiers);
+    };
+    const auto key = [&](int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QKeyEvent event(QEvent::KeyPress, code, modifiers);
+        QCoreApplication::sendEvent(panel, &event);
+    };
+    click(1, yFor(opacity));
+    click(3, yFor(rotation), Qt::ShiftModifier);
+    expectations.expect(session.selection().keyframes.size() == 2,
+                        "Shift-click extends session selection across parameter lanes");
+    const auto selected = session.selection().keyframes;
+    const auto history = fixture.commands.size();
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity));
+    mouse(QEvent::MouseMove, 2, yFor(opacity), Qt::ShiftModifier);
+    expectations.expect(fixture.commands.size() == history, "drag previews without commands");
+    mouse(QEvent::MouseButtonRelease, 2, yFor(opacity), Qt::ShiftModifier);
+    expectations.expect(fixture.commands.size() == history + 1 &&
+                            session.selection().keyframes == selected,
+                        "multi-lane drag is one transaction and preserves selected IDs");
+    const auto moved = session.selectedKeyframeData();
+    expectations.expect(moved.size() == 2 && moved[0].time == time(2) && moved[1].time == time(4),
+                        "drag moves all selected keys by one frame-grid delta");
+    (void)session.undo();
+    mouse(QEvent::MouseButtonPress, 0.5, yFor(rotation) - 10);
+    mouse(QEvent::MouseMove, 5.5, yFor(opacity) + 10);
+    mouse(QEvent::MouseButtonRelease, 5.5, yFor(opacity) + 10);
+    expectations.expect(session.selection().keyframes.size() == 6,
+                        "box-select spans parameter rows");
+    std::vector<ui::KeyframeSelection> stretchKeys;
+    for (const auto& selectedKey : session.selection().keyframes)
+        if (selectedKey.curveId == selected.front().curveId)
+            stretchKeys.push_back(selectedKey);
+    session.selectKeyframes(stretchKeys);
+    const auto stretchBefore = session.selectedKeyframeData();
+    const auto stretchRevision = session.snapshot().revision();
+    mouse(QEvent::MouseButtonPress, 5, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 9, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 9, yFor(opacity), Qt::AltModifier);
+    const auto stretched = session.selectedKeyframeData();
+    expectations.expect(stretched.size() == 3 && stretched[0].time == time(1) &&
+                            stretched[1].time == time(5) && stretched[2].time == time(9),
+                        "Alt-drag last key scales about the fixed first key");
+    expectations.expect(session.snapshot().revision().value() == stretchRevision.value() + 1,
+                        "stretch is one undo transaction");
+    (void)session.undo();
+    const auto restored = session.selectedKeyframeData();
+    expectations.expect(restored.size() == 3 && restored[1].time == stretchBefore[1].time &&
+                            session.selection().keyframes == stretchKeys,
+                        "stretch undo restores exact times and IDs");
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 3, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 3, yFor(opacity), Qt::AltModifier);
+    const auto compressed = session.selectedKeyframeData();
+    expectations.expect(compressed.size() == 3 && compressed[0].time == time(3) &&
+                            compressed[1].time == time(4) && compressed[2].time == time(5),
+                        "Alt-drag first key scales about the fixed last key");
+    (void)session.undo();
+    session.selectKeyframe(selected[0].curveId, selected[0].keyframeId);
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 2, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 2, yFor(opacity), Qt::AltModifier);
+    const auto duplicate = session.selectedKeyframeData();
+    const auto duplicateKey = session.selection().keyframes.front();
+    expectations.expect(duplicate.size() == 1 && duplicate[0].time == time(2) &&
+                            session.selection().keyframes.front() != selected.front(),
+                        "Alt-drag copies one key with a new identity");
+    mouse(QEvent::MouseButtonDblClick, 2, yFor(opacity));
+    expectations.expect(session.currentTime() == time(2), "double-click key moves playhead");
+    key(Qt::Key_C, Qt::ControlModifier);
+    (void)session.setCurrentTime(time(7));
+    key(Qt::Key_V, Qt::ControlModifier);
+    expectations.expect(session.selectedKeyframeData().front().time == time(7),
+                        "Ctrl+C/Ctrl+V pastes on the same parameter at the playhead");
+    const auto beforeDelete = fixture.commands.size();
+    key(Qt::Key_Delete);
+    expectations.expect(
+        fixture.commands.size() == beforeDelete + 1 && session.selection().keyframes.empty(),
+        "Delete removes selected keys in one transaction and prunes session selection");
+    (void)session.undo();
+    expectations.expect(session.composition()->animationCurves().find(selected.front().curveId) !=
+                            nullptr,
+                        "one undo restores deleted curve keys");
+    session.selectKeyframes(selected);
+    mouse(QEvent::MouseButtonPress, 1, yFor(opacity));
+    mouse(QEvent::MouseMove, 1.123, yFor(opacity), Qt::ShiftModifier);
+    mouse(QEvent::MouseButtonRelease, 1.123, yFor(opacity), Qt::ShiftModifier);
+    const auto unsnapped = session.selectedKeyframeData();
+    expectations.expect(unsnapped.size() == 2 && unsnapped[0].time == time(1123, 1000) &&
+                            unsnapped[1].time == time(3123, 1000),
+                        "Shift disables frame and magnetic snapping with one exact offset");
+    key(Qt::Key_C, Qt::ControlModifier);
+    (void)session.setCurrentTime(time(7011, 1000));
+    key(Qt::Key_V, Qt::ControlModifier);
+    const auto pastedSubframes = session.selectedKeyframeData();
+    expectations.expect(pastedSubframes.size() == 2 &&
+                            pastedSubframes[0].time == time(7011, 1000) &&
+                            pastedSubframes[1].time == time(9011, 1000),
+                        "clipboard preserves rational offsets relative to a subframe playhead");
+    const auto cancelledRevision = session.snapshot().revision();
+    mouse(QEvent::MouseButtonPress, 7.011, yFor(opacity));
+    mouse(QEvent::MouseMove, 7.3, yFor(opacity));
+    key(Qt::Key_Escape);
+    mouse(QEvent::MouseButtonRelease, 7.3, yFor(opacity));
+    expectations.expect(session.snapshot().revision() == cancelledRevision,
+                        "Escape cancels a multi-key drag without a transaction");
+    session.selectKeyframes(selected);
+    bool pickedInterpolation = false;
+    const auto menuRevision = session.snapshot().revision();
+    QTimer::singleShot(0, panel, [&] {
+        for (auto* menu : panel->findChildren<QMenu*>()) {
+            for (auto* action : menu->actions())
+                if (action->objectName() == "keyframeInterpolationAction" &&
+                    action->text() == "Hold") {
+                    pickedInterpolation = true;
+                    action->trigger();
+                    break;
+                }
+            menu->close();
+        }
+    });
+    const QPoint contextPoint(static_cast<int>(std::lround(axis->pixelForSeconds(1.123))),
+                              yFor(opacity));
+    QContextMenuEvent context(QContextMenuEvent::Mouse, contextPoint,
+                              panel->mapToGlobal(contextPoint));
+    QCoreApplication::sendEvent(panel, &context);
+    const auto interpolated = session.selectedKeyframeData();
+    expectations.expect(pickedInterpolation &&
+                            session.snapshot().revision().value() == menuRevision.value() + 1 &&
+                            interpolated.size() == 2 &&
+                            std::ranges::all_of(interpolated,
+                                                [](const auto& item) {
+                                                    return item.interpolation ==
+                                                           document::KeyframeInterpolation::Hold;
+                                                }),
+                        "context menu edits every selected interpolation in one transaction");
+    session.selectKeyframes({selected.front(), duplicateKey});
+    mouse(QEvent::MouseButtonPress, 2, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseMove, 4, yFor(opacity), Qt::AltModifier);
+    mouse(QEvent::MouseButtonRelease, 4, yFor(opacity), Qt::AltModifier);
+    const auto fixedSubframe = session.selectedKeyframeData();
+    expectations.expect(fixedSubframe.size() == 2 && fixedSubframe[0].time == time(1123, 1000) &&
+                            fixedSubframe[1].time == time(4),
+                        "stretch preserves the opposite endpoint's exact subframe time");
+    (void)session.undo();
+    mouse(QEvent::MouseButtonPress, 1.123, yFor(opacity));
+    mouse(QEvent::MouseMove, 2.5, yFor(opacity));
+    mouse(QEvent::MouseButtonRelease, 2.5, yFor(opacity));
+    const auto spaced = session.selectedKeyframeData();
+    expectations.expect(
+        spaced.size() == 2 && spaced[0].time == time(5, 2) && spaced[1].time == time(3377, 1000),
+        "frame snapping the dragged key preserves every selected key's exact relative offset");
+    (void)session.undo();
+    (void)session.setCurrentTime(time(4007, 1000));
+    mouse(QEvent::MouseButtonPress, 1.123, yFor(opacity));
+    mouse(QEvent::MouseMove, 4.01, yFor(opacity));
+    mouse(QEvent::MouseButtonRelease, 4.01, yFor(opacity));
+    const auto magnetic = session.selectedKeyframeData();
+    expectations.expect(magnetic.size() == 2 && magnetic[0].time == time(4007, 1000) &&
+                            magnetic[1].time == time(4884, 1000),
+                        "magnetic snapping preserves an exact subframe playhead and group spacing");
+    (void)session.undo();
+    const auto lockedLayer = session.selection().contextualLayer;
+    if (!lockedLayer)
+        throw std::runtime_error("Missing keyframe contextual layer");
+    commands::Transaction lock("Lock key target", session.snapshot().revision());
+    lock.emplace<commands::SetLayerLocked>(session.compositionId(), *lockedLayer, true);
+    (void)session.executeTransaction(std::move(lock));
+    const auto lockedRevision = session.snapshot().revision();
+    key(Qt::Key_Delete);
+    expectations.expect(session.snapshot().revision() == lockedRevision &&
+                            session.selection().keyframes.size() == 2,
+                        "locked-layer keys reject a batch deletion without changing selection");
+    finishFixture(fixture);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1528,6 +1837,8 @@ int main(int argc, char** argv) {
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);
+        testPropertyRows(expectations);
+        testIntegratedKeyGestures(expectations);
         testTimelineHeaderMenus(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);
         testRowsAreFlatThirtyTwoPixelRows(expectations);
