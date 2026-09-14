@@ -31,6 +31,7 @@
 
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -150,6 +151,16 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                                kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
     layout->setSpacing(kit::px(kit::Spacing::S));
 
+    setFocusPolicy(Qt::StrongFocus);
+    search_ = new QLineEdit(this);
+    search_->setObjectName("propertiesSearchField");
+    search_->setAccessibleName(tr("Search properties"));
+    search_->setPlaceholderText(tr("Search properties…"));
+    search_->setClearButtonEnabled(true);
+    search_->installEventFilter(this);
+    layout->addWidget(search_);
+    connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
+
     // Task P1 (owner review 2026-09-12: "should not show 'Nothing selected' or any other selected
     // layer info") removed the selection title row entirely. With nothing selected the panel shows
     // only the document/composition section; with a selection it shows only the Object/Transform/
@@ -258,6 +269,12 @@ void PropertiesEditor::commitRotationFromControls() {
 }
 
 bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == search_ && event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        search_->clear();
+        setFocus(Qt::ShortcutFocusReason);
+        return true;
+    }
     if (event->type() == QEvent::FocusOut && watched->objectName() == "propertiesTextMultiline" &&
         !rebuilding_) {
         if (auto* text = qobject_cast<QPlainTextEdit*>(watched))
@@ -305,6 +322,7 @@ void PropertiesEditor::rebuild() {
         rotationSlider_->setEnabled(false);
     }
     rebuilding_ = false;
+    filterRows();
 }
 
 void PropertiesEditor::configureObjectToggles() {
@@ -625,6 +643,27 @@ void PropertiesEditor::configureDocumentProperties() {
     const auto context = frameContextFor(session_);
     documentDuration_->setText(context.has_value() ? formatDuration(*context)
                                                    : QStringLiteral("—"));
+}
+
+void PropertiesEditor::filterRows() {
+    const auto query = search_->text();
+    for (auto* section : sections_) {
+        bool any = false;
+        auto* rows = section->bodyLayout();
+        for (int index = 0; index < rows->count(); ++index) {
+            auto* row = rows->itemAt(index)->widget();
+            if (!row)
+                continue;
+            const auto label = row->property("rowLabel").toString();
+            if (label.isEmpty())
+                continue;
+            const bool match = label.contains(query, Qt::CaseInsensitive);
+            row->setVisible(match);
+            any = any || match;
+        }
+        section->setVisible(query.isEmpty() || any);
+        section->body()->setVisible(!section->isCollapsed() || !query.isEmpty());
+    }
 }
 
 } // namespace bloom::ui

@@ -350,7 +350,11 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     addRow(rows, body, makeRowLabel(tr("Font"), body), nullptr, textFontName_);
 
     layout->addWidget(textSourcePanel_);
-    auto* multiline = new QPlainTextEdit(body);
+    auto* multilineRow = new QWidget(body);
+    multilineRow->setProperty("rowLabel", tr("Content"));
+    auto* multilineLayout = new QVBoxLayout(multilineRow);
+    multilineLayout->setContentsMargins(0, 0, 0, 0);
+    auto* multiline = new QPlainTextEdit(multilineRow);
     multiline->setObjectName("propertiesTextMultiline");
     multiline->setFixedHeight(kit::px(kit::Size::Control) * 3);
     multiline->installEventFilter(this);
@@ -358,8 +362,9 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     expand->setObjectName("propertiesTextExpand");
     expand->setText(tr("Edit multiple lines"));
     expand->setCheckable(true);
-    rows->addWidget(expand);
-    rows->addWidget(multiline);
+    multilineLayout->addWidget(expand);
+    multilineLayout->addWidget(multiline);
+    rows->addWidget(multilineRow);
     multiline->hide();
     connect(expand, &kit::KButton::toggled, multiline, &QWidget::setVisible);
     connect(&session_, &CompositionSession::snapshotChanged, multiline, [this, multiline] {

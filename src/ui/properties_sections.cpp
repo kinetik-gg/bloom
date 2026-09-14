@@ -97,6 +97,7 @@ QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWi
                 const std::initializer_list<QWidget*> values) {
     auto* row = new QWidget(sectionParent);
     row->setObjectName(QStringLiteral("propertiesRow"));
+    row->setProperty("rowLabel", label->toolTip());
     row->setMinimumHeight(kit::px(kit::Size::Control));
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),

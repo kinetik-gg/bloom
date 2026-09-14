@@ -1,4 +1,6 @@
 #include <QApplication>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QSettings>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
@@ -57,6 +59,24 @@ void registryRows() {
                "source reset includes registry defaults");
     }
     expect(session.addTextLayer("Text", "Hello", 48, {1, 1, 1, 1}), "add text");
+    panel.show();
+    QCoreApplication::processEvents();
+    auto* search = panel.findChild<QLineEdit*>("propertiesSearchField");
+    expect(search != nullptr, "search field exists");
+    search->setText("HeIgHt");
+    expect(row(panel, "line-height")->isVisible() && !row(panel, "letter-spacing")->isVisible(),
+           "search is case-insensitive substring over labels");
+    expect(!panel.findChild<ui::kit::KSection*>("propertiesSection_transform")->isVisible(),
+           "unmatched sections hide");
+    search->setText("not a property");
+    expect(!panel.findChild<ui::kit::KSection*>("propertiesSection_text")->isVisible(),
+           "empty sections hide");
+    search->setFocus();
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(search, &escape);
+    expect(search->text().isEmpty() && panel.hasFocus() &&
+               row(panel, "letter-spacing")->isVisible(),
+           "Escape clears, restores rows, and returns panel focus");
     auto* alignment = row(panel, "alignment");
     expect(alignment && row(panel, "line-height") && row(panel, "letter-spacing"),
            "registry adds every text layout parameter");
