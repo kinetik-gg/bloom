@@ -2,12 +2,18 @@
 
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QCursor>
+#include <QImage>
+#include <QMetaObject>
 #include <QPointF>
 #include <QRectF>
+#include <QString>
 #include <QWidget>
 
+#include <cstdint>
 #include <optional>
 
 namespace bloom::core {
@@ -22,6 +28,10 @@ namespace bloom::ui::kit {
 class KDropdown;
 }
 
+class QAction;
+class QLabel;
+class QToolButton;
+
 class QContextMenuEvent;
 class QKeyEvent;
 class QMouseEvent;
@@ -31,6 +41,54 @@ class QWheelEvent;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+class PlaybackController;
+class RamPreviewController;
+class ViewerTimecodeReadout;
+
+// Which channels of the display buffer the Viewer shows (task VIEW-1). This is a VIEWER-only
+// remap applied while packing the frame for presentation: it never reaches an export, a cached
+// frame, or any other surface, because the only thing it changes is the QImage paintEvent() blits.
+//
+//   Rgba  -- the delivered buffer, untouched (and uncopied: the zero-copy borrow paintEvent() has
+//            always used).
+//   Rgb   -- the same colour with alpha forced opaque, so a transparent region shows its colour
+//            rather than the background behind it.
+//   Red / Green / Blue -- that one channel as grey.
+//   Alpha -- the alpha channel as luminance.
+enum class ViewerChannel : std::uint8_t {
+    Rgba,
+    Rgb,
+    Red,
+    Green,
+    Blue,
+    Alpha,
+};
+
+// What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
+// "viewer/background"; Solid is the default.
+//
+// Solid is the application's own canvas Background token, NOT a per-composition colour: the
+// document model carries no background colour for a composition today (document::CompositionFormat
+// holds extent, pixel aspect, and frame rate and nothing else), so claiming one here would be an
+// invented value. When the document gains one, Solid is the single place that has to start reading
+// it.
+enum class ViewerBackground : std::uint8_t {
+    Solid,
+    Checkerboard,
+    Black,
+    White,
+};
+
+// Widgets that consume Left/Right/Home/End for their own navigation set this dynamic property to
+// true (task VIEW-1). The Viewer's four frame-stepping actions are Qt::WindowShortcut, so they
+// would otherwise silently swallow that navigation window-wide; ViewerEditor disables them while
+// focus rests on (or inside) a widget carrying this marker, which is exactly the rule
+// TimelineEditor used to implement against its own layer stack before the transport moved here. A
+// disabled QAction never claims ShortcutOverride, so the key reaches the focused widget unchanged.
+//
+// A dynamic property rather than a direct type check because the Viewer must not know which panels
+// exist; anything that needs the arrow keys opts in by name.
+inline constexpr char kDefersTransportKeysProperty[] = "bloomDefersTransportKeys";
 
 [[nodiscard]] QRectF fitDisplayRect(const QRectF& available, render::ImageExtent extent,
                                     core::PixelAspectRatio pixelAspect) noexcept;
@@ -105,8 +163,17 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     Q_OBJECT
 
   public:
+    // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
+    // menu so both entry points call one method. Null leaves the footer's RAM Preview button
+    // present and disabled -- an affordance that is visibly unavailable rather than one that
+    // silently does nothing. It moved here with the rest of the transport (task VIEW-1).
     ViewerEditor(CompositionSession& session, CompositionPreviewController& previewController,
-                 QWidget* parent = nullptr);
+                 RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
+    // Drops the application-wide focusChanged subscription BEFORE Qt starts deleting this panel's
+    // children, for exactly the reason TimelineEditor's own destructor documents: a child losing
+    // focus re-enters that subscription, which reads sibling widgets deleteChildren() may already
+    // have destroyed.
+    ~ViewerEditor() override;
 
     // EditorFooterProvider (task C1, FORMAL AMENDMENT 1): the first call reparents the status bar
     // widget away from this ViewerEditor and returns it -- the caller (EditorArea) takes ownership
@@ -129,6 +196,10 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     // caching.
     [[nodiscard]] QString statusBarRamPreviewTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
+    // Task VIEW-1's own seams, on the same terms as the four above.
+    [[nodiscard]] ViewerChannel channelForTest() const noexcept;
+    [[nodiscard]] ViewerBackground backgroundForTest() const noexcept;
+    [[nodiscard]] QString timeReadoutTextForTest() const;
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -182,6 +253,28 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     void setZoomFit();
     void setZoomActualSize();
     void setZoomPercent(int percent);
+    void buildFooter(RamPreviewController* ramPreview);
+    void wireTransport();
+    // Pauses playback first, then writes the exact mapped time for `frameIndex`. The one
+    // path every transport landing goes through -- the step actions, and the readout's own
+    // click-to-edit commit.
+    void seekToFrame(std::uint64_t frameIndex);
+    void setChannel(ViewerChannel channel);
+    void setBackground(ViewerBackground background);
+    // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
+    // state (issue #105, design decision 4: "button/icon state reflects transport state via a
+    // signal"), unchanged except for which panel hosts the button.
+    void updatePlaybackButton(PlaybackState state);
+    void updateRamPreviewButton();
+    void updateLoopButton();
+    // Frame stepping (issue #108, decisions 1/2): Left/Right step one frame back/forward from
+    // nearestFrameIndex(currentTime()), clamped to [0, maxFrameIndex]; delta is -1 or +1. Home/End
+    // (stepToStart()/stepToEnd()) jump to frame 0 / the last frame. Every landing goes through the
+    // exact mapped frame time via CompositionSession::setCurrentTime(), and pauses playback FIRST
+    // through PlaybackController's own public pause() -- never by racing its tick().
+    void stepFrame(int delta);
+    void stepToStart();
+    void stepToEnd();
     void beginPan(Qt::MouseButton button, QPointF screenPoint, const DisplayGeometry& geometry);
     void updatePanCursor();
     void layoutStatusBar();
@@ -201,18 +294,60 @@ class ViewerEditor final : public QWidget, public EditorFooterProvider {
     QPointF panOrigin_;
     ViewTransform panBaseTransform_;
 
-    // Bottom status bar (decision 3). Only the zoom control is a real child widget; the exact
-    // frame/timecode readout and the color-state chip are painted directly (they update every
-    // repaint from live session/preview state, so there is no separate text-cache to keep in
-    // sync). Reparented into statusBarFooter_ the moment takeFooterWidget() is called; until then
-    // (every existing standalone test) it stays a direct child of this ViewerEditor, positioned by
-    // layoutStatusBar(), exactly as before FORMAL AMENDMENT 1.
+    // The footer's controls (decision 3, reshaped by task VIEW-1). Every one of them is a child of
+    // footer_ from construction, never of this ViewerEditor: the pre-VIEW-1 arrangement -- controls
+    // parented here and the strip painted into this widget's own bottom inset until
+    // takeFooterWidget() moved them -- meant the same bar had two rendering paths that had to stay
+    // in agreement. There is one now, and takeFooterWidget() hands the whole row over by
+    // reparenting exactly one widget.
     kit::KDropdown* zoomDropdown_ = nullptr;
     kit::KDropdown* resolutionDropdown_ = nullptr;
-    // FORMAL AMENDMENT 1: null until takeFooterWidget() is called; from that point on, the
-    // surviving reference this ViewerEditor keeps so its own session/preview-state signal
-    // handlers can also repaint the (now externally-owned) footer. Its concrete type is private to
-    // viewer_editor.cpp -- this ViewerEditor never needs anything from it beyond QWidget::update().
+    // Task VIEW-1's footer, left to right: channel, zoom, resolution, background, the transport,
+    // and the frame/timecode readout. Every one of them is a child of footer_ from construction --
+    // there is no second, painted-into-the-canvas copy of any of them -- so takeFooterWidget()
+    // hands the whole row over by reparenting exactly one widget.
+    kit::KDropdown* channelDropdown_ = nullptr;
+    kit::KDropdown* backgroundDropdown_ = nullptr;
+    // Part of the Resolution control rather than a footer item of its own: what the chosen
+    // policy actually resolved to ("Auto · ¼"), which for Auto is visible nowhere else.
+    QLabel* resolutionReadout_ = nullptr;
+    QToolButton* stepToStartButton_ = nullptr;
+    QToolButton* stepBackButton_ = nullptr;
+    QToolButton* playPauseButton_ = nullptr;
+    QToolButton* stepForwardButton_ = nullptr;
+    QToolButton* stepToEndButton_ = nullptr;
+    // A real toggle now, not the status glyph the timeline used to show: PlaybackController has a
+    // setLooping() command behind it (task VIEW-1), so a clickable control is honest here.
+    QToolButton* loopButton_ = nullptr;
+    // RAM Preview (task PERF1, item 3): folded into the play button's cached state -- the play
+    // button reports whether the range it is about to play is cached -- while the explicit action
+    // stays its own button, because caching a range and starting playback are different commands.
+    QToolButton* ramPreviewButton_ = nullptr;
+    ViewerTimecodeReadout* timeReadout_ = nullptr;
+    // Borrowed from the preview controller; every panel drives the same transport.
+    PlaybackController* playback_ = nullptr;
+    // Borrowed: the RAM Preview command is application-wide (the Composition menu reaches the same
+    // one), so this panel never owns it. Null when none was attached.
+    RamPreviewController* ramPreview_ = nullptr;
+    QAction* stepBackwardAction_ = nullptr;
+    QAction* stepForwardAction_ = nullptr;
+    QAction* stepToStartAction_ = nullptr;
+    QAction* stepToEndAction_ = nullptr;
+    QMetaObject::Connection focusConnection_;
+    ViewerChannel channel_ = ViewerChannel::Rgba;
+    ViewerBackground background_ = ViewerBackground::Solid;
+    // The channel remap's one cached result. Keyed on the FRAME HANDLE (held by value, so the
+    // bytes it was built from cannot be freed and a later frame cannot reuse the address) plus the
+    // channel, so a repaint at an unchanged channel and frame costs nothing and playback does not
+    // re-walk the buffer every tick. Empty whenever channel_ is Rgba, which is also the only case
+    // paintEvent() keeps its original zero-copy borrow for.
+    PreparedPreviewFrameHandle channelViewFrame_;
+    ViewerChannel channelViewChannel_ = ViewerChannel::Rgba;
+    QImage channelView_;
+    // FORMAL AMENDMENT 1, as of task VIEW-1: non-null for this ViewerEditor's whole life. Until
+    // takeFooterWidget() is called it is a child positioned by layoutStatusBar() inside this
+    // widget's own bottom strip; after it, the caller owns it and this stays the surviving
+    // reference the signal handlers repaint through.
     QWidget* statusBarFooter_ = nullptr;
     bool statusBarFooterTaken_ = false;
 };

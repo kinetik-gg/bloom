@@ -1,14 +1,12 @@
 #pragma once
 
 #include <bloom/ui/editor_area.hpp>
-#include <bloom/ui/playback_controller.hpp>
 
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 
 #include <bloom/ui/kit/tokens.hpp>
 
-#include <QMetaObject>
 #include <QPoint>
 #include <QRect>
 #include <QString>
@@ -28,7 +26,6 @@ class QToolButton;
 namespace bloom::ui {
 
 class CompositionPreviewController;
-class RamPreviewController;
 class CompositionSession;
 class TimelineColumnHeaders;
 class TimelineKeyframePanel;
@@ -68,19 +65,11 @@ class TimelineEditor final : public QWidget,
     Q_OBJECT
 
   public:
-    // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
-    // menu so both entry points call one method. Null leaves the transport's RAM Preview button and
-    // shortcut present but disabled -- an affordance that is visibly unavailable rather than one
-    // that silently does nothing.
+    // Task VIEW-1 moved the transport -- and with it the RAM Preview button this constructor used
+    // to take a controller for -- to the viewer footer. This panel is the layer stack, the ruler,
+    // the lanes and the navigator now; it owns no transport command at all.
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
-                   RamPreviewController* ramPreview = nullptr, QWidget* parent = nullptr);
-    // Exists only to drop the application-wide focusChanged subscription BEFORE Qt starts deleting
-    // this panel's children. QWidget's own destructor clears focus from each child as it goes, and
-    // a child losing focus re-enters that subscription -- which reads sibling widgets that
-    // deleteChildren may already have destroyed. Disconnecting here is the one place that ordering
-    // can be fixed; QObject's automatic disconnection happens far too late, in ~QObject, after
-    // every child is gone.
-    ~TimelineEditor() override;
+                   QWidget* parent = nullptr);
     [[nodiscard]] QWidget* takeHeaderMenuWidget() override;
     [[nodiscard]] QWidget* takeHeaderRightWidget() override;
     [[nodiscard]] int headerSplitPosition() const override { return layerColumnWidth(); }
@@ -97,9 +86,6 @@ class TimelineEditor final : public QWidget,
     [[nodiscard]] TimelineLaneRegion* laneRegionForTest() const noexcept { return lanes_; }
     [[nodiscard]] TimelineRuler* rulerForTest() const noexcept { return ruler_; }
     [[nodiscard]] QScrollBar* verticalScrollBarForTest() const noexcept { return scrollBar_; }
-    [[nodiscard]] QToolButton* ramPreviewButtonForTest() const noexcept {
-        return ramPreviewButton_;
-    }
 
   private:
     void rebuild();
@@ -112,21 +98,6 @@ class TimelineEditor final : public QWidget,
     void setTimecodeFormat(bool timecode);
     void showEvent(QShowEvent* event) override;
     void updateScrollRange();
-    // Reflects PlaybackController::stateChanged() onto the toggle button's text/tooltip/checked
-    // state (design decision 4: "button/icon state reflects transport state via a signal").
-    void updatePlaybackButton(PlaybackState state);
-    void updateRamPreviewButton();
-    // Frame stepping (issue #108, decisions 1/2): Left/Right step one frame back/forward from
-    // nearestFrameIndex(currentTime()), clamped to [0, maxFrameIndex]; delta is -1 or +1. Home/End
-    // (stepToStart()/stepToEnd()) jump to frame 0 / the last frame. Every landing goes through the
-    // exact mapped frame time via CompositionSession::setCurrentTime(), and pauses playback FIRST
-    // through PlaybackController's own public pause() -- never by racing its tick().
-    void stepFrame(int delta);
-    void stepToStart();
-    void stepToEnd();
-    // Updates timeReadout_'s text to the current frame index / exact time (design decision 3),
-    // wired to currentTimeChanged() and compositionChanged().
-    void updateTimeReadout();
 
     std::set<document::LayerId> expandedLayers_;
     CompositionSession& session_;
@@ -151,38 +122,6 @@ class TimelineEditor final : public QWidget,
     // rather than a pair of signal handlers that could drift.
     QScrollBar* scrollBar_ = nullptr;
     QToolButton* addButton_ = nullptr;
-    // Borrowed from the preview session; every panel controls the same transport.
-    PlaybackController* playback_ = nullptr;
-    // Borrowed: the RAM Preview command is application-wide (the Composition menu reaches the same
-    // one), so this panel never owns it. Null when none was attached.
-    RamPreviewController* ramPreview_ = nullptr;
-    // Task U7 (issue #122), decision 5: clickable mouse affordances for the SAME
-    // stepBackwardAction_/stepForwardAction_ QActions the Left/Right shortcuts already trigger --
-    // wired by connecting the button's clicked() straight to the action's trigger() rather than
-    // QToolButton::setDefaultAction(), so this button's own icon/tooltip/objectName stay under this
-    // class's control instead of mirroring the action's text. Their enabled state is kept in
-    // lockstep with the actions by the SAME focusChanged reconciliation lambda that already
-    // disables the actions while the layer stack holds keyboard focus (see the constructor).
-    QToolButton* stepBackButton_ = nullptr;
-    QToolButton* stepForwardButton_ = nullptr;
-    QToolButton* playPauseButton_ = nullptr;
-    // RAM Preview (task PERF1, item 3): caches the composition range, then plays it from the cache.
-    // Checked while a run is caching, so the one button is also the cancel affordance.
-    QToolButton* ramPreviewButton_ = nullptr;
-    // Non-interactive (decision 5: "non-interactive if loop isn't toggleable"): playback always
-    // loops (PlaybackController::tick()'s exact modulo wrap) with no command to disable it, so this
-    // is a status glyph, never a button that would falsely imply a click could turn looping off.
-    QLabel* loopIndicator_ = nullptr;
-    // Current frame index / exact time readout (design decision 3), living beside playPauseButton_
-    // in the same controls cluster.
-    QLabel* timeReadout_ = nullptr;
-    // Frame-stepping QActions (design decision 2), disabled while the layer stack holds keyboard
-    // focus -- see their construction site in the .cpp for the arrow-key conflict this reconciles.
-    QAction* stepBackwardAction_ = nullptr;
-    QAction* stepForwardAction_ = nullptr;
-    QAction* stepToStartAction_ = nullptr;
-    QAction* stepToEndAction_ = nullptr;
-    QMetaObject::Connection focusConnection_;
 };
 
 // The LEFT layer-stack column (task T1), replacing the QTreeWidget this panel used to be: a painted

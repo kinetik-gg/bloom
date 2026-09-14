@@ -20,19 +20,26 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/timeline_frame_math.hpp>
 
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineEdit>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QRectF>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QWheelEvent>
 
 #include <chrono>
@@ -627,8 +634,14 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "the fixture's initial frame becomes ready");
 
-    expectations.expect(fixture.viewer.statusBarReadoutTextForTest() ==
-                            QStringLiteral("Auto · 1 · Frame 0 · 0.000s"),
+    // ADAPTED for task VIEW-1: the footer's one combined string became two controls -- the
+    // Resolution readout ("Auto · 1", part of the Resolution dropdown) and the click-to-edit
+    // frame/time readout. Both claims below are the same claims, read off the control that now
+    // makes each of them.
+    expectations.expect(fixture.viewer.statusBarReadoutTextForTest() == QStringLiteral("Auto · 1"),
+                        "the resolution readout names the effective Auto factor");
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
+                            QStringLiteral("Frame 0 · 0.000s"),
                         "the readout starts at frame 0, exact zero seconds");
 
     // 1/3 s has no terminating decimal expansion: truncated to 3 places this is EXACTLY "0.333s",
@@ -639,7 +652,7 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
         expectations.expect(fixture.session.setCurrentTime(*subframeTime),
                             "the session accepts an exact subframe time");
         expectations.expect(
-            fixture.viewer.statusBarReadoutTextForTest().contains(QStringLiteral("0.333s")),
+            fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("0.333s")),
             "the readout truncates 1/3 second to exactly 0.333s (never a rounded 0.334s)");
     }
 
@@ -900,6 +913,326 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
     QSettings().remove("viewer/resolution");
 }
 
+// --- Task VIEW-1: the viewer footer ------------------------------------------------------------
+
+// The footer's controls, in the order the task fixes them: Channel, Zoom, Resolution, Background,
+// the transport, and the frame/time readout. Order is asserted through laid-out geometry rather
+// than child order, because the artist reads positions, not construction sequence.
+void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Footer Order Test"));
+    auto* footer = fixture.viewer.takeFooterWidget();
+    expectations.expect(footer != nullptr, "the viewer offers a footer widget");
+    if (footer == nullptr) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    footer->resize(1400, ui::kit::px(ui::kit::Size::Control));
+    QCoreApplication::processEvents();
+
+    const char* const ordered[] = {
+        "viewerChannelDropdown",    "viewerZoomDropdown",        "viewerResolutionDropdown",
+        "viewerBackgroundDropdown", "viewerStepToStartButton",   "timelineStepBackButton",
+        "playPauseButton",          "timelineStepForwardButton", "viewerStepToEndButton",
+        "timelineLoopIndicator",    "timelineRamPreviewButton",  "viewerTimeReadout"};
+    int previousRight = -1;
+    for (const char* name : ordered) {
+        auto* control = footer->findChild<QWidget*>(QString::fromLatin1(name));
+        expectations.expect(control != nullptr, std::string{name} + " lives in the viewer footer");
+        if (control == nullptr) {
+            continue;
+        }
+        expectations.expect(control->geometry().left() > previousRight,
+                            std::string{name} + " sits to the right of the control before it");
+        previousRight = control->geometry().right();
+    }
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+// task U8, issue #131, fix 7 carried over from the timeline: every icon-only transport button is a
+// Size::Control square, and its glyph is the Control icon role's own 20px box (task VIEW-1).
+void testTransportButtonsAreSquareAndUseTheControlIconRole(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Transport Button Metrics Test"));
+    const int box = ui::kit::px(ui::kit::iconSize(ui::kit::IconRole::Control));
+    for (const char* name : {"viewerStepToStartButton", "timelineStepBackButton", "playPauseButton",
+                             "timelineStepForwardButton", "viewerStepToEndButton",
+                             "timelineLoopIndicator", "timelineRamPreviewButton"}) {
+        auto* button = fixture.viewer.findChild<QToolButton*>(QString::fromLatin1(name));
+        expectations.expect(button != nullptr, std::string{name} + " is reachable by name");
+        if (button == nullptr) {
+            continue;
+        }
+        expectations.expect(button->width() == button->height() &&
+                                button->width() == ui::kit::px(ui::kit::Size::Control),
+                            std::string{name} + " is exactly Size::Control square");
+        expectations.expect(button->iconSize() == QSize(box, box),
+                            std::string{name} + " carries a Control-role glyph box");
+    }
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+// MOVED from timeline_editor_style_tests.cpp with the transport (task VIEW-1). Same claims, same
+// objectName, same QToolButton text()/isChecked() contract -- only the panel and the icon role
+// changed.
+void testPlayPauseButtonIconSwapsWithState(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Play Pause Icon Test"));
+    auto* button = fixture.viewer.findChild<QToolButton*>("playPauseButton");
+    expectations.expect(button != nullptr, "the play/pause button is reachable by name");
+    if (button == nullptr) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+
+    const auto playIcon = ui::kit::icon(ui::kit::IconId::Play, ui::kit::IconRole::Control);
+    const auto pauseIcon = ui::kit::icon(ui::kit::IconId::Pause, ui::kit::IconRole::Control);
+    const int box = ui::kit::px(ui::kit::iconSize(ui::kit::IconRole::Control));
+    const auto size = QSize(box, box);
+    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
+                        "the button starts showing the Play glyph");
+
+    button->click();
+    expectations.expect(button->isChecked() && button->text() == QStringLiteral("Pause"),
+                        "the existing text()/isChecked() contract still flips on click");
+    expectations.expect(button->icon().pixmap(size).toImage() == pauseIcon.pixmap(size).toImage(),
+                        "clicking swaps the icon to Pause alongside the text");
+
+    button->click();
+    expectations.expect(button->icon().pixmap(size).toImage() == playIcon.pixmap(size).toImage(),
+                        "clicking again swaps the icon back to Play");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+// REPLACES timeline_editor_style_tests.cpp's "the loop indicator is never a clickable control"
+// non-goal guard. That guard was honest while there was no command to turn looping off; task
+// VIEW-1 added PlaybackController::setLooping(), so the control is a real toggle and the honest
+// assertion is that clicking it actually changes the transport -- and that the preference persists.
+void testLoopToggleDrivesThePlaybackControllerAndPersists(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("playback/loop");
+    {
+        ViewerFixture fixture(makeTestProject("Loop Toggle Test"));
+        auto* loop = fixture.viewer.findChild<QToolButton*>("timelineLoopIndicator");
+        expectations.expect(loop != nullptr && loop->isCheckable(),
+                            "the loop control is a checkable button under its original name");
+        if (loop == nullptr) {
+            reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+            return;
+        }
+        auto& playback = fixture.controller.playbackController();
+        expectations.expect(playback.isLooping() && loop->isChecked(),
+                            "looping is on by default -- the behavior every Bloom transport has "
+                            "shipped with");
+        loop->click();
+        expectations.expect(!playback.isLooping() && !loop->isChecked(),
+                            "clicking it turns looping off on the shared transport");
+        expectations.expect(!QSettings().value("playback/loop").toBool(),
+                            "and the choice is persisted under playback/loop");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+    }
+    {
+        ViewerFixture restored(makeTestProject("Loop Restore Test"));
+        expectations.expect(!restored.controller.playbackController().isLooping(),
+                            "a new viewer restores the persisted looping preference");
+        reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
+    }
+    QSettings().remove("playback/loop");
+}
+
+// The channel dropdown offers exactly the six documented views and drives the viewer's own channel
+// state. The remap itself is viewer-only: the delivered display buffer is never touched, which is
+// asserted by comparing the controller's own frame bytes before and after the switch.
+void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) {
+    using namespace bloom;
+    const auto format = document::CompositionFormat::create(160, 120);
+    if (!format.has_value()) {
+        std::abort();
+    }
+    ViewerFixture fixture(document::makeNewProject("Channel view", "Main",
+                                                   core::RationalTime::fromInteger(1), *format));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Blue"), core::Color4d{0.0, 0.0, 1.0, 1.0}),
+        "the channel fixture has opaque coloured content");
+    fixture.viewer.show();
+    fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3); // 100%
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the channel fixture reaches a ready frame");
+
+    auto* channel = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerChannelDropdown");
+    expectations.expect(channel != nullptr && channel->count() == 6 &&
+                            channel->currentText() == QStringLiteral("RGBA"),
+                        "the footer offers RGBA/RGB/R/G/B/Alpha and starts on RGBA");
+    if (channel == nullptr) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+
+    const auto bufferBefore = fixture.controller.state().frame->displayBufferView();
+    const QImage rgba = fixture.viewer.grab().toImage();
+
+    channel->setCurrentIndex(2); // "R"
+    expectations.expect(fixture.viewer.channelForTest() == ui::ViewerChannel::Red,
+                        "choosing R puts the viewer in the red-channel view");
+    QCoreApplication::processEvents();
+    const QImage red = fixture.viewer.grab().toImage();
+    expectations.expect(red != rgba, "a single-channel view really changes the presented pixels");
+
+    const auto bufferAfter = fixture.controller.state().frame->displayBufferView();
+    expectations.expect(
+        bufferBefore.has_value() && bufferAfter.has_value() &&
+            bufferBefore->pixels.data() == bufferAfter->pixels.data(),
+        "and it never touches the delivered display buffer -- the viewer is looking "
+        "at the SAME bytes, which is why a channel view can never reach an export");
+
+    channel->setCurrentIndex(0); // back to RGBA
+    QCoreApplication::processEvents();
+    expectations.expect(fixture.viewer.grab().toImage() == rgba,
+                        "returning to RGBA restores exactly the original presentation");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+// The background dropdown chooses what the canvas surround is, defaults to Solid, and persists the
+// choice under "viewer/background".
+void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/background");
+    {
+        ViewerFixture fixture(makeTestProject("Background Test"));
+        fixture.viewer.show();
+        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                            "the background fixture reaches a ready frame");
+        auto* background =
+            fixture.viewer.findChild<ui::kit::KDropdown*>("viewerBackgroundDropdown");
+        expectations.expect(background != nullptr && background->count() == 4 &&
+                                background->currentText() == QStringLiteral("Solid") &&
+                                fixture.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
+                            "the footer offers four backgrounds and defaults to Solid");
+        if (background == nullptr) {
+            reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+            return;
+        }
+        // A corner of the canvas at 25% zoom: the composition rectangle is a few pixels at the
+        // centre, so the corner is pure surround with none of the frame's own drop shadow reaching
+        // it (drawFrameShadow() spreads by the Popup elevation's blur radius).
+        fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1); // 25%
+        QCoreApplication::processEvents();
+        const auto corner = [&fixture] { return fixture.viewer.grab().toImage().pixelColor(2, 2); };
+        expectations.expect(corner() == ui::kit::color(ui::kit::Color::Background),
+                            "Solid paints the application's own canvas Background token");
+        background->setCurrentIndex(2); // Black
+        QCoreApplication::processEvents();
+        expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&
+                                corner() == QColor(Qt::black),
+                            "Black is literal black, not a token that merely reads dark");
+        background->setCurrentIndex(3); // White
+        QCoreApplication::processEvents();
+        expectations.expect(corner() == QColor(Qt::white), "and White is literal white");
+        expectations.expect(QSettings().value("viewer/background").toString() ==
+                                QStringLiteral("White"),
+                            "the choice is persisted under viewer/background");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+    }
+    {
+        ViewerFixture restored(makeTestProject("Background Restore Test"));
+        expectations.expect(restored.viewer.backgroundForTest() == ui::ViewerBackground::White,
+                            "a new viewer restores the persisted background");
+        reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
+    }
+    QSettings().setValue("viewer/background", QStringLiteral("nonsense"));
+    {
+        ViewerFixture invalid(makeTestProject("Background Fallback Test"));
+        expectations.expect(invalid.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
+                            "an unrecognized saved background falls back to Solid");
+        reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
+    }
+    QSettings().remove("viewer/background");
+}
+
+// The readout: click to type an exact frame number, and a context menu that switches the label
+// between a frame index and non-drop timecode (the SAME "timeline/time-format" preference the
+// timeline's ruler reads, so the two surfaces cannot disagree about the format).
+void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().setValue("timeline/time-format", QStringLiteral("frames"));
+    ViewerFixture fixture(makeTestProject("Readout Edit Test"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the readout fixture reaches a ready frame");
+
+    auto* readout = fixture.viewer.findChild<QWidget*>("viewerTimeReadout");
+    auto* editor = fixture.viewer.findChild<QLineEdit*>("viewerTimeReadoutEditor");
+    expectations.expect(readout != nullptr && editor != nullptr,
+                        "the readout and its inline editor are both reachable by name");
+    if (readout == nullptr || editor == nullptr) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
+                            QStringLiteral("Frame 0 · 0.000s"),
+                        "the readout starts on the frame-index format");
+
+    // A click opens the editor seeded with the current frame; typing a number and pressing Return
+    // moves session time to that frame's EXACT mapped time.
+    const QPointF centre(readout->width() / 2.0, readout->height() / 2.0);
+    QMouseEvent press(QEvent::MouseButtonPress, centre, centre, Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(readout, &press);
+    expectations.expect(editor->isVisible() || editor->text() == QStringLiteral("0"),
+                        "clicking the readout opens an editor seeded with the current frame");
+    editor->setText(QStringLiteral("5"));
+    QMetaObject::invokeMethod(editor, "returnPressed");
+    QCoreApplication::processEvents();
+    const auto* const composition = fixture.session.composition();
+    const auto expected =
+        ui::frameTimeForIndex(composition->format().frameRate(), composition->duration(), 5);
+    expectations.expect(expected.has_value() && fixture.session.currentTime() == *expected,
+                        "committing a typed frame number lands on that frame's exact mapped time");
+
+    // Out of range clamps rather than refusing, and an unparseable entry reverts in silence.
+    QCoreApplication::sendEvent(readout, &press);
+    editor->setText(QStringLiteral("999999"));
+    QMetaObject::invokeMethod(editor, "returnPressed");
+    QCoreApplication::processEvents();
+    const auto maximum =
+        ui::maxFrameIndex(composition->format().frameRate(), composition->duration());
+    const auto lastTime = maximum.has_value()
+                              ? ui::frameTimeForIndex(composition->format().frameRate(),
+                                                      composition->duration(), *maximum)
+                              : std::nullopt;
+    expectations.expect(lastTime.has_value() && fixture.session.currentTime() == *lastTime,
+                        "an out-of-range frame clamps to the last frame of the composition");
+
+    // The context menu's own two format actions, triggered directly -- QMenu::exec() would block.
+    // They are real children of the readout rather than menu-local, which is what makes them
+    // reachable at all.
+    auto* frames = fixture.viewer.findChild<QAction*>("viewerFramesAction");
+    auto* timecode = fixture.viewer.findChild<QAction*>("viewerTimecodeAction");
+    expectations.expect(frames != nullptr && timecode != nullptr && frames->isChecked() &&
+                            !timecode->isChecked(),
+                        "both format actions exist and Frames is the checked one");
+    if (frames == nullptr || timecode == nullptr) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
+    timecode->trigger();
+    expectations.expect(
+        fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("00:00:03:00")) &&
+            fixture.viewer.timeReadoutTextForTest().contains(QStringLiteral("3.000s")),
+        "Timecode shows non-drop timecode AND keeps the exact seconds beside it");
+    expectations.expect(QSettings().value("timeline/time-format").toString() ==
+                            QStringLiteral("timecode"),
+                        "the format is persisted under the SAME key the timeline ruler reads, so "
+                        "the two surfaces can never disagree about it");
+    frames->trigger();
+    expectations.expect(fixture.viewer.timeReadoutTextForTest() ==
+                            QStringLiteral("Frame 72 · 3.000s"),
+                        "Frames restores the frame-index reading");
+
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+    QSettings().remove("timeline/time-format");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -928,6 +1261,13 @@ int main(int argc, char** argv) {
     testTakeFooterWidgetExposesTheStatusBarWithItsColorStateChip(expectations);
     testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(expectations);
     testStatusBarDroppedFrameReadoutOnlyClaimsWhatItMeasures(expectations);
+    testFooterControlsAreOrderedLeftToRight(expectations);
+    testTransportButtonsAreSquareAndUseTheControlIconRole(expectations);
+    testPlayPauseButtonIconSwapsWithState(expectations);
+    testLoopToggleDrivesThePlaybackControllerAndPersists(expectations);
+    testChannelDropdownRemapsOnlyThePresentedImage(expectations);
+    testBackgroundDropdownChoosesTheSurroundAndPersists(expectations);
+    testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
     testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);

@@ -113,7 +113,7 @@ struct Surfaces final {
         layout->setContentsMargins(0, 0, 0, 0);
         nodes = new NodeGraphEditor(session, &window);
         properties = new PropertiesEditor(session, &window);
-        timeline = new TimelineEditor(session, controller, nullptr, &window);
+        timeline = new TimelineEditor(session, controller, &window);
         layout->addWidget(nodes);
         layout->addWidget(properties);
         layout->addWidget(timeline);

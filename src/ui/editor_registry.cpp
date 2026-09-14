@@ -35,15 +35,15 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
     };
 
     return addEditor("bloom.viewer", "Viewer",
-                     [&session, &previewController](QWidget* parent) {
-                         return new ViewerEditor(session, previewController, parent);
+                     [&session, &previewController, ramPreview](QWidget* parent) {
+                         return new ViewerEditor(session, previewController, ramPreview, parent);
                      }) &&
            addEditor(
                "bloom.nodes", "Nodes",
                [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&
            addEditor("bloom.timeline", "Timeline",
-                     [&session, &previewController, ramPreview](QWidget* parent) {
-                         return new TimelineEditor(session, previewController, ramPreview, parent);
+                     [&session, &previewController](QWidget* parent) {
+                         return new TimelineEditor(session, previewController, parent);
                      }) &&
            addEditor("bloom.assets", "Assets",
                      [&session](QWidget* parent) { return new AssetsEditor(session, parent); }) &&

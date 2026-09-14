@@ -55,6 +55,11 @@ class PlaybackController final : public QObject {
 
     ~PlaybackController() override;
     [[nodiscard]] PlaybackState state() const noexcept;
+    // Task VIEW-1: whether reaching the end of the work area wraps to its start (the behavior this
+    // transport has always had, and still the default) or stops on the last frame. The viewer
+    // footer's loop control is a real toggle rather than the status glyph the timeline used to
+    // show, so there is now a command behind it -- see setLooping() below.
+    [[nodiscard]] bool isLooping() const noexcept;
     // One action on the window, independent of panel visibility or lifetime. Text entry keeps
     // Space via Qt's ShortcutOverride mechanism, just like the window's backtick shortcut.
     void installWindowShortcut(QWidget& window);
@@ -70,6 +75,10 @@ class PlaybackController final : public QObject {
     // play() itself, if no tick has landed yet) left it -- no snap-back.
     void pause();
     void toggle();
+    // Takes effect on the NEXT tick; it never moves session time by itself, so toggling looping
+    // mid-run neither restarts nor re-seeks playback. Turning looping off while a run is already
+    // past the end is not a case that exists: the run pauses the moment it reaches the last frame.
+    void setLooping(bool looping);
 
     // Advances playback by one tick using the injected clock's current reading. Production wires
     // the internal ~16 ms QTimer's timeout() here (mirroring CompositionPreviewController's
@@ -81,6 +90,7 @@ class PlaybackController final : public QObject {
 
   signals:
     void stateChanged(PlaybackState state);
+    void loopingChanged(bool looping);
 
   private:
     void handleCompositionChanged();
@@ -106,6 +116,9 @@ class PlaybackController final : public QObject {
     // an external scrub/direct-manipulation change while playing (see tick()'s only caller of
     // setCurrentTime() and handleCurrentTimeChanged()'s own comment).
     bool applyingOwnTimeChange_ = false;
+    // True by default: every transport Bloom has shipped so far loops, and the footer's toggle is
+    // what makes the other half of that statement reachable rather than a promise.
+    bool looping_ = true;
 };
 
 } // namespace bloom::ui

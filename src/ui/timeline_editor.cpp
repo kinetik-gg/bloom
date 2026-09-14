@@ -1,6 +1,8 @@
 #include "node_editor_items.hpp"
 #include <bloom/ui/timeline_editor.hpp>
 
+#include <bloom/ui/viewer_editor.hpp>
+
 #include "composition_editor_support.hpp"
 #include "timeline_property_rows.hpp"
 
@@ -196,36 +198,6 @@ QString toggleToolTip(const int index) {
     const auto boundary = session.boundaryNodeForLayer(layer);
     return (boundary.has_value() && session.selectedNodes().contains(*boundary)) ||
            selectedLayer(session) == layer;
-}
-
-QToolButton* makeToolButton(const QString& text, const QString& accessibleName, QWidget* parent) {
-    auto* button = new QToolButton(parent);
-    button->setText(text);
-    button->setAccessibleName(accessibleName);
-    button->setAutoRaise(true);
-    return button;
-}
-
-// Task U7 (issue #122), decision 5: transport controls get their kit icon glyph via the SAME
-// "plain QToolButton + kit::icon()" idiom EditorArea's own header chrome already uses
-// (editor_area.cpp's makeHeaderButton) -- not kit::KButton, which is not a QToolButton and would
-// break every existing findChild<QToolButton*>("playPauseButton") test contract. An icon never
-// replaces an accessible name (ADR 0010; docs/ux/visual-language.md's Iconography section), so
-// every call site still sets both a tooltip and setAccessibleName().
-QToolButton* makeIconToolButton(const kit::IconId iconId, const QString& toolTip,
-                                const QString& accessibleName, const QString& objectName,
-                                QWidget* parent) {
-    auto* button = new QToolButton(parent);
-    button->setObjectName(objectName);
-    button->setIcon(kit::icon(iconId, kit::Size::IconMedium));
-    button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
-    button->setToolTip(toolTip);
-    button->setAccessibleName(accessibleName);
-    button->setAutoRaise(true);
-    // task U8, issue #131, fix 7: an icon-only QToolButton sizes to controlExtent x controlExtent
-    // exactly, the same square target kit::KButton's own icon-only sizeHint() pins.
-    button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
-    return button;
 }
 
 // Parent: one always-disabled KDropdown carrying its single honest value ("None"). No parenting
@@ -538,6 +510,11 @@ TimelineLayerStack::TimelineLayerStack(CompositionSession& session, QScrollBar& 
     // Accepts focus so row navigation has somewhere to live, and so the frame-step shortcuts can
     // keep yielding to it exactly as they yielded to the QTreeWidget before this task.
     setFocusPolicy(Qt::StrongFocus);
+    // This column consumes Up/Down/Home/End for its own row navigation but, unlike a text-entry
+    // widget, does not claim ShortcutOverride for them. The marker is how the Viewer's frame-step
+    // actions -- Qt::WindowShortcut, and owners of Home/End since task VIEW-1 moved the transport
+    // there -- know to stand down while this column holds focus. See kDefersTransportKeysProperty.
+    setProperty(kDefersTransportKeysProperty, true);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineLayerStack::syncCurrentRowFromSelection);
@@ -1400,17 +1377,14 @@ int TimelineEditor::propertyNameIndent() {
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
-                               CompositionPreviewController& previewController,
-                               RamPreviewController* const ramPreview, QWidget* parent)
-    : QWidget(parent), session_(session), ramPreview_(ramPreview) {
+                               CompositionPreviewController& previewController, QWidget* parent)
+    : QWidget(parent), session_(session) {
     setObjectName("timelineEditor");
     setAccessibleName(tr("Layers timeline"));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-
-    playback_ = &previewController.playbackController();
 
     // Standalone panels keep a local header; EditorArea takes its two cells when hosted.
     headerFallback_ = new QWidget(this);
@@ -1432,66 +1406,17 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     headerLayout->setContentsMargins(0, 0, 0, 0);
     headerLayout->setSpacing(0);
 
+    // The transport cluster that used to sit here moved to the viewer footer (task VIEW-1): one
+    // transport, in the panel that shows the frames it drives. What is left of this row is the
+    // time navigator, and an empty left cell of exactly the layer column's width so the navigator's
+    // own time axis stays aligned with the ruler and the lanes above it.
     auto* transportRow = new QWidget(this);
     auto* transportLayout = new QHBoxLayout(transportRow);
     transportLayout->setContentsMargins(0, 0, 0, 0);
     transportLayout->setSpacing(0);
-    auto* controls = new QWidget(transportRow);
-    controls->setObjectName("timelineControls");
-    controls->setFixedWidth(kLayerColumnWidthPx);
-    auto* controlsLayout = new QHBoxLayout(controls);
-    controlsLayout->setContentsMargins(kColumnPadding, 0, kColumnPadding, 0);
-    controlsLayout->setSpacing(kit::px(kit::Spacing::XS));
-
-    // Playback transport (issue #105, decision 4): a StepBack/Play-Pause/StepForward/Loop row.
-    // playPauseButton_ MUST stay a QToolButton with its existing text()/isChecked() contract
-    // (playback_controller_tests.cpp, composition_projection_test.cpp both read it by exactly that
-    // type/objectName).
-    stepBackButton_ = makeIconToolButton(kit::IconId::StepBack, tr("Step back one frame (Left)"),
-                                         tr("Step back one frame"),
-                                         QStringLiteral("timelineStepBackButton"), controls);
-    playPauseButton_ = makeToolButton(tr("Play"), tr("Toggle playback"), controls);
-    playPauseButton_->setObjectName("playPauseButton");
-    playPauseButton_->setCheckable(true);
-    playPauseButton_->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
-    stepForwardButton_ = makeIconToolButton(
-        kit::IconId::StepForward, tr("Step forward one frame (Right)"),
-        tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), controls);
-    // RAM Preview (task PERF1, item 3). IconId::Sequence is the nearest honest glyph in the kit's
-    // existing vocabulary -- a run of frames -- rather than a new vendored asset for one button;
-    // the tooltip and accessible name carry the meaning, as iconography rules require of an
-    // icon-only control.
-    ramPreviewButton_ = makeIconToolButton(
-        kit::IconId::Sequence,
-        tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"),
-        tr("RAM preview"), QStringLiteral("timelineRamPreviewButton"), controls);
-    ramPreviewButton_->setCheckable(true);
-    ramPreviewButton_->setEnabled(ramPreview_ != nullptr);
-    // Loop indicator: non-interactive status glyph, not a button -- playback always loops
-    // (PlaybackController::tick()'s exact modulo wrap) and there is no command to disable it, so a
-    // clickable control here would dishonestly imply a toggle that does not exist.
-    loopIndicator_ = new QLabel(controls);
-    loopIndicator_->setObjectName(QStringLiteral("timelineLoopIndicator"));
-    loopIndicator_->setAccessibleName(tr("Playback loops continuously"));
-    loopIndicator_->setToolTip(tr("Playback always loops; there is no command to disable it yet"));
-    loopIndicator_->setPixmap(kit::iconPixmap(kit::IconId::Loop, kit::Size::IconMedium,
-                                              kit::Color::Accent, kit::State::Normal,
-                                              kit::IconWeight::Fill));
-    // Current time readout (issue #108, decision 3). Text is set by updateTimeReadout(), not here.
-    timeReadout_ = new QLabel(controls);
-    timeReadout_->setObjectName("timelineTimeReadout");
-    timeReadout_->setAccessibleName(tr("Current frame and time"));
-    timeReadout_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    timeReadout_->setFont(kit::font(kit::TypeRole::Value));
-    // Left-aligned, in the order the design mock reads them; the trailing stretch is what makes the
-    // whole cluster sit against the left edge of the column rather than spreading across it.
-    controlsLayout->addWidget(stepBackButton_);
-    controlsLayout->addWidget(playPauseButton_);
-    controlsLayout->addWidget(stepForwardButton_);
-    controlsLayout->addWidget(ramPreviewButton_);
-    controlsLayout->addWidget(loopIndicator_);
-    controlsLayout->addWidget(timeReadout_);
-    controlsLayout->addStretch(1);
+    auto* navigatorLeftCell = new QWidget(transportRow);
+    navigatorLeftCell->setObjectName("timelineNavigatorLeftCell");
+    navigatorLeftCell->setFixedWidth(kLayerColumnWidthPx);
 
     auto* rulerColumn = new QWidget(headerRow);
     auto* rulerLayout = new QVBoxLayout(rulerColumn);
@@ -1532,7 +1457,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     headerLayout->addWidget(rulerColumn, 1);
     headerLayout->addWidget(headerGutter);
     fallbackLayout->addWidget(headerRow, 1);
-    transportLayout->addWidget(controls);
+    transportLayout->addWidget(navigatorLeftCell);
     transportLayout->addWidget(new TimelineNavigator(*ruler_, transportRow), 1);
     auto* navigatorGutter = new QWidget(transportRow);
     navigatorGutter->setObjectName("timelineNavigatorScrollGutter");
@@ -1600,11 +1525,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->addWidget(body, 1);
     layout->addWidget(transportRow);
 
-    connect(playPauseButton_, &QToolButton::clicked, playback_, &PlaybackController::toggle);
-    connect(playback_, &PlaybackController::stateChanged, this,
-            &TimelineEditor::updatePlaybackButton);
-    updatePlaybackButton(playback_->state());
-
     // ONE scrollbar drives both halves of the grid: left/right scroll sync is structural here, not
     // a pair of handlers keeping two scroll areas in step.
     connect(scrollBar_, &QScrollBar::valueChanged, this, [this](const int value) {
@@ -1613,100 +1533,16 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     });
     connect(stack_, &TimelineLayerStack::viewportResized, this, &TimelineEditor::updateScrollRange);
 
-    // RAM Preview's KEYS are not declared here. Ctrl+Shift+Space and the Escape that cancels a run
-    // are application-wide commands owned by the Composition menu (main_window.cpp): one
-    // Qt::WindowShortcut owner per sequence, or Qt reports an ambiguous overload and fires neither.
-    // This button is the transport's own affordance for that same command, and it calls the same
-    // RamPreviewController::toggle() the menu item calls -- never a synthesized key press.
-    if (ramPreview_ != nullptr) {
-        connect(ramPreviewButton_, &QToolButton::clicked, ramPreview_,
-                &RamPreviewController::toggle);
-        connect(ramPreview_, &RamPreviewController::stateChanged, this,
-                &TimelineEditor::updateRamPreviewButton);
-        updateRamPreviewButton();
-    }
-
-    // Frame-stepping shortcuts (issue #108, decisions 1/2), mirroring playPauseAction's own
-    // WindowShortcut idiom exactly. Issue #120 (task U5) replaced PropertiesEditor's Position X/Y
-    // QDoubleSpinBoxes with kit::KValueField, which has no line edit and does NOT accept
-    // ShortcutOverride for Left/Right/Home/End -- so those keys typed while a Position field has
-    // focus ALSO fire these actions. Still flagged rather than fixed here: the fix belongs to
-    // whoever next owns kit::KValueField's key handling.
-    stepBackwardAction_ = new QAction(tr("Step Back One Frame"), this);
-    stepBackwardAction_->setObjectName("stepBackwardAction");
-    stepBackwardAction_->setShortcut(QKeySequence(Qt::Key_Left));
-    stepBackwardAction_->setShortcutContext(Qt::WindowShortcut);
-    addAction(stepBackwardAction_);
-    connect(stepBackwardAction_, &QAction::triggered, this, [this] { stepFrame(-1); });
-    // The visible stepBackButton_ triggers this SAME action -- one behavior, two entry points.
-    connect(stepBackButton_, &QToolButton::clicked, stepBackwardAction_, &QAction::trigger);
-
-    stepForwardAction_ = new QAction(tr("Step Forward One Frame"), this);
-    stepForwardAction_->setObjectName("stepForwardAction");
-    stepForwardAction_->setShortcut(QKeySequence(Qt::Key_Right));
-    stepForwardAction_->setShortcutContext(Qt::WindowShortcut);
-    addAction(stepForwardAction_);
-    connect(stepForwardAction_, &QAction::triggered, this, [this] { stepFrame(1); });
-    connect(stepForwardButton_, &QToolButton::clicked, stepForwardAction_, &QAction::trigger);
-
-    stepToStartAction_ = new QAction(tr("Go To Start"), this);
-    stepToStartAction_->setObjectName("stepToStartAction");
-    stepToStartAction_->setShortcut(QKeySequence(Qt::Key_Home));
-    stepToStartAction_->setShortcutContext(Qt::WindowShortcut);
-    addAction(stepToStartAction_);
-    connect(stepToStartAction_, &QAction::triggered, this, &TimelineEditor::stepToStart);
-
-    stepToEndAction_ = new QAction(tr("Go To End"), this);
-    stepToEndAction_->setObjectName("stepToEndAction");
-    stepToEndAction_->setShortcut(QKeySequence(Qt::Key_End));
-    stepToEndAction_->setShortcutContext(Qt::WindowShortcut);
-    addAction(stepToEndAction_);
-    connect(stepToEndAction_, &QAction::triggered, this, &TimelineEditor::stepToEnd);
-
-    // Arrow-key conflict reconciliation, carried over verbatim from the QTreeWidget this panel used
-    // to be (issue #108's own investigation): the layer stack consumes Up/Down/Home/End for its OWN
-    // row navigation but, unlike a text-entry widget, does not claim the ShortcutOverride event for
-    // them, so a same-key WindowShortcut action would silently swallow that navigation. The frozen
-    // rule -- widget focus wins, the step action fires otherwise -- is implemented by disabling
-    // these four actions outright while the stack holds keyboard focus: a disabled QAction never
-    // claims ShortcutOverride, so the key event reaches the stack and its navigation runs
-    // unchanged.
-    focusConnection_ =
-        connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
-            const bool stackFocused =
-                now != nullptr && (now == stack_ || stack_->isAncestorOf(now));
-            stepBackwardAction_->setEnabled(!stackFocused);
-            stepForwardAction_->setEnabled(!stackFocused);
-            stepToStartAction_->setEnabled(!stackFocused);
-            stepToEndAction_->setEnabled(!stackFocused);
-            // The visible step buttons mirror their action's enabled state exactly, so the same
-            // reconciliation is visible on the mouse affordance too rather than showing a clickable
-            // button that would silently do nothing.
-            stepBackButton_->setEnabled(!stackFocused);
-            stepForwardButton_->setEnabled(!stackFocused);
-        });
-
     connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineEditor::updateSelection);
     connect(&session_, &CompositionSession::historyChanged, this,
             &TimelineEditor::updateHistoryActions);
-    // Readout updates on every session-time change and on a composition switch (which resets
-    // session time to exact zero -- docs/architecture/animation-and-time.md, "Session Time And
-    // Scrubbing"), so the label always reflects the SAME time compositionChanged's reset already
-    // produced rather than momentarily showing the previous composition's stale frame/time.
-    connect(&session_, &CompositionSession::currentTimeChanged, this,
-            &TimelineEditor::updateTimeReadout);
-    connect(&session_, &CompositionSession::compositionChanged, this,
-            &TimelineEditor::updateTimeReadout);
 
     rebuild();
     updateHistoryActions();
-    updateTimeReadout();
 }
-
-TimelineEditor::~TimelineEditor() { QObject::disconnect(focusConnection_); }
 
 QWidget* TimelineEditor::takeHeaderMenuWidget() { return std::exchange(headerMenus_, nullptr); }
 
@@ -1796,114 +1632,6 @@ void TimelineEditor::updateSelection() {
     } else if (top + kTimelineRowHeight > scrollBar_->value() + viewport) {
         scrollBar_->setValue(top + kTimelineRowHeight - viewport);
     }
-}
-
-void TimelineEditor::updatePlaybackButton(const PlaybackState state) {
-    const bool playing = state == PlaybackState::Playing;
-    playPauseButton_->setChecked(playing);
-    // text()/isChecked() stay the pinned test contract verbatim (playback_controller_tests.cpp);
-    // the icon swap (task U7, issue #122, decision 5: "Play/Pause swap") is purely additive.
-    playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
-    playPauseButton_->setIcon(
-        kit::icon(playing ? kit::IconId::Pause : kit::IconId::Play, kit::Size::IconMedium));
-    playPauseButton_->setIconSize(
-        QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
-    playPauseButton_->setToolTip(playing ? tr("Pause playback (Space)")
-                                         : tr("Play from the current time (Space)"));
-}
-
-void TimelineEditor::updateRamPreviewButton() {
-    if (ramPreview_ == nullptr) {
-        return;
-    }
-    const bool caching = ramPreview_->isCaching();
-    ramPreviewButton_->setChecked(caching);
-    ramPreviewButton_->setToolTip(
-        caching ? tr("Cancel the RAM preview being cached (Esc)")
-                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
-}
-
-void TimelineEditor::stepFrame(const int delta) {
-    const auto context = frameContextFor(session_);
-    if (!context.has_value()) {
-        return;
-    }
-    const auto nearest =
-        nearestFrameIndexForTime(context->frameRate, context->duration, session_.currentTime());
-    if (!nearest.has_value()) {
-        return;
-    }
-    // Stepping while playing pauses playback FIRST through PlaybackController's own public
-    // transport API (design decision 1) -- composing with pause() explicitly here rather than
-    // relying on handleCurrentTimeChanged()'s existing "any external setCurrentTime() while playing
-    // pauses" side effect, so this call site is honest about what it does and the transport state
-    // change is never a coincidental side effect of the time write below. Called unconditionally
-    // (idempotent no-op if already Stopped), not only when the step actually moves the playhead.
-    playback_->pause();
-
-    // Left/Right move exactly one frame index from the nearest index to the CURRENT (possibly
-    // subframe) time, clamped to [0, maxFrameIndex] (design decision 1). nearestFrameIndex()'s own
-    // tie rule decides which frame a subframe time steps from, not this call site.
-    std::uint64_t target = *nearest;
-    if (delta < 0) {
-        target = target > 0 ? target - 1 : 0;
-    } else {
-        target = target < context->maxFrameIndexValue ? target + 1 : context->maxFrameIndexValue;
-    }
-    const auto targetTime = frameTimeForIndex(context->frameRate, context->duration, target);
-    if (targetTime.has_value()) {
-        // A clamped step that lands back on the CURRENT exact time (e.g. Left at frame 0) is a true
-        // no-op through CompositionSession::setCurrentTime()'s own early-return-on-equal-time guard
-        // -- no currentTimeChanged signal churn.
-        (void)session_.setCurrentTime(*targetTime);
-    }
-}
-
-void TimelineEditor::stepToStart() {
-    const auto context = frameContextFor(session_);
-    if (!context.has_value()) {
-        return;
-    }
-    playback_->pause();
-    const auto targetTime = frameTimeForIndex(context->frameRate, context->duration, 0);
-    if (targetTime.has_value()) {
-        (void)session_.setCurrentTime(*targetTime);
-    }
-}
-
-void TimelineEditor::stepToEnd() {
-    const auto context = frameContextFor(session_);
-    if (!context.has_value()) {
-        return;
-    }
-    playback_->pause();
-    const auto targetTime =
-        frameTimeForIndex(context->frameRate, context->duration, context->maxFrameIndexValue);
-    if (targetTime.has_value()) {
-        (void)session_.setCurrentTime(*targetTime);
-    }
-}
-
-void TimelineEditor::updateTimeReadout() {
-    const auto time = session_.currentTime();
-    const auto context = frameContextFor(session_);
-    QString frameText = QStringLiteral("—");
-    if (context.has_value()) {
-        const auto nearest = nearestFrameIndexForTime(context->frameRate, context->duration, time);
-        if (nearest.has_value()) {
-            frameText = QString::number(*nearest);
-        }
-    }
-    if (timecodeFormat_ && context.has_value()) {
-        const auto nearest = nearestFrameIndexForTime(context->frameRate, context->duration, time);
-        if (nearest.has_value()) {
-            frameText = formatTimelineFrameLabel(*nearest, context->frameRate, true);
-        }
-    }
-    timeReadout_->setText((timecodeFormat_ ? tr("TC %1 · %2") : tr("Frame %1 · %2"))
-                              .arg(frameText, formatExactSeconds(time)));
-    timeReadout_->setToolTip(timecodeFormat_ ? tr("Non-drop timecode · exact composition time")
-                                             : tr("Frame index · exact composition time"));
 }
 
 } // namespace bloom::ui
