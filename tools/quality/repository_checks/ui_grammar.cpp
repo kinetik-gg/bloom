@@ -103,12 +103,12 @@ std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& 
     // Zero is a structural origin/empty margin. Nonzero geometric literals require tokens.
     append(
         std::regex(
-            R"(\b(?:setFixed\w*|setMinimum(?:Size|Width|Height)|setMaximum(?:Size|Width|Height)|setContentsMargins|setSpacing|setGeometry|setIconSize|QSizeF?|QRectF?)\s*\([^;{}]*\b[1-9][0-9]*(?:\.[0-9]+)?\b)"),
+            R"(\b(?:setFixed\w*|setMinimum(?:Size|Width|Height)|setMaximum(?:Size|Width|Height)|setContentsMargins|setSpacing|setGeometry|setIconSize|QSizeF?|QRectF?)\s*\([^;{}()]*\b[1-9][0-9]*(?:\.[0-9]+)?\b)"),
         "dimension");
     append(std::regex(R"(\b[1-9][0-9]*(?:\.[0-9]+)?\s*\*\s*(?:kit::)?px\s*\()"), "dimension");
     append(
         std::regex(
-            R"(\b(?:width|height|left|right|top|bottom|x|y)\s*\(\s*\)\s*[+\-*/]\s*[1-9][0-9]*(?:\.[0-9]+)?\b)"),
+            R"(\b(?:width|height|left|right|top|bottom|x|y)\s*\(\s*\)\s*[+\-]\s*[1-9][0-9]*(?:\.[0-9]+)?\b)"),
         "dimension");
     append(
         std::regex(
@@ -136,10 +136,12 @@ std::vector<RepositoryFinding> scanUiGrammar(const std::filesystem::path& root,
     }
     std::cout << "UI grammar allowlist: " << allowed.size() << " remaining entries (GRAMMAR-2)\n";
     std::vector<RepositoryFinding> result;
+    if (!allowed.empty())
+        result.push_back({"tools/quality/ui_grammar_allowlist.txt", "allowlist",
+                          "UI grammar debt must remain zero", std::nullopt});
     for (const auto& path : files) {
         for (const auto& finding : uiGrammarViolations(path, read(root / path))) {
-            if (!allowed.contains(uiGrammarEntry(finding)))
-                result.push_back(finding);
+            result.push_back(finding);
         }
     }
     return result;

@@ -165,7 +165,6 @@ class TimelineLayerStack final : public QWidget {
     void expansionRequested(document::LayerId layer);
 
   protected:
-    void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
@@ -265,7 +264,6 @@ class TimelineColumnHeaders final : public QWidget {
     [[nodiscard]] static QString toolTipAtX(int x);
 
   protected:
-    void paintEvent(QPaintEvent* event) override;
     bool event(QEvent* event) override;
 };
 

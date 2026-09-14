@@ -1,5 +1,7 @@
 #include "properties_sections.hpp"
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
+#include <memory>
 
 #include "node_editor_items.hpp"
 
@@ -52,7 +54,7 @@ KeyframeDiamond* makeKeyframeDiamond(CompositionSession& session, const std::str
 }
 
 QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
-    auto* label = new QLabel(parent);
+    auto* label = new kit::KLabel(parent);
     label->setFont(kit::font(role));
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     QPalette palette = label->palette();

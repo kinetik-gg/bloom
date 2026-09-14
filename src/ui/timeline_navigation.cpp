@@ -146,7 +146,8 @@ void TimelineRuler::zoomBy(const double factor, const qreal anchorX) {
     if (!axis.has_value() || !std::isfinite(factor) || factor <= 0.0) {
         return;
     }
-    const double fraction = std::clamp(anchorX / std::max(1, width() - 1), 0.0, 1.0);
+    const double fraction =
+        std::clamp(anchorX / std::max(1, width() - kit::px(kit::Size::Hairline)), 0.0, 1.0);
     const double anchor = axis->t0 + fraction * (axis->t1 - axis->t0);
     const double span = std::clamp(
         (axis->t1 - axis->t0) / factor,
@@ -172,8 +173,10 @@ bool TimelineRuler::handleWheel(QWheelEvent* event) {
         const double steps = pixels != 0 ? pixels / 120.0 : angle / 120.0;
         zoomBy(std::pow(1.25, steps), event->position().x());
     } else {
-        const double delta = pixels != 0 ? -pixels / static_cast<double>(std::max(1, width() - 1))
-                                         : -angle / 120.0 * 0.1;
+        const double delta =
+            pixels != 0
+                ? -pixels / static_cast<double>(std::max(1, width() - kit::px(kit::Size::Hairline)))
+                : -angle / 120.0 * 0.1;
         const double seconds = delta * (axis->t1 - axis->t0);
         zoomToRange(axis->t0 + seconds, axis->t1 + seconds);
     }
@@ -253,7 +256,8 @@ QRectF TimelineNavigator::windowRect() const {
     if (!axis.has_value()) {
         return {};
     }
-    const double scale = std::max(1, width() - 1) / axis->duration.toSeconds();
+    const double scale =
+        std::max(1, width() - kit::px(kit::Size::Hairline)) / axis->duration.toSeconds();
     const int thumb = kit::px(kit::Size::TimelineNavigatorThumb);
     return {axis->t0 * scale, static_cast<qreal>(height() - thumb) / 2.0,
             (axis->t1 - axis->t0) * scale, static_cast<qreal>(thumb)};
@@ -303,8 +307,9 @@ void TimelineNavigator::mouseMoveEvent(QMouseEvent* event) {
     if (!axis.has_value()) {
         return;
     }
-    const double delta =
-        (event->position().x() - pressX_) / std::max(1, width() - 1) * axis->duration.toSeconds();
+    const double delta = (event->position().x() - pressX_) /
+                         std::max(1, width() - kit::px(kit::Size::Hairline)) *
+                         axis->duration.toSeconds();
     const double minimum =
         std::min(axis->duration.toSeconds(),
                  static_cast<double>(axis->frameRate.denominator()) / axis->frameRate.numerator());

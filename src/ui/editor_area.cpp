@@ -1,5 +1,6 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -87,47 +88,6 @@ constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
 // one color a rounded panel's corner always reveals in this design language -- leaving the arc's
 // interior untouched so whatever is legitimately there (the header/footer's own rounded paint, or
 // content within the curve) still shows through normally.
-class PanelCornerMask final : public QWidget {
-  public:
-    enum class Corner : std::uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
-
-    PanelCornerMask(const Corner corner, QWidget* parent) : QWidget(parent), corner_(corner) {
-        setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        setFocusPolicy(Qt::NoFocus);
-        const int extent = kit::radiusPx(kit::Radius::Panel, 0);
-        setFixedSize(extent, extent);
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const qreal r = width();
-        QPointF center;
-        switch (corner_) {
-        case Corner::TopLeft:
-            center = QPointF(r, r);
-            break;
-        case Corner::TopRight:
-            center = QPointF(0.0, r);
-            break;
-        case Corner::BottomLeft:
-            center = QPointF(r, 0.0);
-            break;
-        case Corner::BottomRight:
-            center = QPointF(0.0, 0.0);
-            break;
-        }
-        QPainterPath square;
-        square.addRect(rect());
-        QPainterPath arc;
-        arc.addEllipse(center, r, r);
-        painter.fillPath(square.subtracted(arc), kit::color(kit::Color::Background));
-    }
-
-  private:
-    Corner corner_;
-};
 
 } // namespace
 
@@ -188,7 +148,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // hairline short of the frame's own left/right/bottom edge (the top edge is already bounded by
     // the header), so its own background never draws directly on top of the frame's border stroke.
     // The actual rounded-corner clipping is a separate concern, handled by the always-on-top
-    // PanelCornerMask overlays below rather than by this inset alone.
+    // kit::PanelCornerMask overlays below rather than by this inset alone.
     const int hairlineInset = static_cast<int>(kit::kHairlineWidth);
     contentLayout_->setContentsMargins(hairlineInset, 0, hairlineInset, hairlineInset);
     contentLayout_->setSpacing(0);
@@ -274,10 +234,10 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // The four corner-mask overlays (task C1, item C5): created last, after every layout-managed
     // child, so Qt's default stacking order already puts them on top; raise() is only a defensive
     // guarantee against a future reordering of the constructor above.
-    cornerMasks_ = {new PanelCornerMask(PanelCornerMask::Corner::TopLeft, this),
-                    new PanelCornerMask(PanelCornerMask::Corner::TopRight, this),
-                    new PanelCornerMask(PanelCornerMask::Corner::BottomLeft, this),
-                    new PanelCornerMask(PanelCornerMask::Corner::BottomRight, this)};
+    cornerMasks_ = {new kit::PanelCornerMask(kit::PanelCornerMask::Corner::TopLeft, this),
+                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::TopRight, this),
+                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::BottomLeft, this),
+                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::BottomRight, this)};
     for (auto* mask : cornerMasks_) {
         mask->raise();
     }
@@ -561,7 +521,7 @@ void EditorArea::resizeEvent(QResizeEvent* event) {
 }
 
 void EditorArea::layoutCornerMasks() {
-    // Repositions the four PanelCornerMask overlays (task C1, item C5) to this frame's current
+    // Repositions the four kit::PanelCornerMask overlays (task C1, item C5) to this frame's current
     // four corners -- each is a fixed Radius::Panel square, so only its position ever needs to
     // change on resize, never its size.
     const int extent = kit::radiusPx(kit::Radius::Panel, 0);

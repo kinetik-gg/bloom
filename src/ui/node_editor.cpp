@@ -194,7 +194,8 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
     updateGroupGeometry();
     const QRectF bounds = itemsBoundingRect();
     setSceneRect(bounds.isEmpty() ? QRectF(-kNodeSceneMargin, -kNodeSceneMargin,
-                                           kNodeSceneMargin * 2.0, kNodeSceneMargin * 2.0)
+                                           (kNodeSceneMargin + kNodeSceneMargin),
+                                           (kNodeSceneMargin + kNodeSceneMargin))
                                   : bounds.adjusted(-kNodeSceneMargin, -kNodeSceneMargin,
                                                     kNodeSceneMargin, kNodeSceneMargin));
 }

@@ -1,10 +1,10 @@
 #pragma once
 
-#include <QWidget>
 #include <atomic>
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <optional>
 
 class QTimer;
@@ -12,18 +12,16 @@ namespace bloom::ui {
 class CompositionSession;
 
 // Resolves the same immutable local geometry as the viewer, off the UI thread.
-class PropertiesAnchorGrid final : public QWidget {
+class PropertiesAnchorGrid final : public kit::KAnchorGrid {
     Q_OBJECT
     Q_PROPERTY(int selectedPoint READ selectedPoint)
   public:
     PropertiesAnchorGrid(CompositionSession& session, QWidget* parent);
     ~PropertiesAnchorGrid() override;
     void refresh();
-    [[nodiscard]] int selectedPoint() const;
-    [[nodiscard]] QRect pointRect(int index) const;
+    [[nodiscard]] int selectedPoint() const override;
 
   protected:
-    void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 

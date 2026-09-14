@@ -112,7 +112,7 @@ void paintRulers(QPainter& painter, const QRectF& canvasRect, const QRectF& disp
     for (int x = 0; x <= compositionSize.width(); x += xStep) {
         const qreal screenX =
             displayRect.left() + displayRect.width() * x / compositionSize.width();
-        painter.drawLine(QPointF(screenX, topBand.bottom() - 5),
+        painter.drawLine(QPointF(screenX, topBand.bottom() - kit::px(kit::Size::PlayheadHalfWidth)),
                          QPointF(screenX, topBand.bottom()));
         painter.drawText(QPointF(screenX + 2.0, topBand.top() + metrics.ascent()),
                          QString::number(x));
@@ -120,7 +120,7 @@ void paintRulers(QPainter& painter, const QRectF& canvasRect, const QRectF& disp
     for (int y = 0; y <= compositionSize.height(); y += yStep) {
         const qreal screenY =
             displayRect.top() + displayRect.height() * y / compositionSize.height();
-        painter.drawLine(QPointF(leftBand.right() - 5, screenY),
+        painter.drawLine(QPointF(leftBand.right() - kit::px(kit::Size::PlayheadHalfWidth), screenY),
                          QPointF(leftBand.right(), screenY));
         painter.save();
         painter.translate(leftBand.left() + metrics.ascent(), screenY - 2.0);

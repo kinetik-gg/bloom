@@ -3,7 +3,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QString>
-#include <QWidget>
+#include <bloom/ui/kit/surfaces.hpp>
 
 class QLabel;
 class QTimer;
@@ -56,7 +56,7 @@ struct PreviewColorState final {
 // cache is empty and nothing is caching.
 [[nodiscard]] QString previewCacheText(const CompositionPreviewController& previewController);
 
-class WindowStatusBar final : public QWidget {
+class WindowStatusBar final : public kit::KSurface {
     Q_OBJECT
 
   public:
@@ -82,8 +82,6 @@ class WindowStatusBar final : public QWidget {
     [[nodiscard]] QString versionTextForTest() const;
 
   protected:
-    void paintEvent(QPaintEvent* event) override;
-
   private:
     void refreshPreviewCells();
     void refreshMessage();

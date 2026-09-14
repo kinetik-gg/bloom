@@ -1,4 +1,6 @@
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <memory>
 
 #include "composition_editor_support.hpp"
 
@@ -9,7 +11,6 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
-#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -230,7 +231,7 @@ void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
     // honored, so a transparent pixel already reads as "checkerboard showing through" with no
     // separate under-image pass needed. Task VIEW-1 made it one of four choices rather than the
     // only one; see drawCanvasBackground().
-    constexpr qreal tileSize = 22.0;
+    constexpr qreal tileSize = kit::px(kit::Size::ViewerChecker);
     painter.save();
     painter.setClipRect(bounds);
     painter.fillRect(bounds, kit::color(kit::Color::Surface));
@@ -325,7 +326,7 @@ class ViewerTimecodeReadout final : public QWidget {
         stack_ = new QStackedLayout(this);
         stack_->setContentsMargins(0, 0, 0, 0);
 
-        label_ = new QLabel(this);
+        label_ = new kit::KLabel(this);
         // Unchanged objectName: this is the same readout the timeline transport used to own, moved
         // rather than replaced (task VIEW-1's "they change parent, not identity").
         label_->setObjectName(QStringLiteral("timelineTimeReadout"));
@@ -334,7 +335,7 @@ class ViewerTimecodeReadout final : public QWidget {
         // The click that starts an edit belongs to this widget, so the label never eats it.
         label_->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-        editor_ = new QLineEdit(this);
+        editor_ = new kit::KLineEdit(this);
         editor_->setObjectName(QStringLiteral("viewerTimeReadoutEditor"));
         editor_->setAccessibleName(ViewerEditor::tr("Go to frame"));
         editor_->setFont(kit::font(kit::TypeRole::Value));
@@ -434,7 +435,8 @@ class ViewerTimecodeReadout final : public QWidget {
     }
 
     void contextMenuEvent(QContextMenuEvent* event) override {
-        QMenu menu(this);
+        std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
+        auto& menu = *menuOwner;
         menu.addAction(framesAction_);
         menu.addAction(timecodeAction_);
         menu.exec(event->globalPos());
@@ -1010,7 +1012,7 @@ void ViewerEditor::showCustomSafeAreaDialog() {
     title->setSuffix(QStringLiteral("%"));
     title->setValue(composition->safeAreas().title * 100.0);
     form->addRow(tr("Title"), title);
-    auto* error = new QLabel(&dialog);
+    auto* error = new kit::KLabel(&dialog);
     error->setObjectName(QStringLiteral("viewerSafeAreaErrorLabel"));
     error->hide();
     form->addRow(error);
@@ -1183,7 +1185,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     });
     // Part of the Resolution control, not a footer item of its own: what the chosen policy actually
     // resolved to. For Auto that effective factor is visible nowhere else.
-    resolutionReadout_ = new QLabel(footer);
+    resolutionReadout_ = new kit::KLabel(footer);
     resolutionReadout_->setObjectName("viewerResolutionReadout");
     resolutionReadout_->setAccessibleName(tr("Effective preview resolution"));
     resolutionReadout_->setFont(kit::font(kit::TypeRole::Value));
@@ -1284,7 +1286,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
       ramPreview_(ramPreview) {
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
-    setMinimumSize(220, 150 + kit::px(kit::Size::Control));
+    setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
     // lets the widget receive Space/Z/F without a prior click.
@@ -2148,7 +2150,8 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
     // composition_editor_support.cpp) -- no per-menu styling code needed here. Honest,
     // placeholder-free set only (decision 4): no RAM-preview/channel/quality slots, which do not
     // exist yet.
-    QMenu menu(this);
+    std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
+    auto& menu = *menuOwner;
     QAction* fitAction = menu.addAction(tr("Fit"));
     QAction* actualSizeAction = menu.addAction(tr("100%"));
     menu.addSeparator();

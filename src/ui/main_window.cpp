@@ -1,4 +1,6 @@
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <memory>
 
 #include <bloom/host/project_session.hpp>
 #include <bloom/ui/composition_commands.hpp>
@@ -559,19 +561,20 @@ QWidget* MainWindow::createReadOnlyPlaceholderPage() {
     auto* page = new QWidget(this);
     page->setObjectName("readOnlyPlaceholderPage");
 
-    auto* heading = new QLabel(tr("Read-only project"), page);
+    auto* heading = new kit::KLabel(tr("Read-only project"), page);
     heading->setObjectName("readOnlyPlaceholderHeading");
 
-    readOnlyPlaceholderFileNameLabel_ = new QLabel(page);
+    readOnlyPlaceholderFileNameLabel_ = new kit::KLabel(page);
     readOnlyPlaceholderFileNameLabel_->setObjectName("readOnlyPlaceholderFileName");
 
-    readOnlyPlaceholderBodyLabel_ = new QLabel(page);
+    readOnlyPlaceholderBodyLabel_ = new kit::KLabel(page);
     readOnlyPlaceholderBodyLabel_->setObjectName("readOnlyPlaceholderBody");
     readOnlyPlaceholderBodyLabel_->setWordWrap(true);
-    readOnlyPlaceholderBodyLabel_->setMaximumWidth(520);
+    readOnlyPlaceholderBodyLabel_->setMaximumWidth(kit::px(kit::Size::DialogTextWidth));
 
     auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(48, 48, 48, 48);
+    layout->setContentsMargins(kit::px(kit::Spacing::XXL), kit::px(kit::Spacing::XXL),
+                               kit::px(kit::Spacing::XXL), kit::px(kit::Spacing::XXL));
     layout->addStretch(1);
     layout->addWidget(heading);
     layout->addWidget(readOnlyPlaceholderFileNameLabel_);

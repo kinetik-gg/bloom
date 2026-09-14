@@ -134,6 +134,24 @@ enum class Spacing : int {
 
 // Control and chrome extents.
 enum class Size : int {
+    // Owned canvas, dialog and multiline extents; shared by projections and audits.
+    Hairline = 1,
+    NodeGrid = 16,
+    NodeCardMin = 128,
+    SelectionEdge = 2,
+    PlayheadHalfWidth = 5,
+    PlayheadHeight = 6,
+    RulerLabelGap = 10,
+    RulerLabelInset = 3,
+    MinorTick = 4,
+    MajorTick = 8,
+    ViewerChecker = 22,
+    ViewerMinWidth = 220,
+    ViewerMinHeight = 176,
+    MultilineHeight = 78,
+    PropertyLabelCompact = 64,
+    DialogTextWidth = 520,
+    DiagnosticHeight = 140,
     HeaderRow = 32,
     FooterRow = 32,
     ListRow = 32,
@@ -201,6 +219,8 @@ enum class Size : int {
 
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.
+inline constexpr qreal kKeyDiamondRadius = 4.5;
+inline constexpr qreal kNodeCanvasHalfExtent = 256.0 * 1024;
 inline constexpr qreal kHairlineWidth = 1.0;
 inline constexpr qreal kFocusRingWidth = 1.5;
 inline constexpr qreal kWindowBorderWidth = 1.0;

@@ -3,6 +3,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/timeline_editor.hpp>
+#include <memory>
 
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -96,13 +97,6 @@ constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
 [[nodiscard]] int nameCellWidth(const int width) {
     return std::max(kNameCellMinWidth, width - kNameCellX - 2 * kColumnWidth);
 }
-[[nodiscard]] int blendingCellX(const int width) {
-    return std::max(kBlendingCellX, width - 2 * kColumnWidth);
-}
-[[nodiscard]] int parentCellX(const int width) {
-    return std::max(kParentCellX, width - kColumnWidth);
-}
-
 // ---------------------------------------------------------------------------------------------
 // Visibility, audio, solo and lock share the same cell geometry in headings and rows.
 enum class ToggleCell : int { Visibility = 0, Audio = 1, Solo = 2, Lock = 3 };
@@ -430,35 +424,21 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     setMinimumWidth(kLayerColumnWidthPx);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setFixedHeight(kit::px(kit::Size::Control));
-}
-
-void TimelineColumnHeaders::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    QPainter painter(this);
-    painter.fillRect(rect(), kit::color(kit::Color::Surface));
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
-    painter.drawLine(QPointF(0.0, static_cast<qreal>(height()) - 0.5),
-                     QPointF(static_cast<qreal>(width()), static_cast<qreal>(height()) - 0.5));
-
+    auto* row = new kit::KRow(this);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    QList<QWidget*> glyphs;
     for (int index = 0; index < kToggleCellCount; ++index) {
-        const auto glyph =
-            kit::iconPixmap(toggleIcon(index), kit::IconRole::Chrome, kit::Color::Muted);
-        const int glyphExtent = kit::px(kit::iconSize(kit::IconRole::Chrome));
-        const int x = toggleCellX(index) + (kToggleCellWidth - glyphExtent) / 2;
-        const int y = (height() - glyphExtent) / 2;
-        painter.drawPixmap(QRect(x, y, glyphExtent, glyphExtent), glyph);
+        auto* glyph = new kit::KIconButton(row);
+        glyph->setIcon(kit::icon(toggleIcon(index), kit::IconRole::Chrome));
+        glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
+        glyphs.append(glyph);
     }
-
-    auto headerFont = kit::font(kit::TypeRole::UiSmall);
-    headerFont.setCapitalization(QFont::MixedCase);
-    painter.setFont(headerFont);
-    painter.setPen(kit::color(kit::Color::Muted));
-    painter.drawText(QRect(kNameCellX, 0, nameCellWidth(width()), height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, tr("Name"));
-    painter.drawText(QRect(blendingCellX(width()), 0, kColumnWidth, height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, tr("Blending"));
-    painter.drawText(QRect(parentCellX(width()), 0, kColumnWidth, height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, tr("Parent"));
+    row->setCells(glyphs, new kit::KLabel(tr("Name"), row, kit::TypeRole::UiSmall),
+                  {new kit::KLabel(tr("Blending"), row, kit::TypeRole::UiSmall),
+                   new kit::KLabel(tr("Parent"), row, kit::TypeRole::UiSmall)});
+    row->setFixedHeight(kit::px(kit::Size::Control));
+    layout->addWidget(row);
 }
 
 QString TimelineColumnHeaders::toolTipAtX(const int x) { return cellToolTipAt(x); }
@@ -612,24 +592,6 @@ void TimelineLayerStack::relayoutRows() {
     }
 }
 
-void TimelineLayerStack::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    QPainter painter(this);
-    // Layer and property rows share one alternating surface ladder; child rows only paint their
-    // own controls over this backdrop.
-    painter.fillRect(rect(), kit::color(kit::Color::Surface));
-    const int firstRow = std::max(0, scrollOffset_ / kTimelineRowHeight);
-    const int lastRow = std::min(static_cast<int>(entries_.size()) - 1,
-                                 (scrollOffset_ + height()) / kTimelineRowHeight);
-    for (int row = firstRow; row <= lastRow; ++row)
-        painter.fillRect(
-            QRect(0, rowTop(row), width(), kTimelineRowHeight),
-            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
-    painter.drawLine(QPointF(static_cast<qreal>(width()) - 0.5, 0.0),
-                     QPointF(static_cast<qreal>(width()) - 0.5, static_cast<qreal>(height())));
-}
-
 void TimelineLayerStack::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     relayoutRows();
@@ -773,7 +735,7 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
     const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
     if (found == entries_.end())
         return;
-    auto* field = new QLineEdit(QString::fromStdString(layer->name), this);
+    auto* field = new kit::KLineEdit(QString::fromStdString(layer->name), this);
     field->setObjectName("timelineLayerRenameEditor");
     field->setGeometry(kNameCellX, rowTop(static_cast<int>(found - entries_.begin())),
                        nameCellWidth(width()), kTimelineRowHeight);
@@ -823,7 +785,7 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
         if (isLayerSelected(session_, entry.layerId))
             if (const auto node = session_.boundaryNodeForLayer(entry.layerId))
                 nodes.insert(*node);
-    auto* menu = new QMenu(this);
+    auto* menu = kit::makeMenu(this);
     menu->setObjectName("timelineLayerContextMenu");
     menu->setAttribute(Qt::WA_DeleteOnClose);
     connect(menu->addAction(tr("Duplicate")), &QAction::triggered, this,
@@ -1153,11 +1115,12 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                                     kit::hoverFillFor(fill), kit::Radius::Small);
             const int grip = kit::px(kit::Spacing::XXS);
             const int stripe = kit::px(kit::Size::TimelineWorkAreaHandle) / 2;
-            painter.fillRect(QRect(bar->left() + grip, bar->top() + 1, stripe, bar->height() - 2),
+            painter.fillRect(QRect(bar->left() + grip, bar->top() + kit::px(kit::Size::Hairline),
+                                   stripe, bar->height() - (grip + grip)),
                              fill);
-            painter.fillRect(
-                QRect(bar->right() - grip, bar->top() + grip, 1, bar->height() - 2 * grip),
-                kit::hoverFillFor(fill));
+            painter.fillRect(QRect(bar->right() - grip, bar->top() + grip,
+                                   kit::px(kit::Size::Hairline), bar->height() - (grip + grip)),
+                             kit::hoverFillFor(fill));
         }
         if (const auto axis = ruler_.axisForWidth(width())) {
             painter.setRenderHint(QPainter::Antialiasing, true);

@@ -1,6 +1,8 @@
 #include <QRegion>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
+#include <memory>
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -68,7 +70,7 @@ const int kKeyframeRowHeight = kTimelineRowHeight;
 // The honest work-area strip (decision 3): thin, using the smallest spacing token rather than an
 // invented pixel gap.
 const int kWorkAreaStripHeight = kit::px(kit::Size::TimelineWorkArea);
-constexpr qreal kKeyDiamondRadius = 4.5;
+constexpr qreal kKeyDiamondRadius = kit::kKeyDiamondRadius;
 constexpr qreal kKeyHitToleranceLogicalPixels = 6.0;
 // Minor ticks are a dense, purely visual grid (decision 3: "minors as subtle ticks"); majors are
 // re-derived per paint from the axis's OWN font metrics so adjacent labels can never collide (see
@@ -78,10 +80,10 @@ constexpr qreal kMinimumPixelsPerMinorTick = 8.0;
 constexpr qreal kMinimumPixelsPerMajorTick = 40.0;
 // Extra breathing room between two adjacent major labels, beyond their own widest possible text
 // width -- keeps the collision-avoidance math from packing labels edge-to-edge.
-constexpr qreal kMajorLabelGapPixels = 10.0;
-constexpr qreal kTickLabelInsetPixels = 3.0;
-constexpr qreal kMinorTickHeight = 4.0;
-constexpr qreal kMajorTickHeight = 8.0;
+constexpr qreal kMajorLabelGapPixels = kit::px(kit::Size::RulerLabelGap);
+constexpr qreal kTickLabelInsetPixels = kit::px(kit::Size::RulerLabelInset);
+constexpr qreal kMinorTickHeight = kit::px(kit::Size::MinorTick);
+constexpr qreal kMajorTickHeight = kit::px(kit::Size::MajorTick);
 
 // One minor per frame while frames have room to breathe; otherwise keep the ruler legible with
 // five-frame minors.
@@ -329,7 +331,7 @@ class TimelineKeyframeRow final : public QWidget {
         const QFontMetrics metrics = painter.fontMetrics();
         const QRectF chip(kit::px(kit::Spacing::XXS), kit::px(kit::Spacing::XXS),
                           metrics.horizontalAdvance(label_) + kit::px(kit::Spacing::S),
-                          height() - 2.0 * kit::px(kit::Spacing::XXS));
+                          height() - kit::px(kit::Spacing::XS));
         kit::fillRoundedSurface(painter, chip, kit::color(kit::Color::SurfaceRaised), QColor(),
                                 kit::Radius::Small);
         painter.setPen(kit::color(kit::Color::Muted));
@@ -438,7 +440,8 @@ class TimelineKeyframeRow final : public QWidget {
         const bool isFinal = session_.selectedKeyframeIsFinal();
         const auto keys = collectKeys();
 
-        QMenu menu(this);
+        std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
+        auto& menu = *menuOwner;
         auto* group = new QActionGroup(&menu);
         group->setExclusive(true);
         for (const auto mode :
@@ -803,7 +806,8 @@ std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
             continue;
         }
         const auto left = std::max(0.0, axis->pixelForTime(time));
-        const auto right = std::min(static_cast<qreal>(width() - 1), axis->pixelForTime(end));
+        const auto right = std::min(static_cast<qreal>(width() - kit::px(kit::Size::Hairline)),
+                                    axis->pixelForTime(end));
         if (right > left) {
             segments.emplace_back(left, height() - barHeight, right - left, barHeight);
         }

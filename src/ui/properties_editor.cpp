@@ -1,6 +1,7 @@
 #include "node_editor_items.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
+#include <memory>
 
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
@@ -409,7 +410,7 @@ void PropertiesEditor::configureMergeInputs() {
         row->setObjectName(QStringLiteral("mergeInputRow"));
         auto* rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(0, 0, 0, 0);
-        auto* name = new QLabel(node_editor::nodeDisplayName(*composition, *source), row);
+        auto* name = new kit::KLabel(node_editor::nodeDisplayName(*composition, *source), row);
         name->setTextFormat(Qt::PlainText);
         name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         row->setProperty("rowLabel", name->text());

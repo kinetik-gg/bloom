@@ -30,6 +30,7 @@ target_sources(
         kit/icons.cpp
         kit/mnemonic_style.cpp
         kit/painting.cpp
+        kit/surfaces.cpp
         kit/controls.cpp
         kit/row.cpp
         kit/radio_group.cpp
@@ -59,6 +60,7 @@ target_sources(
             include/bloom/ui/kit/mnemonic_style.hpp
             include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/panel_switcher.hpp
+            include/bloom/ui/kit/surfaces.hpp
             include/bloom/ui/kit/controls.hpp
             include/bloom/ui/kit/row.hpp
             include/bloom/ui/kit/radio_group.hpp

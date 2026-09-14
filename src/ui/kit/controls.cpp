@@ -74,11 +74,13 @@ void KLabel::resizeEvent(QResizeEvent* event) {
     if (elides_)
         setText(fontMetrics().elidedText(fullText_, Qt::ElideRight, width()));
 }
-KSearchField::KSearchField(QWidget* parent) : QLineEdit(parent) {
+KLineEdit::KLineEdit(QWidget* parent) : KLineEdit(QString{}, parent) {}
+KLineEdit::KLineEdit(const QString& text, QWidget* parent) : QLineEdit(text, parent) {
     setFont(kit::font(TypeRole::Ui));
     setFixedHeight(px(Size::Control));
     setProperty("kitControl", true);
 }
+KSearchField::KSearchField(QWidget* parent) : KLineEdit(parent) {}
 QMenu* makeMenu(QWidget* parent) { return new QMenu(parent); }
 QMenu* makeMenu(const QString& title, QWidget* parent) { return new QMenu(title, parent); }
 } // namespace bloom::ui::kit

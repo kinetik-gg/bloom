@@ -3,6 +3,8 @@
 #include <QPainterPathStroker>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <memory>
 
 namespace bloom::ui {
 kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
@@ -321,7 +323,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Foreground));
     QRectF titleRect(kCardPadding, 0.0,
-                     bounds.width() - 2.0 * kCardPadding -
+                     bounds.width() - (kCardPadding + kCardPadding) -
                          (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
                      kCardHeaderHeight);
     if (!eyebrow_.isEmpty()) {
@@ -359,7 +361,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     for (const auto* socket : sockets_) {
         const qreal rowExtent = socket->rowHeight();
         const QRectF row(kCardPadding, socket->pos().y() - rowExtent / 2,
-                         std::max(0.0, width_ - 2 * kCardPadding), rowExtent);
+                         std::max(0.0, width_ - (kCardPadding + kCardPadding)), rowExtent);
         painter->drawText(
             row,
             static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
@@ -833,11 +835,11 @@ void NodeItem::startRename() {
         renameProxy_->widget()->setFocus();
         return;
     }
-    auto* field = new QLineEdit(title_);
+    auto* field = new kit::KLineEdit(title_);
     field->setObjectName(QStringLiteral("nodeRenameEditor"));
     field->setAccessibleName(tr("Layer name"));
     field->setFont(kit::font(kit::TypeRole::UiSmall));
-    field->resize(static_cast<int>(std::ceil(width_ - 2 * kCardPadding)),
+    field->resize(static_cast<int>(std::ceil(width_ - (kCardPadding + kCardPadding))),
                   static_cast<int>(kCardHeaderHeight));
     hostTranslucent(*field);
     renameProxy_ = new QGraphicsProxyWidget(this);
@@ -898,9 +900,9 @@ void NodeGroupItem::setFrameRect(const QRectF rect) {
     prepareGeometryChange();
     size_ = rect.size();
     if (renameProxy_ != nullptr && renameProxy_->widget() != nullptr)
-        renameProxy_->widget()->resize(
-            static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
-            static_cast<int>(kGroupTitleHeight));
+        renameProxy_->widget()->resize(static_cast<int>(std::ceil(std::max(
+                                           0.0, size_.width() - (kCardPadding + kCardPadding)))),
+                                       static_cast<int>(kGroupTitleHeight));
     update();
 }
 
@@ -933,7 +935,8 @@ void NodeGroupItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QW
         titleRect().adjusted(kCardPadding, 0.0, -kCardPadding, 0.0),
         static_cast<int>(Qt::AlignVCenter | Qt::AlignLeft),
         QFontMetricsF(painter->font())
-            .elidedText(title_, Qt::ElideRight, std::max(0.0, bounds.width() - 2 * kCardPadding)));
+            .elidedText(title_, Qt::ElideRight,
+                        std::max(0.0, bounds.width() - (kCardPadding + kCardPadding))));
 }
 
 void NodeGroupItem::retireRenameProxy() {
@@ -962,12 +965,13 @@ void NodeGroupItem::startRename() {
         renameProxy_->widget()->setFocus();
         return;
     }
-    auto* field = new QLineEdit(title_);
+    auto* field = new kit::KLineEdit(title_);
     field->setObjectName(QStringLiteral("nodeGroupRenameEditor"));
     field->setAccessibleName(tr("Node group name"));
     field->setFont(kit::font(kit::TypeRole::UiSmall));
-    field->resize(static_cast<int>(std::ceil(std::max(0.0, size_.width() - 2 * kCardPadding))),
-                  static_cast<int>(kGroupTitleHeight));
+    field->resize(
+        static_cast<int>(std::ceil(std::max(0.0, size_.width() - (kCardPadding + kCardPadding)))),
+        static_cast<int>(kGroupTitleHeight));
     field->setAttribute(Qt::WA_TranslucentBackground, true);
     field->setAttribute(Qt::WA_NoSystemBackground, true);
     field->setAutoFillBackground(false);

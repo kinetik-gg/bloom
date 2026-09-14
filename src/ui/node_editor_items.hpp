@@ -73,7 +73,7 @@ inline constexpr qreal kCardLabelGap = kit::px(kit::Spacing::S);
 inline constexpr qreal kCardRowGap = kit::px(kit::Spacing::XXS);
 inline constexpr qreal kCardHeaderHeight = kit::px(kit::Size::PanelHeader);
 inline constexpr auto kCardRadius = kit::Radius::Medium;
-inline constexpr qreal kCardMinimumWidth = 128.0;
+inline constexpr qreal kCardMinimumWidth = kit::px(kit::Size::NodeCardMin);
 // Task FIX1, item I: a reroute is drawn as a DOT, not a card. It has no name to show, no parameter
 // to edit, and no header to grab -- it is a bend in a wire, and a card around one would be a box
 // the size of a Solid standing in for a single point.
@@ -86,7 +86,7 @@ inline constexpr qreal kStackSlotPitch = kit::px(kit::Spacing::M);
 // The pointer slop around a socket, beyond its own painted extent.
 inline constexpr qreal kSocketHitSlop = 16.0 - kSocketDiameter / 2.0;
 inline constexpr qreal kNodeSceneMargin = kit::px(kit::Spacing::XXL) * 2;
-inline constexpr qreal kSelectionEdgeWidth = 2.0;
+inline constexpr qreal kSelectionEdgeWidth = kit::px(kit::Size::SelectionEdge);
 // A group frame's own title strip, and how faintly its body reads against the canvas: a frame is
 // background, so its fill is the raised surface at low opacity rather than a second opaque plate.
 inline constexpr qreal kGroupTitleHeight = kit::px(kit::Size::PanelHeader);

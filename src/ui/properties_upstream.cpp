@@ -7,11 +7,13 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <deque>
+#include <memory>
 #include <set>
 
 namespace bloom::ui {
@@ -155,7 +157,7 @@ void PropertiesEditor::configureUpstream() {
             }
         }
         if (more) {
-            auto* label = new QLabel(tr("and %1 more upstream").arg(more), upstreamPanel_);
+            auto* label = new kit::KLabel(tr("and %1 more upstream").arg(more), upstreamPanel_);
             label->setObjectName("propertiesMoreUpstream");
             layout->addWidget(label);
         }

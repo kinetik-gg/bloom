@@ -66,9 +66,9 @@ inline constexpr int kTimelineRowHeight = kit::px(kit::Size::TimelineRow);
 // the ruler and all lanes, with exactly ONE small head marker at its top, painted in the work-area
 // header row directly above the ruler. Named here rather than re-spelled per widget so the line in
 // the ruler, the line down the lanes, and the marker above them can never disagree.
-inline constexpr qreal kPlayheadLineWidth = 1.0;
-inline constexpr qreal kPlayheadMarkerHalfWidth = 5.0;
-inline constexpr qreal kPlayheadMarkerHeight = 6.0;
+inline constexpr qreal kPlayheadLineWidth = kit::kHairlineWidth;
+inline constexpr qreal kPlayheadMarkerHalfWidth = kit::px(kit::Size::PlayheadHalfWidth);
+inline constexpr qreal kPlayheadMarkerHeight = kit::px(kit::Size::PlayheadHeight);
 
 // Paints the 1px Accent playhead line for `time` down the full `heightPixels` of the caller's
 // widget, snapped so the aliased stroke lands on exactly one whole pixel column. Shared by the

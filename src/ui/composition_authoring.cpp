@@ -138,7 +138,7 @@ namespace {
 } // namespace
 
 KeyframeDiamond::KeyframeDiamond(CompositionSession& session, std::string role, QWidget* parent)
-    : QWidget(parent), session_(session), role_(std::move(role)) {
+    : kit::KDiamond(parent), session_(session), role_(std::move(role)) {
     setObjectName(QStringLiteral("keyframeDiamond"));
     setAccessibleName(QStringLiteral("Keyframe for %1").arg(roleDisplayName(role_)));
     setFixedSize(kit::px(kit::Size::IconSmall), kit::px(kit::Size::IconSmall));
@@ -188,38 +188,9 @@ void KeyframeDiamond::refresh() {
     }
     if (state_ != next) {
         state_ = next;
+        setIndicator(next != KeyframeDiamondState::Constant,
+                     next == KeyframeDiamondState::AnimatedWithKey);
         update();
-    }
-}
-
-void KeyframeDiamond::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
-    if (state_ == KeyframeDiamondState::Unsupported) {
-        return;
-    }
-    // The one place the three states become two kit inputs: which ink, and which of the kit's two
-    // existing icon weights. "Dimmed" reuses tokens::kDisabledOpacity rather than a new literal --
-    // dimmed ink and disabled ink are the same fade recipe on a different colour -- and a hover
-    // brightens a constant row's diamond so the click target reads as clickable before it is an
-    // "on" state.
-    const bool animated = state_ != KeyframeDiamondState::Constant;
-    QColor tint = animated || hovered_
-                      ? kit::color(kit::Color::Keyframe)
-                      : kit::withOpacity(kit::color(kit::Color::Muted), kit::kDisabledOpacity);
-    if (!animated && hovered_) {
-        tint = kit::withOpacity(tint, kit::kDisabledOpacity);
-    }
-    const auto weight = state_ == KeyframeDiamondState::AnimatedWithKey ? kit::IconWeight::Fill
-                                                                        : kit::IconWeight::Regular;
-    QPainter painter(this);
-    const int extent = kit::px(kit::Size::IconSmall);
-    const QRect box((width() - extent) / 2, (height() - extent) / 2, extent, extent);
-    painter.drawPixmap(
-        box, kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint, 0.0, weight));
-    if (state_ == KeyframeDiamondState::AnimatedWithoutKey) {
-        painter.setClipRect(QRect(box.left(), box.top(), box.width() / 2, box.height()));
-        painter.drawPixmap(box, kit::iconPixmap(kit::IconId::Keyframe, kit::Size::IconSmall, tint,
-                                                0.0, kit::IconWeight::Fill));
     }
 }
 
