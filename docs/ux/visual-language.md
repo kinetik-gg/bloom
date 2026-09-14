@@ -275,8 +275,11 @@ that node and frames it in the existing node canvas in the same window.
 Driven rows replace editable values with a link glyph, the driver's display name, and its resolved
 value. Clicking the link navigates to the driver. Resolution is cancellable background work using
 the CPU reference value evaluator; “Resolving…” is indeterminate activity, and failures display a
-diagnostic rather than an invented value. A private snapshot copy with built-in probe nodes makes
-detached value branches inspectable without publishing changes to the project. Only the newest
+diagnostic rather than an invented value. A private snapshot copy with muted built-in probe nodes makes
+detached value branches inspectable without publishing changes to the project. Non-animated value
+nodes with driver kinds restricted by the image compiler use the same private mute path, retaining
+their value kernels. Inspection can resolve these values independently of current image-source
+render support. Only the newest
 request may update the panel; closing it cancels work and releases workers off the UI thread.
 
 Right-click a parameter row or its control to Reset to default. Constant and animated values use

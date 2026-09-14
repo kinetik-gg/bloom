@@ -149,6 +149,27 @@ void upstreamRows() {
         QThread::msleep(5);
     }
     expect(value && value->text() == "0, 0", "driver display applies scalar-to-vector promotion");
+    const auto string = addNode(session, document::kStringValueNodeType);
+    const auto stringSwitch = addNode(session, document::kStringSwitchNodeType);
+    const auto stringParameter =
+        session.composition()->graph().findNode(string)->parameters.front().parameterId;
+    expect(session.setParameterValue(stringParameter, std::string("Exact string"), "String"),
+           "string driver fixture");
+    connectNodes(session, string, stringSwitch, "ifFalse");
+    connectNodes(session, string, stringSwitch, "ifTrue");
+    const auto stringConsumer = addNode(session, document::kStringSwitchNodeType);
+    connectNodes(session, stringSwitch, stringConsumer, "ifFalse");
+    session.selectNode(stringConsumer);
+    value = panel->findChild<QLabel*>("propertiesDrivenValue");
+    wait.restart();
+    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    if (value && value->text() != "Exact string")
+        std::cerr << "STRING RESULT " << value->text().toStdString() << "\n";
+    expect(value && value->text() == "Exact string",
+           "detached String driver resolves without image lowering");
 }
 void widthRule() {
     auto project = document::makeNewProject("Width", "Main", core::RationalTime::fromInteger(10));

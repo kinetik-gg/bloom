@@ -52,6 +52,44 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
     if (!composition || !composition->graph().compositionOutput())
         return {};
     DriverProbe probe(snapshot, compositionId);
+    // The image compiler's common validator still refuses driven String/Integer/Boolean/Vec3
+    // operands, although its value kernels support them. In this inspection copy, mute only
+    // non-animated value nodes needing that path: value lowering retains their kernels and links,
+    // while the image-only source restriction is skipped. Keep animated literals unmuted so
+    // their curve tables are compiled normally.
+    for (const auto& node : composition->graph().nodes()) {
+        if (cancellation.isCancellationRequested())
+            return {};
+        const auto* definition =
+            document::builtInNodeDefinitions().find(node.typeId, node.schemaVersion);
+        if (!definition || !document::isValueLowering(definition->lowering))
+            continue;
+        bool needsProbe = false;
+        bool animated = false;
+        for (const auto& binding : node.parameters) {
+            const auto* parameter = composition->parameters().find(binding.parameterId);
+            if (!parameter)
+                continue;
+            animated = animated ||
+                       std::holds_alternative<document::AnimationCurveSource>(parameter->source);
+            const auto declared = std::ranges::find(definition->parameters, binding.role,
+                                                    &document::ParameterDefinition::role);
+            if (declared == definition->parameters.end())
+                continue;
+            const auto kind = declared->valueKind;
+            needsProbe =
+                needsProbe ||
+                (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
+                 (kind == document::ParameterValueKind::String ||
+                  kind == document::ParameterValueKind::Integer ||
+                  kind == document::ParameterValueKind::Boolean ||
+                  kind == document::ParameterValueKind::Vec3d));
+        }
+        if (needsProbe && !animated &&
+            !probe.edit<commands::SetNodeMuted>(node.id, true).succeeded())
+            return {};
+    }
+
     const auto merge = probe.add(document::kLayerStackNodeType);
     for (const auto id : parameters) {
         if (cancellation.isCancellationRequested())
@@ -94,6 +132,10 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
             if (!probe.connect({source, "image"}, document::NodeInputRef{image, "image"}))
                 return {};
         }
+        // Only the value graph is inspected. Muting the private image sink keeps its driver
+        // dependencies reachable while bypassing image lowering (including constant-only Text).
+        if (!probe.edit<commands::SetNodeMuted>(image, true).succeeded())
+            return {};
         if (!probe.connect({image, "image"},
                            document::LayerStackInputRef{
                                merge, {}, std::string(document::kLayerStackContentInputRole)}))
