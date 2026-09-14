@@ -206,7 +206,7 @@ void testElevationsCarryTheSpecifiedShadows(Expectations& expectations) {
 void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expectations) {
     const auto ui = kit::font(kit::TypeRole::Ui);
     expectations.expect(ui.families().contains(kit::interfaceFontFamily()),
-                        "the UI role asks for DejaVu Sans");
+                        "the UI role asks for Inter");
     expectations.expect(ui.weight() == QFont::Medium, "the UI role is weight 500");
 
     const auto small = kit::font(kit::TypeRole::UiSmall);

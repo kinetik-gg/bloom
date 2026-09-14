@@ -136,40 +136,9 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 
 ### Size
 
-| Token | Value | Use |
-| --- | --- | --- |
-| `ControlCompact` | `22` | Dense chrome controls |
-| `Control` | `26` | The default control height |
-| `ControlRoomy` | `32` | Prominent controls and dialog buttons |
-| `IconSmall` | `12` | Dense chrome |
-| `IconMedium` | `16` | Default |
-| `IconLarge` | `20` | Prominent actions |
-| `TitleBar` | `34` | `kit::TitleBar`'s own row height. Compiled and tested, but currently unused: task C1 moved Bloom to native (OS) window chrome only, so `MainWindow` never constructs `kit::TitleBar` today -- the token and the widget both stay ready for a possible future custom-chrome/CSD return |
-| `PanelHeader` | `30` | The node graph's own card header height and row-pitch multiplier (`node_editor.cpp`) -- despite the name, not the editor panel's own header row below |
-| `EditorHeader` | `48` | An editor panel's header row |
-| `TimelineRow` | `32` | Shared pitch for layer rows, clip lanes, expanded property rows, and keyframe lanes |
-| `TimelineBar` | `20` | Clip-bar height inside a timeline row |
-| `TimelineToggleColumn` | `80` | Four 20px toggle cells in the layer column |
-| `TimelineNameMin` | `120` | Minimum flexible Name column width |
-| `TimelineColumn` | `100` | Blending and Parent column widths |
-| `TimelineWorkArea` / `TimelineWorkAreaHandle` | `6` / `6` | Work-area strip height and endpoint handle width |
-| `TimelineNavigatorThumb` | `6` | Resting navigator thumb height |
-| `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
-| `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
-| `PanelMinWidth` | `300` | Every `EditorArea`'s own strict minimum width, in Figma design px |
-| `ValueCellMin` | `72` | The numeric floor a Properties value cell (`kit::KValueField`) retains at the panel minimum |
-
-`MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
-and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
-applied to the row rather than to the popup window because a row that stopped short of the frame
-could not carry the full-width accent hover bar the State table requires.
-
-An editor panel's footer strip (task C1, item C5) is not a distinct token: it reuses `Control`
-(`26`) exactly, the same way its header reuses `EditorHeader`. The footer is `Surface`-backed with
-the header's own `Border` hairline, just on its top edge, and is empty by default -- see this
-task's report for why an editor's own existing bottom bar (the viewer's status readout, the
-timeline's transport) is not moved into it yet. Editors that offer a task-specific footer, such as
-Assets and Nodes, use the same strip rather than inventing a second chrome treatment.
+The [UI grammar](ui-grammar.md#metric-grid) owns control, chrome, row, icon and dropdown
+metrics. `kit::Size` and `kit::Spacing` are the only dimension sources. Compact density changes
+width, never the common control height. Canvas geometry has separate named kit tokens.
 
 ### Editor panel rows
 
@@ -263,21 +232,9 @@ plain chevron, a semibold `UiSmall` title, an optional upstream jump icon, a res
 six-dot menu handle. Header actions use the Chrome icon role and have no resting button box.
 Cards use the panel surface radius and a `Border` hairline.
 
-| Metric | Design pixels / behavior |
-| --- | --- |
-| Row pitch | `PropertiesRowPitch` = 28; 22 px controls, 6 px between rows |
-| Card body padding / card gap | `Spacing::S` = 8 / 8 |
-| Label column | `PropertiesLabelWidth` = 96, right-aligned `UiSmall` in `Muted` |
-| Narrow label column | `PropertiesLabelMinWidth` = 72 at the 300 px panel minimum; labels elide with full tooltips |
-| Keyframe column | Fixed trailing `PropertiesDiamondColumn` = 20; empty slots remain reserved |
-| Numeric fields | 64–72 px, monospaced values with at most two decimals, no trailing zeroes, muted unit suffix |
-| X/Y pairs | Internal axis prefixes; a 22 px square link between Position/Scale axes; Anchor has no link |
-| Dropdown | `PropertiesDropdownWidth` = 108, compact 22 px height |
-| Checkbox | `PropertiesCheckBox` = 12 square, accent fill and check when on |
-| Search | Up to `PropertiesSearchWidth` = 180 in the panel header between switcher and fullscreen |
-| Color | 72×20 swatch and small disclosure chevron; four RGBA fields on one line below, 60 px minimum per channel |
-| Anchor grid | Nine 8 px dots on a 12 px pitch, selected point in timeline `Keyframe` amber |
-| Sliders | 4 px accent track and 12 px round knob; remaining control-column width before the numeric field |
+Property rows use `kit::KPropertyRow`: its label, control and diamond columns own alignment,
+elision and spacing. The grammar owns row and control heights; the kit's Properties tokens
+own specialized field widths, anchor geometry and section padding.
 
 A layer is grouped as **Object** (Visible / Solo / Locked checkboxes, disabled Parent `None`,
 Blending Mode, Opacity), **Transform** (Position, Rotation, Scale, Anchor and Anchor Point),
@@ -485,25 +442,16 @@ never the only thing separating a surface from what is behind it.
 
 | Role | Family | Size | Weight | Use |
 | --- | --- | --- | --- | --- |
-| `Ui` | DejaVu Sans | `12` | 500 | The default interface text |
-| `UiSmall` | DejaVu Sans | `10.5` | 500 | Panel headers: uppercase, `+0.07em` tracking |
+| `Ui` | Inter | `12` | 500 | The default interface text |
+| `UiSmall` | Inter | `10.5` | 500 | Panel headers: uppercase, `+0.07em` tracking |
 | `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
-| `Title` | DejaVu Sans | `13` | 600 | Dialog and section titles |
+| `Title` | Inter | `13` | 600 | Dialog and section titles |
 
 Sizes are in design pixels. `Value` is monospaced so a column of numbers stays aligned and a
 changing digit does not reflow the text beside it.
 
-Static faces are shipped rather than the upstream variable fonts (see Font Packaging And Loading
-below). How a role asks for a face depends on how the upstream family is cut. The interface family's
-three faces all declare the one family name `DejaVu Sans` and differ by style (`Book` / `Bold` /
-`Oblique`), so an interface role names that family and the role's own weight picks the face: `Ui`
-and `UiSmall` at 500 resolve to Book, `Title` at 600 resolves to Bold. The monospaced family is cut
-the other way -- its Medium face registers as its own family `Geist Mono Medium` -- so the `Value`
-role asks for that exact face first, the base family second, and the platform family last.
-
-`Ui` and `UiSmall` are `12` and `10.5` rather than the `12.5` and `11` they were under the previous
-interface face: DejaVu Sans renders visibly larger at an equal pixel size, and the earlier numbers
-read oversized in dense chrome once the family changed.
+Pinned static Inter faces provide Medium for Ui/UiSmall and SemiBold for Title; the value
+role names Geist Mono Medium. TypeRole selects these families and platform fallbacks.
 
 ### State
 
@@ -595,10 +543,10 @@ Official sources:
 
 ## Typography
 
-DejaVu Sans is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
+Inter is Bloom's primary interface typeface. Geist Mono is Bloom's monospaced
 typeface.
 
-Use DejaVu Sans for:
+Use Inter for:
 
 - menus, editor headers, controls, labels, dialogs, properties, and timeline text
 - headings and ordinary artist-facing documentation rendered inside the application
@@ -631,21 +579,15 @@ layout should carry hierarchy in the normal interface.
   application font control. Bloom does not introduce platform-specific menu or window chrome solely
   to force typography.
 
-Initial interface faces are Book, Bold, and Oblique for DejaVu Sans, and Regular and Medium for
-Geist Mono. Book carries the `Ui`/`UiSmall` roles and Bold carries `Title`; the Oblique face is
-shipped with the family but no implemented component asks for an italic role yet.
+The interface ships Inter Regular, Medium and SemiBold static TTFs; values retain Geist Mono
+Regular and Medium. Provenance, computed digests and licenses live in
+`src/ui/kit/third_party/inter/` and `src/ui/kit/third_party/geist-mono/`, inventoried in
+`THIRD_PARTY_NOTICES.md`. DejaVu Sans Book remains solely for the render text source.
 
-The shipped set is the static TTFs, not an upstream variable font: it is exactly five faces, and a
-static face resolves the same way on every supported Qt platform without depending on the platform
-font engine's named-instance handling. The vendored assets, their pinned releases, their archive
-digests, and a digest for every file are recorded in
-`src/ui/kit/third_party/dejavu-sans/provenance.md` and
-`src/ui/kit/third_party/geist-mono/provenance.md`, and inventoried in the repository's
-`THIRD_PARTY_NOTICES.md`.
 
 Official sources:
 
-- [DejaVu fonts](https://github.com/dejavu-fonts/dejavu-fonts)
+- [Inter](https://rsms.me/inter/)
 - [Geist and Geist Mono](https://github.com/vercel/geist-font)
 
 ## Ownership Boundary

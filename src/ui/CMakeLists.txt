@@ -269,9 +269,11 @@ qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
-        kit/third_party/dejavu-sans/DejaVuSans-Bold.ttf
-        kit/third_party/dejavu-sans/DejaVuSans-Oblique.ttf
-        kit/third_party/dejavu-sans/DejaVuSans.ttf
+        kit/third_party/inter/LICENSE
+        kit/third_party/inter/Inter-Regular.ttf
+        kit/third_party/inter/Inter-Medium.ttf
+        kit/third_party/inter/Inter-SemiBold.ttf
+        kit/third_party/inter/manifest.json
         kit/third_party/geist-mono/GeistMono-Medium.ttf
         kit/third_party/geist-mono/GeistMono-Regular.ttf
 )

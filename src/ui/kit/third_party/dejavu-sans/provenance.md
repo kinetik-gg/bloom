@@ -17,8 +17,8 @@ Reviewed: 2026-09-12
 
 The archive SHA-256 above, and every per-file digest below, were computed with `sha256sum` over the
 exact bytes downloaded from that URL on 2026-09-12 -- never copied from an upstream publication and
-never typed from memory. The three TTFs were extracted from that verified archive; their digests are
-the digests of the extracted members, and the vendored files are those bytes unchanged.
+never typed from memory. The original three TTFs were extracted from that verified archive; their digests are
+the digests of the extracted members, and the retained Book face is those bytes unchanged.
 
 ## License verdict
 
@@ -48,28 +48,13 @@ the license itself requires.
 | --- | --- | --- |
 | `LICENSE` | `7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93` | -- |
 | `DejaVuSans.ttf` | `7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954` | `DejaVu Sans` (style `Book`, weight 400) |
-| `DejaVuSans-Bold.ttf` | `e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724` | `DejaVu Sans` (style `Bold`, weight 700) |
-| `DejaVuSans-Oblique.ttf` | `4af75fa16ee6d3ad43e1ecec41862c24954af26a55c6bb1ebb27bd486a50f5f4` | `DejaVu Sans` (style `Oblique`) |
 
-## One family, three styles -- unlike the family this replaces
+## Renderer-only retention
 
-Plus Jakarta Sans, which DejaVu Sans replaces here, shipped its heavier static faces under their own
-family names (`Plus Jakarta Sans Medium`), so `src/ui/kit/fonts.cpp` had to name each face
-explicitly or silently get Regular. DejaVu's three faces all declare family name `DejaVu Sans` and
-distinguish themselves by style (`Book` / `Bold` / `Oblique`) -- verified by reading the `name`
-table of the three extracted files (name IDs 1/2/16/17) rather than assumed. The interface roles
-therefore ask for the single family `DejaVu Sans` and let Qt's own weight matching pick the face:
-the 500-weight UI roles resolve to Book and the 600-weight Title role resolves to Bold.
-`src/ui/tests/kit_fonts_tests.cpp` asserts that resolution through `QFontInfo` rather than trusting
-it.
-
-The archive also carries DejaVu Serif, DejaVu Sans Mono, the Condensed and ExtraLight cuts, and
-DejaVu Math TeX Gyre. None are vendored: Bloom's monospaced family is Geist Mono, and no implemented
-component uses a serif, condensed, or math face.
-
-The Oblique face is vendored on the product owner's explicit instruction for this task's shipped set
-even though no implemented component asks for an italic role today; it registers with the other two
-so the bundled family is complete rather than half-present.
+GRAMMAR-1 replaces interface typography with Inter. Only the unmodified Book face remains,
+at the exact path embedded by the render module's text source. Bold and Oblique are removed
+from the UI resource pack and the repository. The render module and its embedded bytes are
+unchanged; interface TypeRole never selects DejaVu Sans.
 
 ## Status
 
