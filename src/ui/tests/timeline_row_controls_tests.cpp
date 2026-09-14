@@ -132,6 +132,18 @@ int run(int argc, char** argv) {
         QCoreApplication::processEvents();
     }
 
+    // The column's one tooltip table still answers for the row's painted cells: the row itself
+    // carries no tooltip, so a help event on it is ignored and propagates to the column exactly as
+    // a press does. Only the two dropdowns -- real controls -- carry their own.
+    if (auto* toolTipRow = surfaces.layerRow(0); toolTipRow != nullptr) {
+        expect(toolTipRow->toolTip().isEmpty(), "a row shadows none of the column's tooltips");
+        expect(!stack->toolTipAt(QPoint(4, stack->rowTop(0) + 4)).isEmpty(),
+               "the column still answers for the cells the row paints");
+        auto* rowBlending = surfaces.blendingDropdown(0);
+        expect(rowBlending != nullptr && !rowBlending->toolTip().isEmpty(),
+               "the Blending control keeps its own");
+    }
+
     // The column's own gestures still belong to the column: a press on the row's blank area
     // selects that row, exactly as it did when the row was transparent to the pointer.
     auto* row = surfaces.layerRow(0);
