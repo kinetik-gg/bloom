@@ -25,3 +25,8 @@ GRAMMAR-1 row approval: timeline toggles now occupy four real 24 px kit cells wi
 glyphs. Assets uses the same row's fixed Kind column. Property cards use 28 px rows without
 extra inter-row spacing; narrow rows remove column gaps to retain readable field widths.
 Shared chrome keeps overflow reachable and preserves the declared footer names.
+
+Final Qt qualification approval: the fixture installs the application's mnemonic proxy after
+the theme. Menu bars and table headers explicitly use TypeRole Ui, including after a style
+change, eliminating Qt-version-dependent platform font substitution and window-layout drift.
+Both references are reapproved for this typography correction with the same tolerance.

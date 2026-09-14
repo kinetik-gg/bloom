@@ -4,7 +4,8 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <iostream>
 
-int main(int argc, char** argv) {
+namespace {
+int run(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setOrganizationName("BloomGrammarTests");
     app.setApplicationName("WindowGoldens");
@@ -61,4 +62,14 @@ int main(int argc, char** argv) {
     std::cout << "Golden " << suffix.toStdString() << ": mean channel error " << mean
               << ", changed fraction " << fraction << '\n';
     return mean <= 1.2 && fraction <= 0.01 ? 0 : 1;
+}
+
+} // namespace
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

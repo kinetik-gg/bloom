@@ -82,3 +82,5 @@ at DPR 1 and 1.5. Clear keyboard focus and deliver Leave before capture. Pixel a
 relative brightness. Goldens use a documented small tolerance; drift fails until an explicit
 `--update-goldens` commit explains the visual change. References are generated from the
 application and never from a design mockup.
+
+The [validation map and capture contract](grammar1-validation.md) identify enforcement and the remaining migration debt.

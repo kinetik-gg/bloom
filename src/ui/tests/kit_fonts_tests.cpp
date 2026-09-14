@@ -9,10 +9,13 @@
 #include <QFontDatabase>
 #include <QFontInfo>
 #include <QFontMetricsF>
+#include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMenuBar>
 #include <QString>
 #include <QStringList>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -180,6 +183,7 @@ void testTheInstallerRegistersFontsBeforeSettingTheApplicationFont(QApplication&
 
 } // namespace
 
+// NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -191,5 +195,17 @@ int main(int argc, char** argv) {
     testHeavierWeightsResolveToTheirOwnStaticFace(expectations);
     testEveryRoleEndsInAPlatformFallback(expectations);
     testTheInstallerRegistersFontsBeforeSettingTheApplicationFont(application, expectations);
+    QApplication::setStyle(new kit::AltUnderlineProxyStyle());
+    QMenuBar menuBar;
+    QHeaderView tableHeader(Qt::Horizontal);
+    for (QWidget* widget : {static_cast<QWidget*>(&menuBar), static_cast<QWidget*>(&tableHeader)}) {
+        widget->ensurePolished();
+        expectations.expect(
+            widget->font().pixelSize() == kit::font(kit::TypeRole::Ui).pixelSize() &&
+                QFontInfo(widget->font()).family().startsWith(kit::interfaceFontFamily()),
+            "platform class fonts cannot override TypeRole after proxy installation");
+    }
     return expectations.failures() == 0 ? 0 : 1;
 }
+
+// NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)

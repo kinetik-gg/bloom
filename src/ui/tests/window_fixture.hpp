@@ -16,6 +16,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -41,7 +42,10 @@ struct WindowFixture {
     EditorRegistry registry;
     std::unique_ptr<MainWindow> window;
 
+    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
     WindowFixture() {
+        // Match apps/bloom/main.cpp: the application installs this proxy after the theme.
+        QApplication::setStyle(new kit::AltUnderlineProxyStyle());
         if (!settingsDirectory.isValid())
             throw std::runtime_error("Fixture settings directory failed");
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -75,6 +79,7 @@ struct WindowFixture {
         QTest::qWait(100);
         clearInteraction();
     }
+    // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
     void clearInteraction() {
         if (auto* focus = QApplication::focusWidget())
             focus->clearFocus();

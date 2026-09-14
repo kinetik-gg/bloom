@@ -10,8 +10,10 @@
 #include <QFocusEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
+#include <QHeaderView>
 #include <QIcon>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPainter>
 #include <QRect>
 #include <QRectF>
@@ -136,6 +138,8 @@ void AltUnderlineProxyStyle::polish(QWidget* widget) {
         // role reliably survives is here, where every menu passes exactly once.
         widget->setFont(font(TypeRole::Ui));
     }
+    if (qobject_cast<QMenuBar*>(widget) || qobject_cast<QHeaderView*>(widget))
+        widget->setFont(font(TypeRole::Ui));
     QProxyStyle::polish(widget);
 }
 

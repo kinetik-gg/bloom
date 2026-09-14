@@ -466,7 +466,7 @@ void installKinetikTheme(QApplication& application) {
         QApplication::setStyle(style);
     }
     // Bundled faces are registered before the application font is set, so the very first widget
-    // already renders in DejaVu Sans rather than flashing the platform family. A face that
+    // already renders in Inter rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
@@ -479,6 +479,8 @@ void installKinetikTheme(QApplication& application) {
     // after this call. kit::AltUnderlineProxyStyle::polish() sets it on every menu for that
     // reason; this line covers a menu built before any style change.
     QApplication::setFont(font(TypeRole::Ui), "QMenu");
+    QApplication::setFont(font(TypeRole::Ui), "QMenuBar");
+    QApplication::setFont(font(TypeRole::Ui), "QHeaderView");
     application.setStyleSheet(kinetikStyleSheet());
 }
 
