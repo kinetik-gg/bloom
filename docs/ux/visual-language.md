@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-14
+Updated: 2026-09-15
 
 ## Purpose
 
@@ -10,9 +10,7 @@ Bloom needs a coherent visual foundation for a dense professional interface. Ico
 must remain legible at small sizes, work across Linux, macOS, and Windows, and be usable without a
 web runtime or JavaScript toolchain.
 
-The [UI grammar](ui-grammar.md) owns control, row and chrome metrics and supersedes historical
-component measurements below. This document owns palette, iconography and interaction recipes. The
-tables below are product truth and match `src/ui/include/bloom/ui/kit/tokens.hpp` exactly; the
+The [UI grammar](ui-grammar.md) owns control, row and chrome metrics and component measurements. This document owns palette, iconography and interaction recipes. The palette and interaction tables below match `src/ui/include/bloom/ui/kit/tokens.hpp` exactly; the
 header is the single implementation of them, and `src/ui/tests/kit_tokens_tests.cpp` asserts each
 value listed here.
 
@@ -39,6 +37,8 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 
 | Role | Value | Use |
 | --- | --- | --- |
+| `Canvas` | `#131313` | Viewer work area |
+| `CompositionFrame` | `#454545` | Viewer frame outline |
 | `Background` | `#111111` | The window, the workspace, and the visible gutters between panels |
 | `Surface` | `#141414` | Panel chrome: headers, status bar, toolbars |
 | `SurfaceRaised` | `#1B1B1B` | Menus, popups, dialogs, and raised controls |
@@ -107,324 +107,19 @@ still draw a `1.5` accent ring outside the keyboard-focused element, because the
 color field, a swatch, or a handle whose own border color is the artist's data rather than a state
 channel -- a border-color change there could not carry focus at all.
 
-### Spacing
+### Controls, editor surfaces and layout
 
-| Token | Value |
-| --- | --- |
-| `XXS` | `2` |
-| `XS` | `4` |
-| `S` | `8` |
-| `M` | `12` |
-| `L` | `16` |
-| `XL` | `24` |
-| `XXL` | `32` |
-| `Gutter` | `6` |
-| `PanelHeader` | `10` |
-| `MenuItemY` | `6` |
-| `MenuItemX` | `10` |
+The [UI grammar](ui-grammar.md) owns the complete control vocabulary, spacing and size grid,
+shared rows, declared headers/footers, viewer tool column, node cards, status line and default
+workspace proportions. Implement these through the kit rather than duplicating component
+measurements here. The [workspace layout contract](../architecture/workspace-layout.md) owns
+persistence and migration. The existing application menu bar and native window frame remain.
 
-`Gutter` is the visible `Background` gap between panels, AND (task C1, item C4) the window's own
-inner padding: the central area that hosts panels insets itself from the window's edge by the same
-`Gutter` on all four sides, so a panel never touches the window border either. Panels float on the
-window; they do not share edges. `PanelHeader` is the panel header's own vertical padding --
-deliberately off the base-4 scale, not rounded to a nearby step. `MenuItemY` and `MenuItemX` are a
-menu row's own padding, off the base scale for the same reason: a menu row is denser vertically and
-roomier horizontally than the scale offers. `MenuItemY` sizes a `QMenu` popup's own rows
-(`kit::AltUnderlineProxyStyle`, owned by the kit foundation); the menu BAR's own row (task C1, item
-C3) instead gets its vertical breathing room from `Spacing::S` padding around the whole bar, with
-`MenuItemX` alone governing each bar item's own horizontal padding.
-
-### Size
-
-The [UI grammar](ui-grammar.md#metric-grid) owns control, chrome, row, icon and dropdown
-metrics. `kit::Size` and `kit::Spacing` are the only dimension sources. Compact density changes
-width, never the common control height. Canvas geometry has separate named kit tokens.
-
-### Editor panel rows
-
-| Panel | Header menus | Body | Footer |
-| --- | --- | --- | --- |
-| Assets | View, Add, Select | Searchable two-column tree: Name and Kind | New Composition, disabled New Folder, disabled Import, right-aligned Delete |
-| Timeline | Left cell: switcher, View/Select/Add menus, composition selector, fullscreen. Right cell: work-area strip, keyframe/graph/snap toggles, tick labels, and playhead head | Column headings first; synchronized layer stack, expanded property rows and their keyframe lanes | Body's bottom row: transport/readout under the layer column, `Control`-high navigator under the lanes |
-
-The timeline header splits at exactly the body's layer-column divider. Its ruler begins at the lane
-region's x origin and reserves the same vertical-scrollbar gutter. The ruler lives inside the
-`EditorHeader` row; it has no separate body row. A continuous `1px` Accent playhead stroke connects
-the header, the right side of the column-heading row, and all lanes. The work-area strip shows the
-persisted range, with Accent grips at both endpoints and the same zoom/scroll axis as the ruler.
-
-Timeline major labels use the frame cadence `1, 2, 5, 10, 24, 48, 96, …`, chosen from available pixel
-density and actual `TypeRole::Value` metrics. Adjacent labels are at least 40 px apart; at fit the
-cadence is ten frames whenever that spacing permits. Minor ticks are per-frame at 8 px/frame or
-more, otherwise every five frames. The navigator is a 6 px `Muted` scrollbar-style thumb on a
-`SurfaceSunken` track and is hidden while the complete composition is visible. Zoom and scroll
-change the window and projections, while layer-row height stays `32`.
-
-Assets uses the `Folder` panel-switcher icon and the `DataComposition` vocabulary for composition
-rows. Its disabled affordances keep their honest reason in a tooltip, and its composition actions
-use the ordinary `Accent` selected-row treatment; no media thumbnail or import chrome is implied
-before the media pipeline exists.
-
-#### Panel width rule (task WIDTH-1)
-
-Every `EditorArea` overrides `minimumSizeHint()` to report exactly `PanelMinWidth` wide by its own
-header-plus-footer height, computed without ever consulting the hosted editor's own size hints. A
-`QSplitter` reads that fixed floor, not whatever the hosted editor happens to want, so switching a
-Properties selection -- more `KValueField` cells, a longer parameter label -- can never grow past
-what a narrower pane already had and nudge a splitter handle. The owner's own framing: "let it have
-min width of something like 300px ... so inner sections and users can compromise to also have that
-strict min width instead of kicking borders around."
-
-The rule applies uniformly to every panel kind, but only Properties needs help holding to it:
-Properties is the one hosted editor that is a *form* rather than a canvas, so `EditorArea` hosts it
-inside a `QScrollArea` with `Qt::Ignored` on the horizontal axis (the scroll area's own minimum
-width never asks the panel's content layout for more room than it already has) and
-`widgetResizable` set, so the real `PropertiesEditor` widget is actually resized down to whatever
-width the panel currently has. Properties offers its search through the panel header slot and
-owns an inner scroll area for its cards. At the 300-design-pixel minimum, row labels elide
-(`Qt::ElideRight`, with full names in tooltips), numeric cells use the compact Properties metrics
-below, component prefixes stay inside fields, and RGBA disclosures use one line. The body scrolls vertically without requiring horizontal
-scrolling. The node graph, timeline, and viewer retain their existing canvas and wrapper behavior;
-node cards retain their separate minimum-width rule.
-
-### Viewer header
-
-The Viewer header keeps the panel switcher first, followed by the compact composition selector
-(`viewerCompositionSelector`), its trailing composition-command button, the active object selector
-(`viewerObjectSelector`), View and Select menu buttons, and the fullscreen toggle
-(`viewerFullscreenButton`). The composition selector lists document compositions; the object
-selector lists the current composition's layer display names and shows `None` when selection is
-empty. New, Duplicate, Delete, and Rename Composition use the same command path as Assets and the
-main Composition menu. F11 remains owned by the main window and is named in the fullscreen
-button's tooltip and accessible label.
-
-Viewer header menus never wrap or clip. When the available width cannot hold both menu buttons,
-they are replaced by one `…` overflow button containing the same View and Select menus. The
-composition and object selectors remain visible and elide their closed-field text within their
-own bounds.
-
-### Viewer overlays
-
-Viewer guides are display-only paint layered above the delivered composition pixels; they never
-enter a cached frame, export, or project render. All guide toggles are off by default. Safe Areas
-draw action-safe and title-safe rectangles, with Broadcast (4:3, 90%/80%), HD (16:9, 93%/90%,
-EBU R95), Cinema, Social (centre 1:1 and 4:5 crops), and Custom presets. Safe-area percentages
-are stored on the composition; the remaining guide toggles are viewer display preferences.
-Centre Cross and Thirds use the transformed composition rectangle. `viewerRulers` paints top and
-left composition-pixel rulers that follow zoom and pan, and Pixel Grid appears only at 400% or
-above. Guide lines and selected bounds use relative brightness/semantic kit colors so their
-readability survives background and zoom changes.
-
-### Viewer content bounds
-
-For each selected layer, paint a 1 px `Accent` polygon and a solid filled 6 px diameter anchor dot.
-Geometry follows the same composition-to-view transform as the image, including zoom, pan and pixel
-aspect; line width and dot diameter stay in screen design pixels. This is canvas painting with no
-object names. It reads geometry retained by the delivered frame, including display-only playback cache hits.
-
-Text Alignment uses the existing `nodeOperandSelector` in node cards and the new
-`timelinePropertyAlignment` dropdown in source property rows. Width, Height, Line Height, and Letter
-Spacing reuse generic scalar cells and animation diamonds. Existing object names are unchanged.
-### Properties sections
-
-The Properties panel groups its rows into bordered `kit::KSection` cards. Each header contains a
-plain chevron, a semibold `UiSmall` title, an optional upstream jump icon, a reset arrow and a
-six-dot menu handle. Header actions use the Chrome icon role and have no resting button box.
-Cards use the panel surface radius and a `Border` hairline.
-
-Property rows use `kit::KPropertyRow`: its label, control and diamond columns own alignment,
-elision and spacing. The grammar owns row and control heights; the kit's Properties tokens
-own specialized field widths, anchor geometry and section padding.
-
-A layer is grouped as **Object** (Visible / Solo / Locked checkboxes, disabled Parent `None`,
-Blending Mode, Opacity), **Transform** (Position, Rotation, Scale, Anchor and Anchor Point),
-and its source section. Parent explains that parenting is unavailable; audio is omitted.
-With nothing selected the panel shows only the read-only Composition section.
-
-Anchor Point uses the evaluated full-resolution local bounds, resolved by a cancellable background
-CPU proxy evaluation. Each dot writes the existing anchor-offset setter: centre is `(0,0)`, edges
-and corners use half the local width/height. Direct edits highlight a matching point or clear the
-highlight. Stale geometry cannot author a new selection or time; unresolved/unsupported bounds
-show a disabled grid with activity or diagnostic tooltip. Closing the panel cancels work and
-retires its worker off the UI thread.
-
-Text uses a monospaced line edit, a disabled DejaVu Sans dropdown, Font Size with steppers,
-three Chrome alignment segments, Line Height and Letter Spacing percentage steppers. Line Height
-maps to the stored ratio; Letter Spacing maps to the stored pixel advance relative to the current
-font size. When a driven font size cannot be resolved through the numeric read API, percentage
-letter spacing is disabled with an explanatory tooltip. Expanded multiline content still commits on focus loss. The supported face is explicit
-in the disabled font dropdown's tooltip.
-
-Collapsed state persists per section under `properties/sections/<id>/collapsed`. A section's Reset
-writes each of that group's parameters back to the value the node definition registry declares as
-its default, through the same session setter the row itself uses. Each parameter reset is an
-ordinary undoable command. The header menu's Collapse all / Expand all are answered by the panel, which is
-the only thing that knows the full set of sections; a section that has nothing to reset (the
-composition view, a merge's inputs) hides its Reset rather than offering a control that would do
-nothing.
-
-Both sliders share their row's commit with the paired value cell. `kit::KSlider` carries no scrub
-gesture signals, so the ADR 0017 boundary is the pointer release: while the handle is dragged the
-cell mirrors the slider and nothing is written; the release -- or a keyboard step, which is not a
-drag -- is the single commit. The rotation slider spans one turn each way and pins at its ends; the
-cell stays the authority for a wound value past that, which the schema accepts and the slider
-cannot reach.
-
-The remaining artist-facing parameters of a selected definition render in its source section. The
-definition owns kind, animation support, role and default; the schema-owned selector vocabulary
-supplies the closed enum choices. Labels derive from role names, with separators converted to
-spaces. Technical metadata roles such as alpha association and encoding are explicitly hidden from
-Properties; Solid's source section therefore contains only Color, Width and Height, with alpha
-still reachable through the Color picker. Existing hand-crafted controls keep their identities and
-command paths.
-
-| Parameter kind | Properties control |
-| --- | --- |
-| Scalar | Value field and a diamond when animatable |
-| Vec2 / Vec3 | Two / three numeric components sharing one parameter |
-| Color | Color chip opening the existing picker; expandable RGBA fields |
-| String | Text field; Text content also offers a multiline expander |
-| Integer / Boolean | Exact integer field / square checkbox |
-| Closed enum | Dropdown, or icon segments when the schema row mapping requests them |
-| Stepper scalar | Numeric field with clickable up/down arrows; registered for text size and spacing |
-
-The header search filters row labels by case-insensitive substring. Unmatched rows and empty
-sections hide; clearing the query restores them. During a search, matching section bodies are
-shown without changing their persisted collapsed state. Escape clears search and focuses the panel.
-
-After the selection's own sections, upstream nodes appear once each in breadth-first order through
-image inputs and driver links, to depth three. Merge and Output terminate traversal. A layer's
-direct source is already represented by its source section and is not duplicated. One trailing
-“and N more upstream” row counts unique nodes beyond the limit. Upstream controls use the same
-registry rows and edit their exact parameters without changing selection. The section header’s jump icon selects
-that node and frames it in the existing node canvas in the same window.
-
-Driven rows replace editable values with a link glyph, the driver's display name, and its resolved
-value. Clicking the link navigates to the driver. Resolution is cancellable background work using
-the CPU reference value evaluator; “Resolving…” is indeterminate activity, and failures display a
-diagnostic rather than an invented value. A private snapshot copy with muted built-in probe nodes makes
-detached value branches inspectable without publishing changes to the project. Non-animated value
-nodes with driver kinds restricted by the image compiler use the same private mute path, retaining
-their value kernels. Inspection can resolve these values independently of current image-source
-render support. Only the newest
-request may update the panel; closing it cancels work and releases workers off the UI thread.
-
-Right-click a parameter row or its control to Reset to default. Constant and animated values use
-the same parameter setter as editing; driven values use the existing disconnect command, which
-restores the registered default and keeps the binding undoable. Locked parameters and read-only
-information rows disable Reset.
-
-At the unchanged 300-design-pixel panel minimum, the header stays fixed and the body scrolls
-vertically. Labels and section titles elide, scalar/paired fields retain their compact floor,
-three-component vectors can shrink to 48 px per component, and RGBA disclosures keep one line. Content never requires horizontal scrolling. These Qt
-controls and command paths apply equally on Linux, macOS and Windows; platform qualification is
-separate from the layout contract.
-
-New object names: `propertiesSearchField`, `propertiesScrollArea`, `propertiesScrollBody`,
-`propertiesRegistryPanel`, `propertiesSection_registry`, `propertiesRegistryRow`,
-`propertiesRegistryDiamond`, `propertiesRegistryEnum`, `propertiesRegistryBool`,
-`propertiesRegistryMultiline`, `propertiesRegistryString`, `propertiesRegistryInteger`, `propertiesRegistryValue`,
-`propertiesRegistryColor`, `propertiesRegistryColorExpand`, `propertiesTextMultiline`,
-`propertiesTextExpand`, `propertiesUpstreamPanel`, `propertiesSection_upstream-<node-id>`,
-`propertiesJumpToNode`, `propertiesMoreUpstream`, `propertiesDrivenDisplay`, `propertiesDriverLink`,
-`propertiesDrivenValue`, `propertiesRowContextMenu`, and `propertiesResetToDefault`. Existing object
-names are retained. Registry rows expose `parameterId` and `role`; upstream sections expose `nodeId`.
-
-The reusable square checkbox has the default kit name `kCheckBox`.
-New Properties automation names: `propertiesParentDropdown`, `propertiesAnchorGrid`, `propertiesUpstreamFont`,
-`propertiesSolidColorChip`, `propertiesSolidColorExpand`, `propertiesTextColorR`,
-`propertiesTextColorG`, `propertiesTextColorB`, `propertiesTextColorA`, `propertiesTextColorExpand`,
-`propertiesTextColorFields`, `propertiesRegistryColorFields`, `propertiesRegistryTextExpand` and `propertiesDrivenControls`.
-Existing names are retained; `textFontName` now identifies a dropdown and the alignment row's
-`propertiesRegistryEnum` identifies a segmented radio group.
-
-
-### Viewer footer
-
-One row, `Size::Control` tall, on `Surface` with a `Border` hairline along its top edge. Left to
-right:
-
-| Control | Object name | Notes |
-| --- | --- | --- |
-| Channel | `viewerChannelDropdown` | RGBA, RGB, R, G, B, Alpha |
-| Zoom | `viewerZoomDropdown` | Fit, 25, 50, 100, 200, 400, plus one trailing custom value |
-| Resolution | `viewerResolutionDropdown` | Auto, Full, Half, Quarter; persisted in `viewer/resolution` |
-| Effective resolution | `viewerResolutionReadout` | `Auto · ¼`; part of the Resolution control, not an item of its own |
-| Background | `viewerBackgroundDropdown` | Solid, Checkerboard, Black, White; persisted in `viewer/background` |
-| Transport | see below | Go to start, step back, play/pause, step forward, go to end, loop, RAM Preview |
-| Frame / time readout | `viewerTimeReadout` | `TypeRole::Value`; click to type an exact frame number |
-
-The transport's buttons are `viewerStepToStartButton`, `timelineStepBackButton`, `playPauseButton`,
-`timelineStepForwardButton`, `viewerStepToEndButton`, `timelineLoopIndicator` (a real toggle now,
-not a status glyph), and `timelineRamPreviewButton`. The four names that still begin with
-`timeline` are the ones that moved here from the Timeline's own bottom row: they changed parent,
-not identity, and renaming them would have broken the contract every test and every future
-automation reads them by.
-
-Each button is a `Size::Control` square carrying an `IconRole::Control` glyph. The readout reserves
-a fixed width from the widest string it can ever show, not from its current text, so a count
-changing sixty times a second never relayouts the row beside it.
-
-Channel is a presentation remap and nothing else: it is applied while packing the frame for the
-canvas, after display-referred conversion, and never reaches an export, a cached frame, or the
-display buffer the colour pipeline produced. Alpha shows the alpha channel as luminance; R, G and B
-show that one channel as grey; RGB is the composite with alpha forced opaque.
-
-Background chooses the canvas surround. Solid is the application's own `Background` token, and the
-control says so: a composition carries no background colour in the document model, so a
-"composition background" would be an invented value. Black and White are literal, because a known
-value is the entire reason an artist asks for them.
-
-### Window status bar
-
-One kit strip at the bottom of the main window, `windowStatusBar`, `Size::Control` tall, on
-`Surface` with a `Border` hairline along its top edge. Not `QStatusBar`: that brings its own
-chrome, size grip and item model. It is a row of the central column, so it stays visible whichever
-central page is authoritative.
-
-Left to right, each cell silent when it has nothing true to say:
-
-| Cell | Object name | Shown when | Token |
-| --- | --- | --- | --- |
-| Colour-state chip | `windowStatusBarColorChip` | Always | Chip colour follows the preview's qualification state: `Ok`, `Warn`, or `Error` |
-| Preview state | `windowStatusBarPreviewState` | Always | `Accent` rendering, `Ok` ready, `Warn` unsupported, `Muted` cancelled, `Error` failed |
-| `N dropped` | `windowStatusBarDroppedFrames` | While a playback run is counting | `Muted` at zero, `Warn` above it |
-| Cache | `windowStatusBarCache` | While a RAM preview run is caching, or while the cache holds frames | `Accent` |
-| Message | `windowStatusBarMessage` | While there is a notice or running work | `Foreground` |
-| Version | `windowStatusBarVersion` | Always | `Faint`, `UiSmall`, right-aligned |
-
-The numeric cells use `TypeRole::Value`, the monospaced role, so a count never reflows the cells
-beside it as it changes. "Silent when it has nothing to say" is the rule they share: outside a
-playback run there is no dropped-frame figure, and with an empty cache there is no cache reading --
-a zero shown out of context reads as a measurement, which would be a different claim.
-
-Messages have two lifetimes. A notice -- a rejected command, an export that landed, a cancellation
--- clears itself after five seconds. Work that is still running -- `Saving…`, `Opening…`, range
-export progress -- persists until it is replaced, because a message that vanished while the work
-continued would be a lie. A notice takes precedence while it lasts; the persistent message is what
-is left when it expires.
-
-Nothing is painted over the viewer canvas. The readiness chip and the failure banner that used to
-be drawn on top of the pixels are cells in this strip; a viewer canvas shows the composition, and
-everything else reports here.
-
-### Nodes footer (task NODES-1)
-
-Left to right: a zoom dropdown (`nodeZoomDropdown`, the same Fit/25/50/100/200/400 items the
-Viewer's own dropdown offers), a grid-snapping switch (`nodeSnapSwitch`, a `KSwitch`), and a link
-style dropdown (`nodeLinkStyleDropdown`, a `KDropdown` offering Spline/Straight/Angled) -- the same
-two settings View's own Grid Snapping toggle and Link Style submenu offer, so the footer and the
-header menu can never show a stale value for the other. Right-aligned: the selection readout
-(`nodeSelectionReadout`), `Muted` `UiSmall`, reading "N nodes". Unlike the Viewer's own footer, this
-one is ordinary child widgets in a `QHBoxLayout` rather than one surface the editor paints itself --
-there is no per-frame readout here that needs a single paint pass to stay in sync.
-
-### Assets footer (task ASSETS-1)
-
-The footer places New Composition, disabled New Folder, and disabled Import on the left, with
-Delete aligned to the right. New Folder explains `Folders arrive with asset organisation`; Import
-explains `Image and sequence import arrives with the media pipeline`. The panel body is a
-two-column tree whose Kind column reads `Composition`, with a search field above it.
+Properties remains a command-backed projection: colour values use the existing colour picker,
+text uses the supported render face (DejaVu Sans), driven rows navigate upstream, and anchor
+placement resolves immutable local bounds asynchronously. UI typography is independent of the
+rendered text face. Viewer guides, backgrounds, channel inspection and zoom remain presentation
+state; they never change cached composition pixels or export semantics.
 
 ### Elevation
 
@@ -443,7 +138,7 @@ never the only thing separating a surface from what is behind it.
 | Role | Family | Size | Weight | Use |
 | --- | --- | --- | --- | --- |
 | `Ui` | Inter | `12` | 500 | The default interface text |
-| `UiSmall` | Inter | `10.5` | 500 | Panel headers: uppercase, `+0.07em` tracking |
+| `UiSmall` | Inter | `10.5` | 500 | Small labels and chrome: mixed case, natural tracking |
 | `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
 | `Title` | Inter | `13` | 600 | Dialog and section titles |
 
@@ -704,13 +399,13 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
-| Port socket | 8px circle in its schema kind's `Socket*` token; inputs left, outputs right; one expanded row per port |
+| Port socket | Kind-coloured edge dots aligned to parameter rows; geometry is owned by the [UI grammar](ui-grammar.md#node-cards) |
 | Ordered multi-input | Each Merge's ordered image port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, and the pill highlights compatible image drops; the card shows its input count |
-| Card eyebrow | A layer card's `UiSmall`/`Faint` "Layer" line above its own name, because the name is the layer's |
-| In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Today's one instance is a layer's Blending. It carries no keyframe indicator, because the value is not animatable |
+| Card eyebrow | Each card carries a `UiSmall`/`Faint` kind label above its display name |
+| In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Blending is one example; its value is not animatable and carries no keyframe indicator |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
 | Selected node | 2px inset Accent outline, painted above the card/header surfaces |
-| Primary/active node | 2px inset Foreground outline; primary identity still belongs to the session selection |
+| Primary/active node | The same Accent outline; primary identity still belongs to the session selection |
 | Muted node | Body and in-node controls at 50% opacity; normal header and existing Phosphor `Hidden`/eye-slash badge, without strikethrough |
 | Collapsed node | Header-only `Radius::Full` pill; sockets distributed along the header edges; parameter controls hidden |
 | Link | Schema kind ink, widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink and 2px stroke |
@@ -737,13 +432,10 @@ which authoring affordances can currently be offered.
 `#D97C7C`, `#D9A66C`, `#C9C76B`, `#83BD84`, `#68BABA`, `#799ED2`, `#AA8ACC`, `#CE89B4`.
 A custom RGB label uses the same row swatch and bar fill. Kind colors remain the default.
 
-Bars span the layer's half-open range at `TimelineBar` (20 px) height, centered in the 32 px row,
-with a 3 px radius, one-pixel lighter top edge, and shallow `Elevation::TimelineBar` shadow. A 3 px
-kind-color stripe marks the left edge; trim grips and frame snapping remain available. Rows use
-alternating `Surface`/`SurfaceRaised` fills with a low-alpha Border separator; the lane track is
-`SurfaceSunken`. Selected rows carry a 3 px Accent stripe. Toggle states use the semantic icons
-listed above, rendered at `IconMedium` (16 px); their source and hashes are in the Phosphor
-provenance record.
+Bars span the layer's half-open range, with trim grips and frame snapping. The
+[UI grammar](ui-grammar.md) owns row pitch, bar geometry, selection edges and toggle sizes.
+`KListSurface` supplies alternating empty rows and `KRow` populated rows; canvas lanes
+paint the matching backdrop. All toggle glyphs use the kit SVG path and Phosphor provenance.
 
 ### Nested Merge Rows
 

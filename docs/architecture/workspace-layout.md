@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-15
 
 ## Purpose
 
@@ -75,7 +75,28 @@ shows an unavailable-editor placeholder, and lets the artist select a registered
 areas continue to restore normally.
 
 Editor-internal session state, pinned context, zoom, scroll positions, detached windows, and
-multi-monitor geometry are not yet part of schema version 1.
+multi-monitor geometry are not yet part of schema version 2.
+
+## Version 2 migration
+
+Schema version 2 adopts the [UI grammar's layout tokens](../ux/ui-grammar.md#layout-and-specialized-metrics).
+The sidebar spans the full workspace height with Assets over Properties; Timeline sits only below
+Viewer and Nodes. Assets is pinned into the default and migrated layout, while editor areas remain
+replaceable during use. The menu bar remains the only fixed application surface.
+
+The application first validates and restores a legacy version-1 layout, then replaces its panel
+arrangement with this complete default. Window geometry is retained. This intentional reset prevents
+old saved arrangements from omitting Assets or giving Timeline the sidebar's width. Subsequent saves
+write schema 2. The generic WorkspaceHost still reads valid version-1 trees for its callers; the
+application owns the Compositing migration policy. Invalid layouts keep the safe default, and future
+versions retain the existing do-not-overwrite guarantee.
+
+Split fractions are applied once the complete widget tree receives its window extent. Context-bound
+callbacks are retired if that tree is replaced before showing, so restoration cannot be overwritten
+by pending default-layout work. Minimum widths continue to apply normally. The timeline left column
+uses the sum of its token-defined columns; metric audits verify full menus at 1600 and 1920 pixels.
+The main-window migration test starts with a valid one-area version-1 layout without Assets and
+asserts a five-area schema-2 result containing Assets.
 
 ## Acceptance And Gating
 
