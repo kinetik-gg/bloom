@@ -29,6 +29,7 @@ KDropdown::KDropdown(QWidget* parent) : QWidget(parent) {
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kDropdown"));
     setFocusPolicy(Qt::StrongFocus);
+    setFixedHeight(px(Size::Control));
     setAttribute(Qt::WA_Hover, true);
     setCursor(Qt::PointingHandCursor);
     setFont(kit::font(TypeRole::Ui));
@@ -36,6 +37,7 @@ KDropdown::KDropdown(QWidget* parent) : QWidget(parent) {
     model_ = new QStandardItemModel(this);
     popup_ = new KDropdownPopup(this);
     popup_->setModel(model_);
+    popup_->view()->setIconSize(QSize(px(Size::IconChrome), px(Size::IconChrome)));
     connect(popup_, &KDropdownPopup::itemChosen, this, [this](const int index) {
         commitIndex(index);
         update();
@@ -53,6 +55,41 @@ int KDropdown::addItem(const QString& text, const QVariant& data) {
     if (currentIndex_ < 0) {
         commitIndex(index);
     }
+    updateGeometry();
+    return index;
+}
+
+QIcon KDropdown::itemIcon(const int index) const {
+    const auto* item = model_->item(index);
+    return item == nullptr ? QIcon{} : item->icon();
+}
+
+void KDropdown::setItemToolTip(const int index, const QString& toolTip) {
+    auto* item = model_->item(index);
+    if (item == nullptr) {
+        return;
+    }
+    item->setToolTip(toolTip);
+    if (index == currentIndex_) {
+        setToolTip(toolTip);
+    }
+}
+
+int KDropdown::findData(const QVariant& data) const {
+    for (int index = 0; index < model_->rowCount(); ++index) {
+        if (itemData(index) == data) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+
+QVariant KDropdown::currentData() const { return itemData(currentIndex_); }
+
+int KDropdown::addItem(const QIcon& icon, const QString& text, const QVariant& data) {
+    const int index = addItem(text, data);
+    model_->item(index)->setIcon(icon);
     updateGeometry();
     return index;
 }
@@ -107,6 +144,7 @@ void KDropdown::commitIndex(const int index) {
         return;
     }
     currentIndex_ = index;
+    setToolTip(model_->item(index)->toolTip());
     update();
     Q_EMIT currentIndexChanged(index);
 }
@@ -124,7 +162,8 @@ QString KDropdown::displayedText() const {
     const QFontMetrics metrics(font());
     const int available =
         std::max(0, width() - horizontalPadding() * 2 - caretColumnWidth() - caretGap());
-    return metrics.elidedText(currentText(), Qt::ElideRight, available);
+    return metrics.elidedText(currentText(), Qt::ElideRight, available -
+        (itemIcon(currentIndex_).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
 }
 
 void KDropdown::setControlSize(const ControlSize size) {
@@ -132,6 +171,7 @@ void KDropdown::setControlSize(const ControlSize size) {
         return;
     }
     controlSize_ = size;
+    setFixedHeight(controlExtent());
     updateGeometry();
     update();
 }
@@ -190,18 +230,19 @@ QSize KDropdown::sizeHint() const {
     const QFontMetrics metrics(font());
     int widest = 0;
     for (int index = 0; index < model_->rowCount(); ++index) {
-        widest = std::max(widest, metrics.horizontalAdvance(itemText(index)));
+        widest = std::max(widest, metrics.horizontalAdvance(itemText(index)) +
+            (itemIcon(index).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
     }
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     const int width =
         widest + horizontalPadding() * 2 + caretGap() + caretColumnWidth() + ringMargin;
-    return {width, controlExtent() + ringMargin};
+    return {width, controlExtent()};
 }
 
 QSize KDropdown::minimumSizeHint() const {
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     return {horizontalPadding() * 2 + caretColumnWidth() + ringMargin,
-            controlExtent() + ringMargin};
+            controlExtent()};
 }
 
 void KDropdown::mousePressEvent(QMouseEvent* event) {
@@ -286,8 +327,17 @@ void KDropdown::paintEvent(QPaintEvent* event) {
 
     painter.setPen(ink);
     painter.setFont(font());
-    const QRectF label(bounds.left() + horizontalPadding(), bounds.top(),
-                       caretColumn.left() - caretGap() - bounds.left() - horizontalPadding(),
+    qreal contentLeft = bounds.left() + horizontalPadding();
+    const auto glyph = itemIcon(currentIndex_);
+    if (!glyph.isNull()) {
+        const int box = px(Size::IconChrome);
+        const auto pixmap = glyph.pixmap(QSize(box, box), devicePixelRatioF());
+        const QPointF origin(contentLeft, bounds.center().y() - box / 2.0);
+        painter.drawPixmap(origin, pixmap);
+        contentLeft += box + caretGap();
+    }
+    const QRectF label(contentLeft, bounds.top(),
+                       caretColumn.left() - caretGap() - contentLeft,
                        bounds.height());
     painter.drawText(label, Qt::AlignVCenter | Qt::AlignLeft, displayedText());
 }

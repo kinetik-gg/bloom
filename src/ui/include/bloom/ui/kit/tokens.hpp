@@ -134,6 +134,16 @@ enum class Spacing : int {
 
 // Control and chrome extents.
 enum class Size : int {
+    HeaderRow = 32,
+    FooterRow = 32,
+    ListRow = 32,
+    PropertyRow = 28,
+    IconChrome = 16,
+    IconControl = 20,
+    ToggleCell = 24,
+    DropdownWidth = 100,
+    DropdownWidthCompact = 108,
+    DropdownWidthWide = 120,
     ControlCompact = 22,
     Control = 26,
     ControlRoomy = 32,
@@ -147,10 +157,10 @@ enum class Size : int {
     // header height and row-pitch multiplier (kCardHeaderHeight/kNodeRowPitch), completely
     // unrelated to this panel's own header row, and growing it would have silently resized node
     // cards on the canvas, a collateral change no design crop covered.
-    EditorHeader = 48,
+    EditorHeader = HeaderRow,
     TimelineRow = 32,
     TimelineBar = 20,
-    TimelineToggleColumn = 80,
+    TimelineToggleColumn = 4 * ToggleCell,
     TimelineNameMin = 120,
     TimelineColumn = 100,
     TimelineWorkArea = 6,

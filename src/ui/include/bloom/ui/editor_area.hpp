@@ -18,7 +18,7 @@ class QToolButton;
 class QVBoxLayout;
 
 namespace bloom::ui::kit {
-class KPanelSwitcher;
+class KDropdown;
 } // namespace bloom::ui::kit
 
 namespace bloom::ui {
@@ -117,7 +117,7 @@ class EditorArea final : public QFrame {
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
-    kit::KPanelSwitcher* editorPicker_ = nullptr;
+    kit::KDropdown* editorPicker_ = nullptr;
     QWidget* editorWidget_ = nullptr;
     // task WIDTH-1: the widget actually parented into contentLayout_ -- editorWidget_ itself for
     // every canvas editor (node graph, timeline, viewer; they already scale their own content down

@@ -1,4 +1,5 @@
 #include "properties_sections.hpp"
+#include <bloom/ui/kit/row.hpp>
 
 #include "node_editor_items.hpp"
 
@@ -27,125 +28,14 @@
 namespace bloom::ui::properties {
 namespace {
 
-// task WIDTH-1: the row's outer label keeps the shared column width as its PREFERRED width (so a
-// roomy panel still lines every row's value column up at the same x, decision 1's whole point) but
-// lets the layout shrink it, eliding the live text with Qt::ElideRight down to whatever width it
-// actually gets and always carrying the untruncated name in the tooltip -- a narrow panel degrades
-// "Pixel Aspect" to "Pixel A..." rather than silently forcing the row wider.
-class PropertyRowLabel final : public QLabel {
-  public:
-    PropertyRowLabel(QString fullText, const int preferredWidth, QWidget* parent)
-        : QLabel(parent), fullText_(std::move(fullText)), preferredWidth_(preferredWidth) {
-        setText(fullText_);
-        setToolTip(fullText_);
-    }
-
-    [[nodiscard]] QSize sizeHint() const override {
-        return {preferredWidth_, QLabel::sizeHint().height()};
-    }
-
-    [[nodiscard]] QSize minimumSizeHint() const override {
-        // Enough for an ellipsis plus a couple of characters -- never zero, or "Rotation" could
-        // shrink to a blank column with nothing for the tooltip to explain.
-        const QFontMetrics metrics(font());
-        const int ellipsisFloor = metrics.horizontalAdvance(QStringLiteral("A…"));
-        return {ellipsisFloor, QLabel::minimumSizeHint().height()};
-    }
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QLabel::resizeEvent(event);
-        const QFontMetrics metrics(font());
-        setText(metrics.elidedText(fullText_, Qt::ElideRight, width()));
-    }
-
-  private:
-    QString fullText_;
-    int preferredWidth_;
-};
-
-class PropertyRow final : public QWidget {
-  public:
-    PropertyRow(QLabel* label, QWidget* parent) : QWidget(parent), label_(label) {}
-    [[nodiscard]] QSize minimumSizeHint() const override {
-        auto size = QWidget::minimumSizeHint();
-        size.setWidth(size.width() - label_->width() + kit::px(kit::Size::PropertiesLabelMinWidth));
-        return size;
-    }
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override {
-        label_->setFixedWidth(kit::px(width() < kit::px(kit::Size::PanelMinWidth)
-                                          ? kit::Size::PropertiesLabelMinWidth
-                                          : kit::Size::PropertiesLabelWidth));
-        QWidget::resizeEvent(event);
-    }
-
-  private:
-    QLabel* label_;
-};
-
 } // namespace
-
 int labelColumnWidth() { return kit::px(kit::Size::PropertiesLabelWidth); }
-
-QLabel* makeRowLabel(const QString& text, QWidget* parent) {
-    auto* label = new PropertyRowLabel(text, labelColumnWidth(), parent);
-    label->setObjectName(QStringLiteral("propertiesRowLabel"));
-    auto labelFont = kit::font(kit::TypeRole::UiSmall);
-    labelFont.setCapitalization(QFont::MixedCase);
-    labelFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
-    label->setFont(labelFont);
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-    label->setPalette(palette);
-    label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    return label;
+QLabel* makeRowLabel(const QString& text, QWidget* parent) { return kit::makePropertyRowLabel(text, parent); }
+QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator, const std::initializer_list<QWidget*> values) {
+    auto* row = new kit::KPropertyRow(label, indicator, values, sectionParent);
+    section->addWidget(row); return row;
 }
-
-QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator,
-                const std::initializer_list<QWidget*> values) {
-    auto* row = new PropertyRow(label, sectionParent);
-    row->setObjectName(QStringLiteral("propertiesRow"));
-    row->setProperty("rowLabel", label->toolTip());
-    row->setMinimumHeight(kit::px(kit::Size::ControlCompact));
-    row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto* layout = new QHBoxLayout(row);
-    layout->setSizeConstraint(QLayout::SetNoConstraint);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(kit::px(kit::Spacing::XXS));
-    label->setFixedWidth(labelColumnWidth());
-    layout->addWidget(label);
-    bool expanding = false;
-    for (auto* value : values) {
-        if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
-            dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
-            dropdown->setFont(label->font());
-            dropdown->setFixedWidth(kit::px(kit::Size::PropertiesDropdownWidth));
-            dropdown->setFixedHeight(kit::px(kit::Size::ControlCompact));
-        }
-        if (auto* chip = qobject_cast<kit::KColorChip*>(value))
-            chip->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
-                               kit::px(kit::Size::PropertiesSwatchHeight));
-        const bool flexible =
-            qobject_cast<kit::KSlider*>(value) || value->maximumWidth() == QWIDGETSIZE_MAX;
-        expanding = expanding || flexible;
-        layout->addWidget(value, flexible ? 1 : 0, Qt::AlignVCenter);
-    }
-    if (!expanding)
-        layout->addStretch(1);
-    auto* slot = indicator ? indicator : new QWidget(row);
-    slot->setFixedWidth(kit::px(kit::Size::PropertiesDiamondColumn));
-    auto policy = slot->sizePolicy();
-    policy.setRetainSizeWhenHidden(true);
-    slot->setSizePolicy(policy);
-    layout->addWidget(slot, 0, Qt::AlignVCenter);
-    section->addWidget(row);
-    return row;
-}
-
-QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator,
-                QWidget* value) {
+QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWidget* indicator, QWidget* value) {
     return addRow(section, sectionParent, label, indicator, {value});
 }
 

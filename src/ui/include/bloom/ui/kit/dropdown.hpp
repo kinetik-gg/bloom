@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/ui/kit/tokens.hpp>
+#include <QIcon>
 
 #include <QSize>
 #include <QString>
@@ -37,6 +38,11 @@ class KDropdown final : public QWidget {
     ~KDropdown() override;
 
     int addItem(const QString& text, const QVariant& data = {});
+    int addItem(const QIcon& icon, const QString& text, const QVariant& data = {});
+    [[nodiscard]] QIcon itemIcon(int index) const;
+    void setItemToolTip(int index, const QString& toolTip);
+    [[nodiscard]] int findData(const QVariant& data) const;
+    [[nodiscard]] QVariant currentData() const;
     void clearItems();
     [[nodiscard]] int count() const;
     [[nodiscard]] QString itemText(int index) const;
