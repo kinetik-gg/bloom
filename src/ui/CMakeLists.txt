@@ -290,6 +290,13 @@ target_sources(
         ram_preview_controller.cpp
         properties_editor.cpp
         properties_editor_sections.cpp
+        properties_registry_row.cpp
+        properties_editor_registry.cpp
+        properties_upstream.cpp
+        properties_driven_values.cpp
+        properties_driven_rows.cpp
+        composition_parameter_vocabulary.cpp
+        composition_driver_probe.cpp
         properties_sections.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp

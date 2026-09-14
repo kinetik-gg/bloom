@@ -316,6 +316,24 @@ layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
 `timelinePropertyDiamond`, `timelinePropertyValue`, `timelinePropertyBlending`,
 `timelinePropertyColor`, `timelinePropertyComponent`, and `timelineKeyframeRow`.
 
+## Properties
+
+| Gesture | Action |
+| --- | --- |
+| Type in header search | Filter labels by case-insensitive substring; hide empty sections |
+| Escape in search | Clear query, restore rows and return focus to the panel |
+| Scrub a numeric row | Preview locally; commit once on release; cancellation writes nothing |
+| Expand RGBA / multiline content | Reveal detailed color components / multiline text editing |
+| Leave a multiline editor | Commit the complete text as one parameter edit |
+| Jump to node / click driver link | Select the target and frame it in the node canvas |
+| Right-click parameter row or control | Reset to its registered default; driven reset disconnects with Undo support |
+| Wheel over the body | Scroll rows beneath the fixed search header |
+
+Upstream rows target their own parameter IDs; editing or keying them preserves the current
+selection. Driver results update from cancellable background evaluation at the current session
+time. A stale result cannot overwrite a newer selection, snapshot, or time. Collapsed section state
+is a UI preference; searching temporarily exposes matches without changing that preference.
+
 ## Retired Bindings
 
 These were bound in earlier slices and are bound by nothing now. They are listed so that a future

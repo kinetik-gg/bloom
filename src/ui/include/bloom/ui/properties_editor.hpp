@@ -16,6 +16,8 @@ class QVBoxLayout;
 namespace bloom::ui {
 
 class CompositionSession;
+class PropertiesRegistryRow;
+class PropertiesDrivenValues;
 
 class KeyframeDiamond;
 
@@ -39,6 +41,18 @@ class PropertiesEditor final : public QWidget {
 
   private:
     void rebuild();
+    void configureRegistryRows();
+    void configureUpstream();
+    void configureDrivenRows();
+    PropertiesDrivenValues* drivenValues_ = nullptr;
+    QWidget* upstreamPanel_ = nullptr;
+    QString upstreamSignature_;
+    std::vector<PropertiesRegistryRow*> upstreamRows_;
+    void filterRows();
+    QLineEdit* search_ = nullptr;
+    std::vector<PropertiesRegistryRow*> registryRows_;
+    QWidget* registryPanel_ = nullptr;
+    QString registrySignature_;
     void configureMergeInputs();
     QWidget* mergeInputsPanel_ = nullptr;
     kit::KSection* mergeSection_ = nullptr;

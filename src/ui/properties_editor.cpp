@@ -2,6 +2,7 @@
 #include <bloom/ui/properties_editor.hpp>
 
 #include "composition_editor_support.hpp"
+#include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -31,8 +32,11 @@
 
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -149,6 +153,29 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
                                kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
     layout->setSpacing(kit::px(kit::Spacing::S));
 
+    setFocusPolicy(Qt::StrongFocus);
+    search_ = new QLineEdit(this);
+    search_->setObjectName("propertiesSearchField");
+    search_->setAccessibleName(tr("Search properties"));
+    search_->setPlaceholderText(tr("Search properties…"));
+    search_->setClearButtonEnabled(true);
+    search_->installEventFilter(this);
+    layout->addWidget(search_);
+    connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
+
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName("propertiesScrollArea");
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* body = new QWidget(scroll);
+    body->setObjectName("propertiesScrollBody");
+    auto* bodyLayout = new QVBoxLayout(body);
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(kit::px(kit::Spacing::S));
+    scroll->setWidget(body);
+    layout->addWidget(scroll, 1);
+
     // Task P1 (owner review 2026-09-12: "should not show 'Nothing selected' or any other selected
     // layer info") removed the selection title row entirely. With nothing selected the panel shows
     // only the document/composition section; with a selection it shows only the Object/Transform/
@@ -178,9 +205,9 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     adoptSection(mergeSection_, {});
     selectionLayout->addWidget(mergeInputsPanel_);
     selectionLayout->addStretch(1);
-    layout->addWidget(selectionSection_);
+    bodyLayout->addWidget(selectionSection_);
 
-    buildDocumentSection(layout);
+    buildDocumentSection(bodyLayout);
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
@@ -218,6 +245,11 @@ void PropertiesEditor::resetRoles(const std::vector<std::string_view>& roles) {
     // Every write goes through the SAME session setter the row itself uses, so a Reset is one
     // ordinary, undoable authoring command and never a second write path into the document.
     for (const auto role : roles) {
+        const auto* parameter = session_.parameterForSelection(role);
+        if (parameter && std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+            resetPropertiesParameter(session_, parameter->id);
+            continue;
+        }
         const auto fallback = registryDefaultFor(session_, role);
         if (!fallback.has_value()) {
             continue;
@@ -257,6 +289,19 @@ void PropertiesEditor::commitRotationFromControls() {
 }
 
 bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == search_ && event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        search_->clear();
+        setFocus(Qt::ShortcutFocusReason);
+        return true;
+    }
+    if (event->type() == QEvent::FocusOut && watched->objectName() == "propertiesTextMultiline" &&
+        !rebuilding_) {
+        if (auto* text = qobject_cast<QPlainTextEdit*>(watched))
+            (void)session_.setParameterValue(
+                document::ParameterId::fromRaw(text->property("parameterId").toULongLong()),
+                text->toPlainText().toStdString(), tr("Set Text"));
+    }
     if (event->type() == QEvent::MouseButtonRelease && !rebuilding_) {
         if (watched == opacitySlider_) {
             commitOpacityFromControls();
@@ -268,6 +313,8 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void PropertiesEditor::rebuild() {
+    if (rebuilding_)
+        return;
     rebuilding_ = true;
     configureObjectToggles();
     configurePosition();
@@ -280,6 +327,9 @@ void PropertiesEditor::rebuild() {
     configureTextSource();
     configureDocumentProperties();
     configureMergeInputs();
+    configureRegistryRows();
+    configureUpstream();
+    configureDrivenRows();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
     const auto context = session_.selection().contextualLayer;
@@ -298,6 +348,7 @@ void PropertiesEditor::rebuild() {
         rotationSlider_->setEnabled(false);
     }
     rebuilding_ = false;
+    filterRows();
 }
 
 void PropertiesEditor::configureObjectToggles() {
@@ -350,6 +401,8 @@ void PropertiesEditor::configureMergeInputs() {
         rowLayout->setContentsMargins(0, 0, 0, 0);
         auto* name = new QLabel(node_editor::nodeDisplayName(*composition, *source), row);
         name->setTextFormat(Qt::PlainText);
+        name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        row->setProperty("rowLabel", name->text());
         name->setObjectName(QStringLiteral("mergeInputName"));
         rowLayout->addWidget(name, 1);
         auto* blend = new kit::KDropdown(row);
@@ -362,6 +415,10 @@ void PropertiesEditor::configureMergeInputs() {
             std::distance(core::kBlendModes.begin(), std::ranges::find(core::kBlendModes, mode))));
         const auto* boundary = composition->graph().findLayer(entry.layerId);
         blend->setEnabled(boundary && !boundary->locked);
+        for (const auto& binding : source->parameters)
+            if (binding.role == document::kBlendModeParameterRole)
+                blend->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
+                                                      binding.parameterId.value())));
         rowLayout->addWidget(blend);
         const auto layerId = entry.layerId;
         connect(blend, &kit::KDropdown::currentIndexChanged, row, [this, layerId](int index) {
@@ -378,6 +435,8 @@ void PropertiesEditor::configureMergeInputs() {
             for (const auto& binding : source->parameters)
                 if (binding.role == document::kOpacityParameterRole)
                     opacityId = binding.parameterId;
+        opacity->setProperty("parameterId",
+                             QVariant::fromValue(static_cast<qulonglong>(opacityId.value())));
         const auto value = opacityId.isValid() ? session_.effectiveScalarValue(opacityId)
                                                : std::optional<double>{1.0};
         opacity->setValue(value.value_or(1.0) * 100);

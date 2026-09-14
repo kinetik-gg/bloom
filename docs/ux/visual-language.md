@@ -148,7 +148,7 @@ C3) instead gets its vertical breathing room from `Spacing::S` padding around th
 | `ScrollBar` | `8` (`12` on hover) | Overlay scrollbars with pill thumbs |
 | `MenuMinWidth` | `200` | The narrowest a `QMenu` popup may be |
 | `PanelMinWidth` | `300` | Every `EditorArea`'s own strict minimum width, in Figma design px |
-| `ValueCellMin` | `72` | The floor a Properties value cell (`kit::KValueField`) may shrink to before its row falls back to horizontal scrolling |
+| `ValueCellMin` | `72` | The numeric floor a Properties value cell (`kit::KValueField`) retains at the panel minimum |
 
 `MenuMinWidth` is a floor, never a cap: `kit::AltUnderlineProxyStyle` claims it for every menu ROW,
 and a menu's width is the widest row it holds, so a long label still widens the popup past it. It is
@@ -201,14 +201,12 @@ Properties is the one hosted editor that is a *form* rather than a canvas, so `E
 inside a `QScrollArea` with `Qt::Ignored` on the horizontal axis (the scroll area's own minimum
 width never asks the panel's content layout for more room than it already has) and
 `widgetResizable` set, so the real `PropertiesEditor` widget is actually resized down to whatever
-width the panel currently has. Inside that width, Properties degrades in this order before ever
-scrolling: each row's label column elides (`Qt::ElideRight`, the untruncated name lives in the
-tooltip), then every value cell shrinks toward `ValueCellMin`; only once a row still doesn't fit at
-that floor does the panel's own scroll area fall back to a horizontal scrollbar, alongside the
-vertical one its sections already use to scroll past a short panel. The node graph, timeline, and
-viewer editors need no such wrapping -- their own canvases already scale down to whatever room they
-get, unwrapped. Node cards keep their own, separate minimum-width rule and are out of this task's
-scope entirely.
+width the panel currently has. Properties owns an inner body scroll area beneath its search
+header. At the 300-design-pixel minimum, row labels elide (`Qt::ElideRight`, with full names in
+tooltips), numeric cells retain `ValueCellMin`, short component prefixes claim their measured glyph
+width, and RGBA fields use two columns. The body scrolls vertically without requiring horizontal
+scrolling. The node graph, timeline, and viewer retain their existing canvas and wrapper behavior;
+node cards retain their separate minimum-width rule.
 
 ### Viewer content bounds
 
@@ -236,8 +234,8 @@ selected the panel shows only the read-only Composition section.
 
 Collapsed state persists per section under `properties/sections/<id>/collapsed`. A section's Reset
 writes each of that group's parameters back to the value the node definition registry declares as
-its default, through the same session setter the row itself uses, so a Reset is one ordinary
-undoable command. The header menu's Collapse all / Expand all are answered by the panel, which is
+its default, through the same session setter the row itself uses. Each parameter reset is an
+ordinary undoable command. The header menu's Collapse all / Expand all are answered by the panel, which is
 the only thing that knows the full set of sections; a section that has nothing to reset (the
 composition view, a merge's inputs) hides its Reset rather than offering a control that would do
 nothing.
@@ -248,6 +246,62 @@ cell mirrors the slider and nothing is written; the release -- or a keyboard ste
 drag -- is the single commit. The rotation slider spans one turn each way and pins at its ends; the
 cell stays the authority for a wound value past that, which the schema accepts and the slider
 cannot reach.
+
+The remaining parameters of a selected definition render in its source section. The definition
+owns kind, animation support, role and default; the schema-owned selector vocabulary supplies the
+closed enum choices. Labels derive from role names, with separators converted to spaces. Existing
+hand-crafted controls keep their identities and command paths.
+
+| Parameter kind | Properties control |
+| --- | --- |
+| Scalar | Value field and a diamond when animatable |
+| Vec2 / Vec3 | Two / three numeric components sharing one parameter |
+| Color | Color chip opening the existing picker; expandable RGBA fields |
+| String | Text field; Text content also offers a multiline expander |
+| Integer / Boolean | Integer field / switch |
+| Closed enum | Dropdown carrying the schema's stored integer values |
+
+The header search filters row labels by case-insensitive substring. Unmatched rows and empty
+sections hide; clearing the query restores them. During a search, matching section bodies are
+shown without changing their persisted collapsed state. Escape clears search and focuses the panel.
+
+After the selection's own sections, upstream nodes appear once each in breadth-first order through
+image inputs and driver links, to depth three. Merge and Output terminate traversal. A layer's
+direct source is already represented by its source section and is not duplicated. One trailing
+“and N more upstream” row counts unique nodes beyond the limit. Upstream controls use the same
+registry rows and edit their exact parameters without changing selection. “Jump to node” selects
+that node and frames it in the existing node canvas in the same window.
+
+Driven rows replace editable values with a link glyph, the driver's display name, and its resolved
+value. Clicking the link navigates to the driver. Resolution is cancellable background work using
+the CPU reference value evaluator; “Resolving…” is indeterminate activity, and failures display a
+diagnostic rather than an invented value. A private snapshot copy with muted built-in probe nodes makes
+detached value branches inspectable without publishing changes to the project. Non-animated value
+nodes with driver kinds restricted by the image compiler use the same private mute path, retaining
+their value kernels. Inspection can resolve these values independently of current image-source
+render support. Only the newest
+request may update the panel; closing it cancels work and releases workers off the UI thread.
+
+Right-click a parameter row or its control to Reset to default. Constant and animated values use
+the same parameter setter as editing; driven values use the existing disconnect command, which
+restores the registered default and keeps the binding undoable. Locked parameters and read-only
+information rows disable Reset.
+
+At the unchanged 300-design-pixel panel minimum, the header stays fixed and the body scrolls
+vertically. Labels and section titles elide, numeric fields retain their kit floor, and the
+hand-crafted RGBA fields use two columns. Content never requires horizontal scrolling. These Qt
+controls and command paths apply equally on Linux, macOS and Windows; platform qualification is
+separate from the layout contract.
+
+New object names: `propertiesSearchField`, `propertiesScrollArea`, `propertiesScrollBody`,
+`propertiesRegistryPanel`, `propertiesSection_registry`, `propertiesRegistryRow`,
+`propertiesRegistryDiamond`, `propertiesRegistryEnum`, `propertiesRegistryBool`,
+`propertiesRegistryMultiline`, `propertiesRegistryString`, `propertiesRegistryInteger`, `propertiesRegistryValue`,
+`propertiesRegistryColor`, `propertiesRegistryColorExpand`, `propertiesTextMultiline`,
+`propertiesTextExpand`, `propertiesUpstreamPanel`, `propertiesSection_upstream-<node-id>`,
+`propertiesJumpToNode`, `propertiesMoreUpstream`, `propertiesDrivenDisplay`, `propertiesDriverLink`,
+`propertiesDrivenValue`, `propertiesRowContextMenu`, and `propertiesResetToDefault`. Existing object
+names are retained. Registry rows expose `parameterId` and `role`; upstream sections expose `nodeId`.
 
 ### Viewer footer
 

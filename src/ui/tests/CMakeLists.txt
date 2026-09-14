@@ -710,3 +710,8 @@ bloom_add_test(
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(bloom_properties_registry_test properties_registry_tests.cpp)
+target_link_libraries(bloom_properties_registry_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_properties_registry_test)
+bloom_add_test(NAME bloom.ui.properties-registry COMMAND bloom_properties_registry_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

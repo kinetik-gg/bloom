@@ -127,6 +127,7 @@ class KValueField final : public QWidget {
     void resizeEvent(QResizeEvent* event) override;
 
   private:
+    [[nodiscard]] int labelColumnWidth() const;
     void commitValue(double value);
     void beginEdit();
     // `keep` commits what was typed; otherwise the value the field had before editing stays.

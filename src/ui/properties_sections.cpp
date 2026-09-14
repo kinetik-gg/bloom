@@ -9,6 +9,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QFontMetrics>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPalette>
@@ -97,11 +98,12 @@ QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWi
                 const std::initializer_list<QWidget*> values) {
     auto* row = new QWidget(sectionParent);
     row->setObjectName(QStringLiteral("propertiesRow"));
+    row->setProperty("rowLabel", label->toolTip());
     row->setMinimumHeight(kit::px(kit::Size::Control));
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS),
                                kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XXS));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    layout->setSpacing(kit::px(kit::Spacing::XS));
     layout->addWidget(label);
     if (indicator != nullptr) {
         layout->addWidget(indicator);
@@ -132,6 +134,7 @@ KeyframeDiamond* makeKeyframeDiamond(CompositionSession& session, const std::str
 QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
     auto* label = new QLabel(parent);
     label->setFont(kit::font(role));
+    label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     QPalette palette = label->palette();
     palette.setColor(QPalette::WindowText, kit::color(kit::Color::Foreground));
     label->setPalette(palette);
@@ -159,9 +162,20 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
                        QWidget* parent) {
     auto* group = new QWidget(parent);
     group->setObjectName(objectName);
+    if (cells.size() > 3) {
+        auto* grid = new QGridLayout(group);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setSpacing(kit::px(kit::Spacing::XS));
+        int index = 0;
+        for (auto* cell : cells) {
+            grid->addWidget(cell, index / 2, index % 2);
+            ++index;
+        }
+        return group;
+    }
     auto* layout = new QHBoxLayout(group);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    layout->setSpacing(kit::px(kit::Spacing::XS));
     for (auto* cell : cells) {
         layout->addWidget(cell);
     }

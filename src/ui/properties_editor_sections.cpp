@@ -41,6 +41,7 @@
 
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -349,6 +350,36 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     addRow(rows, body, makeRowLabel(tr("Font"), body), nullptr, textFontName_);
 
     layout->addWidget(textSourcePanel_);
+    auto* multilineRow = new QWidget(body);
+    multilineRow->setProperty("rowLabel", tr("Content"));
+    auto* multilineLayout = new QVBoxLayout(multilineRow);
+    multilineLayout->setContentsMargins(0, 0, 0, 0);
+    auto* multiline = new QPlainTextEdit(multilineRow);
+    multiline->setObjectName("propertiesTextMultiline");
+    multiline->setFixedHeight(kit::px(kit::Size::Control) * 3);
+    multiline->installEventFilter(this);
+    auto* expand = new kit::KButton(body);
+    expand->setObjectName("propertiesTextExpand");
+    expand->setText(tr("Edit multiple lines"));
+    expand->setCheckable(true);
+    multilineLayout->addWidget(expand);
+    multilineLayout->addWidget(multiline);
+    rows->addWidget(multilineRow);
+    multiline->hide();
+    connect(expand, &kit::KButton::toggled, multiline, &QWidget::setVisible);
+    connect(&session_, &CompositionSession::snapshotChanged, multiline, [this, multiline] {
+        if (!multiline->hasFocus())
+            multiline->setPlainText(textContent_->text());
+    });
+    connect(expand, &kit::KButton::toggled, multiline, [this, multiline](bool expanded) {
+        if (expanded) {
+            const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+            multiline->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
+                                                      parameter ? parameter->id.value() : 0)));
+            multiline->setEnabled(parameter && textContent_->isEnabled());
+            multiline->setPlainText(textContent_->text());
+        }
+    });
 }
 
 void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
