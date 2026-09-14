@@ -179,8 +179,12 @@ QWidget* EditorArea::buildSplitChrome(QWidget* left, QWidget* right, int split, 
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    left->setFixedWidth(split);
-    layout->addWidget(left);
+    auto* leading = new QWidget(row);
+    leading->setFixedWidth(split);
+    auto* leadingLayout = new QHBoxLayout(leading);
+    leadingLayout->setContentsMargins(0, 0, 0, 0);
+    leadingLayout->addWidget(left);
+    layout->addWidget(leading);
     layout->addWidget(right, 1);
     return row;
 }

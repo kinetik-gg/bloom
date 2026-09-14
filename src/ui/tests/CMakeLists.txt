@@ -731,3 +731,16 @@ foreach(scale IN ITEMS 1 1.5 2)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;grammar" TIMEOUT 60)
 endforeach()
+
+add_executable(bloom_window_golden_test window_golden_tests.cpp)
+target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_window_golden_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build"
+    BLOOM_GRAMMAR_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens")
+bloom_enable_warnings(bloom_window_golden_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test)
+    set_tests_properties(bloom.ui.window_golden.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;golden" TIMEOUT 60)
+endforeach()

@@ -8,6 +8,7 @@ KMenuButton::KMenuButton(QWidget* parent) : QToolButton(parent) {
     setFixedHeight(px(Size::Control));
     setAutoRaise(true);
     setPopupMode(QToolButton::InstantPopup);
+    setProperty("headerMenuButton", true);
     setProperty("kitControl", true);
 }
 QSize KMenuButton::sizeHint() const {

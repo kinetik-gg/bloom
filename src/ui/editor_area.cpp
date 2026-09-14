@@ -479,6 +479,7 @@ void EditorArea::rebuildEditor(int editorIndex) {
         headerMenus_ = buildChromeRow(spec.header, headerLeft_);
         if (headerMenus_) {
             headerLayout_->insertWidget(1, headerMenus_, 1, Qt::AlignVCenter);
+            headerLayout_->setStretch(2, 0);
         }
         if (spec.headerCanvas) {
             headerRight_ = spec.headerCanvas;
