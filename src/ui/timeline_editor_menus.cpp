@@ -75,10 +75,10 @@ class TimelineHeaderMenuBar final : public QWidget {
         overflow_->setText(QStringLiteral("…"));
         overflow_->setToolTip(tr("Timeline menus"));
         overflow_->setAccessibleName(overflow_->toolTip());
-        configure(*overflow_);
         overflowMenu_ = new QMenu(this);
         overflowMenu_->setObjectName("timelineHeaderOverflowMenu");
         overflow_->setMenu(overflowMenu_);
+        configure(*overflow_);
         row->addWidget(overflow_);
         overflow_->hide();
     }
@@ -88,9 +88,10 @@ class TimelineHeaderMenuBar final : public QWidget {
         button->setText(menu->title());
         button->setObjectName(name);
         button->setAccessibleName(menu->title());
-        configure(*button);
-        button->setProperty("headerMenuVisible", showInHeader);
         button->setMenu(menu);
+        configure(*button);
+        button->setProperty("headerMenuButton", true);
+        button->setProperty("headerMenuVisible", showInHeader);
         static_cast<QHBoxLayout*>(layout())->insertWidget(static_cast<int>(buttons_.size()),
                                                           button);
         buttons_.push_back(button);
@@ -127,9 +128,6 @@ class TimelineHeaderMenuBar final : public QWidget {
     static void configure(QToolButton& button) {
         button.setAutoRaise(true);
         button.setPopupMode(QToolButton::InstantPopup);
-        button.setProperty("headerMenuButton", true);
-        button.setFont(kit::font(kit::TypeRole::UiSmall));
-        button.setFixedHeight(kit::px(kit::Size::Control));
     }
     std::vector<QToolButton*> buttons_;
     QToolButton* overflow_ = nullptr;

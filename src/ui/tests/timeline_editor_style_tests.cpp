@@ -499,6 +499,17 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(addButton != nullptr && header->isAncestorOf(addButton) &&
                             addButton->menu()->objectName() == QStringLiteral("addLayerMenu"),
                         "the existing Add popup is in the header with its original names");
+    for (const auto& [name, title] : std::array<std::pair<const char*, QString>, 4>{
+             {{"timelineViewButton", QStringLiteral("View")},
+              {"timelineEditButton", QStringLiteral("Edit")},
+              {"timelineSelectButton", QStringLiteral("Select")},
+              {"addLayerButton", QStringLiteral("Add")}}}) {
+        auto* button = area->findChild<QToolButton*>(QString::fromLatin1(name));
+        expectations.expect(button != nullptr && button->text() == title &&
+                                !button->text().contains(QChar(0x25BE)) &&
+                                !button->text().contains(QChar(0x2304)),
+                            std::string{name} + " keeps a Title Case label without a trailing glyph");
+    }
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
                                 ui::kit::px(ui::kit::Size::TimelineNameMin) +
