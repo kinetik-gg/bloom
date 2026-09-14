@@ -292,6 +292,7 @@ target_sources(
         properties_editor_sections.cpp
         properties_registry_row.cpp
         properties_editor_registry.cpp
+        properties_upstream.cpp
         composition_parameter_vocabulary.cpp
         properties_sections.cpp
         qualified_display_processor_bootstrap.cpp

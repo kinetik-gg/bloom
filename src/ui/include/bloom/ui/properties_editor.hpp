@@ -41,6 +41,10 @@ class PropertiesEditor final : public QWidget {
   private:
     void rebuild();
     void configureRegistryRows();
+    void configureUpstream();
+    QWidget* upstreamPanel_ = nullptr;
+    QString upstreamSignature_;
+    std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
     QLineEdit* search_ = nullptr;
     std::vector<PropertiesRegistryRow*> registryRows_;

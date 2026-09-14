@@ -1,14 +1,21 @@
 #include <QApplication>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QSettings>
+#include <QVBoxLayout>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <iostream>
 using namespace bloom;
@@ -25,6 +32,73 @@ QWidget* row(QWidget& panel, const char* role) {
         if (candidate->property("role").toString() == role)
             return candidate;
     return nullptr;
+}
+document::NodeId addNode(ui::CompositionSession& session, std::string_view type) {
+    commands::Transaction transaction("Add", session.snapshot().revision());
+    transaction.emplace<commands::AddNode>(session.compositionId(), std::string(type),
+                                           document::Vec2d{});
+    const auto result = session.executeNodeTransaction(std::move(transaction));
+    return result.outputId<document::NodeId>(commands::kAddNodeOutput).value_or(document::NodeId{});
+}
+void connectNodes(ui::CompositionSession& session, document::NodeId source, document::NodeId target,
+                  const char* port) {
+    commands::Transaction transaction("Connect", session.snapshot().revision());
+    transaction.emplace<commands::ConnectPorts>(session.compositionId(),
+                                                document::OutputPortRef{source, "value"},
+                                                document::NodeInputRef{target, port});
+    expect(session.executeNodeTransaction(std::move(transaction)).changed(),
+           "connect upstream fixture");
+}
+void upstreamRows() {
+    auto project =
+        document::makeNewProject("Upstream", "Main", core::RationalTime::fromInteger(10));
+    auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    const auto root = addNode(session, document::kScalarMathNodeType);
+    const auto first = addNode(session, document::kScalarMathNodeType);
+    const auto second = addNode(session, document::kScalarMathNodeType);
+    const auto third = addNode(session, document::kScalarMathNodeType);
+    const auto fourth = addNode(session, document::kScalarValueNodeType);
+    connectNodes(session, first, root, "a");
+    connectNodes(session, first, root, "b");
+    connectNodes(session, second, first, "a");
+    connectNodes(session, third, second, "a");
+    connectNodes(session, fourth, third, "a");
+    session.selectNode(root);
+    QWidget window;
+    auto* layout = new QVBoxLayout(&window);
+    auto* panel = new ui::PropertiesEditor(session, &window);
+    auto* canvas = new ui::NodeGraphEditor(session, &window);
+    layout->addWidget(panel);
+    layout->addWidget(canvas);
+    window.resize(900, 800);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* upstream = panel->findChild<QWidget*>("propertiesUpstreamPanel");
+    expect(upstream && upstream->findChildren<ui::kit::KSection*>().size() == 3,
+           "BFS deduplicates paths and limits sections to depth three");
+    auto* more = panel->findChild<QLabel*>("propertiesMoreUpstream");
+    expect(more && more->text() == "and 1 more upstream", "one exact beyond-depth count");
+    if (upstream) {
+        const auto sections = upstream->findChildren<ui::kit::KSection*>();
+        expect(sections.front()->property("nodeId").toULongLong() == first.value(),
+               "BFS nearest node first");
+        auto* operand = row(*sections.front(), "b");
+        if (operand) {
+            operand->findChild<ui::kit::KValueField*>()->setValue(5);
+            expect(session.selectedNode()->id == root,
+                   "editing an upstream operand preserves selection");
+        }
+        sections.front()->findChild<ui::kit::KButton*>("propertiesJumpToNode")->click();
+        expect(session.selectedNode()->id == first, "Jump selects its own node");
+        auto* item = canvas->graphScene()->findNodeItem(first);
+        const auto center =
+            canvas->graphView()->mapToScene(canvas->graphView()->viewport()->rect().center());
+        expect(item && QLineF(center, item->sceneBoundingRect().center()).length() < 3,
+               "Jump centers the canvas on its node");
+    }
 }
 void registryRows() {
     auto project =
@@ -94,6 +168,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
     registryRows();
+    upstreamRows();
     QSettings().clear();
     return failures ? 1 : 0;
 }

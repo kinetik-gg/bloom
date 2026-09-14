@@ -7,6 +7,7 @@ class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
 class CompositionSession;
+void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
 class KeyframeDiamond;
 namespace kit {
 class KColorChip;
