@@ -4,7 +4,9 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/safe_parse.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image_types.hpp>
 
@@ -71,6 +73,11 @@ constexpr auto kOpacityB = document::ParameterId::fromRaw(45);
 constexpr auto kOpacityCurve = document::AnimationCurveId::fromRaw(50);
 constexpr auto kPositionCurve = document::AnimationCurveId::fromRaw(51);
 constexpr auto kTextNode = document::NodeId::fromRaw(16);
+// Task DRIVE-1's value nodes: the frame readout, the decimal conversion of it, and the literal
+// Integer that hands a layer its blend mode.
+constexpr auto kFrameNumberNode = document::NodeId::fromRaw(17);
+constexpr auto kIntegerToStringNode = document::NodeId::fromRaw(18);
+constexpr auto kBlendModeNode = document::NodeId::fromRaw(19);
 constexpr auto kTextContent = document::ParameterId::fromRaw(46);
 constexpr auto kTextSize = document::ParameterId::fromRaw(47);
 constexpr auto kTextColor = document::ParameterId::fromRaw(48);
@@ -407,6 +414,156 @@ void testNestedMergeEqualsFlat(Expectations& expectations) {
     render::Rgba32f value = render::Rgba32f::transparent();
     expectations.expect(pixel(result, 1, 1, value) && value.alpha() == 1.0F,
                         "plain source is composited at full opacity");
+}
+
+// Task DRIVE-1. A text layer whose WORDS come from the graph, and a layer whose blend MODE does.
+// Both are kinds that cannot interpolate -- there is no midpoint between "0" and "7", and none
+// between Multiply and Screen -- which is exactly why neither has a curve and why a driver is the
+// only thing that can vary them. The two fixtures below are the smallest plans that vary each.
+
+// Frame Number -> Integer To String -> content. Value output 0 is the frame, value output 1 is its
+// decimal text, and the text layer's content reads output 1.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> frameNumberTextPlan() {
+    auto definition = oneTextPlan()->copyDefinition();
+    auto& text = std::get<runtime::CompiledText>(definition.operations.front());
+    text.content.clear();
+    text.drivenContent = runtime::ValueOutputIndex::fromRaw(1);
+    definition.valueOperations.push_back(
+        {kFrameNumberNode, runtime::ValueOutputIndex::fromRaw(0), 1,
+         runtime::CompiledValueUtility{document::ValueUtilityKernel::FrameNumber, {}, {}}});
+    definition.valueOperations.push_back(
+        {kIntegerToStringNode, runtime::ValueOutputIndex::fromRaw(1), 1,
+         runtime::CompiledValueUtility{document::ValueUtilityKernel::IntegerToString,
+                                       {{{}, runtime::ValueOutputIndex::fromRaw(0)},
+                                        {{}, runtime::CompiledValue{std::int64_t{0}}},
+                                        {{}, runtime::CompiledValue{std::string{}}},
+                                        {{}, runtime::CompiledValue{std::string{}}}},
+                                       {core::kDefaultRadix}}});
+    definition.valueOutputCount = 2;
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+}
+
+// The same two-layer blend fixture, with the TOP layer's mode driven by a literal Integer instead
+// of authored. The authored constant beside the driver is deliberately a different mode, so a
+// frame that matched it would prove the driver was ignored.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+drivenBlendModePlan(const core::BlendMode drivenMode) {
+    auto definition =
+        twoSolidBlendPlan(core::BlendMode::Normal, core::BlendMode::Normal)->copyDefinition();
+    auto& top = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
+    top.drivenBlendMode = runtime::ValueOutputIndex::fromRaw(0);
+    definition.valueOperations.push_back(
+        {kBlendModeNode, runtime::ValueOutputIndex::fromRaw(0), 1,
+         runtime::CompiledValuePassthrough{
+             {kBlendModeA, runtime::CompiledValue{core::blendModeStoredValue(drivenMode)}}}});
+    definition.valueOutputCount = 1;
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+}
+
+void testDrivenTextContentRendersPerFrame(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto driven = frameNumberTextPlan();
+    // 24 fps, so frame 7 is the instant 7/24 -- the exact rational the Frame Number kernel reads,
+    // never a rounded seconds value.
+    const auto rate = driven->format().frameRate();
+    const auto atFrame = [&](const std::int64_t frame) {
+        const auto time =
+            core::RationalTime::create(frame * static_cast<std::int64_t>(rate.denominator()),
+                                       static_cast<std::int64_t>(rate.numerator()));
+        if (!time.has_value()) {
+            throw std::logic_error("driven text fixture frame time must be valid");
+        }
+        auto request = requestFor(*driven);
+        request.time = *time;
+        return evaluator.evaluate(driven, request, {});
+    };
+    const auto first = atFrame(0);
+    const auto eighth = atFrame(7);
+    expectations.expect(first.status() == runtime::EvaluationStatus::Evaluated &&
+                            eighth.status() == runtime::EvaluationStatus::Evaluated,
+                        "a text layer driven by a String-producing chain evaluates at every frame");
+    if (first.frame() == nullptr || eighth.frame() == nullptr) {
+        return;
+    }
+    // The golden: each driven frame is compared against the SAME plan with the words it should be
+    // showing authored as a constant. Byte-identical, not within a tolerance -- the only difference
+    // between the two plans is where the String came from, and where a value came from must never
+    // change the pixels it produces.
+    const auto zero = oneTextPlan({0.5, 0.25, 0.75, 1.0}, "0");
+    const auto seven = oneTextPlan({0.5, 0.25, 0.75, 1.0}, "7");
+    const auto authoredZero = evaluator.evaluate(zero, requestFor(*zero), {});
+    const auto authoredSeven = evaluator.evaluate(seven, requestFor(*seven), {});
+    if (authoredZero.frame() == nullptr || authoredSeven.frame() == nullptr) {
+        expectations.expect(false, "the authored-content reference frames evaluate");
+        return;
+    }
+    bool matchesZero = true;
+    bool matchesSeven = true;
+    bool framesDiffer = false;
+    for (std::int64_t y = 0; y < 20; ++y) {
+        for (std::int64_t x = 0; x < 16; ++x) {
+            render::Rgba32f drivenFirst = render::Rgba32f::transparent();
+            render::Rgba32f drivenEighth = drivenFirst;
+            render::Rgba32f referenceZero = drivenFirst;
+            render::Rgba32f referenceSeven = drivenFirst;
+            if (pixel(first, x, y, drivenFirst) == nullptr ||
+                pixel(eighth, x, y, drivenEighth) == nullptr ||
+                pixel(authoredZero, x, y, referenceZero) == nullptr ||
+                pixel(authoredSeven, x, y, referenceSeven) == nullptr) {
+                expectations.expect(false, "every pixel of all four frames is readable");
+                return;
+            }
+            matchesZero = matchesZero && drivenFirst == referenceZero;
+            matchesSeven = matchesSeven && drivenEighth == referenceSeven;
+            framesDiffer = framesDiffer || !(drivenFirst == drivenEighth);
+        }
+    }
+    expectations.expect(matchesZero,
+                        "frame 0 of the driven text layer is bit-identical to the same layer with "
+                        "\"0\" authored as a constant");
+    expectations.expect(matchesSeven,
+                        "frame 7 of the driven text layer is bit-identical to the same layer with "
+                        "\"7\" authored as a constant");
+    expectations.expect(framesDiffer,
+                        "and the two frames differ, so the content is re-resolved per frame rather "
+                        "than baked once at compile time");
+
+    // The plan says so too: a driven content makes the text operation time-dependent, which is what
+    // keeps the operation cache from serving frame 0's words for frame 7.
+    expectations.expect(driven->operationTimeDependent(runtime::OperationIndex::fromRaw(0)),
+                        "a text operation whose content is driven by the frame is time-dependent");
+    expectations.expect(!oneTextPlan()->operationTimeDependent(runtime::OperationIndex::fromRaw(0)),
+                        "and an undriven one is not, so nothing else pays for the capability");
+}
+
+void testDrivenBlendModeCompositesAsItsResolvedMode(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto driven = drivenBlendModePlan(core::BlendMode::Multiply);
+    const auto authored = twoSolidBlendPlan(core::BlendMode::Multiply, core::BlendMode::Normal);
+    const auto drivenResult = evaluator.evaluate(driven, requestFor(*driven), {});
+    const auto authoredResult = evaluator.evaluate(authored, requestFor(*authored), {});
+    expectations.expect(drivenResult.status() == runtime::EvaluationStatus::Evaluated &&
+                            authoredResult.status() == runtime::EvaluationStatus::Evaluated,
+                        "a layer whose blend mode is driven by an Integer evaluates");
+    if (drivenResult.frame() == nullptr || authoredResult.frame() == nullptr) {
+        return;
+    }
+    bool identical = true;
+    for (std::int64_t y = 0; y < 2; ++y) {
+        for (std::int64_t x = 0; x < 4; ++x) {
+            render::Rgba32f left = render::Rgba32f::transparent();
+            render::Rgba32f right = left;
+            if (pixel(drivenResult, x, y, left) == nullptr ||
+                pixel(authoredResult, x, y, right) == nullptr) {
+                expectations.expect(false, "every pixel of both blend frames is readable");
+                return;
+            }
+            identical = identical && left == right;
+        }
+    }
+    expectations.expect(identical,
+                        "compositing under a driven Multiply is bit-identical to compositing under "
+                        "an authored one");
 }
 
 void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
@@ -1829,6 +1986,8 @@ int main(int argc, char* argv[]) {
         testOperationDirtyPropagation(expectations);
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);
+        testDrivenTextContentRendersPerFrame(expectations);
+        testDrivenBlendModeCompositesAsItsResolvedMode(expectations);
         testAbsoluteCenterAndFractionalTranslation(expectations);
         testLayerTransformShapesTheFrame(expectations);
         testEveryTransformParameterAnimates(expectations);

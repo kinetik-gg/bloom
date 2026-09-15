@@ -9,6 +9,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -17,6 +18,31 @@
 #include <memory>
 
 namespace bloom::ui {
+namespace {
+// The three component captions a multi-component value cell can carry, in authored order.
+[[nodiscard]] QString componentLabel(const std::size_t index) {
+    const std::array<QString, 3> captions{QStringLiteral("X"), QStringLiteral("Y"),
+                                          QStringLiteral("Z")};
+    return captions[index];
+}
+
+// The two nodes a layer's own rows already come from. Task DRIVE-1's upstream walk starts from
+// exactly these, so the value nodes it reaches are the ones driving what the twirl-down shows.
+[[nodiscard]] std::vector<document::NodeId> upstreamSeeds(const CompositionSession& session,
+                                                          const document::LayerId layerId) {
+    std::vector<document::NodeId> seeds;
+    if (const auto boundary = session.boundaryNodeForLayer(layerId))
+        seeds.push_back(*boundary);
+    if (const auto source = session.directSourceNodeForLayer(layerId))
+        seeds.push_back(*source);
+    return seeds;
+}
+} // namespace
+
+QString upstreamGroupKey(const document::NodeId nodeId) {
+    return QStringLiteral("upstream-%1").arg(nodeId.value());
+}
+
 std::vector<TimelineLayerEntry>
 timelinePropertyEntries(const CompositionSession& session,
                         const std::vector<TimelineLayerEntry>& layers,
@@ -32,12 +58,16 @@ timelinePropertyEntries(const CompositionSession& session,
         if (!layer.expanded)
             continue;
         bool groupOpen = true;
-        const auto group = [&](const QString& name) {
+        // `key` is what the collapse set remembers; `title` is what the row shows. They are the
+        // same string for the three built-in groups and differ for an upstream one (task DRIVE-1),
+        // whose title is a node's display name -- which two nodes may share -- while its key is the
+        // node's own identity and therefore never collides.
+        const auto group = [&](const QString& key, const QString& title = {}) {
             auto entry = layer;
             entry.rowKind = TimelineLayerEntry::Kind::Group;
-            entry.name = name;
-            entry.group = name;
-            groupOpen = !collapsedGroups.contains({layer.layerId, name});
+            entry.name = title.isEmpty() ? key : title;
+            entry.group = key;
+            groupOpen = !collapsedGroups.contains({layer.layerId, key});
             entry.expanded = groupOpen;
             rows.push_back(entry);
         };
@@ -110,6 +140,39 @@ timelinePropertyEntries(const CompositionSession& session,
                 add(*source, binding.role, name);
             }
         }
+        // Task DRIVE-1. A layer's own parameters are not the whole of what animates it: a driven
+        // one takes its value from a value node, and that node's keys are what an artist has to
+        // reach to change the motion. One collapsible group per node reachable from this layer
+        // through driver links, breadth-first and deduplicated, titled by the node's display name
+        // -- the same nodes, in the same order, that the Properties panel lists upstream of a
+        // selection. The rows inside are ordinary parameter rows, so they carry the same diamond,
+        // the same lane, and the same drag gestures every layer parameter already has.
+        for (const auto& upstream : session.upstreamNodes(upstreamSeeds(session, layer.layerId),
+                                                          UpstreamTraversal::DriverLinksOnly)) {
+            const auto* node = composition->graph().findNode(upstream.id);
+            const auto* definition =
+                node == nullptr
+                    ? nullptr
+                    : document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+            if (definition == nullptr)
+                continue;
+            bool heading = false;
+            for (const auto& declared : definition->parameters) {
+                const auto found = std::ranges::find(node->parameters, declared.role,
+                                                     &document::ParameterBinding::role);
+                if (found == node->parameters.end())
+                    continue;
+                const auto* parameter = composition->parameters().find(found->parameterId);
+                if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey))
+                    continue;
+                if (!heading) {
+                    group(upstreamGroupKey(upstream.id),
+                          node_editor::nodeDisplayName(*composition, *node));
+                    heading = true;
+                }
+                add(upstream.id, found->role, node_editor::displayTypeName(found->role));
+            }
+        }
     }
     return rows;
 }
@@ -141,7 +204,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         auto* cellLayout = new QHBoxLayout(cell);
         cellLayout->setContentsMargins(0, 0, 0, 0);
         cellLayout->setSpacing(kit::px(kit::Spacing::XXS));
-        auto* component = components_[i] = new kit::KLabel(i == 0 ? "X" : "Y", cell);
+        auto* component = components_[i] = new kit::KLabel(componentLabel(i), cell);
         component->setObjectName("timelinePropertyComponent");
         component->setFont(kit::font(kit::TypeRole::UiSmall));
         component->hide();
@@ -172,8 +235,38 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                                              tr("Set Parameter"));
     });
     color_->setObjectName("timelinePropertyColor");
+    // Task DRIVE-1's read-only display for a driven parameter. It occupies the value columns the
+    // editors would have, so a driven row is the same row with a different thing in it.
+    driven_ = new QWidget(this);
+    driven_->setObjectName("timelinePropertyDriven");
+    auto* drivenLayout = new QHBoxLayout(driven_);
+    drivenLayout->setContentsMargins(0, 0, 0, 0);
+    drivenLayout->setSpacing(kit::px(kit::Spacing::XXS));
+    driverLink_ = new kit::KButton(driven_);
+    driverLink_->setObjectName("timelinePropertyDriverLink");
+    driverLink_->setVariant(kit::KButton::Variant::Ghost);
+    driverLink_->setControlSize(kit::KButton::ControlSize::Compact);
+    driverLink_->setIconId(kit::IconId::Link);
+    drivenLayout->addWidget(driverLink_);
+    drivenValue_ = new kit::KLabel(driven_);
+    drivenValue_->setObjectName("timelinePropertyDrivenValue");
+    drivenValue_->setTypeRole(kit::TypeRole::Value);
+    drivenValue_->setTextFormat(Qt::PlainText);
+    drivenValue_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    drivenLayout->addWidget(drivenValue_, 1);
+    driven_->setMinimumWidth(kit::px(kit::Size::ValueCellMin));
+    driven_->hide();
+    connect(driverLink_, &kit::KButton::clicked, this, [this] {
+        if (const auto* driver = session_.driverBindingFor(entry_.parameterId))
+            jumpToPropertiesNode(session_, driver->sourceNodeId, this);
+    });
+    connect(&session_, &CompositionSession::drivenValuesChanged, this, [this] {
+        if (isVisible() && session_.driverBindingFor(entry_.parameterId) != nullptr)
+            bind(entry_);
+    });
     auto* row = new kit::KPropertyRow(
-        label_, indicator, {cells_[0], cells_[1], blending_, alignment_, color_}, this, true);
+        label_, indicator,
+        {cells_[0], cells_[1], cells_[2], blending_, alignment_, color_, driven_}, this, true);
     layout->addWidget(row, 0, Qt::AlignVCenter);
     connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
         if (binding_ || index < 0)
@@ -234,7 +327,17 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         alignment_->hide();
         color_->hide();
         diamond_->hide();
+        driven_->hide();
     }
+    // Task DRIVE-1. A driven parameter has no authored value to edit here: it has a driver, and
+    // what the row owes the artist is the driver's name and the value it resolves to right now.
+    // The editors below would all show nothing, so none of them is built for this row at all.
+    if (!group && session_.driverBindingFor(entry.parameterId) != nullptr) {
+        bindDriven(true);
+        binding_ = false;
+        return;
+    }
+    bindDriven(false);
     if (!group) {
         diamond_->setRole(entry.role);
         diamond_->setParameterId(entry.parameterId);
@@ -266,14 +369,17 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             diamond_->hide();
         }
         const auto vector = session_.effectiveVec2Value(entry.parameterId);
+        const auto vector3 = session_.effectiveVec3Value(entry.parameterId);
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
-        const int count = vector ? 2 : scalar ? 1 : 0;
+        const bool components = vector.has_value() || vector3.has_value();
+        const int count = vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);
             components_[i]->hide();
-            fields_[i]->setLabel(vector ? (i == 0 ? "X" : "Y") : "");
-            fields_[i]->setAccessibleName(entry.name + (vector ? (i == 0 ? " X" : " Y") : ""));
+            fields_[i]->setLabel(components ? componentLabel(i) : QString{});
+            fields_[i]->setAccessibleName(
+                components ? entry.name + QLatin1Char(' ') + componentLabel(i) : entry.name);
         }
         blending_->setVisible(role == document::kBlendModeParameterRole);
         color_->setVisible(color.has_value());
@@ -282,6 +388,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             values[0] = vector->x * (scale ? 100 : 1);
             values[1] = vector->y * (scale ? 100 : 1);
         }
+        if (vector3)
+            values = {vector3->x, vector3->y, vector3->z, 0.0};
         if (scalar)
             values[0] = *scalar * (opacity ? 100 : 1);
         if (color)
@@ -305,6 +413,10 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                                    role == document::kTextLetterSpacingParameterRole
                                ? "px"
                                : "");
+            // A Vector 3 carries no unit of its own: it is whatever the node reading it means by
+            // three numbers, and inventing "px" for one would be a claim nothing supports.
+            if (vector3)
+                field->setUnit(QString{});
             field->setValue(values[static_cast<std::size_t>(i)]);
             field->show();
         }
@@ -328,10 +440,34 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     binding_ = false;
 }
 
+void TimelinePropertyRow::bindDriven(const bool driven) {
+    driven_->setVisible(driven);
+    if (!driven)
+        return;
+    for (auto* cell : cells_)
+        cell->hide();
+    blending_->hide();
+    alignment_->hide();
+    color_->hide();
+    // A driven parameter carries no curve of its own, so there is no key here to toggle. The
+    // driver's OWN keys are reachable: they are the upstream group's rows in this same twirl-down.
+    diamond_->hide();
+    driverLink_->setText(session_.driverDisplayName(entry_.parameterId));
+    driverLink_->setToolTip(tr("Driven by %1").arg(driverLink_->text()));
+    driverLink_->setAccessibleName(driverLink_->toolTip());
+    const auto resolved = session_.drivenValueText(entry_.parameterId);
+    drivenValue_->setText(resolved.isEmpty() ? tr("Resolving…") : resolved);
+    drivenValue_->setToolTip(drivenValue_->text());
+    setEnabled(true);
+    // The value is worker-thread work; asking is idempotent, so asking from the bind that shows
+    // the previous answer cannot loop.
+    session_.refreshDrivenValues();
+}
+
 void TimelinePropertyRow::commitValues() {
     const auto entry = entry_;
     const auto role = std::string_view(entry.role);
-    const double x = fields_[0]->value(), y = fields_[1]->value();
+    const double x = fields_[0]->value(), y = fields_[1]->value(), z = fields_[2]->value();
     session_.selectLayer(entry.layerId);
     if (role == document::kPositionParameterRole)
         (void)session_.setSelectedPosition(x, y);
@@ -345,6 +481,9 @@ void TimelinePropertyRow::commitValues() {
         (void)session_.setSelectedOpacity(x / 100);
     else if (role == document::kTextSizeParameterRole)
         (void)session_.setSelectedTextSize(x);
+    else if (session_.effectiveVec3Value(entry.parameterId))
+        (void)session_.setParameterValue(entry.parameterId, document::Vec3d{x, y, z},
+                                         tr("Set Parameter"));
     else if (session_.effectiveVec2Value(entry.parameterId))
         (void)session_.setParameterValue(entry.parameterId, document::Vec2d{x, y},
                                          tr("Set Parameter"));

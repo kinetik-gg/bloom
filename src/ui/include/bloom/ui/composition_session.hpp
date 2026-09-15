@@ -21,10 +21,15 @@
 
 #include <bloom/commands/result.hpp>
 
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
+#include <span>
+#include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace bloom::commands {
 class Transaction;
@@ -128,7 +133,34 @@ enum class PositionInteractionRejection : std::uint8_t {
 // One parameter's value, whatever kind it is: the three animatable value kinds a curve can carry
 // and a constant can hold. Named once so sampleParameterValue() and the effective*Value() readers
 // cannot drift apart about what a "parameter value" is in this layer.
-using ParameterSample = std::variant<double, document::Vec2d, document::Vec3d, core::Color4d>;
+// Task DRIVE-1 added the three kinds that cannot interpolate -- a String, an Integer (every
+// enum-backed one included) and a Boolean. They have no curve and never will, but they DO have a
+// value: the constant the store holds, or, once a driver binding is on them, whatever the graph
+// produces. "What is this parameter's value" is one question for all seven kinds, so it has one
+// answer type rather than four readers and three special cases.
+using ParameterSample = std::variant<double, document::Vec2d, document::Vec3d, core::Color4d,
+                                     std::string, std::int64_t, bool>;
+
+// Task DRIVE-1. How far an upstream walk follows, and one node it reached.
+//
+// DriverLinksOnly is the walk the TIMELINE makes from a layer: a layer's twirl-down already lists
+// the layer's own parameters and its direct source's, so what it is missing is exactly the value
+// nodes those parameters are DRIVEN by, and nothing about the image chain behind them. A node with
+// no parameters at all -- a Reroute's pass-through, the one socket a driver cannot land on -- still
+// follows its input edge, because otherwise a reroute would hide the node behind it.
+//
+// DriverLinksAndInputEdges is the walk PROPERTIES makes from the selected node: everything that
+// node depends on, whether the dependency is a wire carrying pixels or a driver carrying a number.
+// Either walk stops at a Layer Stack and at the Composition Output, because everything upstream of
+// those two is the whole composition rather than this node's own inputs.
+enum class UpstreamTraversal : std::uint8_t { DriverLinksOnly, DriverLinksAndInputEdges };
+
+struct UpstreamNode final {
+    document::NodeId id;
+    // Edges away from the nearest seed. Breadth-first, so this never decreases along the result.
+    int depth = 0;
+    friend bool operator==(const UpstreamNode&, const UpstreamNode&) = default;
+};
 
 // What a keyframe diamond shows for one parameter at the session's current time (task S5, item 0;
 // docs/architecture/animation-and-time.md, "The Keyframe Gesture"). The three authored states are
@@ -346,6 +378,48 @@ class CompositionSession final : public QObject {
     effectiveVec2Value(document::ParameterId parameterId) const;
     [[nodiscard]] std::optional<core::Color4d>
     effectiveColorValue(document::ParameterId parameterId) const;
+    // Task DRIVE-1. The same reader for the four kinds that had none. A Vec3d can be animated (it
+    // has a curve table), so it is sampled exactly as the three above are; a String, an Integer and
+    // a Boolean never interpolate, so for them this is the constant the store holds. None of the
+    // four answers for a DRIVEN parameter -- no reader here does, because a driven value is
+    // produced by the value graph rather than read off the record -- which is what
+    // drivenValueText() is for.
+    [[nodiscard]] std::optional<document::Vec3d>
+    effectiveVec3Value(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<QString>
+    effectiveStringValue(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<std::int64_t>
+    effectiveIntegerValue(document::ParameterId parameterId) const;
+    [[nodiscard]] std::optional<bool>
+    effectiveBooleanValue(document::ParameterId parameterId) const;
+
+    // Task DRIVE-1. The driver-chain readers every surface that shows a driven parameter shares.
+    // Properties grew all three inline first; the timeline needs the same three answers, and two
+    // surfaces disagreeing about which node drives a parameter would be a bug nobody could see.
+    //
+    // The binding on one parameter, or nullptr when it carries none.
+    [[nodiscard]] const document::DriverBindingSource*
+    driverBindingFor(document::ParameterId parameterId) const noexcept;
+    // The display name of the node driving `parameterId` -- the same name its node card carries --
+    // or an empty string when the parameter is not driven at all. A binding naming a node the
+    // composition no longer holds answers the honest "Missing driver" rather than an empty cell.
+    [[nodiscard]] QString driverDisplayName(document::ParameterId parameterId) const;
+    // Breadth-first from `seeds`, deduplicated, seeds themselves excluded, in the order reached.
+    [[nodiscard]] std::vector<UpstreamNode> upstreamNodes(std::span<const document::NodeId> seeds,
+                                                          UpstreamTraversal traversal) const;
+
+    // Task DRIVE-1. The resolved text of one driven parameter at the session's current time, or an
+    // empty string when nothing has been resolved for it yet. Resolving a driver means evaluating
+    // the value graph, which is work for a worker thread rather than a paint, so this is a readback
+    // of the newest finished evaluation and refreshDrivenValues() is the request for another.
+    // ONE evaluation answers every surface: the Properties row and the timeline row for the same
+    // parameter read the same string by construction.
+    [[nodiscard]] QString drivenValueText(document::ParameterId parameterId) const;
+    // Requests a fresh resolution of every driven parameter in the composition. Idempotent: a
+    // request identical to the one already in flight or already answered -- same revision, same
+    // time, same parameters -- starts nothing, so a surface may call it from the same refresh that
+    // drivenValuesChanged() triggered without looping.
+    void refreshDrivenValues();
 
     // Writes one authored value onto an EXACT parameter, by the same constant-or-keyframe rule
     // every layer row already follows (task FIX1, item G): a constant source is rewritten, an
@@ -454,6 +528,8 @@ class CompositionSession final : public QObject {
     // CompositionPreviewController consumes it to (re)build a preview request carrying the fresh
     // override.
     void positionInteractionChanged();
+    // Task DRIVE-1: a fresh resolution of the composition's driven parameters has landed.
+    void drivenValuesChanged();
 
   private:
     AssetController* assetController_ = nullptr;
@@ -562,6 +638,15 @@ class CompositionSession final : public QObject {
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
     std::optional<PositionInteraction> positionInteraction_;
+    // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that
+    // finds a driven parameter and never before, so a composition with no drivers -- every existing
+    // test fixture among them -- pays nothing at all for the capability. `drivenRequest_` is the
+    // revision/time/parameter signature of the newest request, which is what makes
+    // refreshDrivenValues() idempotent and therefore safe to call from a handler of the signal it
+    // eventually emits.
+    class DrivenValueResolver* drivenValues_ = nullptr;
+    QString drivenRequest_;
+    std::map<document::ParameterId, QString> drivenText_;
 };
 
 } // namespace bloom::ui

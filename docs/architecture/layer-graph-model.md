@@ -739,21 +739,37 @@ widening of the animatable set. Every generic OPERAND schema also stays constant
 is a value a node reads, and the artist already shapes it with a curve upstream -- wire an animated
 Scalar node into the socket -- so a curve of its own would be a second authoring path to one picture.
 
-The keyframe surface for a value literal is its NODE CARD's diamond. The Timeline's rows are layers
-and the Properties panel's rows are a layer's roles, so neither has a place to hang a value node's
-lane today; giving them one is a timeline-model change rather than an animation one.
+A value literal's keys are authored on its NODE CARD's diamond and are reachable from the TIMELINE as
+well: a layer's twirl-down carries one collapsible group per value node reached from that layer
+through driver links, and the rows inside are ordinary parameter rows with the same diamond, the same
+lane and the same gestures a layer parameter has. See
+[`animation-and-time.md`](animation-and-time.md), "Upstream Value Nodes In The Timeline".
 
 #### Evaluable Parameter Kinds
 
-`CompiledScalarParameter`, `CompiledVec2Parameter` and `CompiledColorParameter` each gained one
-alternative for a value-graph output, and `CompiledValueOperand` gained three for the curve tables. A
-new alternative appearing is not a plan-semantics change, so neither the plan nor the evaluator
-semantics version moved and no cached frame digest shifted.
+**Every parameter kind evaluates its driver link.** A driver binding is accepted on a `Float64`,
+`Vec2d`, `Color4d`, `String`, `Integer` (every enum-backed one included), `Boolean` or `Vec3d`
+parameter, and each of the seven has a lowering that reads the value graph. A text layer's words can
+come from a String node, a layer's blend mode from an Integer node, and any operand of any value node
+from another value node, evaluated recursively at the frame being rendered.
 
-The remaining kinds -- a Layer Output's `Integer` blend mode, a Text source's `String` content -- are
-linkable in the editor and durable in the document, but nothing yet carries their value into a
-compiled operation, so a driver on one is reported through the existing `UnsupportedParameterSource`
-diagnostic rather than silently ignored.
+`CompiledScalarParameter`, `CompiledVec2Parameter` and `CompiledColorParameter` each carry a
+value-graph-output alternative, and `CompiledValueOperand` carries the curve tables. The kinds that
+cannot INTERPOLATE -- a String, an Integer, a Boolean -- have no curve alternative to gain and
+therefore no typed operand of their own: the plan carries the authored constant and, beside it, the
+value output a driver names (`CompiledText::drivenContent`, `CompiledTextLayout::drivenAlignment`,
+`CompiledLayerOutput::drivenBlendMode`). Cannot interpolate and cannot vary are different claims, and
+only the first is about curves.
+
+A new alternative or a new field appearing is not a plan-semantics change: no existing plan value
+means anything different than it did. Neither the plan nor the evaluator semantics version moved for
+any of this, and no cached or exported frame digest shifted.
+
+The evaluator reads each of these through one family, `detail::resolveParameter`, so a driven value
+of the wrong kind is reported as an invalid plan rather than silently substituted, and the resolved
+value -- never the authored constant beside it -- is what enters the operation cache key and what
+makes the operation time-dependent. A text layer whose words change per frame therefore cannot be
+served a cached image of the words it had last frame.
 
 #### The Output Node Is A Sink
 

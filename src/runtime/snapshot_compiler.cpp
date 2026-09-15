@@ -761,28 +761,32 @@ class CompilePass final {
             return;
         }
 
-        // Task S7: a driver binding is evaluable for the three operand kinds that have a
-        // value-graph arm on their compiled parameter -- Scalar, Vector2 and Color. The remaining
-        // kinds (the Layer Output blend mode's Integer, a Text source's String content) are
-        // linkable in the editor and durable in the document, but nothing yet carries their value
-        // into a compiled operation, so they keep the existing unsupported-source report rather
-        // than pretending to evaluate. The reference itself was already validated by the document
-        // layer; what is checked here is only whether this build can lower it.
-        if (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
-            (definition.valueKind == runtime::ParameterValueKind::Float64 ||
-             definition.valueKind == runtime::ParameterValueKind::Vec2d ||
-             definition.valueKind == runtime::ParameterValueKind::Color4d)) {
+        // Task DRIVE-1: a driver binding is evaluable for EVERY parameter kind. Task S7 could only
+        // accept Scalar, Vector2 and Color here, because those were the only three whose compiled
+        // parameter had a value-graph arm; String, Integer, Boolean and Vec3d were linkable in the
+        // editor and durable in the document but carried nothing into a compiled operation, so they
+        // were reported unsupported rather than pretending to evaluate. Each of the four now has a
+        // lowering that reads the value graph -- a Text source's content and a Layer Output's blend
+        // mode through CompiledText::drivenContent and CompiledLayerOutput::drivenBlendMode, and
+        // every value-node operand of any kind through valueOperand() -- so there is no kind left
+        // for which accepting the link would be a promise this build cannot keep. The reference
+        // itself was already validated by the document layer; what is checked here is only whether
+        // this build can lower it, and it can.
+        if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
             return;
         }
 
+        // One case is left: a curve over a parameter whose schema declares no animation. The three
+        // source alternatives a document can store are a constant (returned above), an animation
+        // curve, and a driver binding (returned immediately above, for every kind), so this arm is
+        // reached only by the curve the definition refuses -- which is why it no longer has to
+        // guess between two reasons.
         {
             auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
             diagnosticSubject.parameterId = parameter->id;
             addUnsupported(runtime::CompileDiagnosticCode::UnsupportedParameterSource,
                            std::move(diagnosticSubject), "Parameter source cannot be evaluated yet",
-                           animation != nullptr
-                               ? "This registered parameter does not support animation."
-                               : "This parameter kind cannot yet receive a driver binding.");
+                           "This registered parameter does not support animation.");
         }
     }
 

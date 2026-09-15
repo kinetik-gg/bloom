@@ -259,6 +259,32 @@ restores exact curve/key records, IDs, sources, times, and values on undo/redo w
 maximum live allocator high-water; history never rewinds an allocator counter. Allocation
 exhaustion is a structured command failure and rejected commands do not consume IDs.
 
+### Upstream Value Nodes In The Timeline
+
+A driven parameter has no curve and therefore no key of its own; the key that moves it belongs to the
+value node driving it. The timeline shows both halves of that, so retiming driven motion happens where
+every other retiming happens.
+
+A DRIVEN parameter row shows the driver node's display name behind a link glyph that selects and frames
+that node, and beside it the value the graph resolves the parameter to at the session's current time,
+read-only. It shows no editor, because there is no authored value to edit, and it is never an empty
+cell. The resolved string comes from one session-owned evaluation shared with the Properties panel, so
+the two surfaces cannot show different values for one parameter.
+
+A layer's twirl-down then carries one collapsible group per value node reachable from that layer
+through driver links -- breadth-first from the layer's boundary and direct source nodes, deduplicated,
+titled by the node's display name, in the same order the Properties panel lists the same nodes
+upstream of a selection. A Reroute, the one socket with no parameter behind it, is followed through so
+it cannot hide the node behind it. Inside each group the node's ANIMATABLE parameters are ordinary
+parameter rows: same diamond, same key lane, same drag, box-select, delete, interpolation and paste
+gestures, because they are those rows rather than a second kind that imitates them. A collapsed
+layer's key summary is drawn from the same walk, so the summary and the expanded rows can never
+disagree about which keys belong to a layer.
+
+The group's collapse key is the node's identity rather than its display name, which two nodes may
+share. Editing a row inside a group writes to the value node's own parameter through the ordinary
+constant-or-keyframe rule; it does not touch the layer.
+
 ## Session Time And Scrubbing
 
 `CompositionSession` owns an exact current `RationalTime` and publishes changes to all editors. It

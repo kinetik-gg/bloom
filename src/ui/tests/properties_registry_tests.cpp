@@ -15,6 +15,7 @@
 #include <QVBoxLayout>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
@@ -173,6 +174,67 @@ void upstreamRows() {
     expect(value && value->text() == "Exact string",
            "detached String driver resolves without image lowering");
 }
+// Task DRIVE-1. The headline case at the panel: a text layer whose WORDS come from a String node.
+// The content row has no authored value any more, so it shows the driver and the resolved text
+// read-only rather than an editor holding a stale string -- the same shape every other driven kind
+// already had, now that every kind can actually be driven.
+void drivenTextContent() {
+    auto project =
+        document::makeNewProject("Driven text", "Main", core::RationalTime::fromInteger(10));
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    expect(session.addTextLayer("Title", "Authored"), "driven-content fixture adds its text layer");
+    const auto* content = session.parameterForSelection(document::kTextParameterRole);
+    if (content == nullptr) {
+        expect(false, "the text layer exposes its content parameter");
+        return;
+    }
+    const auto contentId = content->id;
+    const auto string = addNode(session, document::kStringValueNodeType);
+    const auto stringParameter =
+        session.composition()->graph().findNode(string)->parameters.front().parameterId;
+    expect(session.setParameterValue(stringParameter, std::string("Driven words"), "String"),
+           "the String node carries the words");
+    commands::Transaction drive("Drive content", session.snapshot().revision());
+    drive.emplace<commands::SetParameterSource>(
+        id, contentId,
+        document::DriverBindingSource{string, std::string(document::kValuePortName)});
+    expect(session.executeNodeTransaction(std::move(drive)).changed(),
+           "the text content becomes driven");
+
+    ui::PropertiesEditor panel(session);
+    panel.resize(420, 700);
+    panel.show();
+    QCoreApplication::processEvents();
+    QWidget* contentRow = nullptr;
+    for (auto* candidate : panel.findChildren<QWidget*>("propertiesRow"))
+        if (candidate->property("parameterId").toULongLong() == contentId.value())
+            contentRow = candidate;
+    if (contentRow == nullptr) {
+        expect(false, "the content row is realized");
+        return;
+    }
+    auto* editor = contentRow->findChild<QWidget*>("textContentEditor");
+    auto* link = contentRow->findChild<ui::kit::KButton*>("propertiesDriverLink");
+    auto* value = contentRow->findChild<QLabel*>("propertiesDrivenValue");
+    expect(editor != nullptr && !editor->isVisible(),
+           "a driven String shows no text editor, because there is no authored string to edit");
+    expect(link != nullptr && link->isVisible() && !link->text().isEmpty(),
+           "and names the node its words come from");
+    QElapsedTimer wait;
+    wait.start();
+    while (value && value->text() == "Resolving…" && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expect(value != nullptr && value->text() == "Driven words",
+           "and shows the resolved text itself, read-only");
+    expect(value != nullptr && value->text() == session.drivenValueText(contentId),
+           "read from the session, so the timeline row for this parameter shows the same string");
+}
+
 void widthRule() {
     auto project = document::makeNewProject("Width", "Main", core::RationalTime::fromInteger(10));
     auto id = project.initialCompositionId;
@@ -388,6 +450,7 @@ int main(int argc, char** argv) try {
     genericKinds();
     registryRows();
     upstreamRows();
+    drivenTextContent();
     widthRule();
     QSettings().clear();
     return failures ? 1 : 0;

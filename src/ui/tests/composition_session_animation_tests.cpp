@@ -1,18 +1,24 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QThread>
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -163,6 +169,97 @@ void testDrivenEditIsExplicitlyRejected() {
     require(rejection.contains(QStringLiteral("Disconnect")) &&
                 rejection.contains(QStringLiteral("driven")),
             "driven rejection describes the required explicit transition");
+}
+
+// Task DRIVE-1. The driver-chain readers the timeline and Properties share, and the value readers
+// for the kinds that used to have none.
+void testDriverChainAccessors() {
+    auto newProject = document::makeNewProject("Driver Chain", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    commands::Transaction addValue("Add value node", document.snapshot().revision());
+    addValue.emplace<commands::AddNode>(compositionId, std::string(document::kVector2ValueNodeType),
+                                        document::Vec2d{200.0, 200.0});
+    const auto valueResult = stack.execute(std::move(addValue));
+    const auto valueNode = valueResult.outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!valueNode.has_value()) {
+        require(false, "the driver-chain fixture adds its Vector 2 value node");
+        return;
+    }
+    commands::Transaction drive("Drive position", document.snapshot().revision());
+    drive.emplace<commands::SetParameterSource>(
+        compositionId, ids.position,
+        document::DriverBindingSource{*valueNode, std::string(document::kValuePortName)});
+    require(stack.execute(std::move(drive)).changed(), "the fixture position becomes driven");
+
+    ui::CompositionSession session(document, stack, compositionId);
+    const auto* binding = session.driverBindingFor(ids.position);
+    require(binding != nullptr && binding->sourceNodeId == *valueNode,
+            "driverBindingFor names the node the parameter is driven by");
+    require(session.driverBindingFor(ids.opacity) == nullptr,
+            "and answers nothing for a parameter that is not driven");
+    require(!session.driverDisplayName(ids.position).isEmpty(),
+            "a driven parameter names its driver, so a row never has to show an empty cell");
+    require(session.driverDisplayName(ids.opacity).isEmpty(),
+            "and an undriven one names nothing at all");
+
+    const auto boundary = session.boundaryNodeForLayer(ids.layer);
+    if (!boundary.has_value()) {
+        require(false, "the fixture layer has a boundary node");
+        return;
+    }
+    const std::array seeds{*boundary};
+    const auto driversOnly = session.upstreamNodes(seeds, ui::UpstreamTraversal::DriverLinksOnly);
+    require(driversOnly.size() == 1 && driversOnly.front().id == *valueNode &&
+                driversOnly.front().depth == 1,
+            "the driver-only walk reaches exactly the value node the layer is driven by");
+    const auto withEdges =
+        session.upstreamNodes(seeds, ui::UpstreamTraversal::DriverLinksAndInputEdges);
+    require(withEdges.size() > driversOnly.size(),
+            "and the walk that follows input edges as well reaches the layer's image source too, "
+            "which is why the timeline asks for the first and Properties for the second");
+
+    // The value readers for the kinds that had none. A layer's blend mode is the Integer one every
+    // layer carries, so it is the honest fixture for all three.
+    const auto* boundaryNode = session.composition()->graph().findNode(*boundary);
+    if (boundaryNode == nullptr) {
+        require(false, "the boundary node is addressable");
+        return;
+    }
+    auto blendMode = document::ParameterId{};
+    for (const auto& parameterBinding : boundaryNode->parameters) {
+        if (parameterBinding.role == document::kBlendModeParameterRole) {
+            blendMode = parameterBinding.parameterId;
+        }
+    }
+    require(blendMode.isValid(), "the boundary node exposes its blend mode parameter");
+    require(session.effectiveIntegerValue(blendMode).has_value(),
+            "an Integer parameter reads back through the same effective-value reader every other "
+            "kind uses");
+    require(!session.effectiveStringValue(blendMode).has_value() &&
+                !session.effectiveBooleanValue(blendMode).has_value() &&
+                !session.effectiveScalarValue(blendMode).has_value(),
+            "and a value of the wrong kind is refused rather than projected");
+    require(!session.effectiveVec2Value(ids.position).has_value(),
+            "a DRIVEN parameter has no effective value at all -- its value comes from the graph");
+
+    // The resolution itself: one request, answered for every driven parameter in the composition.
+    require(session.drivenValueText(ids.position).isEmpty(),
+            "nothing is resolved before anything asks");
+    session.refreshDrivenValues();
+    QElapsedTimer wait;
+    wait.start();
+    while (session.drivenValueText(ids.position).isEmpty() && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    require(!session.drivenValueText(ids.position).isEmpty(),
+            "and after one refresh the driven parameter reads back a resolved value");
+    require(session.drivenValueText(ids.opacity).isEmpty(),
+            "while a parameter that is not driven resolves to nothing");
 }
 
 void testComponentDiamondsAndSelections() {
@@ -538,6 +635,7 @@ int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     testAnimatedEditsUseExactSessionTime();
     testDrivenEditIsExplicitlyRejected();
+    testDriverChainAccessors();
     testComponentDiamondsAndSelections();
     testKeyframeGestureCreatesAndRemovesAnimation();
     testKeyframeGestureReachesEveryAnimatableSchema();

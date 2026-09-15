@@ -563,6 +563,40 @@ resolveParameter(const CompiledScalarParameter& parameter, const CompiledComposi
                                      sample.segmentStart};
 }
 
+// Task DRIVE-1. The fourth member of this family, for the parameter kinds that cannot interpolate
+// -- a String, an Integer (every enum-backed one included) and a Boolean. They have no curve table
+// to index, so unlike their three animatable siblings they answer only the two questions that are
+// left: the authored constant the compiler resolved, or the value-graph output a driver binding
+// hands them this frame. A driven output of the wrong alternative answers nothing, for exactly the
+// reason resolvedValue() gives -- there is no defensible substitute for "this parameter wanted a
+// String and the graph produced a colour" -- so a malformed plan is diagnosed rather than trusted.
+template <typename Value>
+[[nodiscard]] static std::optional<ResolvedParameter<Value>>
+resolveParameter(const document::ParameterId id, const Value& authored,
+                 const std::optional<ValueOutputIndex>& driven,
+                 const ResolvedEvaluation& resolved) noexcept {
+    if (!driven.has_value()) {
+        return ResolvedParameter<Value>{authored, id, std::nullopt, std::nullopt};
+    }
+    const auto* value = resolvedValue<Value>(*driven, resolved);
+    return value == nullptr
+               ? std::nullopt
+               : std::optional(ResolvedParameter<Value>{*value, id, std::nullopt, std::nullopt});
+}
+
+// The blend mode one layer composites with at this frame. An authored mode and a driven one are the
+// same closed set of modes, because both go through core::blendModeFromStoredValue(): a driven
+// Integer naming no implemented mode answers nothing rather than silently compositing Normal. The
+// document cannot store such an integer -- ParameterStore refuses it on insert and validation
+// refuses it on publication -- so only a malformed plan can produce one.
+[[nodiscard]] static std::optional<core::BlendMode>
+resolveParameter(const CompiledLayerOutput& layer, const ResolvedEvaluation& resolved) noexcept {
+    const auto stored =
+        resolveParameter(layer.blendModeParameterId, core::blendModeStoredValue(layer.blendMode),
+                         layer.drivenBlendMode, resolved);
+    return stored.has_value() ? core::blendModeFromStoredValue(stored->value) : std::nullopt;
+}
+
 template <typename Value>
 [[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
                                                  const ResolvedParameter<Value>& parameter,
@@ -1414,6 +1448,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (value)
                         key.add(value->value);
                 };
+                // Task DRIVE-1. The same participation for the kinds with no curve arm: what enters
+                // the key is the value this FRAME resolves to, never the authored constant beside
+                // it, so a text layer whose words change per frame cannot serve a cached image of
+                // the words it had last frame.
+                const auto authored = [&](const document::ParameterId id, const auto& constant,
+                                          const std::optional<ValueOutputIndex>& driven) {
+                    const auto value = detail::resolveParameter(id, constant, driven, resolved);
+                    key.add(value.has_value());
+                    if (value)
+                        key.add(value->value);
+                };
                 std::visit(
                     [&](const auto& step) {
                         key.add(step.sourceNodeId);
@@ -1427,10 +1472,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
-                            key.add(step.content);
+                            authored(step.contentParameterId, step.content, step.drivenContent);
                             key.add(step.layout.has_value());
                             if (step.layout) {
-                                key.add(step.layout->alignment);
+                                authored(step.layout->alignmentId, step.layout->alignment,
+                                         step.layout->drivenAlignment);
                                 parameter(step.layout->lineHeight);
                                 parameter(step.layout->letterSpacing);
                             }
@@ -1443,7 +1489,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.scale);
                             parameter(step.rotation);
                             parameter(step.opacity);
-                            key.add(step.blendMode);
+                            authored(step.blendModeParameterId,
+                                     core::blendModeStoredValue(step.blendMode),
+                                     step.drivenBlendMode);
                             key.add(request.time >= step.inPoint &&
                                     (!step.outPoint || request.time < *step.outPoint));
                         } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
@@ -1672,7 +1720,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto size = detail::resolveParameter(text.size, *plan, resolved);
                             const auto color =
                                 detail::resolveParameter(text.color, *plan, resolved);
-                            if (!size.has_value() || !color.has_value()) {
+                            // Task DRIVE-1: the words themselves, which a driver may change every
+                            // frame -- a frame counter, a timecode, a label assembled by a String
+                            // node -- resolved by the same family that resolves the size they are
+                            // drawn at.
+                            const auto content =
+                                detail::resolveParameter(text.contentParameterId, text.content,
+                                                         text.drivenContent, resolved);
+                            if (!size.has_value() || !color.has_value() || !content.has_value()) {
                                 operationFailure = diagnostic(
                                     EvaluationDiagnosticCode::InvalidPlan,
                                     "Text parameter could not be resolved", {}, operationSubject);
@@ -1707,20 +1762,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     text.layout->lineHeight, *plan, resolved);
                                 const auto letterSpacing = detail::resolveParameter(
                                     text.layout->letterSpacing, *plan, resolved);
-                                if (!lineHeight || !letterSpacing || text.layout->alignment < 0 ||
-                                    text.layout->alignment > 2) {
+                                const auto alignment = detail::resolveParameter(
+                                    text.layout->alignmentId, text.layout->alignment,
+                                    text.layout->drivenAlignment, resolved);
+                                if (!lineHeight || !letterSpacing || !alignment ||
+                                    alignment->value < 0 || alignment->value > 2) {
                                     operationFailure =
                                         diagnostic(EvaluationDiagnosticCode::InvalidParameter,
                                                    "Text layout is invalid", {}, operationSubject);
                                     return;
                                 }
-                                layout = {
-                                    static_cast<render::TextAlignment>(text.layout->alignment),
-                                    lineHeight->value,
-                                    letterSpacing->value * resolved.horizontalScale, true};
+                                layout = {static_cast<render::TextAlignment>(alignment->value),
+                                          lineHeight->value,
+                                          letterSpacing->value * resolved.horizontalScale, true};
                             }
                             auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                                text.content, *rasterParameters.value(), remainingPixelBudget(),
+                                content->value, *rasterParameters.value(), remainingPixelBudget(),
                                 layout);
                             if (!coverage) {
                                 operationFailure =
@@ -2122,9 +2179,24 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 // choice.
                                 const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                     &plan->operations()[entry->input.value()]);
-                                const auto blendMode = layerOutput && entry->layerId.isValid()
-                                                           ? layerOutput->blendMode
-                                                           : core::BlendMode::Normal;
+                                auto blendMode = core::BlendMode::Normal;
+                                if (layerOutput != nullptr && entry->layerId.isValid()) {
+                                    // Task DRIVE-1: the mode may be driven, so it is READ here
+                                    // rather than copied out of the plan.
+                                    const auto resolvedMode =
+                                        detail::resolveParameter(*layerOutput, resolved);
+                                    if (!resolvedMode.has_value()) {
+                                        auto modeSubject = operationSubject;
+                                        modeSubject.parameterId = layerOutput->blendModeParameterId;
+                                        modeSubject.field = "blend-mode";
+                                        operationFailure =
+                                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                       "Layer blend mode could not be resolved", {},
+                                                       std::move(modeSubject));
+                                        return;
+                                    }
+                                    blendMode = *resolvedMode;
+                                }
                                 auto sourceView = slots[entry->input.value()]->view();
                                 if (!sourceView) {
                                     operationFailure =
