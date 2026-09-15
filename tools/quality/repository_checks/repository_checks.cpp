@@ -341,6 +341,7 @@ constexpr auto kAllowedModuleDependencies =
         {"media", "color"},    /* Qualified input conversion belongs to color. */
         {"media", "platform"},     {"media", "render"},      {"media", "runtime"},
         {"color", "core"},         {"color", "platform"},    {"color", "render"},
+        {"runtime", "media"}, /* Image evaluation consumes the bounded media decoder. */
         {"runtime", "color"},      {"output", "color"},      {"output", "core"},
         {"output", "document"},    {"output", "platform"},   {"output", "render"},
         {"output", "runtime"},     {"host", "color"},        {"host", "commands"},

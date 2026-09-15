@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "image_source.hpp"
 #include "operation_key.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -47,19 +48,21 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
                               .animationCurveId = std::nullopt,
                               .keyframeId = std::nullopt,
                               .field = {}};
-    std::visit(Overloaded{
-                   [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
-                   [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
-                   [&subject](const CompiledLayerOutput& layer) {
-                       subject.nodeId = layer.sourceNodeId;
-                       subject.layerId = layer.layerId;
-                   },
-                   [&subject](const CompiledMerge& stack) { subject.nodeId = stack.sourceNodeId; },
-                   [&subject](const CompiledCompositionOutput& output) {
-                       subject.nodeId = output.sourceNodeId;
-                   },
-               },
-               operation);
+    std::visit(
+        Overloaded{
+            [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+            [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
+            [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
+            [&subject](const CompiledLayerOutput& layer) {
+                subject.nodeId = layer.sourceNodeId;
+                subject.layerId = layer.layerId;
+            },
+            [&subject](const CompiledMerge& stack) { subject.nodeId = stack.sourceNodeId; },
+            [&subject](const CompiledCompositionOutput& output) {
+                subject.nodeId = output.sourceNodeId;
+            },
+        },
+        operation);
     return subject;
 }
 
@@ -319,6 +322,10 @@ enum class ScalarDomain : std::uint8_t {
                        (!solid.height ||
                         hasValidScalarCurveReference(*solid.height, plan, index, failure));
             },
+            [](const CompiledImageSource& image) {
+                return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
+                       image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
+            },
             [&plan, index, &failure](const CompiledText& text) {
                 return hasValidScalarCurveReference(text.size, plan, index, failure) &&
                        hasValidColorCurveReference(text.color, plan, index, failure) &&
@@ -335,6 +342,7 @@ enum class ScalarDomain : std::uint8_t {
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
+                           std::holds_alternative<CompiledImageSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
                            std::holds_alternative<CompiledMerge>(input);
                 };
@@ -953,6 +961,7 @@ template <typename Value>
                                       registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
                                                      operationSubject));
                 },
+                [](const CompiledImageSource&) {},
                 [](const CompiledMerge&) {},
                 [](const CompiledCompositionOutput&) {},
             },
@@ -1325,6 +1334,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache()))
                       ? nullptr
                       : cache_.get();
+    std::vector<EvaluationDiagnostic> imageWarnings;
+    const auto mediaBase = assetBaseDirectory();
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -1366,6 +1377,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
 
+            std::optional<detail::ImageSourceSelection> selectedImage;
+            if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
+                selectedImage = detail::selectImageSource(
+                    *source, request.time, plan->format().frameRate(), mediaBase, cancellation);
+                if (selectedImage->cancelled)
+                    return EvaluationResult::cancelled();
+                if (!selectedImage->warning.empty())
+                    imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                             DiagnosticSeverity::Warning,
+                                             operationSubject,
+                                             selectedImage->warning,
+                                             {}});
+            }
             detail::OperationKey key;
             if (cache) {
                 key.add(std::string("image"));
@@ -1400,6 +1424,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 parameter(*step.width);
                             if (step.height)
                                 parameter(*step.height);
+                        } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
+                            key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
                             key.add(step.content);
                             key.add(step.layout.has_value());
@@ -1605,6 +1631,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledImageSource&) {
+                            if (!selectedImage || !selectedImage->available)
+                                return;
+                            auto image = detail::evaluateImageSource(
+                                *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
+                                resolved.verticalScale, remainingPixelBudget(), *decodedImages_,
+                                cancellation);
+                            if (image.cancelled) {
+                                operationCancelled = true;
+                                return;
+                            }
+                            if (!image.value.has_value()) {
+                                imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                                         DiagnosticSeverity::Warning,
+                                                         operationSubject,
+                                                         image.diagnostic,
+                                                         {}});
+                                return;
+                            }
+                            bounds[index].local = detail::boundsForWindow(
+                                image.value->descriptor()->dataWindow(), resolved.horizontalScale,
+                                resolved.verticalScale);
+                            bounds[index].output = bounds[index].local;
+                            produced.emplace(std::move(*image.value));
                         },
                         [&](const CompiledText& text) {
                             // A text source produces a full-frame image exactly like a solid, so
@@ -2301,7 +2352,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::move(identity), std::move(processImage), frameStatistics, std::move(bounds)));
         if (statistics)
             *statistics = std::move(frameStatistics);
-        return EvaluationResult::evaluated(std::move(frame));
+        return EvaluationResult::evaluated(std::move(frame), std::move(imageWarnings));
     } catch (const std::bad_alloc&) {
         return unexpectedAllocationFailure();
     } catch (const std::length_error&) {

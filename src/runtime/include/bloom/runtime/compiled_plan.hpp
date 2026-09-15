@@ -10,6 +10,7 @@
 #include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <array>
+#include <bloom/document/asset.hpp>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -141,6 +142,16 @@ struct CompiledTextLayout {
     friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
 };
 
+struct CompiledImageSource {
+    document::NodeId sourceNodeId;
+    std::optional<document::AssetRecord> asset;
+    std::int64_t startFrame = 0;
+    std::int64_t loopMode = 0;
+    std::int64_t colorSpace = 0;
+    bool premultiply = true;
+    friend bool operator==(const CompiledImageSource&, const CompiledImageSource&) = default;
+};
+
 struct CompiledText {
     document::NodeId sourceNodeId;
     document::ParameterId contentParameterId;
@@ -206,8 +217,9 @@ struct CompiledCompositionOutput {
                            const CompiledCompositionOutput&) = default;
 };
 
-using CompiledOperation = std::variant<CompiledSolid, CompiledText, CompiledLayerOutput,
-                                       CompiledMerge, CompiledCompositionOutput>;
+using CompiledOperation =
+    std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledLayerOutput,
+                 CompiledMerge, CompiledCompositionOutput>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot

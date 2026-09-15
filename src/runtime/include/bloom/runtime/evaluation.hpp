@@ -19,6 +19,10 @@
 
 namespace bloom::runtime {
 
+// MEDIA-1 bumps evaluator semantics 5 -> 6: process evaluation now admits interpreted external
+// image bytes and composition-rate sequence selection. Decoded source keys bind member digest,
+// interpretation and the unchanged Bloom Neutral config revision. Primitive, plan and animation
+// semantics remain unchanged: no existing primitive or operand contract changed.
 // Bumped to 5 by the blend-mode slice: the Layer Stack stage reads each entry's Layer Output blend
 // mode and folds through render::blendLinearRec709SceneRow() instead of compositing source-over
 // unconditionally. A composition whose every layer is Normal evaluates to bit-identical pixels, but
@@ -30,7 +34,7 @@ namespace bloom::runtime {
 // data window to its own transformed bounds rather than the whole composition. A frame identity
 // from before this change must not compare equal to one from after it, even where the pixels
 // coincide.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 5;
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 6;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,

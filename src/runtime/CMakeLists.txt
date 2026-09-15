@@ -60,6 +60,8 @@ target_sources(
     bloom_runtime_evaluator
     PRIVATE
         operation_cache.cpp
+        image_source.cpp
+        image_source.hpp
         operation_key.hpp
         animation_sampling.cpp
         cpu_composition_evaluator.cpp
@@ -102,7 +104,7 @@ target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)
 # bloom::color value types (PreparedCpuDisplayProcessorHandle, PreparedDisplayFrame) directly in
 # their own public signatures, exactly like the existing PUBLIC bloom_render dependency below.
 target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render
-                                                     bloom_color_ocio)
+                                                     bloom_color_ocio bloom_media_image)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 

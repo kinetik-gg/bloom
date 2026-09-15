@@ -760,6 +760,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
                definition.inputs.front().valueKind == definition.outputs.front().valueKind &&
                definition.inputs.front().name == definition.outputs.front().name;
     case NodeLoweringKind::Solid:
+    case NodeLoweringKind::ImageSource:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::LayerOutput:
     case NodeLoweringKind::LayerStack:

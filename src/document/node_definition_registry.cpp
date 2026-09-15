@@ -133,6 +133,20 @@ template <typename Definition>
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
                hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
+    case NodeLoweringKind::ImageSource:
+        return hasCanonicalKey(definition, "bloom.image-source", 1) &&
+               hasImageOutput(definition, "image") && definition.parameters.size() == 5 &&
+               definition.inputs.empty() &&
+               hasParameter(definition, 0, "asset", "bloom.image.asset",
+                            ParameterValueKind::String) &&
+               hasParameter(definition, 1, "startFrame", "bloom.image.start-frame",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 2, "loopMode", "bloom.image.loop-mode",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 3, "colorSpace", "bloom.image.color-space",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 4, "premultiply", "bloom.image.premultiply",
+                            ParameterValueKind::Boolean);
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
         // then color. The font is not a parameter -- this lowering has exactly one face
@@ -350,6 +364,26 @@ template <typename Definition>
             NodeCategory::Output};
 }
 
+[[nodiscard]] NodeDefinition imageDefinition() {
+    using namespace bloom::document;
+    return {{"bloom.image-source", 1},
+            NodeLoweringKind::ImageSource,
+            {},
+            {{"image", SocketValueKind::Image}},
+            {{"asset", "bloom.image.asset", ParameterValueKind::String, true, false, std::string{}},
+             {"startFrame", "bloom.image.start-frame", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"loopMode", "bloom.image.loop-mode", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"colorSpace", "bloom.image.color-space", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"premultiply", "bloom.image.premultiply", ParameterValueKind::Boolean, true, false,
+              true}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
+}
+
 [[nodiscard]] NodeDefinition textDefinition(const bool typography = true) {
     using namespace bloom::document;
     NodeDefinition definition{
@@ -461,10 +495,16 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::vector<NodeDefinition> definitions{
-        solidDefinition(false),        solidDefinition(),           layerOutputDefinition(false),
-        layerOutputDefinition(),       layerStackDefinition(false), layerStackDefinition(),
-        compositionOutputDefinition(), textDefinition(false),       textDefinition()};
+    std::vector<NodeDefinition> definitions{solidDefinition(false),
+                                            solidDefinition(),
+                                            layerOutputDefinition(false),
+                                            layerOutputDefinition(),
+                                            layerStackDefinition(false),
+                                            layerStackDefinition(),
+                                            compositionOutputDefinition(),
+                                            textDefinition(false),
+                                            textDefinition(),
+                                            imageDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.
