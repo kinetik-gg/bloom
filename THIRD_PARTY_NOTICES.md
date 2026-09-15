@@ -68,6 +68,8 @@ are not vendored.
 | --- | --- | --- | --- | --- |
 | stb_truetype | 1.26 (commit `6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760`) | MIT OR Unlicense | `src/render/third_party/stb_truetype/` | `dependencies/licenses/stb_truetype/` |
 
+| stb_image | 2.30 (commit `013ac3beddff3dbffafd5177e7972067cd2b5083`) | MIT OR Unlicense | `src/media/third_party/stb_image/` | `dependencies/licenses/stb_image/` |
+
 ### stb_truetype
 
 Copyright (c) 2017 Sean Barrett (<https://github.com/nothings/stb>). Dual-licensed at the

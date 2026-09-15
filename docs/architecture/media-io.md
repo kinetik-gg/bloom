@@ -4,6 +4,15 @@ Status: working research
 
 Updated: 2026-08-25
 
+## v0 implemented boundary
+
+The accepted v0 amendment in ADR 0020 admits the image pipeline under `src/media/image`:
+a private, pinned stb_image PNG/JPEG decoder compiled in process with hard input and allocation
+limits. PNG16 is included. Images and numbered sequences become asset records; authoring source
+nodes reference stable asset IDs. Broad time-based media remains the working research below.
+The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection
+research below for this closed image profile. See the component security review for limits.
+
 ## Purpose
 
 Bloom needs reliable, performant media ingest and export without making one codec library, operating

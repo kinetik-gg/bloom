@@ -1,0 +1,8 @@
+add_library(bloom_media_stb_image OBJECT stb_image_adapter.cpp stb_image_adapter.hpp)
+target_compile_features(bloom_media_stb_image PUBLIC cxx_std_20)
+if(MSVC)
+    target_compile_options(bloom_media_stb_image PRIVATE /w)
+else()
+    target_compile_options(bloom_media_stb_image PRIVATE -w)
+endif()
+bloom_enable_strict_floating_point(bloom_media_stb_image)

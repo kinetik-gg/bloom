@@ -42,6 +42,7 @@ add_subdirectory(src/project)
 # added above), never on src/runtime, so this reordering introduces no cycle.
 add_subdirectory(src/render)
 add_subdirectory(src/color)
+add_subdirectory(src/media)
 add_subdirectory(src/runtime)
 add_subdirectory(src/output)
 add_subdirectory(src/commands)
