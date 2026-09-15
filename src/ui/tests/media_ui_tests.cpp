@@ -1,4 +1,6 @@
 #include "asset_drop.hpp"
+#include "node_editor_items.hpp"
+#include "timeline_property_rows.hpp"
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -85,6 +87,33 @@ void run() {
     require(selector && selector->currentIndex() > 0, "asset selector reflects source binding");
     auto* dimensions = properties.findChild<ui::kit::KLabel*>("propertiesImageDimensions");
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
+    ui::node_editor::NodeItem* card = nullptr;
+    for (auto* item : view->scene()->items())
+        if (auto* candidate = dynamic_cast<ui::node_editor::NodeItem*>(item);
+            candidate && candidate->id() == source)
+            card = candidate;
+    require(card, "Image card exists");
+    const auto checkEnums = [](ui::kit::KDropdown* control, const QStringList& names) {
+        require(control && control->count() == names.size(), "closed enum dropdown");
+        for (int index = 0; index < names.size(); ++index)
+            require(control->itemText(index) == names[index] &&
+                        control->itemData(index).toLongLong() == index,
+                    "enum display and stored value agree");
+    };
+    for (const auto& [role, names] : std::vector<std::pair<QString, QStringList>>{
+             {"loopMode", {"Hold", "Loop", "Ping-pong"}},
+             {"colorSpace", {"Auto", "sRGB", "Linear", "Raw"}}}) {
+        ui::kit::KDropdown* control = nullptr;
+        for (auto* child : card->childItems())
+            if (auto* proxy = dynamic_cast<QGraphicsProxyWidget*>(child))
+                for (auto* dropdown : proxy->widget()->findChildren<ui::kit::KDropdown*>())
+                    if (dropdown->property("nodeParameterRole").toString() == role)
+                        control = dropdown;
+        checkEnums(control, names);
+        const auto object =
+            role == "loopMode" ? "propertiesImageLoopMode" : "propertiesImageColorSpace";
+        checkEnums(properties.findChild<ui::kit::KDropdown*>(object), names);
+    }
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
     QWidget timelineTarget;
     ui::installAssetDropTarget(timelineTarget, session);
@@ -96,6 +125,29 @@ void run() {
     require(drop(timelineTarget, mime), "timeline asset drop");
     require(session.composition()->graph().layerOutputs().size() == 1, "drop creates a Layer");
     require(session.snapshot().project().validate().ok(), "drop preserves valid project graph");
+    const auto layer = session.composition()->graph().layerOutputs().front().id;
+    ui::TimelineLayerEntry entry;
+    entry.layerId = layer;
+    const auto rows = ui::timelinePropertyEntries(session, {entry}, {layer});
+    int enumRows = 0;
+    for (const auto& item : rows) {
+        if (item.role != "loopMode" && item.role != "colorSpace")
+            continue;
+        ++enumRows;
+        ui::TimelinePropertyRow row(session, nullptr);
+        row.bind(item);
+        auto* control = row.findChild<ui::kit::KDropdown*>("timelinePropertyAlignment");
+        checkEnums(control, item.role == "loopMode" ? QStringList{"Hold", "Loop", "Ping-pong"}
+                                                    : QStringList{"Auto", "sRGB", "Linear", "Raw"});
+        control->setCurrentIndex(2);
+        require(std::get<std::int64_t>(
+                    std::get<document::ConstantValueSource>(
+                        session.composition()->parameters().find(item.parameterId)->source)
+                        .value) == 2,
+                "timeline enum commits");
+        require(session.undo(), "timeline enum undo");
+    }
+    require(enumRows == 2, "timeline exposes both image enum rows");
     controller.remove(asset);
     require(!session.snapshot().project().findAsset(asset), "Remove publishes asset removal");
     require(host.liveDocumentAndStack().second->undo().succeeded(), "asset removal is undoable");

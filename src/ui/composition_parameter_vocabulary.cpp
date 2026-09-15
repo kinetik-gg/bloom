@@ -20,7 +20,7 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     if (schemaKey == "bloom.image.loop-mode") {
         add(QObject::tr("Hold"), 0);
         add(QObject::tr("Loop"), 1);
-        add(QObject::tr("PingPong"), 2);
+        add(QObject::tr("Ping-pong"), 2);
         return items;
     }
     if (schemaKey == "bloom.image.color-space") {
@@ -47,7 +47,7 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
             // The frozen signature's own id is the name, with its namespace trimmed: the card
             // must not invent a second spelling for an operation the kernel already names.
             const auto id = signature == nullptr ? std::string_view{} : signature->id;
-            add(node_editor::displayTypeName(id.substr(id.rfind('.') + 1)),
+            add(node_editor::displayTypeName(id.subsQObject::tr(id.rfind('.') + 1)),
                 document::scalarOperationStoredValue(operation));
         }
         return items;
@@ -77,6 +77,59 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
         }
         return items;
     }
+    // Task UTIL-1's selectors. Each offers its own closed vocabulary in the order the document
+    // numbers it, so the card cannot offer a member the schema would refuse.
+    if (schemaKey == document::kRoundingModeParameterSchemaKey) {
+        static constexpr std::array kNames{"Round", "Floor", "Ceiling", "Truncate"};
+        for (std::size_t index = 0; index < document::kRoundingModes.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]),
+                document::selectorStoredValue(document::kRoundingModes[index]));
+        }
+        return items;
+    }
+    if (schemaKey == document::kIntegerOperationParameterSchemaKey) {
+        static constexpr std::array kNames{"Add",    "Subtract", "Multiply", "Divide",
+                                           "Modulo", "Minimum",  "Maximum"};
+        for (std::size_t index = 0; index < document::kIntegerOperations.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]),
+                document::selectorStoredValue(document::kIntegerOperations[index]));
+        }
+        return items;
+    }
+    if (schemaKey == document::kBooleanOperationParameterSchemaKey) {
+        static constexpr std::array kNames{"And", "Or", "Xor", "Nand", "Nor"};
+        for (std::size_t index = 0; index < document::kBooleanOperations.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]),
+                document::selectorStoredValue(document::kBooleanOperations[index]));
+        }
+        return items;
+    }
+    if (schemaKey == document::kStringCaseParameterSchemaKey) {
+        static constexpr std::array kNames{"Upper", "Lower", "Title"};
+        for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]),
+                document::selectorStoredValue(document::kStringCaseModes[index]));
+        }
+        return items;
+    }
+    if (schemaKey == document::kStringPadSideParameterSchemaKey) {
+        static constexpr std::array kNames{"Start", "End"};
+        for (std::size_t index = 0; index < document::kStringPadSides.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]),
+                document::selectorStoredValue(document::kStringPadSides[index]));
+        }
+        return items;
+    }
+    if (schemaKey == document::kNumberRadixParameterSchemaKey) {
+        // The stored value IS the radix, so the offered list is a convenience rather than a
+        // mapping: a document carrying base 36 keeps it, and this dropdown simply has no row
+        // for it.
+        static constexpr std::array kNames{"Binary", "Octal", "Decimal", "Hexadecimal"};
+        for (std::size_t index = 0; index < document::kOfferedRadices.size(); ++index) {
+            add(QString::fromUtf8(kNames[index]), document::kOfferedRadices[index]);
+        }
+        return items;
+    }
     if (schemaKey == document::kCompareOperationParameterSchemaKey) {
         static constexpr std::array kNames{"Equal",         "Not Equal", "Less",
                                            "Less Or Equal", "Greater",   "Greater Or Equal"};
@@ -88,4 +141,5 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     }
     return items;
 }
+
 } // namespace bloom::ui
