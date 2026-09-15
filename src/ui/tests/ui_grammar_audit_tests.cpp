@@ -56,8 +56,13 @@ int run(int argc, char** argv) {
                 qobject_cast<kit::KValueField*>(widget) || qobject_cast<kit::KSwitch*>(widget) ||
                 qobject_cast<kit::KSlider*>(widget) || qobject_cast<kit::KSearchField*>(widget) ||
                 qobject_cast<kit::KLabel*>(widget) || qobject_cast<kit::KColorChip*>(widget)) {
-                expect(widget->height() == kit::px(kit::Size::Control), widget,
-                       "kit control token");
+                expect(widget->height() ==
+                           kit::px((qobject_cast<kit::KIconToggle*>(widget) ||
+                                    widget->property("rowCell").toString() == "toggle" ||
+                                    widget->width() == kit::px(kit::Size::ToggleCell))
+                                       ? kit::Size::ToggleCell
+                                       : kit::Size::Control),
+                       widget, "kit control token");
                 ++controls;
             }
             if (const auto* button = qobject_cast<kit::KButton*>(widget)) {
@@ -150,7 +155,7 @@ int run(int argc, char** argv) {
     const auto choices = tools->findChildren<kit::KIconToggle*>();
     expect(choices.size() == 6, tools, "six tool choices");
     for (auto* choice : choices) {
-        expect(choice->height() == kit::px(kit::Size::Control) && !choice->toolTip().isEmpty(),
+        expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),
                choice, "tool extent and help");
         expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
     }

@@ -214,3 +214,7 @@ Rows own `Spacing::RowPadding` (1 on all edges); KValueField owns `FieldMargin` 
 inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
 controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge).
 Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
+
+Toggle and disclosure cells are ToggleCell squares (24); their glyphs are IconControl (20),
+with Regular off, Fill on, muted disabled and a neutral bordered box. Column headings use
+the same glyph size and pitch. KDiamond uses the Bold outline at every DPR.

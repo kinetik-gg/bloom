@@ -119,7 +119,7 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     nameLayout->setContentsMargins(px(Spacing::XS), 0, px(Spacing::XS), 0);
     nameLayout->setSpacing(0);
     disclosure_ = new KIconButton(nameCell_);
-    disclosure_->setFixedWidth(px(Size::IconChrome));
+    disclosure_->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     disclosure_->hide();
     name_ = new KLabel(nameCell_);
     name_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -130,7 +130,7 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
 void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
                     QWidget* trailing) {
     for (auto* cell : toggles) {
-        cell->setFixedSize(px(Size::ToggleCell), px(Size::Control));
+        cell->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
         cell->setProperty("rowCell", "toggle");
         row_->addWidget(cell, 0, Qt::AlignVCenter);
     }

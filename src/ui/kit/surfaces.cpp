@@ -6,7 +6,7 @@ void KDiamond::paintEvent(QPaintEvent*) {
                           ? color(Color::Keyframe)
                           : withOpacity(color(Color::Muted), kDisabledOpacity);
     const auto glyph = iconPixmap(IconId::Keyframe, Size::IconSmall, tint, devicePixelRatioF(),
-                                  keyed_ ? IconWeight::Fill : IconWeight::Regular);
+                                  keyed_ ? IconWeight::Fill : IconWeight::Bold);
     const auto extent = glyph.deviceIndependentSize();
     const QPointF origin((width() - extent.width()) / 2, (height() - extent.height()) / 2);
     painter.drawPixmap(origin, glyph);

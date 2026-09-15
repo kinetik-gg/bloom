@@ -428,7 +428,9 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     QList<QWidget*> glyphs;
     for (int index = 0; index < kToggleCellCount; ++index) {
         auto* glyph = new kit::KIconButton(row);
-        glyph->setIcon(kit::icon(toggleIcon(index), kit::IconRole::Chrome));
+        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconControl, kit::Color::Muted,
+                                 kit::IconWeight::Regular));
+        glyph->setIconSize(QSize(kit::px(kit::Size::IconControl), kit::px(kit::Size::IconControl)));
         glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
         glyphs.append(glyph);
     }

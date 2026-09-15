@@ -28,7 +28,7 @@ KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
 }
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
-    setFixedWidth(px(Size::ToggleCell));
+    setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     ensureKeyboardFocusTracking(*this);
 }
 void KIconToggle::setGlyph(IconId id) {
@@ -47,12 +47,10 @@ QPixmap KIconToggle::glyphPixmap() const {
 }
 void KIconToggle::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const QRectF box = QRectF(rect()).adjusted(px(Spacing::XXS), px(Spacing::XXS),
-                                               -px(Spacing::XXS), -px(Spacing::XXS));
+    const QRectF box = rect();
     fillRoundedSurface(
         painter, box,
-        color(property("toolChoice").toBool() && isChecked() ? Color::Accent
-                                                             : Color::ControlSurface),
+        color(property("toolChoice").toBool() && isChecked() ? Color::Accent : Color::Surface),
         color(borderForInteraction(isEnabled(), hasKeyboardFocus(*this), underMouse())),
         Radius::Small);
     const auto glyph = glyphPixmap();
