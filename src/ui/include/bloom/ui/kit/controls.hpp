@@ -18,6 +18,9 @@ class KIconButton : public QToolButton {
     Q_OBJECT
   public:
     explicit KIconButton(QWidget* parent = nullptr);
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
 };
 class KIconToggle final : public KIconButton {
     Q_OBJECT

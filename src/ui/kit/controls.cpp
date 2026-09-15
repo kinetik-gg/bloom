@@ -26,6 +26,27 @@ KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     setAutoRaise(true);
     setProperty("kitControl", true);
 }
+void KIconButton::paintEvent(QPaintEvent* event) {
+    if (!isChecked()) {
+        QToolButton::paintEvent(event);
+        return;
+    }
+    QPainter painter(this);
+    fillRoundedSurface(painter, rect(), color(isDown() ? Color::AccentPressed : Color::Accent), {},
+                       Radius::Small);
+    auto glyph = icon().pixmap(iconSize(), devicePixelRatioF(), QIcon::Normal, QIcon::On);
+    QPainter ink(&glyph);
+    ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    ink.fillRect(glyph.rect(), isEnabled() ? color(Color::OnAccent)
+                                           : withOpacity(color(Color::OnAccent), kDisabledOpacity));
+    ink.end();
+    const auto extent = glyph.deviceIndependentSize();
+    painter.drawPixmap(QPointF((width() - extent.width()) / 2, (height() - extent.height()) / 2),
+                       glyph);
+    painter.setPen(color(Color::OnAccent));
+    if (icon().isNull())
+        painter.drawText(rect(), Qt::AlignCenter, text());
+}
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
     setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
@@ -37,7 +58,7 @@ void KIconToggle::setGlyph(IconId id) {
 }
 QPixmap KIconToggle::glyphPixmap() const {
     if (property("toolChoice").toBool() && isChecked())
-        return iconPixmap(glyph_, Size::IconControl, Color::Foreground, State::Normal,
+        return iconPixmap(glyph_, Size::IconControl, Color::OnAccent, State::Normal,
                           IconWeight::Fill, devicePixelRatioF());
     return iconPixmap(glyph_, Size::IconControl, Color::Muted,
                       !isEnabled()  ? State::Disabled
@@ -63,9 +84,13 @@ void KIconToggle::paintEvent(QPaintEvent*) {
 KToolColumn::KToolColumn(QWidget* parent)
     : QWidget(parent), column_(new QVBoxLayout(this)), group_(new QButtonGroup(this)) {
     setFixedWidth(px(Size::ToolColumnWidth));
-    column_->setContentsMargins(px(Spacing::XXS), px(Spacing::XXS), px(Spacing::XXS),
-                                px(Spacing::XXS));
-    column_->setSpacing(px(Spacing::XS));
+    column_->setContentsMargins(px(Spacing::ChromePadding), px(Spacing::ChromePadding),
+                                px(Spacing::ChromePadding), px(Spacing::ChromePadding));
+    column_->setSpacing(px(Spacing::ChromeGap));
+    setAutoFillBackground(true);
+    auto colors = palette();
+    colors.setColor(QPalette::Window, color(Color::Surface));
+    setPalette(colors);
     group_->setExclusive(true);
 }
 KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString& objectName,
@@ -75,7 +100,7 @@ KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString
     button->setAccessibleName(label);
     button->setToolTip(label);
     button->setProperty("toolChoice", true);
-    button->setFixedWidth(px(Size::Control));
+    button->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     button->setEnabled(enabled);
     group_->addButton(button);
     column_->addWidget(button, 0, Qt::AlignHCenter);

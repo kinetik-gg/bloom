@@ -53,6 +53,8 @@ class ChromeRow final : public QWidget {
             }
             if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
                 dropdown->setControlSize(kit::KDropdown::ControlSize::Default);
+            if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
+                dropdown->setMinimumWidth(dropdown->minimumSizeHint().width());
             entry.control->setFixedHeight(kit::px(kit::Size::Control));
             entry.control->setProperty("chromeControl", true);
             entry.control->setVisible(entry.visible);

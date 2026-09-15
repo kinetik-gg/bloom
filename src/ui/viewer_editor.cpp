@@ -1352,7 +1352,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         updatePanCursor();
     });
     tools->adjustSize();
-    tools->move(kit::px(kit::Spacing::S), kit::px(kit::Spacing::S));
+    tools->move(0, 0);
 
     setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

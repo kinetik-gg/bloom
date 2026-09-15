@@ -47,6 +47,7 @@ enum class Color : std::uint8_t {
     // one role that marks "this is the active panel."
     BorderActive,
     Accent,
+    OnAccent,
     AccentHover,
     AccentPressed,
     Keyframe,

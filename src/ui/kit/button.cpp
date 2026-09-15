@@ -168,8 +168,8 @@ QColor KButton::fillForState(const State state) const {
 
 QColor KButton::inkForVisualState(const State state) const {
     if (variant_ == Variant::Primary) {
-        return state == State::Disabled ? withOpacity(color(Color::Foreground), kDisabledOpacity)
-                                        : color(Color::Foreground);
+        return state == State::Disabled ? withOpacity(color(Color::OnAccent), kDisabledOpacity)
+                                        : color(Color::OnAccent);
     }
     if (variant_ == Variant::Danger || (variant_ == Variant::Ghost && dangerOnHover_)) {
         switch (state) {

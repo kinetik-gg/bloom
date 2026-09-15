@@ -231,3 +231,9 @@ The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at t
 Object, Transform, Source groups are collapsible Title Case rows. KPropertyRow's leading-indicator
 layout places the diamond or disclosure in a ToggleCell column, then the compact label and
 bounded controls; vector component labels live inside fields. New name: `timelinePropertyDisclosure`.
+
+`Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
+including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left
+edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
+KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
+fixed widths are floors. The chrome builder respects that minimum after assigning density.

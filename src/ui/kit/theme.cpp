@@ -36,6 +36,7 @@ const auto& colorPlaceholders() {
         {QLatin1StringView("BorderHover"), Color::BorderHover},
         {QLatin1StringView("BorderActive"), Color::BorderActive},
         {QLatin1StringView("Accent"), Color::Accent},
+        {QLatin1StringView("OnAccent"), Color::OnAccent},
         {QLatin1StringView("AccentHover"), Color::AccentHover},
         {QLatin1StringView("AccentPressed"), Color::AccentPressed},
         {QLatin1StringView("Keyframe"), Color::Keyframe},

@@ -242,9 +242,9 @@ QSize KDropdown::sizeHint() const {
     return {width, controlExtent()};
 }
 
-QSize KDropdown::minimumSizeHint() const {
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {horizontalPadding() * 2 + caretColumnWidth() + ringMargin, controlExtent()};
+QSize KDropdown::minimumSizeHint() const { return sizeHint(); }
+void KDropdown::setFixedWidth(int width) {
+    QWidget::setFixedWidth(std::max(width, sizeHint().width()));
 }
 
 void KDropdown::mousePressEvent(QMouseEvent* event) {

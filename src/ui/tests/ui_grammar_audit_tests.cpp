@@ -182,6 +182,11 @@ int run(int argc, char** argv) {
     auto* tools = fixture.window->findChild<kit::KToolColumn*>("viewerToolColumn");
     expect(tools && tools->isVisible() && tools->width() == kit::px(kit::Size::ToolColumnWidth),
            fixture.window.get(), "tool column token");
+    expect(tools->pos() == QPoint(0, 0), tools, "E20 tool strip sticks to canvas left");
+    expect(kit::color(kit::Color::OnAccent) == QColor(Qt::white), tools, "E19 white accent ink");
+    auto* zoomDropdown = fixture.window->findChild<kit::KDropdown*>("viewerZoomDropdown");
+    expect(zoomDropdown->width() >= zoomDropdown->minimumSizeHint().width(), zoomDropdown,
+           "E21 zoom fits widest item plus chevron");
     const auto choices = tools->findChildren<kit::KIconToggle*>();
     expect(choices.size() == 6, tools, "six tool choices");
     for (auto* choice : choices) {

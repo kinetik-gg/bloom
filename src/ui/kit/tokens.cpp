@@ -42,6 +42,7 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     // task U8 (issue 131), formal amendment 1, A1: final value, supersedes 0x333333.
     {Color::BorderActive, 0x444444U},
     {Color::Accent, 0x0C8CE9U},
+    {Color::OnAccent, 0xFFFFFFU},
     {Color::AccentHover, 0x3AA5F0U},
     {Color::AccentPressed, 0x0A73C2U},
     {Color::Keyframe, 0xF5C542U},
