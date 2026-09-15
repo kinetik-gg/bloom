@@ -30,7 +30,7 @@ target_sources(
 )
 
 target_compile_features(bloom_commands PUBLIC cxx_std_20)
-target_link_libraries(bloom_commands PUBLIC bloom_document PRIVATE bloom_media_image)
+target_link_libraries(bloom_commands PUBLIC bloom_document PRIVATE bloom_media_image bloom_media_audio)
 bloom_enable_warnings(bloom_commands)
 
 if(BUILD_TESTING)

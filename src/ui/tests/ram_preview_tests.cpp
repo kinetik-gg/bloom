@@ -747,6 +747,30 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+void testDefaultBudgetFollowsPhysicalMemory(Expectations& expectations) {
+    const auto physical = ui::physicalMemoryBytes();
+    const auto budget = ui::defaultPreviewFrameCacheByteBudget();
+    expectations.expect(budget >= ui::kMinimumPreviewFrameCacheByteBudget,
+                        "the default RAM preview budget never drops below the floor");
+    if (physical == 0) {
+        expectations.expect(budget == ui::kMinimumPreviewFrameCacheByteBudget,
+                            "unknown physical memory falls back to the floor");
+    } else {
+        constexpr std::size_t kMinimumReserve = std::size_t{4} * 1024U * 1024U * 1024U;
+        const auto reserve = std::max(kMinimumReserve, physical / 4);
+        const auto expected = physical > reserve ? std::max(ui::kMinimumPreviewFrameCacheByteBudget,
+                                                            physical - reserve)
+                                                 : ui::kMinimumPreviewFrameCacheByteBudget;
+        expectations.expect(budget == expected,
+                            "the default budget is physical memory less the reserve");
+        expectations.expect(budget < physical, "the default budget leaves memory for the system");
+    }
+    QTemporaryDir directory;
+    QSettings settings(directory.filePath("playback.ini"), QSettings::IniFormat);
+    expectations.expect(ui::ramPreviewByteBudgetFromSettings(settings) == budget,
+                        "an unset budget setting reads as the machine-derived default");
+}
+
 void testOperationCacheUnderRamPreview(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Operation Cache", time(24, 25)));
     expectations.expect(
@@ -799,6 +823,7 @@ int main(int argc, char** argv) {
     // std::variant-carrying identities, so the standard library's own throwing paths are reachable
     // in principle and main() must not be the frame they escape from.
     try {
+        testDefaultBudgetFollowsPhysicalMemory(expectations);
         testOperationCacheUnderRamPreview(expectations);
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);

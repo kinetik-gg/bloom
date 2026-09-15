@@ -12,6 +12,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     switch (kind) {
     case runtime::SocketValueKind::Image:
         return kit::Color::SocketImage;
+    case runtime::SocketValueKind::Audio:
+        return kit::Color::SocketAudio;
     case runtime::SocketValueKind::Color:
         return kit::Color::SocketColor;
     case runtime::SocketValueKind::Scalar:
@@ -124,6 +126,8 @@ QString displayTypeName(const std::string_view typeId) {
 QString nodeTypeDisplayName(const std::string_view typeId) {
     if (typeId == "bloom.image-source")
         return QCoreApplication::translate("node_editor", "Image");
+    if (typeId == "bloom.audio-source")
+        return QCoreApplication::translate("node_editor", "Audio");
     if (typeId == document::kSolidSourceNodeType)
         return QCoreApplication::translate("node_editor", "Solid");
     if (typeId == document::kLayerOutputNodeType)
@@ -365,21 +369,45 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         return;
     }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
-    if (imageSource_) {
+    if (imageSource_ || audioSource_) {
         const QRectF cell(kCardPadding, kCardHeaderHeight + kCardPadding, width_ - 2 * kCardPadding,
                           kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
         painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
         const auto* controller = session_ ? session_->assetController() : nullptr;
-        const auto thumbnail = controller ? controller->nodeThumbnail(id_) : QImage{};
+        const auto thumbnail =
+            imageSource_ && controller ? controller->nodeThumbnail(id_) : QImage{};
+        const auto waveform =
+            audioSource_ && controller ? controller->waveform(imageAsset_) : nullptr;
         if (!thumbnail.isNull()) {
             auto size = QSizeF(thumbnail.size());
             size.scale(cell.size(), Qt::KeepAspectRatio);
             painter->drawImage(
                 QRectF(cell.center() - QPointF(size.width() / 2, size.height() / 2), size),
                 thumbnail);
+        } else if (waveform && !waveform->buckets.empty()) {
+            painter->setPen(QPen(kit::color(kit::Color::DataAudio), 1.0));
+            const auto bucketCount = waveform->buckets.size();
+            for (std::size_t index = 0; index < bucketCount; ++index) {
+                float minimum = 0.0F;
+                float maximum = 0.0F;
+                for (const auto& channel : waveform->buckets[index]) {
+                    minimum = std::min(minimum, channel.minimum);
+                    maximum = std::max(maximum, channel.maximum);
+                }
+                const auto x = cell.left() + cell.width() * (static_cast<qreal>(index) + 0.5) /
+                                                 static_cast<qreal>(bucketCount);
+                const auto top =
+                    cell.center().y() -
+                    cell.height() * std::clamp(static_cast<qreal>(maximum), 0.0, 1.0) / 2.0;
+                const auto bottom =
+                    cell.center().y() -
+                    cell.height() * std::clamp(static_cast<qreal>(minimum), -1.0, 0.0) / 2.0;
+                painter->drawLine(QPointF(x, top), QPointF(x, bottom));
+            }
         } else {
             const auto glyph =
-                kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Muted);
+                kit::iconPixmap(audioSource_ ? kit::IconId::Audio : kit::IconId::Warning,
+                                kit::Size::IconSmall, kit::Color::Muted);
             painter->drawPixmap(cell.center() -
                                     QPointF(glyph.width() / glyph.devicePixelRatio() / 2,
                                             glyph.height() / glyph.devicePixelRatio() / 2),
@@ -389,7 +417,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
-    if (imageSource_ && session_) {
+    if ((imageSource_ || audioSource_) && session_) {
         const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
         const auto* controller = session_->assetController();
         if (!asset || !asset->manifest.gaps.empty() ||
@@ -469,6 +497,8 @@ QString socketKindName(const document::SocketValueKind kind) {
     switch (kind) {
     case document::SocketValueKind::Image:
         return QStringLiteral("Image");
+    case document::SocketValueKind::Audio:
+        return QStringLiteral("Audio");
     case document::SocketValueKind::Color:
         return QStringLiteral("Color");
     case document::SocketValueKind::Scalar:
@@ -578,8 +608,18 @@ void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
 }
 
 bool SocketItem::accepts(const document::InputPortRef& ref) const {
-    return (input.has_value() && *input == ref) ||
-           std::ranges::find(orderedInputs_, ref) != orderedInputs_.end();
+    if ((input.has_value() && *input == ref) ||
+        std::ranges::find(orderedInputs_, ref) != orderedInputs_.end())
+        return true;
+    // The stack pill stands for every role of every slot: a Layer's audio edge into a slot lands
+    // on the same pill as its content edge, so the artist can see that the audio is already routed.
+    const auto* slot = std::get_if<document::LayerStackInputRef>(&ref);
+    return slot != nullptr &&
+           std::ranges::any_of(orderedInputs_, [&](const document::InputPortRef& candidate) {
+               const auto* ordered = std::get_if<document::LayerStackInputRef>(&candidate);
+               return ordered != nullptr && ordered->stackNodeId == slot->stackNodeId &&
+                      ordered->slotId == slot->slotId;
+           });
 }
 
 void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {

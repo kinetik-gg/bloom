@@ -466,6 +466,10 @@ class CompilePass final {
                     } else if (destinationDefinition->second->layerSlotInput.has_value() &&
                                destinationDefinition->second->layerSlotInput->role == input.role) {
                         inputKind = &destinationDefinition->second->layerSlotInput->valueKind;
+                    } else if (destinationDefinition->second->audioLayerSlotInput.has_value() &&
+                               destinationDefinition->second->audioLayerSlotInput->role ==
+                                   input.role) {
+                        inputKind = &destinationDefinition->second->audioLayerSlotInput->valueKind;
                     }
                 },
                 edge->destination);
@@ -531,8 +535,14 @@ class CompilePass final {
                 if (cancelled()) {
                     return;
                 }
-                if (layerSlotInputEdge(node->id, entry.slotId, slotInputDefinition.role) ==
-                    nullptr) {
+                const auto* const imageEdge =
+                    layerSlotInputEdge(node->id, entry.slotId, slotInputDefinition.role);
+                const auto* const audioEdge =
+                    definition->second->audioLayerSlotInput.has_value()
+                        ? layerSlotInputEdge(node->id, entry.slotId,
+                                             definition->second->audioLayerSlotInput->role)
+                        : nullptr;
+                if (imageEdge == nullptr && audioEdge == nullptr) {
                     auto diagnosticSubject = subject(node->id, "layerSlotInput");
                     diagnosticSubject.layerId = entry.layerId;
                     diagnosticSubject.layerSlotId = entry.slotId;

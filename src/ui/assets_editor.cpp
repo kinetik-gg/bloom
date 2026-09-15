@@ -190,26 +190,30 @@ void AssetsEditor::rebuild() {
         const auto name = asset.kind == document::AssetKind::Sequence
                               ? asset.manifest.pattern
                               : asset.locator.path.substr(asset.locator.path.find_last_of('/') + 1);
+        const bool audio = asset.kind == document::AssetKind::Audio;
         item->setText(0, QString::fromStdString(name));
         item->setText(1, asset.kind == document::AssetKind::Sequence
                              ? tr("Sequence [%1]").arg(asset.manifest.members.size())
-                             : tr("Image"));
+                         : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+                                 : tr("Image"));
         item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(asset.id.value()));
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
-        item->setToolTip(0, missing ? tr("Missing image — Relink in Assets")
+        item->setToolTip(0, missing ? (audio ? tr("Missing audio — Relink in Assets")
+                                             : tr("Missing image — Relink in Assets"))
                                     : QString::fromStdString(asset.locator.path));
         auto* row = new kit::KRow(tree_);
         row->setObjectName(QStringLiteral("assetsRow"));
         row->setName(item->text(0), asset.kind == document::AssetKind::Sequence
                                         ? kit::IconId::Images
-                                        : kit::IconId::Image);
+                                    : audio ? kit::IconId::Audio
+                                            : kit::IconId::Image);
         auto* kind = new kit::KLabel(row);
         kind->setElidedText(item->text(1));
         auto* warning = new kit::KIconButton(row);
         warning->setObjectName(QStringLiteral("assetsMissingGlyph"));
         warning->setIcon(kit::icon(kit::IconId::Warning, kit::IconRole::Chrome, kit::Color::Warn));
-        warning->setToolTip(tr("Missing image"));
+        warning->setToolTip(audio ? tr("Missing audio") : tr("Missing image"));
         warning->setVisible(missing);
         row->setCells({}, nullptr, {kind}, warning);
         row->setAttribute(Qt::WA_TransparentForMouseEvents);

@@ -1,6 +1,7 @@
 #include "asset_drop.hpp"
 #include "node_editor_items.hpp"
 #include <QSignalBlocker>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/timeline_editor.hpp>
@@ -117,7 +118,7 @@ QString toggleToolTip(const int index) {
     case ToggleCell::Visibility:
         return TimelineEditor::tr("Toggle layer visibility");
     case ToggleCell::Audio:
-        return TimelineEditor::tr("Audio controls arrive with the media pipeline");
+        return TimelineEditor::tr("Mute or unmute this audio layer");
     case ToggleCell::Solo:
         return TimelineEditor::tr("Solo: render only soloed layers");
     case ToggleCell::Lock:
@@ -149,6 +150,10 @@ QString toggleToolTip(const int index) {
     if (isKnownSource(sourceNode, document::kTextSourceNodeType,
                       document::kTextSourceNodeSchemaVersion)) {
         return TimelineEditor::tr("Text");
+    }
+    if (isKnownSource(sourceNode, document::kAudioSourceNodeType,
+                      document::kAudioSourceNodeSchemaVersion)) {
+        return TimelineEditor::tr("Audio");
     }
     return TimelineEditor::tr("Layer");
 }
@@ -205,6 +210,10 @@ QString toggleToolTip(const int index) {
     if (isKnownSource(sourceNode, document::kTextSourceNodeType,
                       document::kTextSourceNodeSchemaVersion)) {
         return kit::Color::DataClip;
+    }
+    if (isKnownSource(sourceNode, document::kAudioSourceNodeType,
+                      document::kAudioSourceNodeSchemaVersion)) {
+        return kit::Color::DataAudio;
     }
     return kit::Color::Muted;
 }
@@ -349,6 +358,7 @@ class TimelineLayerRow final : public kit::KRow {
         setRowState(rowIndex, selected);
         layerId_ = entry.layerId;
         collapsedImage_ = entry.imageNodeId.isValid();
+        audioLayer_ = entry.audioNodeId.isValid();
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
         // document truth, never an edit: a blocked signal would still leave the lambda armed for a
         // nested change, and a row re-pointed during a scroll must author nothing at all.
@@ -379,9 +389,17 @@ class TimelineLayerRow final : public kit::KRow {
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = toggles_[static_cast<std::size_t>(index)];
             const QSignalBlocker blocker(toggle);
-            toggle->setChecked(index == 0 ? enabled_ : index == 2 ? solo_ : index == 3 && locked_);
-            toggle->setEnabled(index != 1 && (!collapsedImage_ || index == 0));
-            toggle->setGlyph(index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
+            toggle->setVisible(index != 1 || audioLayer_);
+            toggle->setChecked(index == 0   ? (enabled_ && !audioLayer_)
+                               : index == 1 ? (enabled_ && audioLayer_)
+                               : index == 2 ? solo_
+                                            : index == 3 && locked_);
+            toggle->setEnabled(index == 1   ? audioLayer_ && !locked_
+                               : index == 0 ? !audioLayer_ && (!collapsedImage_ || index == 0)
+                                            : index != 1 && !collapsedImage_);
+            toggle->setGlyph(index == 0 ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
+                             : index == 1
+                                 ? (enabled_ ? kit::IconId::AudioOn : kit::IconId::AudioOff)
                              : index == 3 ? (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked)
                                           : toggleIcon(index));
         }
@@ -423,6 +441,7 @@ class TimelineLayerRow final : public kit::KRow {
     std::optional<document::LayerId> layerId_;
     bool enabled_ = true, solo_ = false, locked_ = false;
     bool collapsedImage_ = false;
+    bool audioLayer_ = false;
     bool binding_ = false;
     kit::KDropdown* blending_ = nullptr;
     kit::KDropdown* parentDropdown_ = nullptr;
@@ -507,11 +526,13 @@ void TimelineLayerStack::syncCurrentRowFromSelection() {
             }
         }
     }
-    for (int index = 0; index < rowCount(); ++index)
-        if (entries_[static_cast<std::size_t>(index)].imageNodeId.isValid() &&
-            session_.selectedNodes().contains(
-                entries_[static_cast<std::size_t>(index)].imageNodeId))
+    for (int index = 0; index < rowCount(); ++index) {
+        const auto& entry = entries_[static_cast<std::size_t>(index)];
+        const auto sourceNodeId =
+            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
+        if (sourceNodeId.isValid() && session_.selectedNodes().contains(sourceNodeId))
             resolved = index;
+    }
     if (resolved == currentRow_) {
         // Still worth repainting: the row whose FILL changed may not be the current row at all (a
         // node selection can move the contextual layer without moving this column's current row).
@@ -557,8 +578,8 @@ void TimelineLayerStack::setCurrentRow(const int row) {
     // Navigation IS selection here (single-selection, exactly like the QTreeWidget before it): the
     // session owns selection truth, and every other editor follows it from selectionChanged.
     const auto& entry = entries_[static_cast<std::size_t>(row)];
-    if (entry.imageNodeId.isValid())
-        session_.selectNode(entry.imageNodeId);
+    if (entry.imageNodeId.isValid() || entry.audioNodeId.isValid())
+        session_.selectNode(entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId);
     else
         session_.selectLayer(entry.layerId);
     relayoutRows();
@@ -659,8 +680,15 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     const int toggle = (static_cast<int>(event->position().x()) - kToggleStripX) / kToggleCellWidth;
     if (event->position().x() >= kToggleStripX &&
         event->position().x() < kToggleStripX + kToggleCellCount * kToggleCellWidth) {
-        if (toggle == static_cast<int>(ToggleCell::Audio))
+        if (toggle == static_cast<int>(ToggleCell::Audio)) {
+            if (!entry.audioNodeId.isValid())
+                return;
+            commands::Transaction transaction("Toggle Audio", session_.snapshot().revision());
+            transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id,
+                                                           !layer->enabled);
+            (void)session_.executeTransaction(std::move(transaction));
             return;
+        }
         commands::Transaction transaction("Toggle Layer", session_.snapshot().revision());
         if (toggle == 0) {
             const auto layout = composition->nodeLayout().find(layer->nodeId);
@@ -1129,8 +1157,10 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         painter.setRenderHint(QPainter::Antialiasing, false);
         painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
                          kit::color(kit::Color::Surface));
-        const bool selected = entry.imageNodeId.isValid()
-                                  ? session_.selectedNodes().contains(entry.imageNodeId)
+        const auto sourceNodeId =
+            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
+        const bool selected = sourceNodeId.isValid()
+                                  ? session_.selectedNodes().contains(sourceNodeId)
                                   : isLayerSelected(session_, entry.layerId);
         if (selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             paintSelectedRowFill(painter, top, width());
@@ -1154,6 +1184,30 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
             painter.fillRect(QRect(bar->right() - grip, bar->top() + grip,
                                    kit::px(kit::Size::Hairline), bar->height() - (grip + grip)),
                              kit::hoverFillFor(fill));
+            if (entry.audioNodeId.isValid() && entry.waveform != nullptr &&
+                !entry.waveform->buckets.empty()) {
+                painter.setPen(QPen(kit::color(kit::Color::DataAudio), kit::kHairlineWidth));
+                const auto& buckets = entry.waveform->buckets;
+                for (std::size_t bucket = 0; bucket < buckets.size(); ++bucket) {
+                    float minimum = 0.0F;
+                    float maximum = 0.0F;
+                    bool hasRange = false;
+                    for (const auto& range : buckets[bucket]) {
+                        minimum = hasRange ? std::min(minimum, range.minimum) : range.minimum;
+                        maximum = hasRange ? std::max(maximum, range.maximum) : range.maximum;
+                        hasRange = true;
+                    }
+                    if (!hasRange)
+                        continue;
+                    const auto x = static_cast<qreal>(bar->left()) +
+                                   (static_cast<qreal>(bucket) + 0.5) * bar->width() /
+                                       static_cast<qreal>(buckets.size());
+                    const auto centre = static_cast<qreal>(bar->center().y());
+                    const auto halfHeight = static_cast<qreal>(bar->height() - (grip + grip)) * 0.5;
+                    painter.drawLine(QPointF(x, centre - static_cast<qreal>(maximum) * halfHeight),
+                                     QPointF(x, centre - static_cast<qreal>(minimum) * halfHeight));
+                }
+            }
         }
         if (const auto axis = ruler_.axisForWidth(width())) {
             painter.setRenderHint(QPainter::Antialiasing, true);
@@ -1593,6 +1647,22 @@ void TimelineEditor::rebuild() {
                                .name = layerName(*composition, entry.layerId),
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
+            if (const auto* source = directSourceNode(session_, entry.layerId);
+                source != nullptr && source->typeId == document::kAudioSourceNodeType) {
+                entries.back().audioNodeId = source->id;
+                if (auto* controller = session_.assetController()) {
+                    for (const auto& binding : source->parameters) {
+                        if (binding.role != "asset")
+                            continue;
+                        const auto value = session_.constantStringValue(binding.parameterId);
+                        if (value.has_value()) {
+                            entries.back().waveform = controller->waveform(
+                                document::AssetId::fromRaw(value->toULongLong()));
+                        }
+                        break;
+                    }
+                }
+            }
             if (const auto* layer = composition->graph().findLayer(entry.layerId);
                 layer && layer->labelColor) {
                 const auto rgb = *layer->labelColor;

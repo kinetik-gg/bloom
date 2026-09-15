@@ -1,3 +1,4 @@
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 
 #include <cmath>
@@ -141,6 +142,34 @@ void testRateAndClockMonotonicity(Expectations& expectations) {
     expectations.expect(!engine.setRate(0.0), "zero transport rate is rejected");
 }
 
+void testPlaySeekStopKeepsFrameAndAudioClock(Expectations& expectations) {
+    auto backend = std::make_unique<NullBackend>();
+    AudioEngine engine(std::move(backend), AudioEngine::Config{24, 1, 64});
+    static_cast<void>(engine.addClip(
+        AudioClip{monoBuffer(std::vector<float>(48, 1.0F), 24), time(0), 1.0F, false, false}));
+    const auto mappingResult = bloom::core::FrameTimeMapping::create(time(2), 24, 1);
+    expectations.expect(mappingResult.hasValue(), "frame mapping is available for the audio check");
+    if (!mappingResult.hasValue())
+        return;
+    const auto& mapping = *mappingResult.value();
+    expectations.expect(!engine.play(time(0)).has_value(), "play starts the headless transport");
+    expectations.expect(!engine.renderForTesting(5).has_value(), "play renders five frames");
+    const auto playedFrame = mapping.nearestFrameIndex(engine.positionNow());
+    expectations.expect(playedFrame == 5, "audio clock maps played frames exactly");
+
+    expectations.expect(!engine.seek(time(10, 24)).has_value(), "seek restarts the headless clock");
+    expectations.expect(!engine.renderForTesting(2).has_value(), "seek renders two frames");
+    const auto seekedPosition = engine.positionNow();
+    const auto seekedFrame = mapping.nearestFrameIndex(seekedPosition);
+    expectations.expect(seekedFrame == 12, "seeked audio clock maps to the requested frame");
+
+    engine.stop();
+    const auto stoppedPosition = engine.positionNow();
+    const auto stoppedFrame = mapping.nearestFrameIndex(stoppedPosition);
+    expectations.expect(stoppedFrame == seekedFrame && stoppedPosition == seekedPosition,
+                        "stop freezes the frame index and audio clock within one frame");
+}
+
 } // namespace
 
 int main() {
@@ -148,5 +177,6 @@ int main() {
     testSampleAccurateMixing(expectations);
     testSoloMuteAndSeek(expectations);
     testRateAndClockMonotonicity(expectations);
+    testPlaySeekStopKeepsFrameAndAudioClock(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

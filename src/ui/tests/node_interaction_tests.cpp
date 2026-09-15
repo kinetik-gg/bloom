@@ -74,10 +74,10 @@ void testLayoutSelectionAndSockets() {
     expect(f.card(a)->pos() == savedPosition && f.stack.size() == resizedBefore + 1,
            "Escape cancels a move preview");
     f.release(savedPosition + QPointF(90, 45));
-    f.drag({145, 130}, {370, 290});
+    f.drag({145, 150}, {370, 290});
     expect(f.session.selectedNodes() == std::set{a},
            "box selection routes its complete set to session");
-    f.drag({400, 130}, {560, 340}, Qt::ShiftModifier);
+    f.drag({400, 149}, {560, 340}, Qt::ShiftModifier);
     expect(f.session.selectedNodes() == std::set{a, b}, "Shift box extends the selection");
     f.click({25, 680});
     expect(f.session.selectedNodes().empty(), "empty click clears all selection");
@@ -89,12 +89,13 @@ void testLayoutSelectionAndSockets() {
     f.scene()->sendEvent(socket, &hover);
     expect(socket->data(kNodeHoveredRole).toBool(), "socket hover grows its painted state");
     // Task S1, item 6: the socket palette is its own, not the Data* palette's.
-    // ADAPTED (task S7): three more kinds. Both vector widths share SocketVector deliberately --
-    // they read as one family, and a cross-width link is refused by the kind check regardless.
-    const std::array mapping{kit::Color::SocketImage,   kit::Color::SocketColor,
-                             kit::Color::SocketScalar,  kit::Color::SocketVector,
-                             kit::Color::SocketString,  kit::Color::SocketInteger,
-                             kit::Color::SocketBoolean, kit::Color::SocketVector};
+    // ADAPTED (task S7): three more kinds, plus Audio. Both vector widths share SocketVector
+    // deliberately -- they read as one family, and a cross-width link is refused by the kind check
+    // regardless.
+    const std::array mapping{
+        kit::Color::SocketImage,   kit::Color::SocketAudio,   kit::Color::SocketColor,
+        kit::Color::SocketScalar,  kit::Color::SocketVector,  kit::Color::SocketString,
+        kit::Color::SocketInteger, kit::Color::SocketBoolean, kit::Color::SocketVector};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
                "all socket palette mappings use the socket roles");

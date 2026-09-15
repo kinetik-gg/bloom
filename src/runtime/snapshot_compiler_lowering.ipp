@@ -245,6 +245,11 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(nodeId, "A reachable node lost its registered definition.");
             return {};
         }
+        // Audio sources are compiled into the sibling audio mix below. They must remain in the
+        // reachable/topological set so audio edges participate in graph validation, but never enter
+        // the image operation variant or alter image evaluation semantics.
+        if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource)
+            continue;
         if (emptyImages_.contains(nodeId))
             continue;
         if (isValueNode(nodeId))
@@ -326,6 +331,10 @@ lower(const std::vector<document::NodeId>& order) {
         addTopologyFailure(outputNodeId, "Composition output was not lowered.");
         return {};
     }
+    const auto audioMix = lowerAudioMix();
+    if (!audioMix.has_value()) {
+        return {};
+    }
     return std::make_shared<const runtime::CompiledCompositionPlan>(
         runtime::CompiledCompositionPlanDefinition{
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
@@ -334,7 +343,121 @@ lower(const std::vector<document::NodeId>& order) {
             std::move(curveTables->vec3), std::move(curveTables->color4),
             std::move(valueOperations_), valueOutputCount_,
             runtime::kCompiledCompositionPlanSemanticsVersion,
-            runtime::kAnimationSamplingSemanticsVersion, request_.parameterOverride.has_value()});
+            runtime::kAnimationSamplingSemanticsVersion, request_.parameterOverride.has_value(),
+            *audioMix});
+}
+
+[[nodiscard]] std::optional<runtime::CompositionAudioMix> lowerAudioMix() {
+    runtime::CompositionAudioMix mix;
+    const auto& graph = composition_->graph();
+    const auto& endpoint = graph.compositionOutput();
+    if (!endpoint.has_value())
+        return std::nullopt;
+    mix.outputNodeId = endpoint->nodeId;
+    const auto outputEdge = std::ranges::find_if(graph.edges(), [&](const auto& edge) {
+        const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+        return input != nullptr && input->nodeId == endpoint->nodeId &&
+               input->port == document::kCompositionOutputAudioInputPort;
+    });
+    if (outputEdge == graph.edges().end())
+        return mix;
+    // Lowers one audio source node into `mix.sources`, returning its index.
+    const auto appendSource =
+        [&](const document::NodeRecord& audioSource) -> std::optional<std::size_t> {
+        const auto* assetBinding = findParameterBinding(audioSource, "asset");
+        const auto* startBinding = findParameterBinding(audioSource, "startFrame");
+        const auto* assetText = parameterConstant<std::string>(assetBinding);
+        const auto* startFrame = parameterConstant<std::int64_t>(startBinding);
+        const auto level = compiledScalarParameter(findParameterBinding(audioSource, "level"));
+        std::uint64_t assetRaw = 0;
+        if (assetText == nullptr || startFrame == nullptr || !level || assetText->empty() ||
+            std::from_chars(assetText->data(), assetText->data() + assetText->size(), assetRaw)
+                    .ec != std::errc{} ||
+            !document::AssetId::fromRaw(assetRaw).isValid() ||
+            composition_->parameters().find(assetBinding->parameterId) == nullptr ||
+            request_.snapshot.project().findAsset(document::AssetId::fromRaw(assetRaw)) ==
+                nullptr) {
+            addTopologyFailure(audioSource.id, "Audio source parameters could not be lowered.");
+            return std::nullopt;
+        }
+        const auto sourceIndex = mix.sources.size();
+        mix.sources.push_back(
+            {audioSource.id, document::AssetId::fromRaw(assetRaw), *startFrame, *level});
+        return sourceIndex;
+    };
+    // Lowers one Layer node as an audio layer: its boundary supplies enable, solo, and range; the
+    // source on its audio input supplies the clip. A Layer whose audio input is unwired contributes
+    // nothing rather than failing, so an image-only layer routed into the output stays valid.
+    const auto appendLayer = [&](const document::NodeId layerNodeId) -> bool {
+        const auto* layerNode = findNode(layerNodeId);
+        const auto boundary = std::ranges::find_if(
+            graph.layerOutputs(), [&](const auto& candidate) { return candidate.nodeId == layerNodeId; });
+        if (layerNode == nullptr || layerNode->typeId != document::kLayerOutputNodeType ||
+            boundary == graph.layerOutputs().end()) {
+            addTopologyFailure(layerNodeId, "Validated audio layer topology could not be lowered.");
+            return false;
+        }
+        const auto layerAudioEdgeIterator = std::ranges::find_if(graph.edges(), [&](const auto& edge) {
+            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+            return input != nullptr && input->nodeId == layerNodeId &&
+                   input->port == document::kLayerOutputAudioInputPort;
+        });
+        if (layerAudioEdgeIterator == graph.edges().end())
+            return true;
+        const auto* audioSource = findNode(layerAudioEdgeIterator->source.nodeId);
+        if (audioSource == nullptr || audioSource->typeId != document::kAudioSourceNodeType) {
+            addTopologyFailure(layerAudioEdgeIterator->source.nodeId,
+                               "Audio layer does not have an audio source.");
+            return false;
+        }
+        const auto sourceIndex = appendSource(*audioSource);
+        if (!sourceIndex)
+            return false;
+        mix.layers.push_back({layerNodeId, boundary->layerId, *sourceIndex,
+                              boundary->enabled && !isMuted(boundary->nodeId), boundary->solo,
+                              boundary->inPoint, boundary->endPoint(composition_->duration())});
+        return true;
+    };
+
+    const auto feedNodeId = outputEdge->source.nodeId;
+    if (const auto* stack = graph.merge(feedNodeId); stack != nullptr) {
+        // The usual shape: the Merge sums the audio of every slot that carries an audio edge.
+        for (const auto& entry : stack->entries()) {
+            if (cancelled())
+                return std::nullopt;
+            const auto stackEdgeIterator =
+                std::ranges::find_if(graph.edges(), [&](const auto& edge) {
+                    const auto* input = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                    return input != nullptr && input->stackNodeId == stack->nodeId() &&
+                           input->slotId == entry.slotId &&
+                           input->role == document::kLayerStackAudioInputRole;
+                });
+            if (stackEdgeIterator == graph.edges().end())
+                continue;
+            if (!appendLayer(stackEdgeIterator->source.nodeId))
+                return std::nullopt;
+        }
+        return mix;
+    }
+    const auto* feed = findNode(feedNodeId);
+    if (feed != nullptr && feed->typeId == document::kLayerOutputNodeType) {
+        // A Layer wired straight into the output is a one-layer mix.
+        if (!appendLayer(feedNodeId))
+            return std::nullopt;
+        return mix;
+    }
+    if (feed != nullptr && feed->typeId == document::kAudioSourceNodeType) {
+        // An audio source wired straight into the output plays whole, from the composition start.
+        const auto sourceIndex = appendSource(*feed);
+        if (!sourceIndex)
+            return std::nullopt;
+        mix.layers.push_back({feedNodeId, document::LayerId{}, *sourceIndex, !isMuted(feedNodeId),
+                              false, core::RationalTime{}, composition_->duration()});
+        return mix;
+    }
+    addTopologyFailure(feedNodeId,
+                       "Composition audio is not fed by a Merge, a Layer, or an Audio source.");
+    return std::nullopt;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -346,6 +469,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerSolid(node);
     case NodeLoweringKind::ImageSource:
         return lowerImageSource(node);
+    case NodeLoweringKind::AudioSource:
+        break;
     case NodeLoweringKind::Text:
         return lowerText(node);
     case NodeLoweringKind::LayerOutput:
@@ -535,6 +660,13 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         }
         const auto* edge = layerSlotInputEdge(node.id, entry.slotId, layerSlotInput.role);
         if (edge == nullptr) {
+            // An audio-only layer occupies the same stable stack slot but has no image operation.
+            // Its typed audio edge is lowered by lowerAudioMix(), so it is intentionally absent
+            // from the image merge entries.
+            if (definition.audioLayerSlotInput.has_value() &&
+                layerSlotInputEdge(node.id, entry.slotId,
+                                   definition.audioLayerSlotInput->role) != nullptr)
+                continue;
             addTopologyFailure(node.id, "Validated Layer Stack input could not be lowered.");
             return std::nullopt;
         }

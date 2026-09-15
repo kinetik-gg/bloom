@@ -120,6 +120,7 @@ class ValueUtilityReader final {
     case document::SocketValueKind::Color:
         return core::Color4d{};
     case document::SocketValueKind::Image:
+    case document::SocketValueKind::Audio:
     case document::SocketValueKind::Scalar:
         break;
     }

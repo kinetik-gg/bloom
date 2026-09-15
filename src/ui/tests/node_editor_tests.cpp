@@ -386,6 +386,9 @@ void testConnectorTypingIsPinnedPerSocketKind(Expectations& expectations) {
     expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Image) ==
                             ui::kit::Color::SocketImage,
                         "an Image socket takes the socket palette's own Image token");
+    expectations.expect(ui::socketColorToken(runtime::SocketValueKind::Audio) ==
+                            ui::kit::Color::SocketAudio,
+                        "an Audio socket takes the socket palette's own Audio token");
     expectations.expect(ui::kit::color(ui::socketColorToken(runtime::SocketValueKind::Image)) ==
                             ui::kit::color(ui::kit::Color::SocketImage),
                         "and resolves to exactly that token's color, not a look-alike");

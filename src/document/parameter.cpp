@@ -206,6 +206,11 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
     }
+    if (schemaKey == kAudioLevelParameterSchemaKey) {
+        const auto* level = std::get_if<double>(&constant.value);
+        return level != nullptr && std::isfinite(*level) &&
+               isScalarWithinSchemaDomain(schemaKey, *level);
+    }
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
     if (schemaKey == "bloom.image.premultiply")

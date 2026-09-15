@@ -61,6 +61,9 @@ using bloom::media::audio::playback::AudioStatus;
     if (absoluteFrame < startFrame) {
         return false;
     }
+    if (clip.endTime.has_value() && absoluteFrame >= timeToFrames(*clip.endTime, outputRate)) {
+        return false;
+    }
     const auto localFrame = absoluteFrame - startFrame;
     if (localFrame < 0) {
         return false;
@@ -180,6 +183,16 @@ AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
     std::scoped_lock lock(controlMutex_);
     clips_.push_back(std::move(clip));
     return clips_.size() - 1U;
+}
+
+void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
+    std::scoped_lock lock(controlMutex_);
+    clips_ = std::move(clips);
+}
+
+void AudioEngine::clearClips() noexcept {
+    std::scoped_lock lock(controlMutex_);
+    clips_.clear();
 }
 
 bool AudioEngine::removeClip(const ClipId id) {

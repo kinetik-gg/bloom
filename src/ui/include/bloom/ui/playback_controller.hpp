@@ -1,6 +1,8 @@
 #pragma once
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/media/audio/playback/audio_engine.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 
 #include <QObject>
 #include <QTimer>
@@ -63,6 +65,11 @@ class PlaybackController final : public QObject {
     // One action on the window, independent of panel visibility or lifetime. Text entry keeps
     // Space via Qt's ShortcutOverride mechanism, just like the window's backtick shortcut.
     void installWindowShortcut(QWidget& window);
+    void setAudioEngine(std::unique_ptr<media::audio::playback::AudioEngine> engine);
+    void setAudioEnabled(bool enabled);
+    [[nodiscard]] bool isAudioEnabled() const noexcept { return audioEnabled_; }
+    void setAudioMix(runtime::AudioMixDescription description,
+                     std::vector<media::audio::playback::AudioClip> clips);
 
   public slots:
     // No-op (guarded) if already playing, if no composition is available, or if the composition's
@@ -119,6 +126,10 @@ class PlaybackController final : public QObject {
     // True by default: every transport Bloom has shipped so far loops, and the footer's toggle is
     // what makes the other half of that statement reachable rather than a promise.
     bool looping_ = true;
+    std::unique_ptr<media::audio::playback::AudioEngine> audioEngine_;
+    std::optional<runtime::AudioMixDescription> audioMix_;
+    bool audioEnabled_ = true;
+    bool audioClockActive_ = false;
 };
 
 } // namespace bloom::ui

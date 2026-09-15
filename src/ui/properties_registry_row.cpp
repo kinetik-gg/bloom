@@ -15,6 +15,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <limits>
 #include <memory>
@@ -65,7 +66,14 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     diamond_->setParameterId(parameter_);
 
     const auto items = propertiesSelectorItems(definition_.schemaKey);
-    if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
+    if (definition_.schemaKey == document::kAudioLevelParameterSchemaKey) {
+        slider_ = new kit::KSlider(controls);
+        slider_->setObjectName(QStringLiteral("propertiesAudioLevelSlider"));
+        slider_->setAccessibleName(label);
+        slider_->setRange(0.0, 2.0);
+        layout->addWidget(slider_);
+        connect(slider_, &kit::KSlider::valueChanged, this, [this] { commit(); });
+    } else if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
         segments_ = new kit::KRadioGroup(controls);
         segments_->setObjectName("propertiesRegistryEnum");
         segments_->setAccessibleName(label);
@@ -77,10 +85,12 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         segments_->setFixedSize(segments_->sizeHint());
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
-    } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset") {
+    } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset" ||
+               definition_.schemaKey == "bloom.audio.asset") {
         selector_ = new kit::KDropdown(controls);
         selector_->setObjectName(
             definition_.schemaKey == "bloom.image.asset"         ? "propertiesImageAsset"
+            : definition_.schemaKey == "bloom.audio.asset"       ? "propertiesAudioAsset"
             : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
             : definition_.schemaKey == "bloom.image.color-space" ? "propertiesImageColorSpace"
                                                                  : "propertiesRegistryEnum");
@@ -93,9 +103,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         integer_ = new kit::KLineEdit(controls);
-        integer_->setObjectName(definition_.schemaKey == "bloom.image.start-frame"
-                                    ? "propertiesImageStartFrame"
-                                    : "propertiesRegistryInteger");
+        integer_->setObjectName(
+            definition_.schemaKey == "bloom.image.start-frame"   ? "propertiesImageStartFrame"
+            : definition_.schemaKey == "bloom.audio.start-frame" ? "propertiesAudioStartFrame"
+                                                                 : "propertiesRegistryInteger");
         integer_->setAccessibleName(label);
         integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
                                kit::px(kit::Size::ControlCompact));
@@ -237,7 +248,7 @@ void PropertiesRegistryRow::refresh() {
     for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(segments_),
                           static_cast<QWidget*>(toggle_), static_cast<QWidget*>(color_),
                           static_cast<QWidget*>(text_), static_cast<QWidget*>(multiline_),
-                          static_cast<QWidget*>(integer_)})
+                          static_cast<QWidget*>(integer_), static_cast<QWidget*>(slider_)})
         if (control)
             control->setEnabled(editable);
     if (parameter) {
@@ -253,6 +264,8 @@ void PropertiesRegistryRow::refresh() {
         if (auto* scalar = std::get_if<double>(&value); scalar && fields_[0])
             if (displayScale() != 0.0)
                 fields_[0]->setValue(*scalar * displayScale());
+        if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
+            slider_->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
             if (integer_)
                 integer_->setText(QString::number(static_cast<qlonglong>(*integer)));
@@ -282,9 +295,10 @@ void PropertiesRegistryRow::refresh() {
         if (auto* boolean = std::get_if<bool>(&value); boolean && toggle_)
             toggle_->setChecked(*boolean);
         if (auto* text = std::get_if<std::string>(&value)) {
-            if (selector_ && definition_.schemaKey == "bloom.image.asset") {
+            if (selector_ && definition_.schemaKey == "bloom.image.asset")
                 refreshImageAssetSelector(*selector_, session_, QString::fromStdString(*text));
-            }
+            if (selector_ && definition_.schemaKey == "bloom.audio.asset")
+                refreshAudioAssetSelector(*selector_, session_, QString::fromStdString(*text));
             if (text_)
                 text_->setText(QString::fromStdString(*text));
             if (multiline_ && !multiline_->hasFocus())
@@ -322,8 +336,11 @@ void PropertiesRegistryRow::commit() {
     document::ParameterValue value = definition_.defaultValue;
     if (segments_)
         value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
-    else if (selector_ && definition_.schemaKey == "bloom.image.asset")
+    else if (selector_ && (definition_.schemaKey == "bloom.image.asset" ||
+                           definition_.schemaKey == "bloom.audio.asset"))
         value = selector_->itemData(selector_->currentIndex()).toString().toStdString();
+    else if (slider_)
+        value = slider_->value();
     else if (selector_)
         value = selector_->itemData(selector_->currentIndex()).value<std::int64_t>();
     else if (integer_) {

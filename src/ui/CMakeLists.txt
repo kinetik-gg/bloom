@@ -318,6 +318,7 @@ target_sources(
         composition_preview_playback.cpp
         composition_preview_result.cpp
         composition_session.cpp
+        audio_playback_session.cpp
         composition_session_drivers.cpp
         composition_session_keyframes.cpp
         driven_value_resolver.cpp
@@ -381,6 +382,7 @@ target_sources(
             include/bloom/ui/composition_editors.hpp
             include/bloom/ui/composition_plan_cache.hpp
             include/bloom/ui/composition_preview_controller.hpp
+            include/bloom/ui/audio_playback_session.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
             include/bloom/ui/editor_area.hpp
@@ -432,6 +434,7 @@ target_link_libraries(
         bloom_runtime
         bloom_runtime_evaluator
         bloom_ui_kit
+        bloom_media_audio
         Qt6::Widgets
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image)

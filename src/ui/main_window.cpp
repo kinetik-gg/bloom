@@ -13,6 +13,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
+#include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -62,10 +63,11 @@ void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                        ProjectHost& projectHost, FrameExportController& frameExportController,
                        RamPreviewController* const ramPreview,
-                       CompositionPreviewController* const previewController, QWidget* parent)
+                       CompositionPreviewController* const previewController, QWidget* parent,
+                       PlaybackController* const playbackController)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
-      previewController_(previewController) {
+      previewController_(previewController), playbackController_(playbackController) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -204,6 +206,10 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
     settings.setValue(windowGeometryKey, saveGeometry());
     if (workspaceLayoutWritable_) {
         workspaceHost_->persistLayout(settings, workspaceLayoutKey);
+    }
+    if (playbackController_ != nullptr) {
+        settings.setValue(QStringLiteral("playback/audio-enabled"),
+                          playbackController_->isAudioEnabled());
     }
 }
 
@@ -365,6 +371,15 @@ void MainWindow::createViewMenu(QMenu& viewMenu) {
     viewMaximizePanelAction_ = viewMenu.addAction("Maximize Panel");
     viewMaximizePanelAction_->setObjectName("viewMaximizePanelAction");
     viewMaximizePanelAction_->setCheckable(true);
+    if (playbackController_ != nullptr) {
+        viewMenu.addSeparator();
+        viewAudioEnabledAction_ = viewMenu.addAction("Audio Playback");
+        viewAudioEnabledAction_->setObjectName("viewAudioEnabledAction");
+        viewAudioEnabledAction_->setCheckable(true);
+        viewAudioEnabledAction_->setChecked(playbackController_->isAudioEnabled());
+        connect(viewAudioEnabledAction_, &QAction::toggled, playbackController_,
+                &PlaybackController::setAudioEnabled);
+    }
     // task C1: the "Use Native Window Frame" toggle is gone -- native chrome is the default and
     // only mode now, so there is no longer a chrome setting for this menu to offer.
 }

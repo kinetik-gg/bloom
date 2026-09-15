@@ -45,7 +45,7 @@ struct CompositionPreviewSettings final {
     std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};
     // The RAM preview cache's memory budget, used only when this controller has to create its own
     // cache (see the constructor). The application reads it from QSettings.
-    std::size_t ramPreviewByteBudget = kDefaultPreviewFrameCacheByteBudget;
+    std::size_t ramPreviewByteBudget = defaultPreviewFrameCacheByteBudget();
 
     friend bool operator==(const CompositionPreviewSettings&,
                            const CompositionPreviewSettings&) = default;

@@ -10,6 +10,12 @@
 #include <memory>
 #include <utility>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace bloom::ui {
 namespace {
 
@@ -208,15 +214,46 @@ void PreviewFrameCache::removeAt(const std::size_t index) {
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
 }
 
+std::size_t physicalMemoryBytes() noexcept {
+#if defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status) == 0)
+        return 0;
+    return static_cast<std::size_t>(status.ullTotalPhys);
+#else
+    const auto pages = sysconf(_SC_PHYS_PAGES);
+    const auto pageSize = sysconf(_SC_PAGE_SIZE);
+    if (pages <= 0 || pageSize <= 0)
+        return 0;
+    const auto total =
+        static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(pageSize);
+    if (total > std::numeric_limits<std::size_t>::max())
+        return std::numeric_limits<std::size_t>::max();
+    return static_cast<std::size_t>(total);
+#endif
+}
+
+std::size_t defaultPreviewFrameCacheByteBudget() noexcept {
+    const auto physical = physicalMemoryBytes();
+    if (physical == 0)
+        return kMinimumPreviewFrameCacheByteBudget;
+    constexpr std::size_t kMinimumReserve = std::size_t{4} * 1024U * 1024U * 1024U;
+    const auto reserve = std::max(kMinimumReserve, physical / 4);
+    if (physical <= reserve)
+        return kMinimumPreviewFrameCacheByteBudget;
+    return std::max(kMinimumPreviewFrameCacheByteBudget, physical - reserve);
+}
+
 std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {
     const auto value = settings.value(QLatin1StringView(ramPreviewByteBudgetKey));
     if (!value.isValid()) {
-        return kDefaultPreviewFrameCacheByteBudget;
+        return defaultPreviewFrameCacheByteBudget();
     }
     bool parsed = false;
     const auto bytes = value.toString().toULongLong(&parsed);
     if (!parsed || bytes == 0) {
-        return kDefaultPreviewFrameCacheByteBudget;
+        return defaultPreviewFrameCacheByteBudget();
     }
     return static_cast<std::size_t>(bytes);
 }

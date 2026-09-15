@@ -21,6 +21,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_editor.hpp>
@@ -79,9 +80,13 @@ struct WindowFixture {
         arrange.emplace<commands::MoveNodes>(session.compositionId(), std::move(positions));
         if (!session.executeTransaction(std::move(arrange)).succeeded())
             throw std::runtime_error("Fixture arrangement failed");
+        // A pinned budget: the status bar prints it, and the production default follows the
+        // machine's memory, which would make every whole-window golden machine-dependent.
         preview = std::make_unique<CompositionPreviewController>(
             session, scheduler, bridge,
-            makeCompositionPreviewPipeline(compiler, evaluator, display, qualified));
+            makeCompositionPreviewPipeline(compiler, evaluator, display, qualified),
+            CompositionPreviewSettings{},
+            std::make_shared<PreviewFrameCache>(kMinimumPreviewFrameCacheByteBudget));
         exporter = std::make_unique<FrameExportController>(session, scheduler, bridge, compiler,
                                                            projectHost.publicationCoordinator(),
                                                            projectHost.artifactCoordinator());
@@ -97,6 +102,12 @@ struct WindowFixture {
             QTest::qWait(10);
         if (preview->state().activity != PreviewActivity::Ready)
             throw std::runtime_error("Fixture preview did not become ready");
+        // Colour swatches show display colour once the converter is up; capture only after it
+        // is, or the same window renders two different Properties panels from run to run.
+        while (!session.colorConverter() && timer.elapsed() < 15000)
+            QTest::qWait(10);
+        if (!session.colorConverter())
+            throw std::runtime_error("Fixture colour converter did not become ready");
         QTest::qWait(100);
         auto* stack = window->findChild<TimelineLayerStack*>();
         for (const auto& layer : session.composition()->graph().layerOutputs()) {

@@ -38,18 +38,17 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.10`.
+The container version remains `1.0`; the current document schema is `1.11`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
-The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.9.schema.json` and `schemas/project/document-1.9.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.9` and
-`urn:kinetik:bloom:schema:project-document:1.9`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.9`. Every historical artifact from `1.0` through `1.8`, manifest and
-document, remains checked, and each version's checker validates what its own minor adds and then
-reduces the artifact to its predecessor so the older checks run unchanged.
+The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.10` remain checked as
+historical fixtures, with the current `1.11` contract also enforced by the canonical writer,
+decoder and migration tests. The manifest artifact still requires container `1.0`; its document
+declaration follows the current document minor. Every historical artifact from `1.0` through `1.10`,
+manifest and document, remains checked, and each version's checker validates what its own minor adds
+and then reduces the artifact to its predecessor so the older checks run unchanged.
 
 Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
 value -- the third authoring vector width, with its own kind token rather than a third component on
@@ -1180,3 +1179,25 @@ Sequence ranges and gaps must agree with their members. Dimensions and locator l
 validated before publication. Missing files do not invalidate the document or remove its assets.
 `RemoveAsset` preserves referencing nodes so they can warn; Relink retains the stable asset ID.
 Import, relink, removal, layer placement and background editing use ordinary command transactions.
+
+## Audio Assets And Graph Sources In Document 1.11
+
+Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
+version and preserves every existing object, ID, parameter source, graph edge, asset and authored
+value. The canonical writer and manifest declaration emit `1.11`; older documents are upgraded
+through the sequential DOM migration before trusted decoding.
+
+An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
+an image, with `kind: "audio"`, the existing content digest and interpretation envelope, and the
+captured source descriptor fields `rate`, `channels`, `frames`, and exact rational `duration`.
+Audio has no image dimensions or sequence manifest. WAV and MP3 imports probe through the bounded
+audio adapter and persist the probe result; filesystem bytes, decoded planar float32 buffers and
+waveform buckets remain derived runtime state. Missing audio remains a valid reference and is
+relinkable without changing its `AssetId`.
+
+The `bloom.audio-source` node stores the stable audio asset ID as a String parameter, its integer
+start frame, and its linear level. Layer Output, Layer Stack and Composition Output gain the typed
+audio ports described in [`layer-graph-model.md`](layer-graph-model.md); these are ordinary graph
+nodes and edges, not an opaque timeline extension. `AddAudioLayer` allocates and persists the source,
+boundary, slot and edge identities atomically. Existing image-only documents contain no audio
+edges and decode to the same image graph and pixels.

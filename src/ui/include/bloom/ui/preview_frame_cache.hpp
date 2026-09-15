@@ -15,12 +15,20 @@ class QSettings;
 
 namespace bloom::ui {
 
-// 2 GiB by default (docs/architecture/animation-and-time.md, "RAM preview"). A retained frame is
-// its packed RGBA8 display buffer and nothing else -- about 8 MB at 1920x1080, a quarter of what
-// the Float32 process image it was mapped from would have cost -- so the default budget holds
-// roughly 250 frames of a composition-resolution range.
-inline constexpr std::size_t kDefaultPreviewFrameCacheByteBudget =
+// The floor of the default budget (docs/architecture/animation-and-time.md, "RAM preview"). A
+// retained frame is its packed RGBA8 display buffer and nothing else -- about 8 MB at 1920x1080, a
+// quarter of what the Float32 process image it was mapped from would have cost -- so even the floor
+// holds roughly 250 frames of a composition-resolution range.
+inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
+
+// The default budget follows the machine: physical memory less a reserve for the operating system,
+// decoders, and other applications (a quarter of physical memory, never less than 4 GiB), and never
+// below the floor above. A machine whose memory cannot be read gets the floor.
+[[nodiscard]] std::size_t defaultPreviewFrameCacheByteBudget() noexcept;
+
+// Total physical memory in bytes, or 0 when the platform does not report it.
+[[nodiscard]] std::size_t physicalMemoryBytes() noexcept;
 
 // Everything about a preview request that decides its PIXELS: the document revision, the exact
 // rational time, the display identity, and the resolution -- which is where a proxy factor lives.
@@ -85,7 +93,7 @@ class PreviewFrameCache final : public QObject {
     };
 
     explicit PreviewFrameCache(
-        std::size_t byteBudget = kDefaultPreviewFrameCacheByteBudget) noexcept;
+        std::size_t byteBudget = defaultPreviewFrameCacheByteBudget()) noexcept;
 
     // The cached frame for `identity`, re-stamped with that identity's own request generation so
     // the caller can publish it as the answer to THIS request (a frame's generation says which ask
@@ -141,7 +149,7 @@ class PreviewFrameCache final : public QObject {
 
     // Most-recently-used first.
     std::vector<Entry> entries_;
-    std::size_t byteBudget_ = kDefaultPreviewFrameCacheByteBudget;
+    std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
     std::optional<bool> displayQualified_;
     Statistics statistics_;
@@ -150,7 +158,7 @@ class PreviewFrameCache final : public QObject {
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 
 // "playback/ram-preview-memory-bytes" = the RAM preview cache's byte budget. Missing, unparseable,
-// or zero reads as kDefaultPreviewFrameCacheByteBudget; any other value is taken at face value,
+// or zero reads as defaultPreviewFrameCacheByteBudget(); any other value is taken at face value,
 // because how much of their own memory an artist wants to spend on cached frames is their decision,
 // not Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
 // precedent -- nothing in src/ui constructs a QSettings of its own.

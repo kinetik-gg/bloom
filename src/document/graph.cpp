@@ -539,11 +539,13 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             const auto matching = std::ranges::find_if(edges_, [&](const auto& edge) {
                 const auto* input = std::get_if<LayerStackInputRef>(&edge.destination);
                 return input && input->stackNodeId == stack.nodeId() &&
-                       input->slotId == entry.slotId && input->role == kLayerStackContentInputRole;
+                       input->slotId == entry.slotId &&
+                       (input->role == kLayerStackContentInputRole ||
+                        input->role == kLayerStackAudioInputRole);
             });
             if (matching == edges_.end()) {
                 result.add(ValidationCode::InvalidLayerStack, "merges.entries",
-                           "Merge slot requires an image edge");
+                           "Merge slot requires an image or audio edge");
                 continue;
             }
             const auto boundary = boundariesByLayer.find(entry.layerId);
@@ -675,9 +677,13 @@ CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistr
             if (port.name == fixed->port)
                 return port.valueKind;
         }
-    } else if (definition->layerSlotInput &&
-               definition->layerSlotInput->role == std::get<LayerStackInputRef>(input).role) {
-        return definition->layerSlotInput->valueKind;
+    } else {
+        const auto& layerInput = std::get<LayerStackInputRef>(input);
+        if (definition->layerSlotInput && definition->layerSlotInput->role == layerInput.role)
+            return definition->layerSlotInput->valueKind;
+        if (definition->audioLayerSlotInput &&
+            definition->audioLayerSlotInput->role == layerInput.role)
+            return definition->audioLayerSlotInput->valueKind;
     }
     return std::nullopt;
 }

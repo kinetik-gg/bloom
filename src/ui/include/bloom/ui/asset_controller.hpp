@@ -5,6 +5,7 @@
 #include <QStringList>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/media/audio/audio.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <map>
 
@@ -28,6 +29,10 @@ class AssetController final : public QObject {
     [[nodiscard]] bool missing(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
+    [[nodiscard]] std::shared_ptr<const media::audio::WaveformSummary>
+    waveform(document::AssetId id) const;
+    [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
+    audioBuffer(document::AssetId id) const;
     [[nodiscard]] std::filesystem::path baseDirectory() const;
     void cancel();
     [[nodiscard]] bool acceptsEdits() const;
@@ -45,10 +50,16 @@ class AssetController final : public QObject {
         bool missing = false;
     };
     using Previews = std::map<document::AssetId, Preview>;
+    using Waveforms =
+        std::map<document::AssetId, std::shared_ptr<const media::audio::WaveformSummary>>;
+    using AudioBuffers =
+        std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>>;
     struct Thumbnails {
         Previews assets;
         std::map<document::NodeId, Preview> nodes;
         std::map<std::string, QImage> cache;
+        Waveforms waveforms;
+        AudioBuffers audioBuffers;
     };
     void prepare(const QStringList& paths, document::AssetId relinkId = {});
     void refresh();
@@ -63,6 +74,8 @@ class AssetController final : public QObject {
     Previews previews_;
     std::map<document::NodeId, Preview> nodePreviews_;
     std::map<std::string, QImage> thumbnailCache_;
+    Waveforms waveforms_;
+    AudioBuffers audioBuffers_;
     QByteArray dragToken_;
     bool busy_ = false;
     bool previewPending_ = false;

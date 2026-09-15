@@ -1,3 +1,4 @@
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -6,6 +7,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
@@ -135,9 +137,12 @@ int main(int argc, char* argv[]) {
         return bloom::ui::ramPreviewByteBudgetFromSettings(playbackSettings);
     }();
     auto previewFrameCache = std::make_shared<bloom::ui::PreviewFrameCache>(ramPreviewByteBudget);
+    // One compiled-plan cache for every consumer of the live revision: the preview surfaces below
+    // and the audio mix, which derives from the document rather than from a shown frame.
+    auto compiledPlanCache = std::make_shared<bloom::ui::CompiledPlanCache>();
     const auto previewPipeline = bloom::ui::makeCompositionPreviewPipeline(
-        snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
-        qualifiedDisplayProcessorProvider);
+        snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider,
+        compiledPlanCache);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline, {}, previewFrameCache);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
@@ -187,11 +192,45 @@ int main(int argc, char* argv[]) {
 
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
+    auto& playback = previewController.playbackController();
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, snapshotCompiler,
+                                                         compiledPlanCache, cpuEvaluator);
+    playback.setAudioEngine(std::make_unique<bloom::media::audio::playback::AudioEngine>(
+        bloom::media::audio::playback::makeMiniaudioBackend()));
+    playback.setAudioEnabled(
+        settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
+    const auto applyAudioMix = [&] {
+        const auto& mix = audioPlaybackSession.mix();
+        if (!mix.has_value()) {
+            playback.setAudioMix({}, {});
+            return;
+        }
+        std::vector<bloom::media::audio::playback::AudioClip> clips;
+        clips.reserve(mix->clips.size());
+        for (const auto& description : mix->clips) {
+            const auto buffer = assetController.audioBuffer(description.assetId);
+            if (buffer == nullptr)
+                continue;
+            clips.push_back({.buffer = *buffer,
+                             .startTime = description.startTime,
+                             .level = static_cast<float>(description.level),
+                             .muted = description.muted,
+                             .solo = description.solo,
+                             .endTime = description.endTime});
+        }
+        playback.setAudioMix(*mix, std::move(clips));
+    };
+    QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged, &playback,
+                     applyAudioMix);
+    QObject::connect(&assetController, &bloom::ui::AssetController::changed, &playback,
+                     applyAudioMix);
+    (void)audioPlaybackSession.refresh();
+    applyAudioMix();
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController, &ramPreviewController, &previewController);
-    auto& playback = previewController.playbackController();
+                                 frameExportController, &ramPreviewController, &previewController,
+                                 nullptr, &playback);
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {

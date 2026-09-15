@@ -25,9 +25,14 @@ constexpr int kTransientMessageMs = 5'000;
 
 // Mebibytes, one decimal place: the cache budget is set in whole MiB, so a finer reading would
 // imply a precision the setting itself does not have.
-[[nodiscard]] QString formatMebibytes(const std::size_t bytes) {
+// Bytes with the unit that keeps the number readable: MB below one gibibyte, GB from there on,
+// one decimal either way, so a machine-sized budget reads "45.3 GB" rather than "46370.2 MB".
+[[nodiscard]] QString formatBytes(const std::size_t bytes) {
     constexpr double kMebibyte = 1024.0 * 1024.0;
-    return QStringLiteral("%1").arg(static_cast<double>(bytes) / kMebibyte, 0, 'f', 1);
+    constexpr double kGibibyte = kMebibyte * 1024.0;
+    const auto value = static_cast<double>(bytes);
+    return value >= kGibibyte ? WindowStatusBar::tr("%1 GB").arg(value / kGibibyte, 0, 'f', 1)
+                              : WindowStatusBar::tr("%1 MB").arg(value / kMebibyte, 0, 'f', 1);
 }
 
 class StatusColorChip final : public kit::KLabel {
@@ -130,9 +135,9 @@ QString previewCacheText(const CompositionPreviewController& previewController) 
     if (cache.size() == 0) {
         return {};
     }
-    return WindowStatusBar::tr("Cache %1 frames · %2/%3 MB")
+    return WindowStatusBar::tr("Cache %1 frames · %2 / %3")
         .arg(cache.size())
-        .arg(formatMebibytes(cache.residentBytes()), formatMebibytes(cache.byteBudget()));
+        .arg(formatBytes(cache.residentBytes()), formatBytes(cache.byteBudget()));
 }
 
 WindowStatusBar::WindowStatusBar(CompositionSession& session,

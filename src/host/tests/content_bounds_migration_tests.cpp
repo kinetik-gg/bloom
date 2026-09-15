@@ -175,9 +175,9 @@ void migrationProof() {
                 document::CommitStatus::Committed,
             "legacy fixture commits");
     auto bytes = encode(doc.snapshot());
-    const auto version = bytes.find("\"minor\": 10");
+    const auto version = bytes.find("\"minor\": 11");
     require(version != std::string::npos, "root version pinned");
-    bytes.replace(version, std::string_view("\"minor\": 10").size(), "\"minor\": 6");
+    bytes.replace(version, std::string_view("\"minor\": 11").size(), "\"minor\": 6");
     removeImageFields(bytes);
     auto operation = memory();
     const auto dom = project::parseStrictJsonDom(std::as_bytes(std::span(bytes)), {}, operation);

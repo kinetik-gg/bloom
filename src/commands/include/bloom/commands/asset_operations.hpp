@@ -72,4 +72,17 @@ class AddImageLayer final : public Operation {
     document::CompositionId composition_;
     document::AssetId asset_;
 };
+class AddAudioLayer final : public Operation {
+  public:
+    AddAudioLayer(document::CompositionId composition, document::AssetId asset)
+        : composition_(composition), asset_(asset) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.layer.add-audio";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    document::AssetId asset_;
+};
 } // namespace bloom::commands

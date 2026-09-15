@@ -21,16 +21,22 @@ QString imageAssetDisplayName(const document::AssetRecord& asset) {
         asset.kind == document::AssetKind::Sequence ? asset.manifest.pattern : asset.locator.path;
     return QString::fromStdString(path.substr(path.find_last_of("/\\") + 1));
 }
-void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
-                               const QString& stored) {
+void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                          const QString& stored, const bool audioOnly) {
     const QSignalBlocker blocker(&selector);
     selector.clearItems();
     selector.addItem(QObject::tr("Choose Asset"), QString{});
     for (const auto& asset : session.snapshot().project().assets()) {
+        if (audioOnly != (asset.kind == document::AssetKind::Audio))
+            continue;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
-        const auto kind = sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
-                                   : QObject::tr("Image");
-        selector.addItem(kit::icon(sequence ? kit::IconId::Images : kit::IconId::Image,
+        const auto kind =
+            audioOnly  ? QObject::tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+            : sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
+                       : QObject::tr("Image");
+        selector.addItem(kit::icon(audioOnly  ? kit::IconId::Audio
+                                   : sequence ? kit::IconId::Images
+                                              : kit::IconId::Image,
                                    kit::IconRole::Chrome, kit::Color::Muted),
                          imageAssetDisplayName(asset) + " · " + kind,
                          QString::number(asset.id.value()));
@@ -46,6 +52,14 @@ void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSessio
     selector.setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
     selector.setToolTip(missing ? QObject::tr("Missing asset: %1").arg(stored)
                                 : selector.currentText());
+}
+void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored) {
+    refreshAssetSelector(selector, session, stored, false);
+}
+void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored) {
+    refreshAssetSelector(selector, session, stored, true);
 }
 
 PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
