@@ -56,7 +56,8 @@ namespace {
 
 } // namespace
 
-KSearchPopup::KSearchPopup(QWidget* parent) : QWidget(parent, Qt::Popup) {
+KSearchPopup::KSearchPopup(QWidget* parent)
+    : QWidget(parent, Qt::Popup | Qt::BypassGraphicsProxyWidget) {
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSearchPopup"));
     setAccessibleName(tr("Add node search"));

@@ -1,12 +1,19 @@
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QColor>
+#include <QCoreApplication>
 #include <QImage>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPixmap>
+#include <QPoint>
+#include <QRect>
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -302,6 +309,84 @@ void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
 
 } // namespace
 
+// Regression (owner, 2026-09-15): a flowed Add submenu rebuilt its entries as header menu TITLE
+// buttons -- centred, muted -- so every node type read as disabled; a second attempt used its own
+// button widget and drifted in hover and highlight. A flowed menu body is one KMenuFlow painted
+// with the proxy style's CE_MenuItem: enabled exactly when the action is, text at the menu
+// inset on the left, an Accent hover bar under the pointer, and a release triggers the action.
+void testFlowMenuBodyUsesTheMenuItemPrimitive(Expectations& expectations) {
+    QWidget owner;
+    owner.resize(800, 600);
+    owner.show();
+    auto* menu = kit::makeMenu(QStringLiteral("Flow"), &owner);
+    menu->setProperty("columnFlow", true);
+    int triggered = 0;
+    auto* live = menu->addAction(QStringLiteral("Add Live Node"));
+    QObject::connect(live, &QAction::triggered, [&triggered] { ++triggered; });
+    auto* dead = menu->addAction(QStringLiteral("Add Dead Node"));
+    dead->setEnabled(false);
+    menu->popup(owner.mapToGlobal(QPoint(10, 10)));
+    QCoreApplication::processEvents();
+    auto* flow = menu->findChild<kit::KMenuFlow*>();
+    expectations.expect(flow != nullptr && flow->itemCount() == 2,
+                        "a flowed menu builds one KMenuFlow holding every action");
+    if (flow == nullptr || flow->itemCount() != 2) {
+        menu->close();
+        return;
+    }
+    const QRect liveRect = flow->itemRect(0);
+    const QRect deadRect = flow->itemRect(1);
+    // Resting rows: ink starts at the left inset, never centred.
+    {
+        const QImage image = flow->grab(liveRect).toImage();
+        int firstInk = image.width();
+        for (int x = 0; x < image.width() && firstInk == image.width(); ++x)
+            for (int y = 0; y < image.height(); ++y)
+                if (qGray(image.pixel(x, y)) > 128) {
+                    firstInk = x;
+                    break;
+                }
+        expectations.expect(firstInk < image.width() / 4,
+                            "flowed entry text starts at the left inset, not centred");
+    }
+    // Hover: the same full-width Accent bar every menu row shows.
+    const QPointF centre = liveRect.center();
+    QMouseEvent move(QEvent::MouseMove, centre, flow->mapToGlobal(centre.toPoint()), Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(flow, &move);
+    expectations.expect(flow->hoveredIndex() == 0, "moving over a flowed row hovers it");
+    {
+        const QImage image = flow->grab(liveRect).toImage();
+        const QColor edge = image.pixelColor(2, image.height() / 2);
+        const QColor accent = kit::color(kit::Color::Accent);
+        expectations.expect(std::abs(edge.blue() - accent.blue()) < 24 &&
+                                std::abs(edge.red() - accent.red()) < 24,
+                            "a hovered flowed row paints the Accent hover bar to its edge");
+    }
+    // A disabled row never hovers and never triggers.
+    const QPointF deadCentre = deadRect.center();
+    QMouseEvent moveDead(QEvent::MouseMove, deadCentre, flow->mapToGlobal(deadCentre.toPoint()),
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(flow, &moveDead);
+    QMouseEvent releaseDead(QEvent::MouseButtonRelease, deadCentre,
+                            flow->mapToGlobal(deadCentre.toPoint()), Qt::LeftButton, Qt::NoButton,
+                            Qt::NoModifier);
+    QCoreApplication::sendEvent(flow, &releaseDead);
+    expectations.expect(triggered == 0, "releasing on a disabled flowed row triggers nothing");
+    // Release on the live row triggers its action exactly once.
+    menu->popup(owner.mapToGlobal(QPoint(10, 10)));
+    QCoreApplication::processEvents();
+    flow = menu->findChild<kit::KMenuFlow*>();
+    if (flow != nullptr) {
+        const QPointF again = flow->itemRect(0).center();
+        QMouseEvent release(QEvent::MouseButtonRelease, again, flow->mapToGlobal(again.toPoint()),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(flow, &release);
+    }
+    expectations.expect(triggered == 1, "releasing on a flowed row triggers its action once");
+    menu->close();
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -316,5 +401,6 @@ int main(int argc, char** argv) {
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
     testIconOnlyButtonsAreSquareAcrossEverySize(expectations);
     testGhostDangerOnHoverStaysGhostAtRest(expectations);
+    testFlowMenuBodyUsesTheMenuItemPrimitive(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
