@@ -2,8 +2,31 @@
 
 #include "node_operation_support.hpp"
 
+#include <algorithm>
+#include <type_traits>
+
 namespace bloom::commands {
 namespace {
+template <typename Curve, typename Callback>
+void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
+    using CurveType = std::remove_cvref_t<Curve>;
+    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+        for (auto& keyframe : curve.keyframes)
+            callback(keyframe);
+    } else {
+        if (std::ranges::all_of(curve.components, [](const auto& component) {
+                return component.keyframes.empty();
+            })) {
+            for (auto& keyframe : curve.keyframes)
+                callback(keyframe);
+        } else {
+            for (auto& component : curve.components)
+                for (auto& keyframe : component.keyframes)
+                    callback(keyframe);
+        }
+    }
+}
+
 std::optional<document::AnimationCurveId> copyCurve(document::Draft& draft,
                                                     document::Composition& composition,
                                                     const document::AnimationCurveId original) {
@@ -17,17 +40,23 @@ std::optional<document::AnimationCurveId> copyCurve(document::Draft& draft,
     const bool allocated = std::visit(
         [&](auto& curve) {
             curve.id = *id;
-            for (auto& key : curve.keyframes) {
+            bool allAllocated = true;
+            forEachStoredKeyframe(curve, [&](auto& key) {
                 const auto keyId = draft.ids().allocateKeyframe();
-                if (!keyId)
-                    return false;
+                if (!keyId) {
+                    allAllocated = false;
+                    return;
+                }
                 key.id = *keyId;
-            }
-            return true;
+            });
+            return allAllocated;
         },
         copy);
+    const auto copiedCurveId = document::animationCurveId(copy);
     if (!allocated || !composition.animationCurves().insert(std::move(copy)))
         return std::nullopt;
+    static_cast<void>(
+        composition.animationCurves().synchronizeCompatibilityProjection(copiedCurveId));
     return id;
 }
 } // namespace

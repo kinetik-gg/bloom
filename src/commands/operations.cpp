@@ -44,6 +44,43 @@ struct CompositionCloneIds final {
     std::unordered_map<document::NodeGroupId, document::NodeGroupId> groups;
 };
 
+template <typename Curve, typename Callback>
+void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
+    using CurveType = std::remove_cvref_t<Curve>;
+    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+        for (auto& keyframe : curve.keyframes)
+            callback(keyframe);
+    } else {
+        if (std::ranges::all_of(curve.components, [](const auto& component) {
+                return component.keyframes.empty();
+            })) {
+            for (auto& keyframe : curve.keyframes)
+                callback(keyframe);
+        } else {
+            for (auto& component : curve.components)
+                for (auto& keyframe : component.keyframes)
+                    callback(keyframe);
+        }
+    }
+}
+
+template <typename Curve> std::size_t storedKeyframeCount(const Curve& curve) {
+    using CurveType = std::remove_cvref_t<Curve>;
+    if constexpr (std::is_same_v<CurveType, document::ScalarAnimationCurve>) {
+        return curve.keyframes.size();
+    } else {
+        if (std::ranges::all_of(curve.components, [](const auto& component) {
+                return component.keyframes.empty();
+            })) {
+            return curve.keyframes.size();
+        }
+        std::size_t count = 0;
+        for (const auto& component : curve.components)
+            count += component.keyframes.size();
+        return count;
+    }
+}
+
 [[nodiscard]] std::optional<CompositionCloneIds>
 allocateCompositionCloneIds(document::Draft& draft, const document::Composition& source) {
     CompositionCloneIds ids;
@@ -89,10 +126,9 @@ allocateCompositionCloneIds(document::Draft& draft, const document::Composition&
         ids.parameters.emplace(parameter.id, *id);
     }
     std::size_t keyframeCount = 0;
-    for (const auto& record : source.animationCurves().records()) {
+    for (const auto& record : source.animationCurves().records())
         keyframeCount +=
-            std::visit([](const auto& curve) { return curve.keyframes.size(); }, record);
-    }
+            std::visit([](const auto& curve) { return storedKeyframeCount(curve); }, record);
     for (const auto& record : source.animationCurves().records()) {
         const auto curveId = draft.ids().allocateAnimationCurve();
         if (!curveId) {
@@ -100,14 +136,14 @@ allocateCompositionCloneIds(document::Draft& draft, const document::Composition&
         }
         ids.curves.emplace(document::animationCurveId(record), *curveId);
         std::visit(
-            [&](const auto& curve) {
-                for (const auto& keyframe : curve.keyframes) {
+            [&](auto& curve) {
+                forEachStoredKeyframe(curve, [&](const auto& keyframe) {
                     const auto keyframeId = draft.ids().allocateKeyframe();
                     if (!keyframeId) {
                         return;
                     }
                     ids.keyframes.emplace(keyframe.id, *keyframeId);
-                }
+                });
             },
             record);
         if (ids.keyframes.size() != keyframeCount) {
@@ -223,14 +259,17 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         std::visit(
             [&](auto& curve) {
                 curve.id = remap(ids->curves, curve.id);
-                for (auto& keyframe : curve.keyframes) {
+                forEachStoredKeyframe(curve, [&](auto& keyframe) {
                     keyframe.id = remap(ids->keyframes, keyframe.id);
-                }
+                });
             },
             record);
+        const auto copiedCurveId = document::animationCurveId(record);
         if (!composition.animationCurves().insert(std::move(record))) {
             return std::nullopt;
         }
+        static_cast<void>(
+            composition.animationCurves().synchronizeCompatibilityProjection(copiedCurveId));
     }
     for (const auto& [nodeId, layout] : source.nodeLayout()) {
         composition.nodeLayout().emplace(remap(ids->nodes, nodeId), layout);
