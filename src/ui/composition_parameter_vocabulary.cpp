@@ -1,7 +1,40 @@
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
+#include <QSignalBlocker>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/ui/kit/icons.hpp>
 namespace bloom::ui {
+QString imageAssetDisplayName(const document::AssetRecord& asset) {
+    const auto& path =
+        asset.kind == document::AssetKind::Sequence ? asset.manifest.pattern : asset.locator.path;
+    return QString::fromStdString(path.substr(path.find_last_of("/\\") + 1));
+}
+void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored) {
+    const QSignalBlocker blocker(&selector);
+    selector.clearItems();
+    selector.addItem(QObject::tr("Choose Asset"), QString{});
+    for (const auto& asset : session.snapshot().project().assets()) {
+        const bool sequence = asset.kind == document::AssetKind::Sequence;
+        const auto kind = sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
+                                   : QObject::tr("Image");
+        selector.addItem(kit::icon(sequence ? kit::IconId::Images : kit::IconId::Image,
+                                   kit::IconRole::Chrome, kit::Color::Muted),
+                         imageAssetDisplayName(asset) + " · " + kind,
+                         QString::number(asset.id.value()));
+    }
+    auto index = selector.findData(stored);
+    const bool missing = index < 0 && !stored.isEmpty();
+    if (missing) {
+        index = selector.addItem(QObject::tr("Missing asset"), stored);
+        selector.setItemToolTip(index, stored);
+    }
+    selector.setCurrentIndex(index < 0 ? 0 : index);
+    selector.setMutedValue(missing);
+    selector.setToolTip(missing ? QObject::tr("Missing asset: %1").arg(stored)
+                                : selector.currentText());
+}
+
 PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
     if (schemaKey == document::kTextAlignmentParameterSchemaKey)
         return PropertiesRowControl::SegmentedEnum;

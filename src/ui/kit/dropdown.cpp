@@ -312,7 +312,7 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
                        color(borderToken()), Radius::Small);
 
-    const QColor ink = inkForState(Color::Foreground, state);
+    const QColor ink = inkForState(mutedValue_ ? Color::Muted : Color::Foreground, state);
     const auto caretWidth = static_cast<qreal>(caretColumnWidth());
     const QRectF caretColumn(bounds.right() - horizontalPadding() - caretWidth, bounds.top(),
                              caretWidth, bounds.height());

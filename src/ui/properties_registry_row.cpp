@@ -286,18 +286,7 @@ void PropertiesRegistryRow::refresh() {
             toggle_->setChecked(*boolean);
         if (auto* text = std::get_if<std::string>(&value)) {
             if (selector_ && definition_.schemaKey == "bloom.image.asset") {
-                selector_->clearItems();
-                selector_->addItem(tr("Choose Asset"), QString{});
-                for (const auto& asset : session_.snapshot().project().assets()) {
-                    const auto name = asset.kind == document::AssetKind::Sequence
-                                          ? asset.manifest.pattern
-                                          : asset.locator.path;
-                    selector_->addItem(QString::fromStdString(name),
-                                       QString::number(asset.id.value()));
-                }
-                for (int index = 0; index < selector_->count(); ++index)
-                    if (selector_->itemData(index).toString().toStdString() == *text)
-                        selector_->setCurrentIndex(index);
+                refreshImageAssetSelector(*selector_, session_, QString::fromStdString(*text));
             }
             if (text_)
                 text_->setText(QString::fromStdString(*text));

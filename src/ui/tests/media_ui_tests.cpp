@@ -93,6 +93,23 @@ void run() {
             candidate && candidate->id() == source)
             card = candidate;
     require(card, "Image card exists");
+    ui::kit::KDropdown* cardAsset = nullptr;
+    for (auto* child : card->childItems())
+        if (auto* proxy = dynamic_cast<QGraphicsProxyWidget*>(child))
+            if (auto* dropdown = proxy->widget()->findChild<ui::kit::KDropdown*>("nodeImageAsset"))
+                cardAsset = dropdown;
+    require(cardAsset && cardAsset->currentData() == selector->currentData(), "card asset picker");
+    require(!cardAsset->itemIcon(cardAsset->currentIndex()).isNull(), "asset kind icon");
+    require(card->title() ==
+                ui::imageAssetDisplayName(*session.snapshot().project().findAsset(asset)),
+            "source title derives from asset name");
+    const auto other = session.snapshot().project().assets().back().id;
+    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(other.value())));
+    require(selector->currentData().toString() == QString::number(other.value()),
+            "card asset edit projects to Properties");
+    require(session.undo(), "asset picker undo");
+    require(cardAsset->currentData().toString() == QString::number(asset.value()),
+            "asset picker undo restores stable id");
     const auto checkEnums = [](ui::kit::KDropdown* control, const QStringList& names) {
         require(control && control->count() == names.size(), "closed enum dropdown");
         for (int index = 0; index < names.size(); ++index)
@@ -150,6 +167,11 @@ void run() {
     require(enumRows == 2, "timeline exposes both image enum rows");
     controller.remove(asset);
     require(!session.snapshot().project().findAsset(asset), "Remove publishes asset removal");
+    require(cardAsset->currentText() == "Missing asset" && cardAsset->mutedValue() &&
+                cardAsset->toolTip().contains(QString::number(asset.value())),
+            "missing card asset is muted with stable id in tooltip");
+    require(selector->currentText() == "Missing asset" && selector->mutedValue(),
+            "missing Properties asset remains explicit");
     require(host.liveDocumentAndStack().second->undo().succeeded(), "asset removal is undoable");
     controller.cancel();
     bridge.beginShutdown();

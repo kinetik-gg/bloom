@@ -1,12 +1,17 @@
 #pragma once
 #include <QWidget>
 #include <array>
+#include <bloom/document/asset.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
 class CompositionSession;
+QString imageAssetDisplayName(const document::AssetRecord& asset);
+void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored);
 void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
 class KeyframeDiamond;

@@ -272,6 +272,9 @@ class NodeItem final : public QGraphicsObject {
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
+        if (imageSource_ && session_)
+            if (const auto* asset = session_->snapshot().project().findAsset(imageAsset_))
+                title_ = imageAssetDisplayName(*asset);
         eyebrow_ = nodeEyebrow(composition, node);
         if (reroute_) {
             // A dot has no name on it, so its tooltip is where the kind it carries is said.
@@ -877,9 +880,12 @@ class NodeItem final : public QGraphicsObject {
         // list here, so a row cannot offer a key the command layer would refuse.
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
-        if (const auto items = selectorItems(declared->schemaKey); !items.isEmpty()) {
+        if (const auto items = selectorItems(declared->schemaKey);
+            !items.isEmpty() || declared->schemaKey == "bloom.image.asset") {
             row.selector = new kit::KDropdown;
-            row.selector->setObjectName(QStringLiteral("nodeOperandSelector"));
+            row.selector->setObjectName(declared->schemaKey == "bloom.image.asset"
+                                            ? "nodeImageAsset"
+                                            : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
             row.selector->setControlSize(kit::KDropdown::ControlSize::Compact);
             for (const auto& item : items) {
@@ -1006,6 +1012,8 @@ class NodeItem final : public QGraphicsObject {
         const auto value = [&]() -> std::optional<document::ParameterValue> {
             if (row.selector != nullptr) {
                 const auto stored = row.selector->itemData(row.selector->currentIndex());
+                if (row.kind == document::ParameterValueKind::String)
+                    return document::ParameterValue{stored.toString().toStdString()};
                 return stored.isValid()
                            ? std::optional(document::ParameterValue{stored.value<std::int64_t>()})
                            : std::nullopt;
@@ -1133,6 +1141,10 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             if (row.selector != nullptr) {
+                if (row.kind == document::ParameterValueKind::String && session_)
+                    if (const auto* stored = std::get_if<std::string>(&constant->value))
+                        refreshImageAssetSelector(*row.selector, *session_,
+                                                  QString::fromStdString(*stored));
                 if (const auto* stored = std::get_if<std::int64_t>(&constant->value)) {
                     const QSignalBlocker blocker(row.selector);
                     for (int item = 0; item < row.selector->count(); ++item) {
