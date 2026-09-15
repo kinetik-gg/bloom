@@ -19,6 +19,28 @@ and direct-manipulation boundary. It specializes the canonical parameter and com
 
 No layer, node, timeline, Viewer, Properties editor, or add-on gets a private animation store.
 
+## KEY-1 Whole-Component Key Audit
+
+The pre-KEY-1 implementation treats a vector or colour key as one value at one time. The
+whole-value assumptions are deliberately recorded here before the component-curve change:
+
+| Area | Whole-value assumption | Component-curve consequence |
+| --- | --- | --- |
+| Durable model | `Vec2Keyframe` and `Color4Keyframe` store one complete value; `AnimationCurveRecord` has scalar, Vec2, and Color4 alternatives. `Vec3d` is constant-only. | Replace vector/colour key storage with independently addressable scalar component curves, add Vec3 coverage, and retain the parameter's constant for components with no keys. |
+| Sampling | `runtime::sampleAnimationCurve()` has one interval factor and mixes both vector channels or all four colour channels together. | Sample each component curve independently, preserving Hold, Linear, and EaseInOut per component. |
+| Commands | `SetKeyframeAtTime*`, Insert/Update/Delete/Interpolation operations are typed by whole curve kind. Batch `KeyframeAddress` identifies only `{curveId, keyframeId}` and `KeyframePaste` carries a whole typed value. | Add a component address and component command surface; parameter-level operations remain all-component conveniences, while batches accept component-scoped selections. |
+| Session | `toggleKeyframe*()` and `keyframeDiamondState*()` answer one binary state for a parameter's one curve. `KeyframeSelection` and clipboard data carry only curve/key IDs; effective vector/colour readers sample one whole curve. | Add component toggle/state and all/some/none aggregate state; selection and effective readers resolve component curves without changing the public effective-value result types. |
+| Timeline lanes | `TimelineKeyframeRow`, grid projection, hit-testing, drag ghosts, and selection dispatch in `src/ui/timeline_ruler.*` and `src/ui/timeline_keyframe_gestures.cpp` project one lane per parameter curve. Property rows read Vec2 as two fields and one diamond. | KEY-2 owns component lanes and component diamonds. KEY-1 changes only the session seam and leaves widget wiring untouched. |
+| Compiler/evaluator | `CompiledVec2Curve`/`CompiledColor4Curve` tables are indexed once per parameter; snapshot lowering and CPU preflight/sample/resolve paths assume one whole-value curve and one segment identity. | Compile component tables and sample each component, composing the same typed value for consumers. |
+| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes; schema 1.3 introduced Color4; production migration currently ends at 1.8. | Add the next ladder schema step and a deterministic DOM migration that splits each legacy vector/colour key into component keys at the same exact time and interpolation, preserving sampling. |
+| Identity goldens | Runtime sampling tests pin the sampling version and vector behaviour; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
+
+The implementation touch points are therefore `src/document/animation.*` and parameter schema
+predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
+compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode plus the
+document migration registry and schemas, and `src/ui/composition_session.*` with its tests. The
+timeline widget files are audit targets only under this task's fence.
+
 ## Durable Type Model
 
 `KeyframeId` is a project-global strong ID with allocator and high-water semantics identical to the
