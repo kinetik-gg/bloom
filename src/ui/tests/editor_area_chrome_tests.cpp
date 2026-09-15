@@ -3,6 +3,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAction>
@@ -577,6 +578,37 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
                                 ") shows the window background, not a header/footer/content "
                                 "corner bleeding past the rounded curve");
     }
+    // Owner, 2026-09-15: the extreme pixel was never the problem; the header's square corner
+    // showed INSIDE the curve and cut the border. Walk the top-left arc: every pixel outside it
+    // is window background and the arc itself carries the border ink, on the header's own rows.
+    const int r = kit::KPanelFrame::radiusPx() * static_cast<int>(std::lround(dpr));
+    const QColor border = kit::color(kit::Color::Border);
+    bool outsideIsBackground = true;
+    bool arcCarriesBorder = true;
+    for (int y = 1; y < r / 2; ++y) {
+        // x on the arc for this row (circle of radius r centred at (r, r)).
+        const double dy = r - y - 0.5;
+        const double dx = std::sqrt(std::max(0.0, static_cast<double>(r) * r - dy * dy));
+        const int arcX = static_cast<int>(std::lround(r - dx));
+        if (arcX > 2 && image.pixelColor(QPoint(std::max(0, arcX - 2), y)) != background)
+            outsideIsBackground = false;
+        // The arc is antialiased, so the border ink blends with its neighbours: accept any
+        // pixel on the arc that is clearly lighter than Surface (Border is 0x22, Surface 0x14).
+        const int inkFloor =
+            (qGray(border.rgb()) + qGray(kit::color(kit::Color::Surface).rgb())) / 2;
+        bool ink = false;
+        for (int x = std::max(0, arcX - 1); x <= arcX + 1 && x < w; ++x)
+            if (qGray(image.pixelColor(QPoint(x, y)).rgb()) >= inkFloor)
+                ink = true;
+        if (!ink)
+            arcCarriesBorder = false;
+    }
+    expectations.expect(outsideIsBackground,
+                        "every pixel outside the top-left arc is window background, so no header "
+                        "corner shows inside the curve");
+    expectations.expect(arcCarriesBorder,
+                        "the top-left arc carries the border ink on the header's own rows, so the "
+                        "curve is never cut");
 }
 
 // task WIDTH-1 (owner: "let it have min width of something like 300px ... instead of kicking

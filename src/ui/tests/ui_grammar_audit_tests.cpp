@@ -41,8 +41,14 @@ int run(int argc, char** argv) {
         expect(header && header->height() == kit::px(kit::Size::HeaderRow), panel, "header token");
         if (auto* footer = panel->findChild<QWidget*>("editorFooter"))
             expect(footer->height() == kit::px(kit::Size::FooterRow), footer, "footer token");
-        expect(!panel->mask().isEmpty() && !panel->mask().contains(QPoint(0, 0)), panel,
-               "A1 panel clips child chrome at rounded corners");
+        // A1: the rounded frame overlay exists and is the panel's topmost child widget, so no
+        // header, footer or content corner can paint over the curve.
+        QWidget* topmost = nullptr;
+        for (auto* child : panel->children())
+            if (auto* widget = qobject_cast<QWidget*>(child); widget && !widget->isWindow())
+                topmost = widget;
+        expect(topmost != nullptr && topmost->objectName() == QStringLiteral("panelFrame"), panel,
+               "A1 panel frame overlay is the topmost child, clipping chrome at rounded corners");
         const auto inset = kit::px(kit::Spacing::ChromePadding);
         auto* picker = panel->findChild<QWidget*>("editorTypePicker");
         expect(picker->mapTo(header, QPoint()).y() == inset, picker, "A2 chrome vertical inset");

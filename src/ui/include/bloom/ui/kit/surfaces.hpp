@@ -1,50 +1,34 @@
 #pragma once
+#include <QEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QWidget>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 namespace bloom::ui::kit {
-class PanelCornerMask final : public QWidget {
+// The rounded frame of a panel, painted LAST. One transparent overlay the size of the panel that
+// (a) fills the four wedges outside the Radius::Panel curve with Color::Background -- the one
+// colour every rounded corner reveals -- so a header, footer or content widget's square corner
+// can never show past the curve, and (b) draws the hairline border along the curve on top of
+// every child, so the arc is never cut by a child painted after it. It watches its panel: a
+// resize re-fits it and any child added later is stacked beneath it again (the header and footer
+// are built by the chrome rebuild, after the panel's constructor -- exactly what let four
+// small corner masks fall behind them; owner, 2026-09-15: "I asked you to fix this multiple
+// times but no results so far").
+class KPanelFrame final : public QWidget {
   public:
-    enum class Corner : std::uint8_t { TopLeft, TopRight, BottomLeft, BottomRight };
-
-    PanelCornerMask(const Corner corner, QWidget* parent) : QWidget(parent), corner_(corner) {
-        setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        setFocusPolicy(Qt::NoFocus);
-        const int extent = kit::radiusPx(kit::Radius::Panel, 0);
-        setFixedSize(extent, extent);
-    }
+    explicit KPanelFrame(QWidget* panel);
+    void setActive(bool active);
+    [[nodiscard]] static int radiusPx() noexcept;
 
   protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const qreal r = width();
-        QPointF center;
-        switch (corner_) {
-        case Corner::TopLeft:
-            center = QPointF(r, r);
-            break;
-        case Corner::TopRight:
-            center = QPointF(0.0, r);
-            break;
-        case Corner::BottomLeft:
-            center = QPointF(r, 0.0);
-            break;
-        case Corner::BottomRight:
-            center = QPointF(0.0, 0.0);
-            break;
-        }
-        QPainterPath square;
-        square.addRect(rect());
-        QPainterPath arc;
-        arc.addEllipse(center, r, r);
-        painter.fillPath(square.subtracted(arc), kit::color(kit::Color::Background));
-    }
+    void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
-    Corner corner_;
+    void fit();
+    QWidget* panel_;
+    bool active_ = false;
 };
 class KDiamond : public QWidget {
   public:
@@ -87,6 +71,5 @@ class KListSurface : public QWidget {
 class KSurface : public QWidget {
   public:
     explicit KSurface(QWidget* parent = nullptr);
-    static void clipPanelChildren(QWidget& panel);
 };
 } // namespace bloom::ui::kit
