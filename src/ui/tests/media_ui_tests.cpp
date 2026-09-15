@@ -43,8 +43,10 @@ void run() {
     require(directory.isValid(), "temporary media directory");
     QImage image(32, 16, QImage::Format_RGBA8888);
     image.fill(QColor(128, 64, 32, 128));
-    for (const auto* name : {"still.png", "clip.0001.png", "clip.0002.png"})
+    for (const auto* name : {"still.png", "clip.0001.png", "clip.0002.png"}) {
+        image.fill(QString(name).contains("0002") ? Qt::black : Qt::white);
         require(image.save(directory.filePath(name)), "generate PNG fixture");
+    }
     runtime::TaskScheduler scheduler;
     ui::ProjectHost host(scheduler);
     ui::CompositionSession session(*host.liveDocumentAndStack().first,
@@ -131,6 +133,47 @@ void run() {
             role == "loopMode" ? "propertiesImageLoopMode" : "propertiesImageColorSpace";
         checkEnums(properties.findChild<ui::kit::KDropdown*>(object), names);
     }
+    const auto waitThumbnail = [&] {
+        QElapsedTimer wait;
+        wait.start();
+        while (controller.nodeThumbnail(source).isNull() && wait.elapsed() < 15000)
+            QTest::qWait(10);
+        require(!controller.nodeThumbnail(source).isNull(), "node worker thumbnail arrives");
+    };
+    const auto renderCard = [&] {
+        const auto rect = card->boundingRect();
+        QImage pixels(rect.size().toSize(), QImage::Format_ARGB32_Premultiplied);
+        pixels.fill(Qt::transparent);
+        QPainter painter(&pixels);
+        card->paint(&painter, nullptr, nullptr);
+        return pixels;
+    };
+    waitThumbnail();
+    const auto bright = renderCard();
+    const int cx = bright.width() / 2;
+    const int cy =
+        ui::kit::px(ui::kit::Size::NodeTitleBand) + ui::kit::px(ui::kit::Size::ImageThumbnail) / 2;
+    require(bright.pixelColor(cx, cy).lightnessF() >
+                ui::kit::color(ui::kit::Color::SurfaceSunken).lightnessF() + 0.3,
+            "decoded image is visibly brighter than the sunken thumbnail cell");
+    document::AssetId sequence;
+    for (const auto& record : session.snapshot().project().assets())
+        if (record.kind == document::AssetKind::Sequence)
+            sequence = record.id;
+    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(sequence.value())));
+    waitThumbnail();
+    const auto firstFrame = controller.nodeThumbnail(source);
+    require(session.setCurrentTime(*core::RationalTime::create(1, 24)), "advance sequence time");
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightnessF() <
+                firstFrame.pixelColor(0, 0).lightnessF() - 0.3,
+            "sequence thumbnail follows session time");
+    require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "return sequence time");
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).cacheKey() == firstFrame.cacheKey(),
+            "returning to a frame reuses the content and frame proxy cache");
+    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(asset.value())));
+    waitThumbnail();
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
     QWidget timelineTarget;
     ui::installAssetDropTarget(timelineTarget, session);
@@ -172,7 +215,15 @@ void run() {
             "missing card asset is muted with stable id in tooltip");
     require(selector->currentText() == "Missing asset" && selector->mutedValue(),
             "missing Properties asset remains explicit");
-    require(host.liveDocumentAndStack().second->undo().succeeded(), "asset removal is undoable");
+    const auto missingCard = renderCard();
+    int glyphPixels = 0;
+    for (int y = cy - 10; y <= cy + 10; ++y)
+        for (int x = cx - 10; x <= cx + 10; ++x)
+            if (missingCard.pixelColor(x, y).lightnessF() >
+                ui::kit::color(ui::kit::Color::SurfaceSunken).lightnessF() + 0.1)
+                ++glyphPixels;
+    require(glyphPixels > 5, "missing thumbnail paints a visible warning glyph");
+    require(session.undo(), "asset removal is undoable");
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();

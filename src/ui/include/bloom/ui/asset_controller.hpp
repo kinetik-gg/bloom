@@ -27,6 +27,7 @@ class AssetController final : public QObject {
     [[nodiscard]] bool busy() const noexcept { return busy_; }
     [[nodiscard]] bool missing(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
+    [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] std::filesystem::path baseDirectory() const;
     void cancel();
     [[nodiscard]] bool acceptsEdits() const;
@@ -44,6 +45,11 @@ class AssetController final : public QObject {
         bool missing = false;
     };
     using Previews = std::map<document::AssetId, Preview>;
+    struct Thumbnails {
+        Previews assets;
+        std::map<document::NodeId, Preview> nodes;
+        std::map<std::string, QImage> cache;
+    };
     void prepare(const QStringList& paths, document::AssetId relinkId = {});
     void refresh();
     void poll();
@@ -52,11 +58,14 @@ class AssetController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
     runtime::TaskHandle<OperationHandle> import_;
-    runtime::TaskHandle<std::shared_ptr<Previews>> preview_;
+    runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
     std::optional<document::Snapshot> base_;
     Previews previews_;
+    std::map<document::NodeId, Preview> nodePreviews_;
+    std::map<std::string, QImage> thumbnailCache_;
     QByteArray dragToken_;
     bool busy_ = false;
     bool previewPending_ = false;
+    bool previewDirty_ = false;
 };
 } // namespace bloom::ui

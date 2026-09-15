@@ -368,9 +368,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     if (imageSource_) {
         const QRectF cell(kCardPadding, kCardHeaderHeight + kCardPadding, width_ - 2 * kCardPadding,
                           kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
-        painter->fillRect(cell, kit::color(kit::Color::Canvas));
+        painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
         const auto* controller = session_ ? session_->assetController() : nullptr;
-        const auto thumbnail = controller ? controller->thumbnail(imageAsset_) : QImage{};
+        const auto thumbnail = controller ? controller->nodeThumbnail(id_) : QImage{};
         if (!thumbnail.isNull()) {
             auto size = QSizeF(thumbnail.size());
             size.scale(cell.size(), Qt::KeepAspectRatio);
@@ -378,10 +378,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                 QRectF(cell.center() - QPointF(size.width() / 2, size.height() / 2), size),
                 thumbnail);
         } else {
-            const auto glyph = kit::iconPixmap(controller && controller->missing(imageAsset_)
-                                                   ? kit::IconId::Warning
-                                                   : kit::IconId::Image,
-                                               kit::Size::IconSmall, kit::Color::Muted);
+            const auto glyph =
+                kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Muted);
             painter->drawPixmap(cell.center() -
                                     QPointF(glyph.width() / glyph.devicePixelRatio() / 2,
                                             glyph.height() / glyph.devicePixelRatio() / 2),

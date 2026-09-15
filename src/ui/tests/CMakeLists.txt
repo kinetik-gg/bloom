@@ -758,6 +758,7 @@ foreach(scale IN ITEMS 1 1.5 2)
 endforeach()
 
 add_executable(bloom_media_window_capture media_window_capture.cpp)
+target_include_directories(bloom_media_window_capture PRIVATE ..)
 target_link_libraries(bloom_media_window_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_media_window_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")

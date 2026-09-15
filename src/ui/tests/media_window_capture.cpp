@@ -1,3 +1,4 @@
+#include "node_editor_items.hpp"
 #include "window_fixture.hpp"
 #include <QDir>
 #include <QPainter>
@@ -107,6 +108,26 @@ int run(int argc, char** argv) {
     require(fixture.session.snapshot().project().assets().back().manifest.members.size() == 24,
             "capture contains all 24 members");
     require(fixture.window->devicePixelRatioF() == 1.0, "capture requires DPR 1");
+    QElapsedTimer thumbnailWait;
+    thumbnailWait.start();
+    while (fixture.assets->nodeThumbnail(sequenceNode).isNull() && thumbnailWait.elapsed() < 15000)
+        QTest::qWait(10);
+    require(!fixture.assets->nodeThumbnail(sequenceNode).isNull(), "sequence card thumbnail ready");
+    bool captured = false;
+    for (auto* editor : fixture.window->findChildren<ui::NodeGraphEditor*>())
+        for (auto* item : editor->graphView()->scene()->items())
+            if (auto* card = dynamic_cast<ui::node_editor::NodeItem*>(item);
+                card && card->id() == sequenceNode) {
+                const auto rect = card->sceneBoundingRect();
+                QImage image(rect.size().toSize(), QImage::Format_ARGB32_Premultiplied);
+                image.fill(ui::kit::color(ui::kit::Color::Canvas));
+                QPainter painter(&image);
+                editor->graphView()->scene()->render(&painter, QRectF(image.rect()), rect);
+                painter.end();
+                captured =
+                    image.save(QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR "/media2-card.png"));
+            }
+    require(captured, "write Image source card capture");
     const auto destination = QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR "/media1-window-dpr1.png");
     require(fixture.window->grab().save(destination), "write full window capture");
     std::cout << destination.toStdString() << " — frame 12, PNG + 24-frame sequence over solid\n";

@@ -6,11 +6,14 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <cmath>
+#include <limits>
 
 namespace bloom::ui {
 namespace {
@@ -20,6 +23,76 @@ std::filesystem::path nativePath(const QString& text) {
 #else
     return std::filesystem::path(text.toStdString());
 #endif
+}
+struct ThumbnailSelection {
+    std::filesystem::path path;
+    core::Sha256Digest digest;
+    media::ImageInterpretation interpretation;
+    std::string cacheKey;
+    bool available = false;
+};
+// UI-only frame projection of the Image source contract. Use the public exact frame mapping;
+// runtime implementation headers are deliberately outside this module's boundary.
+ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
+                                   core::RationalTime time, document::FrameRate rate,
+                                   const std::filesystem::path& directory,
+                                   const runtime::CancellationToken& cancel) {
+    ThumbnailSelection selected;
+    if (!source.asset)
+        return selected;
+    const auto& asset = *source.asset;
+    const auto* locator = &asset.locator;
+    selected.digest = asset.contentDigest;
+    std::int64_t memberFrame = 0;
+    if (asset.kind == document::AssetKind::Sequence) {
+        const auto frame = runtime::valueGraphFrameIndex(time, rate);
+        if (!frame || asset.manifest.members.empty())
+            return selected;
+        const auto elapsed =
+            static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
+        if (elapsed < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+            elapsed > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+            return selected;
+        const auto length = asset.manifest.last - asset.manifest.first + 1;
+        auto offset = static_cast<std::int64_t>(elapsed);
+        if (offset < 0)
+            offset = 0;
+        else if (source.loopMode == 1)
+            offset %= length;
+        else if (source.loopMode == 2 && length > 1) {
+            const auto period = 2 * (length - 1);
+            offset %= period;
+            if (offset >= length)
+                offset = period - offset;
+        } else
+            offset = std::min(offset, length - 1);
+        const auto wanted = asset.manifest.first + offset;
+        auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
+                                              &document::AssetSequenceMember::frame);
+        if (found != asset.manifest.members.begin())
+            --found;
+        locator = &found->locator;
+        selected.digest = found->contentDigest;
+        memberFrame = found->frame;
+    }
+    selected.path = media::resolveImagePath(locator->path, locator->relinkHint, directory);
+    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
+        source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
+                               : source.colorSpace);
+    selected.interpretation.alphaAssociation = source.premultiply
+                                                   ? media::ImageAlphaAssociation::Straight
+                                                   : media::ImageAlphaAssociation::Premultiplied;
+    const auto probe =
+        media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
+    selected.available = probe.value && probe.value->contentDigest == selected.digest;
+    const auto hex = selected.digest.toLowercaseHex();
+    const auto config = color::kBloomNeutralV1ConfigDigest.toLowercaseHex();
+    selected.cacheKey = std::string(hex.begin(), hex.end()) + ":" + std::to_string(memberFrame) +
+                        ":" + std::to_string(static_cast<int>(selected.interpretation.colorSpace)) +
+                        ":" +
+                        std::to_string(static_cast<int>(selected.interpretation.alphaAssociation)) +
+                        ":" + std::string(config.begin(), config.end());
+    return selected;
 }
 unsigned char srgb(float value) {
     const double linear = static_cast<double>(value);
@@ -36,11 +109,14 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
+    connect(&session_, &CompositionSession::currentTimeChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
         dragToken_ = QUuid::createUuid().toByteArray();
         cancel();
         base_.reset();
         previews_.clear();
+        nodePreviews_.clear();
+        thumbnailCache_.clear();
         refresh();
     });
     connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
@@ -68,6 +144,10 @@ bool AssetController::missing(document::AssetId id) const {
 QImage AssetController::thumbnail(document::AssetId id) const {
     const auto found = previews_.find(id);
     return found == previews_.end() ? QImage{} : found->second.image;
+}
+QImage AssetController::nodeThumbnail(document::NodeId id) const {
+    const auto found = nodePreviews_.find(id);
+    return found == nodePreviews_.end() ? QImage{} : found->second.image;
 }
 void AssetController::requestImport(QWidget* parent) {
     if (!host_.canSave())
@@ -147,58 +227,80 @@ void AssetController::refresh() {
         previewPending_ = false;
         return;
     }
-    if (previewPending_)
+    nodePreviews_.clear();
+    emit changed();
+    if (previewPending_) {
+        previewDirty_ = true;
         preview_.cancel();
+        return;
+    }
+    previewDirty_ = false;
     const auto snapshot = session_.snapshot();
     const auto directory = baseDirectory();
-    auto submission = scheduler_.submit<std::shared_ptr<Previews>>(
+    const auto time = session_.currentTime();
+    const auto* composition = session_.composition();
+    const auto rate =
+        composition ? composition->format().frameRate() : document::FrameRate::framesPerSecond24();
+    std::vector<runtime::CompiledImageSource> sources;
+    if (composition)
+        for (const auto& node : composition->graph().nodes()) {
+            if (node.typeId != "bloom.image-source")
+                continue;
+            runtime::CompiledImageSource source;
+            source.sourceNodeId = node.id;
+            for (const auto& binding : node.parameters) {
+                const auto* parameter = composition->parameters().find(binding.parameterId);
+                const auto* constant =
+                    parameter ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                              : nullptr;
+                if (!constant)
+                    continue;
+                if (binding.role == "asset") {
+                    if (const auto* id = std::get_if<std::string>(&constant->value))
+                        if (const auto* asset =
+                                snapshot.project().findAsset(document::AssetId::fromRaw(
+                                    QString::fromStdString(*id).toULongLong())))
+                            source.asset = *asset;
+                } else if (const auto* integer = std::get_if<std::int64_t>(&constant->value)) {
+                    if (binding.role == "startFrame")
+                        source.startFrame = *integer;
+                    if (binding.role == "loopMode")
+                        source.loopMode = *integer;
+                    if (binding.role == "colorSpace")
+                        source.colorSpace = *integer;
+                } else if (binding.role == "premultiply") {
+                    if (const auto* value = std::get_if<bool>(&constant->value))
+                        source.premultiply = *value;
+                }
+            }
+            sources.push_back(std::move(source));
+        }
+    auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
         runtime::TaskRequest(
             "Image thumbnails",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [snapshot, directory, cached = previews_](runtime::TaskContext& context) {
-            auto results = std::make_shared<Previews>();
-            for (const auto& asset : snapshot.project().assets()) {
-                if (context.isCancellationRequested())
-                    return runtime::TaskResult<std::shared_ptr<Previews>>::cancelled();
-                const auto& locator = asset.kind == document::AssetKind::Sequence
-                                          ? asset.manifest.members.front().locator
-                                          : asset.locator;
-                const auto path =
-                    media::resolveImagePath(locator.path, locator.relinkHint, directory);
-                const auto digest = asset.kind == document::AssetKind::Sequence
-                                        ? asset.manifest.members.front().contentDigest
-                                        : asset.contentDigest;
-                const auto hex = digest.toLowercaseHex();
-                const auto configHex = color::kBloomNeutralV1ConfigDigest.toLowercaseHex();
-                const auto key =
-                    std::string(hex.data(), hex.size()) +
-                    std::string(configHex.data(), configHex.size()) + locator.path +
-                    std::to_string(static_cast<int>(asset.interpretation.colorSpace)) +
-                    std::to_string(static_cast<int>(asset.interpretation.alphaAssociation));
-                auto probe =
-                    media::probeImage(path, [&] { return context.isCancellationRequested(); });
+        [snapshot, directory, time, rate, sources = std::move(sources),
+         cached = thumbnailCache_](runtime::TaskContext& context) mutable {
+            auto results = std::make_shared<Thumbnails>();
+            results->cache = std::move(cached);
+            const auto decode = [&](const runtime::CompiledImageSource& source) {
                 Preview preview;
-                preview.key = key;
-                preview.missing = !probe.value || probe.value->contentDigest != digest;
-                const auto found = cached.find(asset.id);
-                if (!preview.missing && found != cached.end() && found->second.key == key &&
-                    !found->second.image.isNull()) {
-                    results->emplace(asset.id, found->second);
-                    continue;
+                const auto selected =
+                    selectThumbnail(source, time, rate, directory, context.cancellation());
+                preview.key = selected.cacheKey;
+                preview.missing = !selected.available;
+                if (preview.missing)
+                    return preview;
+                const auto found = results->cache.find(preview.key);
+                if (found != results->cache.end()) {
+                    preview.image = found->second;
+                    return preview;
                 }
-                // At most 512 RGBA8 thumbnails (8 MiB); decoding remains bounded separately.
-                if (preview.missing || results->size() >= 512) {
-                    results->emplace(asset.id, std::move(preview));
-                    continue;
-                }
-                const media::ImageInterpretation interpretation{
-                    static_cast<media::ImageColorSpace>(asset.interpretation.colorSpace),
-                    static_cast<media::ImageAlphaAssociation>(
-                        asset.interpretation.alphaAssociation)};
                 auto decoded = media::decodeImage(
-                    path, interpretation, {}, [&] { return context.isCancellationRequested(); }, {},
-                    media::kMaxImageStorageBytes, digest);
+                    selected.path, selected.interpretation, {},
+                    [&] { return context.isCancellationRequested(); }, {},
+                    media::kMaxImageStorageBytes, selected.digest);
                 preview.missing = !decoded.value.has_value();
                 if (decoded.value.has_value()) {
                     const auto& image = **decoded.value;
@@ -228,9 +330,39 @@ void AssetController::refresh() {
                             output[3] = static_cast<unsigned char>(std::lround(alpha * 255.0F));
                         }
                 }
-                results->emplace(asset.id, std::move(preview));
+                if (!preview.image.isNull()) {
+                    // 512 proxies of at most 64 × 64 RGBA8: bounded to 8 MiB.
+                    if (results->cache.size() >= 512)
+                        results->cache.erase(results->cache.begin());
+                    results->cache.emplace(preview.key, preview.image);
+                }
+                return preview;
+            };
+            std::uint64_t completed = 0;
+            const auto progress = [&] {
+                context.reportProgress(
+                    {.phase = "Image thumbnails",
+                     .subphase = "Decoding proxies",
+                     .completed = ++completed,
+                     .total = snapshot.project().assets().size() + sources.size()});
+            };
+            for (const auto& asset : snapshot.project().assets()) {
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                runtime::CompiledImageSource source;
+                source.asset = asset;
+                source.premultiply = asset.interpretation.alphaAssociation ==
+                                     document::AssetAlphaAssociation::Straight;
+                results->assets.emplace(asset.id, decode(source));
+                progress();
             }
-            return runtime::TaskResult<std::shared_ptr<Previews>>::succeeded(std::move(results));
+            for (const auto& source : sources) {
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                results->nodes.emplace(source.sourceNodeId, decode(source));
+                progress();
+            }
+            return runtime::TaskResult<std::shared_ptr<Thumbnails>>::succeeded(std::move(results));
         });
     if (submission.accepted()) {
         preview_ = std::move(submission.handle);
@@ -266,8 +398,14 @@ void AssetController::poll() {
         auto result = preview_.tryTakeResult();
         if (result) {
             previewPending_ = false;
+            if (previewDirty_) {
+                refresh();
+                return;
+            }
             if (result->value().has_value() && *result->value()) {
-                previews_ = std::move(**result->value());
+                previews_ = std::move((*result->value())->assets);
+                nodePreviews_ = std::move((*result->value())->nodes);
+                thumbnailCache_ = std::move((*result->value())->cache);
                 emit changed();
             }
         }
