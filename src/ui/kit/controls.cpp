@@ -1,5 +1,8 @@
+#include <QAction>
 #include <QButtonGroup>
+#include <QFontMetrics>
 #include <QGridLayout>
+#include <QKeySequence>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -21,6 +24,42 @@ QSize KMenuButton::sizeHint() const {
     auto size = QToolButton::sizeHint();
     size.setHeight(px(Size::Control));
     return size;
+}
+KMenuItem::KMenuItem(QWidget* parent) : QToolButton(parent) {
+    setFont(kit::font(TypeRole::Ui));
+    setFixedHeight(px(Size::Control));
+    setToolButtonStyle(Qt::ToolButtonTextOnly);
+    setAutoRaise(true);
+    setFocusPolicy(Qt::StrongFocus);
+    setAttribute(Qt::WA_Hover, true);
+    setProperty("kitControl", true);
+    setProperty("menuItem", true);
+}
+QSize KMenuItem::sizeHint() const {
+    const QFontMetrics metrics(font());
+    int width = 2 * px(Spacing::MenuItemX) + metrics.horizontalAdvance(text());
+    if (const auto* action = defaultAction(); action != nullptr && !action->shortcut().isEmpty())
+        width += px(Spacing::M) +
+                 metrics.horizontalAdvance(action->shortcut().toString(QKeySequence::NativeText));
+    return {std::max(width, px(Size::MenuMinWidth)), px(Size::Control)};
+}
+void KMenuItem::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    if (isEnabled() && (underMouse() || hasFocus() || isDown())) {
+        const QColor surface = color(isDown() ? Color::Field : Color::SurfaceRaised);
+        fillRoundedSurface(painter, rect(), surface, surface, Radius::Small);
+    }
+    painter.setFont(font());
+    const int inset = px(Spacing::MenuItemX);
+    const QRect textRect = rect().adjusted(inset, 0, -inset, 0);
+    painter.setPen(color(isEnabled() ? Color::Foreground : Color::Muted));
+    painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text());
+    if (const auto* action = defaultAction(); action != nullptr && !action->shortcut().isEmpty()) {
+        painter.setPen(color(Color::Muted));
+        painter.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter,
+                         action->shortcut().toString(QKeySequence::NativeText));
+    }
 }
 KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     setFont(kit::font(TypeRole::Ui));
@@ -171,15 +210,20 @@ class FlowMenu final : public QMenu {
         owner = owner->window();
         return {owner->mapToGlobal(QPoint()), owner->size()};
     }
+    // Puts the menu back the way it was declared. The originals are REMOVED from the menu while
+    // the flow shows, never hidden: QAction::setVisible(false) also clears the action's enabled
+    // state, which the KMenuItems copied -- that is exactly why every flowed Add entry went grey
+    // and refused to trigger (owner, 2026-09-15).
     void restoreActions() {
         if (columns_) {
             removeAction(columns_);
             columns_->deleteLater();
             columns_ = nullptr;
         }
-        for (auto* action : originals_)
-            action->setVisible(true);
-        originals_.clear();
+        if (!originals_.isEmpty()) {
+            addActions(originals_);
+            originals_.clear();
+        }
     }
     void buildColumns() {
         if (!property("columnFlow").toBool())
@@ -193,27 +237,25 @@ class FlowMenu final : public QMenu {
         auto* grid = new QGridLayout(content);
         grid->setContentsMargins(padding, padding, padding, padding);
         grid->setSpacing(0);
-        for (auto* action : actions()) {
+        originals_ = actions();
+        int index = 0;
+        for (auto* action : originals_) {
             if (!action->isVisible() || action->isSeparator())
                 continue;
-            auto* button = new KMenuButton(content);
+            auto* button = new KMenuItem(content);
             button->setDefaultAction(action);
             button->setFixedWidth(std::max(px(Size::MenuMinWidth), button->sizeHint().width()));
-            button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-            button->setFocusPolicy(Qt::StrongFocus);
-            const int index = static_cast<int>(originals_.size());
             grid->addWidget(button, index % rows, index / rows);
+            ++index;
             connect(button, &QToolButton::clicked, this, [this] {
                 for (auto* menu = static_cast<QMenu*>(this); menu;
                      menu = qobject_cast<QMenu*>(menu->parentWidget()))
                     menu->close();
             });
-            originals_.push_back(action);
         }
         for (auto* action : originals_)
-            action->setVisible(false);
-        // Buttons hold the original actions and retain their enabled state and shortcuts.
-        for (auto* button : content->findChildren<KMenuButton*>())
+            removeAction(action);
+        for (auto* button : content->findChildren<KMenuItem*>())
             button->show();
         columns_ = new QWidgetAction(this);
         columns_->setDefaultWidget(content);

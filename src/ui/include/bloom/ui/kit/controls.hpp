@@ -14,6 +14,20 @@ class KMenuButton : public QToolButton {
     explicit KMenuButton(QWidget* parent = nullptr);
     QSize sizeHint() const override;
 };
+// One row inside a flowing kit menu (kit::makeMenu with the columnFlow property): the action's
+// text left-aligned at the menu-item inset, its shortcut right-aligned and muted, a raised
+// surface under the pointer, muted ink when disabled. It is the ONLY item widget the flow uses;
+// a header menu title (KMenuButton) is a different control and never appears inside a menu --
+// that mix-up is what made flowed Add entries look centred and greyed (owner, 2026-09-15).
+class KMenuItem final : public QToolButton {
+    Q_OBJECT
+  public:
+    explicit KMenuItem(QWidget* parent = nullptr);
+    QSize sizeHint() const override;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+};
 class KIconButton : public QToolButton {
     Q_OBJECT
   public:

@@ -1,12 +1,17 @@
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QAction>
 #include <QApplication>
 #include <QColor>
+#include <QCoreApplication>
 #include <QImage>
+#include <QMenu>
 #include <QPixmap>
+#include <QPoint>
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -302,6 +307,50 @@ void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
 
 } // namespace
 
+// Regression (owner, 2026-09-15): a flowed Add submenu rebuilt its entries as header menu TITLE
+// buttons -- centred, muted -- so every node type read as disabled and the artist did not click.
+// A flowed entry is a KMenuItem: enabled exactly when its action is, its text starting at the
+// menu-item inset on the left, and a click triggers the action.
+void testFlowMenuEntriesAreLeftAlignedAndTriggerTheirActions(Expectations& expectations) {
+    QWidget owner;
+    owner.resize(800, 600);
+    owner.show();
+    auto* menu = kit::makeMenu(QStringLiteral("Flow"), &owner);
+    menu->setProperty("columnFlow", true);
+    int triggered = 0;
+    auto* live = menu->addAction(QStringLiteral("Add Live Node"));
+    QObject::connect(live, &QAction::triggered, [&triggered] { ++triggered; });
+    auto* dead = menu->addAction(QStringLiteral("Add Dead Node"));
+    dead->setEnabled(false);
+    menu->popup(owner.mapToGlobal(QPoint(10, 10)));
+    QCoreApplication::processEvents();
+    const auto items = menu->findChildren<kit::KMenuItem*>();
+    expectations.expect(items.size() == 2, "a flowed menu builds one KMenuItem per action");
+    kit::KMenuItem* liveItem = nullptr;
+    for (auto* item : items) {
+        if (item->defaultAction() == live)
+            liveItem = item;
+        expectations.expect(item->isEnabled() == item->defaultAction()->isEnabled(),
+                            "a flowed entry is enabled exactly when its action is");
+    }
+    expectations.expect(liveItem != nullptr, "the live action has its entry");
+    if (liveItem != nullptr) {
+        const QImage image = liveItem->grab().toImage();
+        int firstInk = image.width();
+        for (int x = 0; x < image.width() && firstInk == image.width(); ++x)
+            for (int y = 0; y < image.height(); ++y)
+                if (qGray(image.pixel(x, y)) > 128) {
+                    firstInk = x;
+                    break;
+                }
+        expectations.expect(firstInk < image.width() / 4,
+                            "flowed entry text starts at the left inset, not centred");
+        liveItem->click();
+        expectations.expect(triggered == 1, "clicking a flowed entry triggers its action once");
+    }
+    menu->close();
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -316,5 +365,6 @@ int main(int argc, char** argv) {
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
     testIconOnlyButtonsAreSquareAcrossEverySize(expectations);
     testGhostDangerOnHoverStaysGhostAtRest(expectations);
+    testFlowMenuEntriesAreLeftAlignedAndTriggerTheirActions(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
