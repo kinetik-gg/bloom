@@ -269,10 +269,33 @@ model; its button keeps the New Folder label. No media-pipeline placeholder tool
 
 File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
 Dragging a media row to Nodes creates an Image source; dropping it on Timeline creates a wired
-Layer. Image Properties exposes asset, Start Frame, Loop Mode, Color Space, Premultiply and
-read-only Dimensions. Controls use the same Kinetik row and control vocabulary as other sources.
-An Image card reserves the `ImageThumbnail` token's 72-pixel body cell for a cached 64-pixel proxy;
-painting does no file access or decoding. Missing/gapped sources show a warning in that cell.
+Layer. Image source cards and Properties use an Asset `KDropdown` listing the project's Image
+and Sequence assets by filename or sequence pattern, with the kind glyph and Image / Sequence [n]
+text. Selection commits the stable asset id through the shared parameter setter. A removed id
+remains selected as **Missing asset**, in muted ink, with the id in its tooltip. An Image source
+card derives its title from the asset name; the title band's category remains **Sources**.
+Existing artist-authored Layer names remain intact.
+
+Loop Mode offers **Hold / Loop / Ping-pong**; Color Space offers **Auto / sRGB / Linear / Raw**.
+The card, generic Properties rows and timeline source twirl-downs read the same UI vocabulary table.
+Start Frame remains an integer and Premultiply a toggle. Dimensions (`1920 × 1080`) and sequence
+Range (`24 frames · 0–23`) are read-only `KLabel` rows on the card and in Properties, read directly
+from the imported asset record. Range uses the actual numbered endpoints and is absent for stills.
+
+An Image card reserves `ImageThumbnail`'s 72-pixel body cell, with a `SurfaceSunken` background,
+for a cached proxy no larger than 64 pixels on either axis. The cell fits that image without
+changing its aspect ratio. Sequence proxies follow session time, Start Frame and Loop Mode using
+the runtime's exact rational frame mapping and the Image source timing contract, including
+holding a preceding member across a sequence gap.
+Asset/parameter/time changes invalidate the displayed proxy; a cancellable worker publishes the
+newest result. The controller caches proxies by content digest, selected frame and interpretation,
+bounded to 512 cache entries. File resolution, hashing, decode and downsampling run on the worker;
+painting only reads a published `QImage`. Missing, unreadable and pending sources show the warning
+glyph in muted ink, never a blank cell. Thumbnail work has task progress and cancellation; shutdown
+cancels without blocking the UI. Relative-brightness probes pin the decoded and missing states.
+Automation names are `nodeImageAsset`, `nodeImageDimensions`, `nodeImageRange`,
+`propertiesImageAsset`, `propertiesImageLoopMode`, `propertiesImageColorSpace`,
+`propertiesImageDimensions`, and `propertiesImageRange`.
 
 New Composition and the composition Properties section expose a `KColorChip` Background Colour.
 Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
