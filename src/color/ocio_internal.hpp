@@ -35,8 +35,13 @@ class ResolvedBloomNeutralConfig::Impl final {
 
 class PreparedCpuDisplayProcessorHandle::Impl final {
   public:
-    explicit Impl(OCIO::ConstCPUProcessorRcPtr cpuProcessor) noexcept
-        : cpuProcessor_(std::move(cpuProcessor)) {}
+    explicit Impl(OCIO::ConstCPUProcessorRcPtr cpuProcessor,
+                  OCIO::ConstCPUProcessorRcPtr inverseProcessor) noexcept
+        : cpuProcessor_(std::move(cpuProcessor)), inverseProcessor_(std::move(inverseProcessor)) {}
+
+    [[nodiscard]] const OCIO::ConstCPUProcessorRcPtr& inverseProcessor() const& noexcept {
+        return inverseProcessor_;
+    }
 
     [[nodiscard]] const OCIO::ConstCPUProcessorRcPtr& cpuProcessor() const& noexcept {
         return cpuProcessor_;
@@ -44,6 +49,7 @@ class PreparedCpuDisplayProcessorHandle::Impl final {
 
   private:
     OCIO::ConstCPUProcessorRcPtr cpuProcessor_;
+    OCIO::ConstCPUProcessorRcPtr inverseProcessor_;
 };
 
 } // namespace bloom::color

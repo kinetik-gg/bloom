@@ -1,3 +1,5 @@
+#include "properties_registry_row.hpp"
+#include "properties_sections.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #pragma once
@@ -258,10 +260,26 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
+        imageSource_ = node.typeId == "bloom.image-source";
+        imageAsset_ = {};
+        if (imageSource_ && session_)
+            for (const auto& binding : node.parameters)
+                if (binding.role == "asset") {
+                    const auto value = session_->constantStringValue(binding.parameterId);
+                    if (value)
+                        imageAsset_ = document::AssetId::fromRaw(value->toULongLong());
+                }
+        const auto* imageRecord = imageSource_ && session_
+                                      ? session_->snapshot().project().findAsset(imageAsset_)
+                                      : nullptr;
+        imageSequence_ = imageRecord && imageRecord->kind == document::AssetKind::Sequence;
         reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
+        if (imageSource_ && session_)
+            if (const auto* asset = session_->snapshot().project().findAsset(imageAsset_))
+                title_ = imageAssetDisplayName(*asset);
         eyebrow_ = nodeEyebrow(composition, node);
         if (reroute_) {
             // A dot has no name on it, so its tooltip is where the kind it carries is said.
@@ -676,6 +694,8 @@ class NodeItem final : public QGraphicsObject {
         valueRows_.clear();
         readOnlyRows_.clear();
         readOnlyLabels_.clear();
+        imageDimensions_ = nullptr;
+        imageRange_ = nullptr;
         controlRoles_.clear();
         operandRows_.clear();
         positionX_ = nullptr;
@@ -829,6 +849,16 @@ class NodeItem final : public QGraphicsObject {
                 readOnlyLabels_.push_back(label);
             }
         }
+        if (imageSource_) {
+            imageDimensions_ = new kit::KLabel;
+            imageDimensions_->setObjectName("nodeImageDimensions");
+            prepareField(imageDimensions_);
+            valueRows_.push_back({tr("Dimensions"), imageDimensions_, nullptr, {}});
+            imageRange_ = new kit::KLabel;
+            imageRange_->setObjectName("nodeImageRange");
+            prepareField(imageRange_);
+            valueRows_.push_back({tr("Range"), imageRange_, nullptr, {}});
+        }
         for (const auto& row : valueRows_)
             wrapPropertyRow(row.label, row.widget, row.diamond);
         if (colorChip_)
@@ -867,9 +897,12 @@ class NodeItem final : public QGraphicsObject {
         // list here, so a row cannot offer a key the command layer would refuse.
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
-        if (const auto items = selectorItems(declared->schemaKey); !items.isEmpty()) {
+        if (const auto items = selectorItems(declared->schemaKey);
+            !items.isEmpty() || declared->schemaKey == "bloom.image.asset") {
             row.selector = new kit::KDropdown;
-            row.selector->setObjectName(QStringLiteral("nodeOperandSelector"));
+            row.selector->setObjectName(declared->schemaKey == "bloom.image.asset"
+                                            ? "nodeImageAsset"
+                                            : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
             row.selector->setControlSize(kit::KDropdown::ControlSize::Compact);
             for (const auto& item : items) {
@@ -980,115 +1013,7 @@ class NodeItem final : public QGraphicsObject {
     // buildOperandRow() to build an ordinary editor instead.
     [[nodiscard]] static QList<std::pair<QString, std::int64_t>>
     selectorItems(const std::string_view schemaKey) {
-        QList<std::pair<QString, std::int64_t>> items;
-        const auto add = [&items](const QString& text, const std::int64_t stored) {
-            items.append({text, stored});
-        };
-        if (schemaKey == document::kTextAlignmentParameterSchemaKey) {
-            add(tr("Left"), 0);
-            add(tr("Center"), 1);
-            add(tr("Right"), 2);
-            return items;
-        }
-        if (schemaKey == document::kScalarOperationParameterSchemaKey) {
-            for (const auto operation : document::kScalarOperations) {
-                const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
-                // The frozen signature's own id is the name, with its namespace trimmed: the card
-                // must not invent a second spelling for an operation the kernel already names.
-                const auto id = signature == nullptr ? std::string_view{} : signature->id;
-                add(displayTypeName(id.substr(id.rfind('.') + 1)),
-                    document::scalarOperationStoredValue(operation));
-            }
-            return items;
-        }
-        if (schemaKey == document::kVectorOperationParameterSchemaKey) {
-            static constexpr std::array kNames{"Add",   "Subtract",  "Multiply",     "Divide",
-                                               "Scale", "Normalize", "Cross Product"};
-            for (std::size_t index = 0; index < document::kVectorOperations.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::vectorOperationStoredValue(document::kVectorOperations[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kVectorReductionParameterSchemaKey) {
-            static constexpr std::array kNames{"Length", "Dot Product", "Distance"};
-            for (std::size_t index = 0; index < document::kVectorReductions.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::vectorReductionStoredValue(document::kVectorReductions[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kRangeInterpolationParameterSchemaKey) {
-            static constexpr std::array kNames{"Linear", "Smoothstep", "Smootherstep"};
-            for (std::size_t index = 0; index < document::kRangeInterpolations.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::rangeInterpolationStoredValue(document::kRangeInterpolations[index]));
-            }
-            return items;
-        }
-        // Task UTIL-1's selectors. Each offers its own closed vocabulary in the order the document
-        // numbers it, so the card cannot offer a member the schema would refuse.
-        if (schemaKey == document::kRoundingModeParameterSchemaKey) {
-            static constexpr std::array kNames{"Round", "Floor", "Ceiling", "Truncate"};
-            for (std::size_t index = 0; index < document::kRoundingModes.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::selectorStoredValue(document::kRoundingModes[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kIntegerOperationParameterSchemaKey) {
-            static constexpr std::array kNames{"Add",    "Subtract", "Multiply", "Divide",
-                                               "Modulo", "Minimum",  "Maximum"};
-            for (std::size_t index = 0; index < document::kIntegerOperations.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::selectorStoredValue(document::kIntegerOperations[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kBooleanOperationParameterSchemaKey) {
-            static constexpr std::array kNames{"And", "Or", "Xor", "Nand", "Nor"};
-            for (std::size_t index = 0; index < document::kBooleanOperations.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::selectorStoredValue(document::kBooleanOperations[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kStringCaseParameterSchemaKey) {
-            static constexpr std::array kNames{"Upper", "Lower", "Title"};
-            for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::selectorStoredValue(document::kStringCaseModes[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kStringPadSideParameterSchemaKey) {
-            static constexpr std::array kNames{"Start", "End"};
-            for (std::size_t index = 0; index < document::kStringPadSides.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::selectorStoredValue(document::kStringPadSides[index]));
-            }
-            return items;
-        }
-        if (schemaKey == document::kNumberRadixParameterSchemaKey) {
-            // The stored value IS the radix, so the offered list is a convenience rather than a
-            // mapping: a document carrying base 36 keeps it, and this dropdown simply has no row
-            // for it.
-            static constexpr std::array kNames{"Binary", "Octal", "Decimal", "Hexadecimal"};
-            for (std::size_t index = 0; index < document::kOfferedRadices.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]), document::kOfferedRadices[index]);
-            }
-            return items;
-        }
-        if (schemaKey == document::kCompareOperationParameterSchemaKey) {
-            static constexpr std::array kNames{"Equal",         "Not Equal", "Less",
-                                               "Less Or Equal", "Greater",   "Greater Or Equal"};
-            for (std::size_t index = 0; index < document::kCompareOperations.size(); ++index) {
-                add(QString::fromUtf8(kNames[index]),
-                    document::compareOperationStoredValue(document::kCompareOperations[index]));
-            }
-            return items;
-        }
-        return items;
+        return propertiesSelectorItems(schemaKey);
     }
 
     // Writes one operand's authored constant. One transaction, one undo entry -- the same shape
@@ -1104,6 +1029,8 @@ class NodeItem final : public QGraphicsObject {
         const auto value = [&]() -> std::optional<document::ParameterValue> {
             if (row.selector != nullptr) {
                 const auto stored = row.selector->itemData(row.selector->currentIndex());
+                if (row.kind == document::ParameterValueKind::String)
+                    return document::ParameterValue{stored.toString().toStdString()};
                 return stored.isValid()
                            ? std::optional(document::ParameterValue{stored.value<std::int64_t>()})
                            : std::nullopt;
@@ -1185,9 +1112,11 @@ class NodeItem final : public QGraphicsObject {
             if (const auto sampled = session_->effectiveColorValue(row.parameterId);
                 sampled.has_value() && row.color != nullptr) {
                 const QSignalBlocker blocker(row.color);
-                row.color->setColor(kit::KColor{
-                    static_cast<float>(sampled->red), static_cast<float>(sampled->green),
-                    static_cast<float>(sampled->blue), static_cast<float>(sampled->alpha)});
+                row.color->setEnabled(true);
+                const auto* parameter = session_->composition()->parameters().find(row.parameterId);
+                properties::refreshColor(*session_,
+                                         parameter ? parameter->schemaKey : std::string_view{},
+                                         *sampled, row.color);
             }
             return;
         case document::ParameterValueKind::Boolean:
@@ -1231,6 +1160,10 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             if (row.selector != nullptr) {
+                if (row.kind == document::ParameterValueKind::String && session_)
+                    if (const auto* stored = std::get_if<std::string>(&constant->value))
+                        refreshImageAssetSelector(*row.selector, *session_,
+                                                  QString::fromStdString(*stored));
                 if (const auto* stored = std::get_if<std::int64_t>(&constant->value)) {
                     const QSignalBlocker blocker(row.selector);
                     for (int item = 0; item < row.selector->count(); ++item) {
@@ -1243,7 +1176,7 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             std::visit(
-                [&row](const auto& held) {
+                [this, &row, parameter](const auto& held) {
                     using Held = std::decay_t<decltype(held)>;
                     const auto setComponent = [&row](const std::size_t component,
                                                      const double value) {
@@ -1271,9 +1204,9 @@ class NodeItem final : public QGraphicsObject {
                     } else if constexpr (std::is_same_v<Held, core::Color4d>) {
                         if (row.color != nullptr) {
                             const QSignalBlocker blocker(row.color);
-                            row.color->setColor(kit::KColor::fromRgba(
-                                static_cast<float>(held.red), static_cast<float>(held.green),
-                                static_cast<float>(held.blue), static_cast<float>(held.alpha)));
+                            row.color->setEnabled(true);
+                            properties::refreshColor(*session_, parameter->schemaKey, held,
+                                                     row.color);
                         }
                     } else if constexpr (std::is_same_v<Held, std::string>) {
                         if (row.text != nullptr) {
@@ -1436,9 +1369,7 @@ class NodeItem final : public QGraphicsObject {
             colorChip_->setEnabled(value.has_value());
             if (value.has_value()) {
                 const QSignalBlocker blocker(colorChip_);
-                colorChip_->setColor(kit::KColor::fromRgba(
-                    static_cast<float>(value->red), static_cast<float>(value->green),
-                    static_cast<float>(value->blue), static_cast<float>(value->alpha)));
+                properties::refreshColor(*session_, parameter->schemaKey, *value, colorChip_);
             }
             // The swatch quantizes to 8 bits and clamps, so an HDR or negative authoring channel
             // cannot be shown in it honestly; the exact, unclipped value travels in the tooltip,
@@ -1494,6 +1425,11 @@ class NodeItem final : public QGraphicsObject {
         }
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
+        if (imageDimensions_ && session_) {
+            const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
+            imageDimensions_->setText(imageDimensionsText(asset));
+            imageRange_->setText(imageRangeText(asset));
+        }
         refreshOperandRows(composition);
         for (auto* child : childItems())
             if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child))
@@ -1569,8 +1505,9 @@ class NodeItem final : public QGraphicsObject {
         }
         rowHeight = kit::px(kit::Size::PropertyRow);
 
-        const auto rowCount = static_cast<qreal>(valueRows_.size() + readOnlyRows_.size() +
-                                                 (colorChip_ != nullptr ? 1 : 0));
+        const auto rowCount =
+            static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) +
+                               readOnlyRows_.size() + (colorChip_ != nullptr ? 1 : 0));
         // The card's own floor, measured from what it actually carries (task S1, item 2): the
         // shared label column, the narrowest usable control beside it, and the widest socket name,
         // each inside the card's padding. A persisted or dragged width never goes below it, so no
@@ -1617,15 +1554,17 @@ class NodeItem final : public QGraphicsObject {
                 else
                     outputHeight += socket->rowHeight();
             }
-        parameterRowsTop_ = kCardHeaderHeight + socketHeight;
+        const qreal thumbnailHeight = imageSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
+        parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
-        const qreal height = layout_.collapsed
-                                 ? kCardHeaderHeight
-                                 : kCardHeaderHeight + socketHeight + outputHeight +
-                                       (rowCount > 0.0 ? rowCount * (rowHeight + kCardRowGap) -
-                                                             kCardRowGap + kCardPadding
-                                                       : 0.0);
+        const qreal height =
+            layout_.collapsed
+                ? kCardHeaderHeight
+                : kCardHeaderHeight + socketHeight + outputHeight + thumbnailHeight +
+                      (rowCount > 0.0
+                           ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
+                           : 0.0);
 
         if (!qFuzzyCompare(width, width_) || !qFuzzyCompare(height, height_)) {
             prepareGeometryChange();
@@ -1650,6 +1589,10 @@ class NodeItem final : public QGraphicsObject {
             row->graphicsProxyWidget()->setOpacity(layout_.muted ? 0.5 : 1.0);
         };
         for (const auto& row : valueRows_) {
+            if (row.widget == imageRange_ && !imageSequence_) {
+                propertyRows_.at(row.widget)->graphicsProxyWidget()->hide();
+                continue;
+            }
             placeRow(row.widget, y);
             y += rowHeight + kCardRowGap;
         }
@@ -1710,6 +1653,11 @@ class NodeItem final : public QGraphicsObject {
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
+    bool imageSource_ = false;
+    bool imageSequence_ = false;
+    kit::KLabel* imageDimensions_ = nullptr;
+    kit::KLabel* imageRange_ = nullptr;
+    document::AssetId imageAsset_;
     bool primary_ = false;
     bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;

@@ -2,6 +2,7 @@
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
@@ -51,6 +52,8 @@ class Composition final {
 
     [[nodiscard]] const std::optional<WorkArea>& workArea() const noexcept { return workArea_; }
     void setWorkArea(std::optional<WorkArea> area) noexcept { workArea_ = area; }
+    [[nodiscard]] core::Color4d backgroundColor() const noexcept { return backgroundColor_; }
+    void setBackgroundColor(core::Color4d color) noexcept { backgroundColor_ = color; }
     [[nodiscard]] SafeAreaSettings safeAreas() const noexcept { return safeAreas_; }
     void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
     [[nodiscard]] bool nodeLocked(NodeId node) const;
@@ -64,6 +67,7 @@ class Composition final {
   private:
     std::optional<WorkArea> workArea_{};
     SafeAreaSettings safeAreas_{};
+    core::Color4d backgroundColor_{0.0, 0.0, 0.0, 1.0};
     CompositionId id_;
     std::string name_;
     core::RationalTime duration_;
@@ -81,6 +85,11 @@ class Project final {
 
     [[nodiscard]] ProjectId id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    [[nodiscard]] std::span<const AssetRecord> assets() const noexcept { return assets_; }
+    [[nodiscard]] const AssetRecord* findAsset(AssetId id) const noexcept;
+    [[nodiscard]] AssetRecord* findAsset(AssetId id) noexcept;
+    [[nodiscard]] bool addAsset(AssetRecord asset);
+    [[nodiscard]] bool removeAsset(AssetId id);
     [[nodiscard]] std::span<const Composition> compositions() const noexcept {
         return compositions_;
     }
@@ -104,6 +113,7 @@ class Project final {
     ProjectId id_;
     std::string name_;
     std::vector<Composition> compositions_;
+    std::vector<AssetRecord> assets_;
     std::vector<ExtensionRecord> extensionRecords_;
 };
 

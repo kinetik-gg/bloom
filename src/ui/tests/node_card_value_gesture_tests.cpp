@@ -1,3 +1,4 @@
+#include <QElapsedTimer>
 // Task FIX2, deliverable 1: the owner's report that "values in nodes parameters are not workable",
 // reproduced through the gestures an artist actually performs -- a real press/move/release on the
 // view's viewport and real key events on the view, over the production NodeGraphEditor with no
@@ -243,16 +244,29 @@ void colorChipCommits(App& app, const document::NodeId solid) {
     if (chip == nullptr) {
         return;
     }
+    QElapsedTimer preparation;
+    preparation.start();
+    while (!app.session.colorConverter() && preparation.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QTest::qWait(1);
+    }
+    QTest::qWait(20);
     click(app, chip);
     expect(chip->isPickerOpen(), "clicking the Solid card's color chip opens its picker");
     // The picker is the chip's own popup; choosing a colour in it is what the chip reports.
     chip->picker()->setColor(kit::KColor::fromRgba(0.25F, 0.5F, 0.75F, 1.0F));
     QCoreApplication::processEvents();
     const auto stored = colorOf(app, solid, document::kSolidColorParameterRole);
-    expect(stored.has_value() && closeTo(static_cast<float>(stored->red), 0.25) &&
-               closeTo(static_cast<float>(stored->green), 0.5),
+    expect(stored.has_value() && closeTo(static_cast<float>(stored->red), 0.050876) &&
+               closeTo(static_cast<float>(stored->green), 0.214041),
            "choosing a color in the picker writes the Solid card's own parameter");
-    expect(closeTo(chip->color().red, 0.25), "and the chip shows what it committed");
+    expect(chip->color().space == kit::ColorSpace::Reference &&
+               closeTo(chip->color()
+                           .converted(kit::ColorSpace::Display, app.session.colorConverter())
+                           .value_or(kit::KColor{})
+                           .red,
+                       0.25),
+           "and the chip shows what it committed");
     chip->closePicker();
     // Offscreen there is no window manager to reactivate the window under a dismissed popup, so
     // the canvas is reactivated and refocused here rather than the next gesture finding no active
@@ -557,7 +571,7 @@ void valueNodeCards(App& app) {
                                    : std::get_if<document::ConstantValueSource>(&parameter->source);
         const auto* held =
             constant == nullptr ? nullptr : std::get_if<core::Color4d>(&constant->value);
-        expect(held != nullptr && closeTo(static_cast<float>(held->red), 0.1),
+        expect(held != nullptr && closeTo(static_cast<float>(held->red), 0.010023),
                "the Colour card's chip commits its value");
     }
 }

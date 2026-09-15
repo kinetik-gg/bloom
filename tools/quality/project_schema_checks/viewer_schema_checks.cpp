@@ -154,4 +154,42 @@ void validateManifestSchemaV1_9(const json::Value& schema) {
     validateReferences(schema, schema);
 }
 
+void validateDocumentSchemaV1_10(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.10",
+                       "document id");
+    requireExact(schema.at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.10"})", "document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.10").at("properties").at("minor"),
+                 R"({"const":10})", "minor");
+    auto definitions = schema.at("$defs");
+    for (const auto* name : {"asset-1.10", "assetLocator-1.10"}) {
+        requireExact(definitions.at(name).at("unevaluatedProperties"), "false",
+                     "closed asset record");
+        definitions.at(name).at("unevaluatedProperties") = json::Value(true);
+    }
+    static_cast<void>(validateObjectShape(
+        definitions, "asset-1.10",
+        {"id", "kind", "locator", "contentDigest", "interpretation", "width", "height", "manifest"},
+        {"id", "kind", "locator", "contentDigest", "interpretation", "width", "height",
+         "manifest"}));
+    static_cast<void>(validateObjectShape(definitions, "assetLocator-1.10",
+                                          {"kind", "portability", "path", "relinkHint"},
+                                          {"kind", "portability", "path", "relinkHint"}));
+    requireExact(definitions.at("project-1.0").at("properties").at("assets"),
+                 R"({"type":"array","maxItems":100000,"items":{"$ref":"#/$defs/asset-1.10"}})",
+                 "assets");
+    requireExact(definitions.at("highestIssued-1.2").at("properties").at("asset"),
+                 R"({"$ref":"#/$defs/allocatorHighWater"})", "asset watermark");
+    validateReferences(schema, schema);
+}
+void validateManifestSchemaV1_10(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.10",
+                       "manifest id");
+    requireExact(schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.10"})", "manifest document version");
+    validateReferences(schema, schema);
+}
+
 } // namespace bloom::quality

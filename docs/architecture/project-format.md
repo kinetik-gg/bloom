@@ -38,7 +38,7 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.9`.
+The container version remains `1.0`; the current document schema is `1.10`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
@@ -917,7 +917,7 @@ Bloom does not claim otherwise.
 
 ## Asset Locators
 
-Asset paths enter the format only alongside a stable `AssetRegistry`:
+Document 1.10 stores asset paths alongside stable records in `Project::assets`:
 
 - nodes reference stable asset IDs, never filesystem paths
 - project-relative paths use UTF-8 and `/` separators
@@ -926,7 +926,7 @@ Asset paths enter the format only alongside a stable `AssetRegistry`:
 - saving does not case-fold asset paths or resolve their symlinks
 - embedded entry paths obey the container path profile when a later version introduces them
 
-The first codec does not invent provisional asset fields.
+The closed image asset records are specified under **Images And Backgrounds In Document 1.10**.
 
 ## Qualified Implementations
 
@@ -1152,3 +1152,31 @@ deterministic. Since the split copies exact values, times, and interpolation mod
 `Hold`, `Linear`, and `EaseInOut` samples are bit-identical to the legacy whole-value samples. The
 document and manifest artifacts are `document-1.9.schema.json` and `manifest-1.9.schema.json`; the
 historical `1.8` artifacts remain unchanged.
+
+
+## Images And Backgrounds In Document 1.10
+
+`document-1.10.schema.json` and `manifest-1.10.schema.json` are current. The manifest reserves
+`bloom.image-source` as a built-in type. Container and node schema versions remain independent.
+Migration 1.9 → 1.10 appends empty project `assets`, opaque black composition `backgroundColor`,
+and `idAllocation.highestIssued.asset: "0"`; all existing IDs and authored values are retained.
+
+Canonical order is `project`'s existing members followed by `assets`; each composition appends
+`backgroundColor` after its optional work area. Background is a four-number straight RGBA array,
+default `[0.0, 0.0, 0.0, 1.0]`. It is viewer presentation metadata and does not fill export alpha.
+The asset allocator is appended after `nodeGroup`; asset IDs follow the existing decimal-string
+and never-reuse/high-water rules, including undo and redo.
+
+Assets are sorted by ID. Their closed member order is `id`, `kind`, `locator`, `contentDigest`,
+`interpretation`, `width`, `height`, `manifest`. Kind is `image` or `sequence`. The closed locator
+order is `kind: "file"`, `portability: "project-relative"`, UTF-8 `path`, absolute `relinkHint`.
+The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered decimal frame
+numbers plus `:` and each member's lowercase digest. Interpretation holds integer `colorSpace`
+(0 Auto, 1 sRGB, 2 Linear, 3 Raw) and `alphaAssociation` (0 Straight, 1 Premultiplied).
+
+The manifest contains `pattern`, `padding`, decimal-string `first` and `last`, sorted `members`
+(frame, locator, digest), and explicit decimal-string `gaps`. A still carries an empty manifest.
+Sequence ranges and gaps must agree with their members. Dimensions and locator lengths are
+validated before publication. Missing files do not invalidate the document or remove its assets.
+`RemoveAsset` preserves referencing nodes so they can warn; Relink retains the stable asset ID.
+Import, relink, removal, layer placement and background editing use ordinary command transactions.

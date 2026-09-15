@@ -71,6 +71,8 @@ are not vendored.
 | minimp3 | 2026-07-27 snapshot (commit `ea99364f61c14656440e8d77e9c233ccf3124633`) | CC0 1.0 | `src/media/third_party/minimp3/` | `dependencies/licenses/minimp3/` |
 | miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | MIT-0 OR public domain | `src/media/third_party/miniaudio/` | `dependencies/licenses/miniaudio/` |
 
+| stb_image | 2.30 (commit `013ac3beddff3dbffafd5177e7972067cd2b5083`) | MIT OR Unlicense | `src/media/third_party/stb_image/` | `dependencies/licenses/stb_image/` |
+
 ### stb_truetype
 
 Copyright (c) 2017 Sean Barrett (<https://github.com/nothings/stb>). Dual-licensed at the

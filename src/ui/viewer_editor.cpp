@@ -251,10 +251,9 @@ void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
 // The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
 // "viewer/background". Black and White are literal, because that is exactly what an artist asks for
 // when checking edges against a known value -- a token would be a different, softer colour and
-// would defeat the purpose of the choice. Solid takes the application's own canvas Background token
-// (see ViewerBackground's own comment on why it cannot be a per-composition colour yet).
+// would defeat the purpose of the choice. Solid reads the authored composition background.
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background) {
+                          const ViewerBackground background, const core::Color4d color) {
     switch (background) {
     case ViewerBackground::Checkerboard:
         drawCheckerboard(painter, bounds);
@@ -268,36 +267,11 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
-}
-
-// Approximates Elevation::Popup's token shadow (kit::shadow()) as a stack of expanding,
-// decreasingly-opaque rounded rects behind `displayRect`. kit::applyElevation() is the real
-// mechanism (a QGraphicsDropShadowEffect attached to a widget) but that requires the shadowed
-// content to BE a widget; the composed frame here is one QImage blit inside ViewerEditor's own
-// paintEvent, not a child widget, so it cannot host a graphics effect. This still consumes the
-// token's own offset/blur/color -- no raw literal -- it just composites the blur by hand.
-void drawFrameShadow(QPainter& painter, const QRectF& displayRect) {
-    const kit::Shadow token = kit::shadow(kit::Elevation::Popup);
-    if (token.isFlat() || displayRect.isEmpty()) {
-        return;
-    }
-    constexpr int kLayers = 4;
-    painter.save();
-    painter.setPen(Qt::NoPen);
-    for (int layer = kLayers; layer >= 1; --layer) {
-        const qreal t = static_cast<qreal>(layer) / static_cast<qreal>(kLayers);
-        QColor layerColor = token.color;
-        layerColor.setAlphaF(static_cast<float>(layerColor.alphaF() / kLayers));
-        const qreal spread = token.blurRadius * t;
-        const QRectF layerRect =
-            displayRect
-                .translated(static_cast<qreal>(token.offsetX), static_cast<qreal>(token.offsetY))
-                .adjusted(-spread, -spread, spread, spread);
-        painter.setBrush(layerColor);
-        painter.drawRoundedRect(layerRect, 2.0, 2.0);
-    }
-    painter.restore();
+    painter.fillRect(bounds,
+                     QColor::fromRgbF(static_cast<float>(std::clamp(color.red, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.green, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.blue, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.alpha, 0.0, 1.0))));
 }
 
 } // namespace
@@ -1223,8 +1197,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
     backgroundDropdown_->setAccessibleName(tr("Background"));
     backgroundDropdown_->setToolTip(
-        tr("What the viewer paints behind the composition. Solid is the application's canvas "
-           "colour; a composition carries no background colour of its own yet."));
+        tr("What the viewer paints behind the composition. Solid uses its background colour."));
     backgroundDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
     for (const auto* name : kBackgroundNames) {
         backgroundDropdown_->addItem(tr(name));
@@ -1730,6 +1703,11 @@ QRectF ViewerEditor::statusBarRect() const {
                   barHeight);
 }
 
+QRectF ViewerEditor::contentRect() const {
+    const QRectF bar = statusBarRect();
+    return QRectF(rect()).adjusted(kit::px(kit::Size::ToolColumnWidth), 0.0, 0.0, -bar.height());
+}
+
 QRectF ViewerEditor::canvasRect() const {
     const QRectF bar = statusBarRect();
     const qreal padding = kit::px(kit::Size::ViewerWorkPadding);
@@ -1853,6 +1831,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::Canvas));
 
+    // The surround fills EVERY pixel of the content area -- right of the tool column, above the
+    // footer -- not just the padded fit rectangle (owner, 2026-09-15: "it should be 100% to
+    // viewer content width and height, not partial"). canvasRect() stays the fit target only.
+    const QRectF surround = contentRect();
     const QRectF frame = canvasRect();
     const auto* composition = session_.composition();
 
@@ -1860,14 +1842,18 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
         // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
         // numeric/timecode surfaces, not prose -- kit/tokens.hpp).
-        drawCanvasBackground(painter, frame, background_);
+        drawCanvasBackground(painter, surround, background_,
+                             session_.composition() ? session_.composition()->backgroundColor()
+                                                    : core::Color4d{0.0, 0.0, 0.0, 1.0});
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         return;
     }
 
-    drawCanvasBackground(painter, frame, background_);
+    drawCanvasBackground(painter, surround, background_,
+                         session_.composition() ? session_.composition()->backgroundColor()
+                                                : core::Color4d{0.0, 0.0, 0.0, 1.0});
 
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle displayedFrame = preview.frame;
@@ -1911,7 +1897,6 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                             ? viewTransformedDisplayRect(frame, geometry->extent,
                                                          geometry->pixelAspect, transform_)
                             : QRectF{};
-                    drawFrameShadow(painter, displayRect);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, shownImage, QRectF(shownImage.rect()));
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);

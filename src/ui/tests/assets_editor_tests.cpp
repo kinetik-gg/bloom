@@ -5,7 +5,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
-#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 
 #include <QApplication>
 #include <QLineEdit>
@@ -69,19 +69,17 @@ int main(int argc, char** argv) {
                    "assets Select menu exists");
 
     auto* newFolder = editor.findChild<QAction*>(QStringLiteral("assetsNewFolderAction"));
-    auto* import = editor.findChild<bloom::ui::kit::KButton*>(QStringLiteral("assetsImportButton"));
+    auto* import =
+        editor.findChild<bloom::ui::kit::KIconButton*>(QStringLiteral("assetsImportButton"));
     context.expect(newFolder != nullptr && !newFolder->isEnabled(),
                    "header New Folder is disabled");
-    context.expect(newFolder != nullptr &&
-                       newFolder->toolTip() ==
-                           QStringLiteral("Folders arrive with asset organisation"),
-                   "header New Folder explains its disabled state");
-    context.expect(import != nullptr && !import->isEnabled(), "footer Import is disabled");
-    context.expect(
-        import != nullptr &&
-            import->toolTip() ==
-                QStringLiteral("Image and sequence import arrives with the media pipeline"),
-        "footer Import explains its disabled state");
+    context.expect(import != nullptr && import->isEnabled(), "footer Import is enabled");
+    context.expect(import != nullptr && import->toolTip() == QStringLiteral("Import"),
+                   "Import has its action tooltip");
+    for (const auto* name : {"assetsNewCompositionButton", "assetsNewFolderButton",
+                             "assetsImportButton", "assetsDeleteButton"})
+        context.expect(editor.findChild<bloom::ui::kit::KIconButton*>(name) != nullptr,
+                       "Assets footer uses icon buttons");
     context.expect(bloom::ui::test::header(editor) != nullptr, "header provider returns a widget");
     context.expect(bloom::ui::test::header(editor) != nullptr, "header provider is take-once");
     context.expect(bloom::ui::test::footer(editor) != nullptr, "footer provider returns a widget");

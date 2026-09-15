@@ -4,12 +4,22 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/row_band_execution.hpp>
 
+#include <filesystem>
 #include <memory>
+#include <mutex>
 
 namespace bloom::runtime {
 
 class CpuCompositionEvaluator final {
   public:
+    void setAssetBaseDirectory(std::filesystem::path directory) const {
+        std::lock_guard lock(assetContext_->mutex);
+        assetContext_->directory = std::move(directory);
+    }
+    [[nodiscard]] std::filesystem::path assetBaseDirectory() const {
+        std::lock_guard lock(assetContext_->mutex);
+        return assetContext_->directory;
+    }
     [[nodiscard]] const std::shared_ptr<OperationCache>& operationCache() const { return cache_; }
     // `rowBands` is the bounded pool the per-row kernels are spread across (the scheduler owns one;
     // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band
@@ -27,6 +37,12 @@ class CpuCompositionEvaluator final {
                                             OperationCacheStatistics* statistics = nullptr) const;
 
   private:
+    struct AssetContext {
+        std::mutex mutex;
+        std::filesystem::path directory;
+    };
+    std::shared_ptr<AssetContext> assetContext_ = std::make_shared<AssetContext>();
+    std::shared_ptr<OperationCache> decodedImages_ = std::make_shared<OperationCache>();
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();
 };
 

@@ -44,6 +44,11 @@ class KDropdown final : public QWidget {
     [[nodiscard]] int findData(const QVariant& data) const;
     [[nodiscard]] QVariant currentData() const;
     void clearItems();
+    void setMutedValue(bool muted) {
+        mutedValue_ = muted;
+        update();
+    }
+    [[nodiscard]] bool mutedValue() const noexcept { return mutedValue_; }
     [[nodiscard]] int count() const;
     [[nodiscard]] QString itemText(int index) const;
     [[nodiscard]] QVariant itemData(int index) const;
@@ -104,6 +109,7 @@ class KDropdown final : public QWidget {
     int currentIndex_ = -1;
     ControlSize controlSize_ = ControlSize::Default;
     bool hovered_ = false;
+    bool mutedValue_ = false;
 };
 
 } // namespace bloom::ui::kit

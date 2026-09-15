@@ -3,9 +3,12 @@
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -99,6 +102,45 @@ void testNeutralIdentityGolden(Expectations& expectations) {
     if (handle == nullptr) {
         return;
     }
+
+    const std::array grid{0.0, 0.003, 0.04, 0.18, 0.5, 0.9, 1.0, 2.0, 16.0};
+    for (const double r : grid) {
+        for (const double g : grid) {
+            for (const double b : grid) {
+                const bloom::core::Color4d display{r, g, b, 0.123456789012345};
+                const auto reference = handle->displayToReference(display);
+                expectations.expect(reference.has_value(), "grid inverse succeeds including HDR");
+                if (!reference)
+                    continue;
+                const auto roundTrip = handle->referenceToDisplay(*reference);
+                expectations.expect(roundTrip &&
+                                        std::abs(roundTrip->red - std::min(r, 1.0)) < 3e-5 &&
+                                        std::abs(roundTrip->green - std::min(g, 1.0)) < 3e-5 &&
+                                        std::abs(roundTrip->blue - std::min(b, 1.0)) < 3e-5,
+                                    "OCIO pair round trips the grid up to display clipping");
+                expectations.expect(reference->alpha == display.alpha && roundTrip &&
+                                        roundTrip->alpha == display.alpha,
+                                    "alpha is preserved at binary64 precision");
+                if (r > 1.0)
+                    expectations.expect(reference->red > 1.0, "inverse retains HDR range");
+                const bloom::core::Color4d authored{r, g, b, 0.0};
+                const auto shown = handle->referenceToDisplay(authored);
+                expectations.expect(shown && shown->alpha == 0.0,
+                                    "straight RGB conversion also preserves zero alpha");
+                if (shown && r <= 1.0 && g <= 1.0 && b <= 1.0) {
+                    const auto restored = handle->displayToReference(*shown);
+                    expectations.expect(restored && std::abs(restored->red - r) < 3e-5 &&
+                                            std::abs(restored->green - g) < 3e-5 &&
+                                            std::abs(restored->blue - b) < 3e-5,
+                                        "reference grid is invertible before clipping");
+                }
+            }
+        }
+    }
+    expectations.expect(
+        !handle->referenceToDisplay({std::numeric_limits<double>::infinity(), 0, 0, 1}) &&
+            !handle->displayToReference({std::numeric_limits<double>::max(), 0, 0, 1}),
+        "non-finite and float overflow fail closed");
 
     const auto expected =
         buildExpectedNeutralIdentityBytes(bloom::color::kBloomNeutralV1ConfigDigest);

@@ -303,9 +303,11 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
     connect(solidColorChip_, &kit::KColorChip::colorChanged, this,
             [this](const kit::KColor& color) {
                 if (!rebuilding_)
-                    (void)session_.setSelectedSolidColor(core::Color4d{
-                        static_cast<double>(color.red), static_cast<double>(color.green),
-                        static_cast<double>(color.blue), static_cast<double>(color.alpha)});
+                    (void)session_.setSelectedSolidColor(
+                        core::Color4d{static_cast<double>(static_cast<double>(color.red)),
+                                      static_cast<double>(static_cast<double>(color.green)),
+                                      static_cast<double>(static_cast<double>(color.blue)),
+                                      static_cast<double>(static_cast<double>(color.alpha))});
             });
 
     layout->addWidget(solidColorPanel_);
@@ -363,9 +365,11 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
                                                  .unit = {}},
                                                 body);
         bindCell(textColorFields_[index], [this] {
-            (void)session_.setSelectedTextColor(
-                core::Color4d{textColorFields_[0]->value(), textColorFields_[1]->value(),
-                              textColorFields_[2]->value(), textColorFields_[3]->value()});
+            if (const auto value =
+                    properties::colorFromFields(session_, document::kTextColorParameterSchemaKey,
+                                                {textColorFields_[0], textColorFields_[1],
+                                                 textColorFields_[2], textColorFields_[3]}))
+                (void)session_.setSelectedTextColor(*value);
         });
     }
     (void)properties::addColorRow(
@@ -458,6 +462,21 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
     addReadOnly(documentPixelAspect_, QStringLiteral("documentPixelAspect"),
                 tr("Composition pixel aspect ratio"), tr("Pixel Aspect"), kit::TypeRole::Value);
 
+    documentBackground_ = new kit::KColorChip(body);
+    documentBackground_->setObjectName(QStringLiteral("compositionBackgroundColor"));
+    documentBackground_->setAccessibleName(tr("Background Colour"));
+    addRow(rows, body, makeRowLabel(tr("Background Colour"), body), nullptr, documentBackground_);
+    connect(documentBackground_, &kit::KColorChip::colorChanged, this,
+            [this](const kit::KColor& color) {
+                commands::Transaction transaction("Set Composition Background",
+                                                  session_.snapshot().revision());
+                transaction.emplace<commands::SetCompositionBackgroundColor>(
+                    session_.compositionId(),
+                    core::Color4d{static_cast<double>(color.red), static_cast<double>(color.green),
+                                  static_cast<double>(color.blue),
+                                  static_cast<double>(color.alpha)});
+                static_cast<void>(session_.executeTransaction(std::move(transaction)));
+            });
     // Color settings (process space + config name) are read from ProjectSession, not from anything
     // CompositionSession exposes -- document::Composition/Snapshot carry no ColorSettings at all.
     // Per issue #120 decision 3 ("if a listed fact is not reachable via existing read-only API,
@@ -574,9 +593,10 @@ void PropertiesEditor::bindCommits() {
     // Task P3: exactly Position's own commit shape (read every cell in the group, write the whole
     // value through one session call) -- one SetSolidColor command per emitted valueChanged.
     const auto commitSolidColor = [this] {
-        (void)session_.setSelectedSolidColor(
-            core::Color4d{solidColorRed_->value(), solidColorGreen_->value(),
-                          solidColorBlue_->value(), solidColorAlpha_->value()});
+        if (const auto value = properties::colorFromFields(
+                session_, document::kSolidColorParameterSchemaKey,
+                {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}))
+            (void)session_.setSelectedSolidColor(*value);
     };
     bindCell(solidColorRed_, commitSolidColor);
     bindCell(solidColorGreen_, commitSolidColor);
@@ -592,8 +612,10 @@ void PropertiesEditor::bindCommits() {
     connect(textColor_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
         if (!rebuilding_) {
             (void)session_.setSelectedTextColor(
-                core::Color4d{static_cast<double>(color.red), static_cast<double>(color.green),
-                              static_cast<double>(color.blue), static_cast<double>(color.alpha)});
+                core::Color4d{static_cast<double>(static_cast<double>(color.red)),
+                              static_cast<double>(static_cast<double>(color.green)),
+                              static_cast<double>(static_cast<double>(color.blue)),
+                              static_cast<double>(static_cast<double>(color.alpha))});
         }
     });
 }

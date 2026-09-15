@@ -6,6 +6,7 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -869,14 +870,17 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "Full is ready at actual size");
     const auto fullImage = fixture.viewer.grab().toImage();
-    const auto interior = fullImage.pixelColor(130, 150);
-    expectations.expect(interior != fullImage.pixelColor(100, 150),
+    const auto inside = fixture.viewer.canvasRectForTest().center().toPoint() + QPoint(13, 11);
+    const auto outside = fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2);
+    const auto interior = fullImage.pixelColor(inside);
+    expectations.expect(interior.blue() > 100 && interior.red() < 50 &&
+                            interior != fullImage.pixelColor(outside),
                         "the sample lies inside the full composition");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "fixed Quarter is ready");
     const auto proxyImage = fixture.viewer.grab().toImage();
-    expectations.expect(proxyImage.pixelColor(130, 150) == interior,
+    expectations.expect(proxyImage.pixelColor(inside) == interior,
                         "Quarter upscales to the same actual-size composition rectangle");
     const auto proxyView = fixture.controller.state().frame->displayBufferView();
     expectations.expect(proxyView.has_value() && proxyView->displayWindow.extent().width() == 40,
@@ -1163,17 +1167,24 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
             return;
         }
-        // A corner of the canvas at 25% zoom: the composition rectangle is a few pixels at the
-        // centre, so the corner is pure surround with none of the frame's own drop shadow reaching
-        // it (drawFrameShadow() spreads by the Popup elevation's blur radius).
+        // A corner of the fit rectangle at 25% zoom: the composition rectangle is a few pixels at
+        // the centre, so the corner is pure surround (the frame casts no shadow any more).
         fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1); // 25%
         QCoreApplication::processEvents();
         const auto corner = [&fixture] {
             return fixture.viewer.grab().toImage().pixelColor(
                 fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
         };
-        expectations.expect(corner() == ui::kit::color(ui::kit::Color::Canvas),
-                            "Solid paints the application's own canvas Background token");
+        expectations.expect(corner() == QColor(Qt::black), "Solid defaults to opaque black");
+        commands::Transaction backgroundEdit("Background", fixture.session.snapshot().revision());
+        backgroundEdit.emplace<commands::SetCompositionBackgroundColor>(
+            fixture.session.compositionId(), core::Color4d{0.2, 0.4, 0.6, 1.0});
+        expectations.expect(
+            fixture.session.executeTransaction(std::move(backgroundEdit)).succeeded(),
+            "authored background edit commits");
+        QCoreApplication::processEvents();
+        expectations.expect(corner() == QColor(51, 102, 153),
+                            "Solid paints the authored composition colour");
         background->setCurrentIndex(2); // Black
         QCoreApplication::processEvents();
         expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&
@@ -1182,6 +1193,17 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         background->setCurrentIndex(3); // White
         QCoreApplication::processEvents();
         expectations.expect(corner() == QColor(Qt::white), "and White is literal white");
+        // The surround fills the WHOLE content area, edge to edge (owner, 2026-09-15): the first
+        // pixel right of the tool column at the very top, and the last pixel above the footer at
+        // the far right, are both surround, not the canvas token behind it.
+        {
+            const QImage image = fixture.viewer.grab().toImage();
+            const QRect content = fixture.viewer.contentRectForTest().toRect();
+            const QColor topLeft = image.pixelColor(content.topLeft() + QPoint(1, 1));
+            const QColor bottomRight = image.pixelColor(content.bottomRight() - QPoint(1, 1));
+            expectations.expect(topLeft == QColor(Qt::white) && bottomRight == QColor(Qt::white),
+                                "the surround reaches every edge of the content area");
+        }
         expectations.expect(QSettings().value("viewer/background").toString() ==
                                 QStringLiteral("White"),
                             "the choice is persisted under viewer/background");

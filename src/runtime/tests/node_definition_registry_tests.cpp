@@ -116,8 +116,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // compatibility schemas, the value library's first slice, and UTIL-1's twenty conversions, four
     // time conversions, fifteen string utilities, nineteen numeric and logic nodes and four
     // readouts. The number is pinned rather than computed so that adding a node type is a
-    // deliberate edit here.
-    expectations.expect(registry.definitions().size() == 104,
+    // deliberate edit here. MEDIA-1 adds one Image source definition.
+    expectations.expect(registry.definitions().size() == 105,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();

@@ -66,6 +66,18 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
                 selectionLayout->insertWidget(selectionLayout->count() - 1, registryPanel_);
             }
+            if (node->typeId == "bloom.image-source") {
+                for (const auto& [name, object] :
+                     std::array{std::pair{tr("Dimensions"), "propertiesImageDimensions"},
+                                std::pair{tr("Range"), "propertiesImageRange"}}) {
+                    auto* label = kit::makePropertyRowLabel(name, section->body());
+                    auto* value = new kit::KLabel(section->body());
+                    value->setObjectName(object);
+                    auto* row = new kit::KPropertyRow(label, nullptr, {value}, section->body());
+                    row->setProperty("rowLabel", name);
+                    section->bodyLayout()->addWidget(row);
+                }
+            }
             int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
@@ -108,6 +120,23 @@ void PropertiesEditor::configureRegistryRows() {
         registryPanel_->setVisible(!registryRows_.empty());
     for (auto* row : registryRows_)
         row->refresh();
+    if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {
+        const document::AssetRecord* asset = nullptr;
+        if (node)
+            for (const auto& binding : node->parameters)
+                if (binding.role == "asset") {
+                    const auto value = session_.constantStringValue(binding.parameterId);
+                    if (value)
+                        asset = session_.snapshot().project().findAsset(
+                            document::AssetId::fromRaw(value->toULongLong()));
+                }
+        dimensions->setText(imageDimensionsText(asset));
+        if (auto* range = findChild<kit::KLabel*>("propertiesImageRange")) {
+            range->setText(imageRangeText(asset));
+            range->parentWidget()->setProperty("unavailableReadout", range->text().isEmpty());
+            range->parentWidget()->setVisible(!range->text().isEmpty());
+        }
+    }
 }
 void PropertiesEditor::filterRows() {
     const auto query = search_->text();
@@ -126,6 +155,10 @@ void PropertiesEditor::filterRows() {
                 row->setVisible(row->property("expanded").toBool() &&
                                 disclosure.contains(query, Qt::CaseInsensitive) &&
                                 (!display || display->isHidden()));
+                continue;
+            }
+            if (row->property("unavailableReadout").toBool()) {
+                row->hide();
                 continue;
             }
             const auto label = row->property("rowLabel").toString();

@@ -84,6 +84,9 @@ ValidationResult Composition::validate() const {
     if (workArea_ && (workArea_->start < core::RationalTime{} ||
                       workArea_->start >= workArea_->end || workArea_->end > duration_))
         result.add(ValidationCode::InvalidValue, "workArea", "Invalid composition work area");
+    if (!backgroundColor_.isValid())
+        result.add(ValidationCode::InvalidValue, "backgroundColor",
+                   "Invalid composition background colour");
     if (!safeAreas_.isValid())
         result.add(ValidationCode::InvalidValue, "safeAreas", "Invalid composition safe areas");
     for (const auto& layer : graph_.layerOutputs()) {
@@ -99,6 +102,24 @@ ValidationResult Composition::validate() const {
     result.append("", validateNodeLayout(nodeLayout_, graph_));
     result.append("", validateNodeGroups(nodeGroups_, graph_));
     return result;
+}
+
+const AssetRecord* Project::findAsset(AssetId id) const noexcept {
+    const auto found = std::ranges::find(assets_, id, &AssetRecord::id);
+    return found == assets_.end() ? nullptr : &*found;
+}
+AssetRecord* Project::findAsset(AssetId id) noexcept {
+    return const_cast<AssetRecord*>(std::as_const(*this).findAsset(id));
+}
+bool Project::addAsset(AssetRecord asset) {
+    if (findAsset(asset.id) || !asset.validate().ok())
+        return false;
+    assets_.push_back(std::move(asset));
+    std::ranges::sort(assets_, {}, &AssetRecord::id);
+    return true;
+}
+bool Project::removeAsset(AssetId id) {
+    return std::erase_if(assets_, [id](const auto& asset) { return asset.id == id; }) != 0;
 }
 
 const Composition* Project::findComposition(const CompositionId id) const noexcept {
@@ -165,6 +186,8 @@ bool Project::removeExtensionRecord(const ExtensionRecordId id) {
 
 ValidationResult Project::validate() const {
     ValidationResult result;
+    for (const auto& asset : assets_)
+        result.append("assets", asset.validate());
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }

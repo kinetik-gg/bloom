@@ -4,6 +4,54 @@ Status: working research
 
 Updated: 2026-09-15
 
+## v0 implemented boundary
+
+The accepted v0 amendment in ADR 0020 admits the image pipeline under `src/media/image`:
+a private, pinned stb_image PNG/JPEG decoder compiled in process with hard input and allocation
+limits. PNG16 is included. Images and numbered sequences become asset records; authoring source
+nodes reference stable asset IDs. Broad time-based media remains the working research below.
+The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection
+research below for this closed image profile. See the component security review for limits.
+
+The implemented APIs are `probeImage`, `decodeImage`, and `scanSequence`. Selection admits PNG
+(including 16-bit samples) and JPEG. The scanner recognizes a final fixed-width number in
+any name whose stem ends in, or contains, a run of digits: the last digit run is the frame number, everything before it is the prefix and everything after it the suffix, and both must match for members to belong together (`shot.0001.png`, `shot_0001.png`, `shot0001.png`, `0001.png`, `shot0001_left.png`); padding may differ between members and is reported once; two or more matching members create one
+sequence asset. Different padding is diagnosed rather than merged. A manifest records explicit
+members, SHA-256 digests, first/last frame and gaps. Hold repeats the nearest endpoint; Loop and
+PingPong wrap after the end, while time before the node start always holds the first member.
+A missing or changed selected member produces transparent pixels and a warning; it is not a gap.
+
+| Bound | v0 value |
+| --- | --- |
+| Encoded file | 64 MiB |
+| Either dimension | 16,384 pixels |
+| Pixel count | 16,777,216 |
+| Decoder allocator live bytes | 256 MiB per thread |
+| Float image storage | 256 MiB per image, also subject to request budget |
+| Directory entries and sequence span | 100,000 each |
+| Decoded image LRU | 1 GiB per evaluator cache |
+| UI thumbnail cache | 512 RGBA8 images, at most 64 × 64 (8 MiB) |
+
+These are separate bounds, not an aggregate process-memory guarantee. Cancellation is checked
+between file chunks, before and after stb, and during conversion/proxy rows; an in-progress stb
+call is cooperatively cancellable only after it returns. Import and relink preparation and
+thumbnail work use the blocking-I/O task executor, with Jobs progress, diagnostics and Cancel.
+Publication checks the originating project/revision and discards work after project replacement.
+The evaluator decodes only on worker execution; UI paint reads cached thumbnails.
+
+The same C++ decoder, filesystem paths and Qt dialogs/drop events serve Linux, macOS and Windows.
+Imports across different filesystem roots are refused explicitly; put the media on the project's
+root before importing. The project-relative locator is preferred. If it is unavailable, the
+absolute file-URI hint supports local recovery, including the first Save As of an unsaved project;
+content-digest verification still applies. Relink records a fresh relative locator for portable
+packaging after such a move. Media is referenced, never embedded or silently copied.
+
+This slice does not add audio, movie containers, EXIF orientation, ICC interpretation, metadata
+round-tripping, external codec processes, or a general proxy service. Files are interpreted by
+the closed sRGB/override rule in `color-management.md`, not by embedded profiles. The broader
+research below does not supersede this implemented boundary.
+
+
 ## Purpose
 
 Bloom needs reliable, performant media ingest and export without making one codec library, operating

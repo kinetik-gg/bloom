@@ -31,6 +31,8 @@ void validateDocumentSchemaV1_7(const json::Value& schema);
 void validateManifestSchemaV1_7(const json::Value& schema);
 void validateDocumentSchemaV1_8(const json::Value& schema);
 void validateManifestSchemaV1_8(const json::Value& schema);
+void validateDocumentSchemaV1_10(const json::Value& schema);
+void validateManifestSchemaV1_10(const json::Value& schema);
 void validateDocumentSchemaV1_9(const json::Value& schema);
 void validateManifestSchemaV1_9(const json::Value& schema);
 void checkProjectSchemas(const std::filesystem::path& repositoryRoot);

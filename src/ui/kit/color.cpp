@@ -94,10 +94,17 @@ constexpr float kEpsilon = 1e-6F;
 
 } // namespace
 
+std::optional<KColor> KColor::converted(const ColorSpace target,
+                                        const KColorConverter& converter) const {
+    if (space == target)
+        return *this;
+    return converter ? converter(*this, target) : std::nullopt;
+}
+
 int quantizeChannel8(const float value) noexcept {
     // Round-half-up, not round-half-to-even: floor(x*255 + 0.5) lands 0.5 away from zero exactly
     // the way an 8-bit color picker's hex field is expected to.
-    const float scaled = std::floor(value * 255.0F + 0.5F);
+    const float scaled = std::floor(clamp01(value) * 255.0F + 0.5F);
     return std::clamp(static_cast<int>(scaled), 0, 255);
 }
 
@@ -155,6 +162,8 @@ KColor KColor::fromQColor(const QColor& value) noexcept {
 }
 
 std::array<float, 4> KColor::toHsva() const noexcept {
+    if (space != ColorSpace::Display)
+        return {};
     const float max = std::max({red, green, blue});
     const float min = std::min({red, green, blue});
     const float delta = max - min;
@@ -164,6 +173,8 @@ std::array<float, 4> KColor::toHsva() const noexcept {
 }
 
 std::array<float, 4> KColor::toHsla() const noexcept {
+    if (space != ColorSpace::Display)
+        return {};
     const float max = std::max({red, green, blue});
     const float min = std::min({red, green, blue});
     const float delta = max - min;
@@ -175,6 +186,8 @@ std::array<float, 4> KColor::toHsla() const noexcept {
 }
 
 QString KColor::toHex(const bool includeAlpha) const {
+    if (space != ColorSpace::Display)
+        return {};
     QString rgb = QStringLiteral("#%1%2%3")
                       .arg(quantizeChannel8(red), 2, 16, QLatin1Char('0'))
                       .arg(quantizeChannel8(green), 2, 16, QLatin1Char('0'))
@@ -186,6 +199,8 @@ QString KColor::toHex(const bool includeAlpha) const {
 }
 
 QColor KColor::toQColor() const noexcept {
+    if (space != ColorSpace::Display)
+        return {};
     return QColor(quantizeChannel8(red), quantizeChannel8(green), quantizeChannel8(blue),
                   quantizeChannel8(alpha));
 }

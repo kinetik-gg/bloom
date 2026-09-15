@@ -1,3 +1,4 @@
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/main_window.hpp>
 
 #include <bloom/core/rational_time.hpp>
@@ -361,7 +362,7 @@ class ArchiveWriter final {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const bloom::project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 9},
+    const bloom::project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 10},
                                                        .requirements = {}};
     const bloom::project::CanonicalDocumentV1 documentInput{.snapshot = &snapshot,
                                                             .colorSettings = &colorSettings};
@@ -441,6 +442,13 @@ void testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(Expectations& expecta
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::ui::TaskUiBridge taskUiBridge(scheduler);
+    QObject::connect(&projectHost, &ProjectHost::sessionReplaced, &compositionSession, [&] {
+        auto [document, stack] = projectHost.liveDocumentAndStack();
+        if (document && stack)
+            compositionSession.rebind(*document, *stack, projectHost.lowestCompositionId());
+    });
+    bloom::ui::AssetController assets(compositionSession, projectHost, scheduler, taskUiBridge);
+
     bloom::ui::FrameExportController frameExportController(
         compositionSession, scheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
@@ -482,6 +490,12 @@ void testPlaceholderSwitchesOnPreservedReadOnlyOpenAndBack(Expectations& expecta
     expectations.expect(window.isShowingReadOnlyPlaceholder(),
                         "placeholder switch: the placeholder is shown for preserved-read-only "
                         "content");
+    auto* importAction = window.findChild<QAction*>("importAssetsAction");
+    expectations.expect(importAction && !importAction->isEnabled(),
+                        "media import is disabled for preserved-read-only content");
+    assets.importFiles({QStringLiteral("unreachable.png")});
+    expectations.expect(!assets.busy(),
+                        "read-only import refuses before reading the retired session");
     expectations.expect(!window.workspaceHost()->isVisible(),
                         "placeholder switch: the workspace is hidden behind the placeholder");
     expectations.expect(!saveProjectAction->isEnabled() && !saveProjectAsAction->isEnabled(),

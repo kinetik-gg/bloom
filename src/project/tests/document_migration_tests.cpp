@@ -710,10 +710,51 @@ void testAnimationComponentMigrationPreservesSampling(Expectations& expectations
     }
 }
 
+void testImageAssetMigration(Expectations& expectations) {
+    constexpr std::string_view fixture =
+        R"({"schemaVersion":{"major":1,"minor":9},"project":{"compositions":[{"nodeGroups":[]}]},"idAllocation":{"highestIssued":{"nodeGroup":"7"}}})";
+    auto operation = makeOperation(64ULL << 20U);
+    auto parsed = parseFixture(fixture, operation);
+    if (!parsed) {
+        expectations.expect(false, "image migration fixture parses");
+        return;
+    }
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 9}, {1, 10},
+                                             kProductionDocumentMigrationSteps, {}, operation);
+    expectations.expect(migrated.outcome() == MigrationOutcome::Migrated &&
+                            migrated.stepsApplied() == 1,
+                        "1.9 to 1.10 migrates once");
+    const auto* root = migrated.migratedRoot();
+    if (!root)
+        return;
+    const auto* project = root->findMember("project");
+    const auto* assets = project ? project->findMember("assets") : nullptr;
+    const auto* compositions = project ? project->findMember("compositions") : nullptr;
+    const auto* background =
+        compositions && !compositions->arrayElements().empty()
+            ? compositions->arrayElements().front().findMember("backgroundColor")
+            : nullptr;
+    expectations.expect(assets && assets->arrayElements().empty(), "migration adds no assets");
+    expectations.expect(background && background->arrayElements().size() == 4,
+                        "migration adds RGBA background");
+    if (background && background->arrayElements().size() == 4) {
+        const auto values = background->arrayElements();
+        expectations.expect(values[0].asNumberToken() == "0" && values[1].asNumberToken() == "0" &&
+                                values[2].asNumberToken() == "0" &&
+                                values[3].asNumberToken() == "1",
+                            "migration background is opaque black");
+    }
+    const auto* allocation = root->findMember("idAllocation");
+    const auto* highest = allocation ? allocation->findMember("highestIssued") : nullptr;
+    const auto* asset = highest ? highest->findMember("asset") : nullptr;
+    expectations.expect(asset && asset->asString() == "0", "migration reserves no asset IDs");
+}
+
 } // namespace
 
 int main() try {
     Expectations expectations;
+    testImageAssetMigration(expectations);
     testIdentity(expectations);
     testSingleStepGoldenValues(expectations);
     testTwoStepSequencing(expectations);

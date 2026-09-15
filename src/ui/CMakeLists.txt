@@ -145,6 +145,18 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/music-notes.svg
         kit/third_party/phosphor-icons/regular/pause.svg
         kit/third_party/phosphor-icons/regular/play.svg
+        kit/third_party/phosphor-icons/regular/folder-simple-plus.svg
+        kit/third_party/phosphor-icons/fill/folder-simple-plus-fill.svg
+        kit/third_party/phosphor-icons/bold/folder-simple-plus-bold.svg
+        kit/third_party/phosphor-icons/regular/download-simple.svg
+        kit/third_party/phosphor-icons/fill/download-simple-fill.svg
+        kit/third_party/phosphor-icons/bold/download-simple-bold.svg
+        kit/third_party/phosphor-icons/regular/trash-simple.svg
+        kit/third_party/phosphor-icons/fill/trash-simple-fill.svg
+        kit/third_party/phosphor-icons/bold/trash-simple-bold.svg
+        kit/third_party/phosphor-icons/regular/images.svg
+        kit/third_party/phosphor-icons/fill/images-fill.svg
+        kit/third_party/phosphor-icons/bold/images-bold.svg
         kit/third_party/phosphor-icons/regular/plus.svg
         kit/third_party/phosphor-icons/regular/repeat.svg
         kit/third_party/phosphor-icons/regular/skip-back.svg
@@ -318,6 +330,9 @@ target_sources(
         licenses_window.cpp
         main_window.cpp
         assets_editor.cpp
+        asset_controller.cpp
+        asset_drop.cpp
+        asset_drop.hpp
         node_editor.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
@@ -376,6 +391,7 @@ target_sources(
             include/bloom/ui/licenses_window.hpp
             include/bloom/ui/main_window.hpp
             include/bloom/ui/assets_editor.hpp
+            include/bloom/ui/asset_controller.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preview_frame_cache.hpp
@@ -418,7 +434,7 @@ target_link_libraries(
         bloom_ui_kit
         Qt6::Widgets
 )
-target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler)
+target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image)
 bloom_enable_warnings(bloom_ui)
 
 if(BUILD_TESTING)

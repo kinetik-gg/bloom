@@ -1,3 +1,4 @@
+#include <regex>
 // Durable node groups (document 1.2): the round trip through a real archive, the reopen that must
 // return the exact same records, and the 1.1 -> 1.2 migration that gives an older file no groups at
 // all. The 1.1 fixture is produced by downgrading a freshly written 1.2 document rather than by
@@ -26,6 +27,12 @@
 #include <vector>
 
 namespace {
+void removeImageFields(std::string& text) {
+    text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
+}
+
 using namespace bloom;
 using namespace bloom::project;
 int failures = 0;
@@ -115,7 +122,7 @@ void roundTripAndReopen() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 9 && !opened.roundTrip,
+    expect(opened.schemaMinor == 10 && !opened.roundTrip,
            "a grouped project is written and read as the current schema minor");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -166,10 +173,11 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 9");
+    const auto minor = documentText.find("\"minor\": 10");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 9").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 10").size(), "\"minor\": 1");
+    removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");
 
@@ -195,7 +203,7 @@ void migrationFromSchema11() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 9 && !opened.roundTrip,
+    expect(opened.schemaMinor == 10 && !opened.roundTrip,
            "migration lands on the current editable schema");
     const auto snapshot = opened.document->snapshot();
     const auto& composition = snapshot.project().compositions().front();

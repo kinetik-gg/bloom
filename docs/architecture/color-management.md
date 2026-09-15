@@ -11,7 +11,7 @@ qualified by per-mode goldens. The
 supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
 processor cache, and cross-platform qualification remain pending.
 
-Updated: 2026-09-13
+Updated: 2026-09-15
 
 ## Purpose
 
@@ -479,6 +479,55 @@ without blocking the UI, and eviction never invalidates a handle retained by an 
 Killing a helper invalidates all handles in its generation before another request can observe them.
 There is no process-global mutable OCIO config or unbounded processor history.
 
+## UI Colour Boundary
+
+Authoring colour parameters remain straight `Color4d` values in
+`bloom.reference.linear-srgb`. Solid, Text, Color value and Color operand schemas use this same
+reference encoding. Opening or migrating a document never reinterprets or rewrites its stored
+colour numbers to compensate for earlier UI presentation.
+
+The qualified `PreparedCpuDisplayProcessorHandle` exposes `referenceToDisplay(Color4d)` and
+`displayToReference(Color4d)`. Both use the resolved Bloom Neutral v1 OCIO display/view; no UI
+implements a transfer function. They operate on straight RGB, preserve binary64 alpha exactly,
+and reject invalid/non-finite input, float overflow and incompatible floating-point environments.
+The forward result clamps RGB to [0, 1]. The inverse retains extended range and uses OCIO's
+lossless optimization mode so display white does not acquire artificial HDR values. The existing
+forward frame processor, config digest, display identity and identity goldens are unchanged.
+The pair is tested within an absolute `3e-5` float tolerance on the unclipped domain. Clipping is
+not invertible: an HDR reference colour must remain available separately from its display swatch.
+
+`KColor` carries a `Display` or `Reference` tag. QColor, hex and HSV/HSL representations are
+Display-only; attempting to paint or format a Reference value directly returns no display value.
+The kit receives a conversion callable from `CompositionSession::colorConverter(schemaKey)`;
+it has no dependency on project types or OCIO. The accessor accepts the four reference colour
+schemas above and refuses unknown encodings. Each session prepares its immutable built-in processor
+off the UI thread, publishes readiness through a timer, and cancels publication when destroyed.
+Worker-owned state contains no widget or session pointer; session destruction never waits for the
+worker. Pending or failed conversion disables reference swatches and leaves explicitly labelled
+reference numbers available. A failed preparation reports a session diagnostic. This currently
+supports the same fixed Bloom Neutral v1 display/view as the viewer.
+
+Properties (Solid, Text and registry colour rows) and node-card colour cells bind this accessor.
+Their chips and picker controls paint Display values and emit Reference values to the existing
+session commands. Hex text, recent colours, sampled screen colours, HSV/HSL and the picker's
+available spatial forms describe display sRGB. Merely opening or closing a picker preserves the
+original reference value, including HDR RGB and alpha, and issues no command.
+
+Expanded Properties RGBA fields normally show normalized display values. If any stored RGB
+channel is negative or above 1, all four fields show the original reference numbers with a
+`reference` suffix. The swatch still shows the converted, clamped display colour. Typing an
+out-of-range RGB value into a display field authors that channel as a reference value and switches
+the row to reference presentation. Unchanged channels retain their exact reference numbers, so
+editing alpha or one component cannot accumulate conversion error in the others. Composition
+background preferences already use Display values and retain that interpretation. The separate
+legacy timeline colour-row adapter still requires adoption of this boundary.
+
+Regression pins cover display `#F03B2E` becoming approximately reference
+`(0.871367, 0.043735, 0.027321)`, the Properties and node-chip pixels matching that pick, the
+qualified viewer pipeline producing RGBA8 `(240, 59, 46, 255)`, stable repeated hex edits, HDR edits,
+and unchanged stored colour numbers after a production 1.9-to-1.10 document migration. UI pins
+run at DPR 1, 1.25, 1.5 and 2.
+
 ## Alpha And Pixel Flow
 
 OCIO processes color channels, never alpha. Bloom's display adapter performs this checked flow:
@@ -547,3 +596,24 @@ Primary references:
 - [Color Interop Forum color-space identifiers](https://github.com/AcademySoftwareFoundation/ColorInterop)
 - [Evaluation primitive color and alpha contract](evaluation-primitives.md)
 - [Frame output contract](frame-output.md)
+
+
+## PNG And JPEG Input In v0
+
+Auto and sRGB interpret encoded samples as display-referred sRGB. `CpuInputProcessor` prepares the
+OCIO inverse of Bloom Neutral v1's `srgb_rec709_display` display transform into
+`lin_rec709_scene`. This is an input preparation, not a new colorspace or config revision. PNG16
+samples retain their precision through normalization to float. Straight RGB is converted first,
+then multiplied by alpha for the immutable `Rgba32fImage`. Alpha itself is never color-converted.
+
+Linear and Raw bypass the inverse transform; they use the normalized samples as linear reference
+values and retain the same premultiplied image contract. The Image node's Premultiply option
+means the source samples are straight. Turning it off declares associated input: nonzero alpha
+is removed before conversion and restored afterward; zero-alpha RGB becomes zero. Auto inherits
+the asset color interpretation; explicit per-node sRGB/Linear/Raw overrides it.
+
+The image process key includes source/member content digest, interpretation and the unchanged
+Bloom Neutral config revision. Display/view changes remain display-cache concerns. Evaluator
+semantics advances once, 5 → 6, to identify image input and sequence evaluation. Primitive 5,
+plan 3, animation 2 and Bloom Neutral v1 identities stay fixed. Output identity goldens were
+independently derived using the S5 byte-envelope oracle with those four version values.

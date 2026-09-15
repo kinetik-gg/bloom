@@ -630,6 +630,8 @@ using document::SchemaVersion;
     }
     if (state.documentMinor >= 5 && node.findMember("workArea"))
         keys.push_back("workArea");
+    if (state.documentMinor >= 10)
+        keys.push_back("backgroundColor");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -726,6 +728,29 @@ using document::SchemaVersion;
             return false;
         }
         out.workArea = value;
+    }
+    if (state.documentMinor >= 10) {
+        const auto* background = node.findMember("backgroundColor");
+        if (!background || background->kind() != JsonValueKind::Array ||
+            background->arrayElements().size() != 4) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "backgroundColor"));
+            return false;
+        }
+        std::array<double*, 4> channels{&out.backgroundColor.red, &out.backgroundColor.green,
+                                        &out.backgroundColor.blue, &out.backgroundColor.alpha};
+        for (std::size_t index = 0; index < 4; ++index) {
+            const auto token = background->arrayElements()[index].asNumberToken();
+            if (!token) {
+                state.fail(DocumentDecodeError::WrongValueKind, path);
+                return false;
+            }
+            const auto parsed = parseKnownFloat64(*token);
+            if (!parsed) {
+                state.fail(DocumentDecodeError::InvalidFloat64, path);
+                return false;
+            }
+            *channels[index] = *parsed.value();
+        }
     }
     return true;
 }
@@ -968,8 +993,12 @@ using document::SchemaVersion;
                                  DecodedDocumentEnvelope& out) {
     static constexpr std::array<std::string_view, 4> kKeys{"id", "name", "colorSettings",
                                                            "compositions"};
+    const std::vector<std::string_view> keys =
+        state.documentMinor >= 10
+            ? std::vector<std::string_view>{"id", "name", "colorSettings", "compositions", "assets"}
+            : std::vector<std::string_view>(kKeys.begin(), kKeys.end());
     std::vector<const JsonValue*> members;
-    if (!matchOrderedMembers(node, kKeys, true, state, path, members)) {
+    if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
     }
 
@@ -1024,6 +1053,9 @@ using document::SchemaVersion;
         hasPrevious = true;
         out.compositions.push_back(std::move(composition));
     }
+    if (state.documentMinor >= 10 &&
+        !detail::decodeAssets(*members[4], state, joinPath(path, "assets"), out.assets))
+        return false;
     return true;
 }
 
@@ -1056,10 +1088,12 @@ using document::SchemaVersion;
 // not exist has never issued a group id.
 [[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
                                        const std::string& path, IdAllocatorHighWater& out) {
-    static constexpr std::array<std::string_view, 11> kKeys{
+    static constexpr std::array<std::string_view, 12> kKeys{
         "composition",    "node",     "edge",          "layer",           "layerSlot", "parameter",
-        "animationCurve", "keyframe", "driverBinding", "extensionRecord", "nodeGroup"};
-    const auto keys = std::span(kKeys).first(state.documentMinor <= 1 ? 10U : 11U);
+        "animationCurve", "keyframe", "driverBinding", "extensionRecord", "nodeGroup", "asset"};
+    const auto keys = std::span(kKeys).first(state.documentMinor <= 1   ? 10U
+                                             : state.documentMinor < 10 ? 11U
+                                                                        : 12U);
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1088,6 +1122,9 @@ using document::SchemaVersion;
     if (state.documentMinor <= 1) {
         return true;
     }
+    if (state.documentMinor >= 10 &&
+        !decodeAllocatorHighWaterMember(*members[11], state, joinPath(path, "asset"), out.asset))
+        return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);
 }

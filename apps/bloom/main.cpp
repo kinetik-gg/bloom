@@ -5,6 +5,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
@@ -109,6 +110,17 @@ int main(int argc, char* argv[]) {
     // reference into it those objects hold (locals destruct in reverse declaration order).
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
+    bloom::ui::AssetController assetController(compositionSession, projectHost, taskScheduler,
+                                               taskUiBridge);
+    const auto updateMediaDirectory = [&] {
+        const auto path = projectHost.displayPath();
+        cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});
+    };
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::sessionReplaced, &assetController,
+                     updateMediaDirectory);
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::saveFinished, &assetController,
+                     updateMediaDirectory);
+    updateMediaDirectory();
     bloom::ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
         taskScheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
     // The RAM preview cache and the preview pipeline are built HERE, once, because two surfaces

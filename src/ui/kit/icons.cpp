@@ -84,6 +84,10 @@ const auto& iconAssets() {
         {IconId::AlignRight, QLatin1StringView("text-align-right")},
         {IconId::Rectangle, QLatin1StringView("rectangle")},
         {IconId::Pen, QLatin1StringView("pen-nib")},
+        {IconId::NewFolder, QLatin1StringView("folder-simple-plus")},
+        {IconId::Import, QLatin1StringView("download-simple")},
+        {IconId::DeleteAsset, QLatin1StringView("trash-simple")},
+        {IconId::Images, QLatin1StringView("images")},
         {IconId::Snap, QLatin1StringView("magnet")},
     });
     return entries;

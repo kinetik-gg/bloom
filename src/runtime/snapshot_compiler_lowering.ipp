@@ -344,6 +344,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return lowerSolid(node);
+    case NodeLoweringKind::ImageSource:
+        return lowerImageSource(node);
     case NodeLoweringKind::Text:
         return lowerText(node);
     case NodeLoweringKind::LayerOutput:
@@ -397,6 +399,21 @@ lowerSolid(const document::NodeRecord& node) {
         return std::nullopt;
     }
     return runtime::CompiledSolid{node.id, *color, width, height};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerImageSource(const document::NodeRecord& node) {
+    const auto* asset=parameterConstant<std::string>(findParameterBinding(node,"asset"));
+    const auto* start=parameterConstant<std::int64_t>(findParameterBinding(node,"startFrame"));
+    const auto* loop=parameterConstant<std::int64_t>(findParameterBinding(node,"loopMode"));
+    const auto* space=parameterConstant<std::int64_t>(findParameterBinding(node,"colorSpace"));
+    const auto* premultiply=parameterConstant<bool>(findParameterBinding(node,"premultiply"));
+    if (!asset || !start || !loop || !space || !premultiply) { addTopologyFailure(node.id,"Image source parameters could not be lowered."); return std::nullopt; }
+    std::uint64_t raw=0;
+    const auto parsed=std::from_chars(asset->data(),asset->data()+asset->size(),raw);
+    const auto* record=parsed.ec==std::errc{} && parsed.ptr==asset->data()+asset->size()
+        ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw)) : nullptr;
+    return runtime::CompiledImageSource{node.id,record?std::optional{*record}:std::nullopt,*start,*loop,*space,*premultiply};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

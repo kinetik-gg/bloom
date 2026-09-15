@@ -192,6 +192,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
 
     // The no-selection document/composition view (issue #120, decision 3).
     QWidget* documentSection_ = nullptr;
+    kit::KColorChip* documentBackground_ = nullptr;
     QLabel* documentName_ = nullptr;
     QLabel* documentFormat_ = nullptr;
     QLabel* documentFrameRate_ = nullptr;

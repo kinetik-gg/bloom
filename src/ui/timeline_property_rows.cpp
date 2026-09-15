@@ -112,17 +112,16 @@ timelinePropertyEntries(const CompositionSession& session,
                     continue;
                 const auto& binding = *found;
                 const auto* parameter = composition->parameters().find(binding.parameterId);
-                if (!parameter ||
-                    !(document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
-                      document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
-                      document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
-                      parameter->schemaKey == document::kTextAlignmentParameterSchemaKey))
+                if (!parameter || !(document::isScalarAnimatableSchemaKey(parameter->schemaKey) ||
+                                    document::isVec2AnimatableSchemaKey(parameter->schemaKey) ||
+                                    document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
+                                    !propertiesSelectorItems(parameter->schemaKey).empty()))
                     continue;
                 if (!heading) {
                     group(QObject::tr("Source"));
                     heading = true;
                 }
-                auto name = QString::fromStdString(binding.role);
+                auto name = node_editor::displayTypeName(binding.role);
                 if (binding.role == document::kSolidColorParameterRole ||
                     binding.role == document::kTextColorParameterRole)
                     name = QObject::tr("Color");
@@ -228,14 +227,12 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     alignment_->setObjectName("timelinePropertyAlignment");
     alignment_->setAccessibleName(tr("Alignment"));
     alignment_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    alignment_->addItem(tr("Left"), 0);
-    alignment_->addItem(tr("Center"), 1);
-    alignment_->addItem(tr("Right"), 2);
 
     connect(alignment_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
         if (!binding_ && index >= 0)
-            (void)session_.setParameterValue(entry_.parameterId, static_cast<std::int64_t>(index),
-                                             tr("Set Alignment"));
+            (void)session_.setParameterValue(entry_.parameterId,
+                                             alignment_->itemData(index).value<std::int64_t>(),
+                                             tr("Set Parameter"));
     });
     color_->setObjectName("timelinePropertyColor");
     // Task DRIVE-1's read-only display for a driven parameter. It occupies the value columns the
@@ -353,14 +350,21 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const bool dimension = role == document::kSolidWidthParameterRole ||
                                role == document::kSolidHeightParameterRole;
         const bool lineHeight = role == document::kTextLineHeightParameterRole;
-        alignment_->setVisible(role == document::kTextAlignmentParameterRole);
-        if (role == document::kTextAlignmentParameterRole) {
-            const auto* record = session_.composition()->parameters().find(entry.parameterId);
+        const auto* record = session_.composition()->parameters().find(entry.parameterId);
+        const auto items = record ? propertiesSelectorItems(record->schemaKey)
+                                  : QList<std::pair<QString, std::int64_t>>{};
+        const bool selector = !items.empty() && role != document::kBlendModeParameterRole;
+        alignment_->setVisible(selector);
+        if (selector) {
+            alignment_->clearItems();
+            alignment_->setAccessibleName(entry.name);
+            for (const auto& [name, stored] : items)
+                alignment_->addItem(name, QVariant::fromValue(stored));
             const auto* constant =
                 record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
             const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
             if (value)
-                alignment_->setCurrentIndex(static_cast<int>(*value));
+                alignment_->setCurrentIndex(alignment_->findData(QVariant::fromValue(*value)));
             alignment_->setEnabled(value != nullptr);
             diamond_->hide();
         }

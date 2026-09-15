@@ -28,6 +28,75 @@
 #include <utility>
 
 namespace bloom::ui::properties {
+void refreshColor(CompositionSession& session, const std::string_view schemaKey,
+                  const core::Color4d value, kit::KColorChip* chip,
+                  const std::initializer_list<kit::KValueField*> fields) {
+    const auto converter = session.colorConverter(schemaKey);
+    const auto reference =
+        kit::KColor::fromRgba(static_cast<float>(value.red), static_cast<float>(value.green),
+                              static_cast<float>(value.blue), static_cast<float>(value.alpha),
+                              kit::ColorSpace::Reference);
+    const auto display = reference.converted(kit::ColorSpace::Display, converter);
+    const QSignalBlocker blocker(chip);
+    chip->setColorConverter(converter);
+    chip->setColor(reference);
+    chip->setEnabled(chip->isEnabled() && display.has_value());
+    const bool extended = value.red > 1 || value.green > 1 || value.blue > 1 || value.red < 0 ||
+                          value.green < 0 || value.blue < 0 || !display;
+    const std::array channels =
+        extended
+            ? std::array{value.red, value.green, value.blue, value.alpha}
+            : std::array{static_cast<double>(display->red), static_cast<double>(display->green),
+                         static_cast<double>(display->blue), value.alpha};
+    const std::array referenceChannels{value.red, value.green, value.blue, value.alpha};
+    std::size_t index = 0;
+    for (auto* field : fields) {
+        const QSignalBlocker fieldBlocker(field);
+        field->setUnit(extended ? QStringLiteral("reference") : QString{});
+        field->setProperty("colorReferenceValue", referenceChannels[index]);
+        field->setProperty("colorDisplayValue", channels[index]);
+        field->setValue(channels[index++]);
+    }
+    if (!display)
+        chip->setToolTip(QObject::tr("Colour conversion unavailable or preparing"));
+}
+
+std::optional<core::Color4d>
+colorFromFields(CompositionSession& session, const std::string_view schemaKey,
+                const std::initializer_list<kit::KValueField*> fields) {
+    if (fields.size() != 4)
+        return std::nullopt;
+    std::array<double, 4> channels{};
+    std::size_t index = 0;
+    bool reference = false;
+    for (const auto* field : fields) {
+        channels[index++] = field->value();
+        reference = reference || field->unit() == QStringLiteral("reference");
+    }
+    if (reference)
+        return core::Color4d{channels[0], channels[1], channels[2], channels[3]};
+    const auto display =
+        kit::KColor::fromRgba(static_cast<float>(channels[0]), static_cast<float>(channels[1]),
+                              static_cast<float>(channels[2]), static_cast<float>(channels[3]));
+    const auto converted =
+        display.converted(kit::ColorSpace::Reference, session.colorConverter(schemaKey));
+    if (!converted)
+        return std::nullopt;
+    std::array result{static_cast<double>(converted->red), static_cast<double>(converted->green),
+                      static_cast<double>(converted->blue), channels[3]};
+    index = 0;
+    for (const auto* field : fields) {
+        // Retain untouched reference channels exactly; repeated alpha/RGB edits must not
+        // accumulate the prepared float transform's round-trip error in other channels.
+        if (field->value() == field->property("colorDisplayValue").toDouble())
+            result[index] = field->property("colorReferenceValue").toDouble();
+        else if (channels[index] < 0 || channels[index] > 1)
+            result[index] = channels[index];
+        ++index;
+    }
+    return core::Color4d{result[0], result[1], result[2], result[3]};
+}
+
 namespace {} // namespace
 int labelColumnWidth() { return kit::px(kit::Size::PropertiesLabelWidth); }
 QLabel* makeRowLabel(const QString& text, QWidget* parent) {
