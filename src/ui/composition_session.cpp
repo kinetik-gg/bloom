@@ -1261,8 +1261,32 @@ bool CompositionSession::keyframeSelectionExists(const KeyframeSelection& select
     }
     return std::visit(
         [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if (selection.component.has_value()) {
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return false;
+                } else {
+                    const auto* component = curve.component(*selection.component);
+                    return component != nullptr &&
+                           std::ranges::any_of(component->keyframes, [&](const auto& key) {
+                               return key.id == selection.keyframeId;
+                           });
+                }
+            }
             return std::ranges::any_of(
-                curve.keyframes, [&](const auto& key) { return key.id == selection.keyframeId; });
+                       curve.keyframes,
+                       [&](const auto& key) { return key.id == selection.keyframeId; }) ||
+                   [&] {
+                       if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                           return false;
+                       } else {
+                           return std::ranges::any_of(curve.components, [&](const auto& component) {
+                               return std::ranges::any_of(
+                                   component.keyframes,
+                                   [&](const auto& key) { return key.id == selection.keyframeId; });
+                           });
+                       }
+                   }();
         },
         *record);
 }
@@ -1305,16 +1329,36 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         return ParameterSample(*sample.value);
     }
     if (const auto* vec2Curve = current->animationCurves().findVec2(source->curveId)) {
-        const auto sample =
-            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*vec2Curve), time);
+        auto compiled = runtime::compileAnimationCurve(*vec2Curve);
+        if (source->defaultValue.has_value()) {
+            if (const auto* value = std::get_if<document::Vec2d>(&*source->defaultValue))
+                compiled.defaultValue = *value;
+        }
+        const auto sample = runtime::sampleAnimationCurve(compiled, time);
+        if (!sample || !sample.value.has_value()) {
+            return std::nullopt;
+        }
+        return ParameterSample(*sample.value);
+    }
+    if (const auto* vec3Curve = current->animationCurves().findVec3(source->curveId)) {
+        auto compiled = runtime::compileAnimationCurve(*vec3Curve);
+        if (source->defaultValue.has_value()) {
+            if (const auto* value = std::get_if<document::Vec3d>(&*source->defaultValue))
+                compiled.defaultValue = *value;
+        }
+        const auto sample = runtime::sampleAnimationCurve(compiled, time);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
         return ParameterSample(*sample.value);
     }
     if (const auto* colorCurve = current->animationCurves().findColor4(source->curveId)) {
-        const auto sample =
-            runtime::sampleAnimationCurve(runtime::compileAnimationCurve(*colorCurve), time);
+        auto compiled = runtime::compileAnimationCurve(*colorCurve);
+        if (source->defaultValue.has_value()) {
+            if (const auto* value = std::get_if<core::Color4d>(&*source->defaultValue))
+                compiled.defaultValue = *value;
+        }
+        const auto sample = runtime::sampleAnimationCurve(compiled, time);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
@@ -1413,6 +1457,15 @@ CompositionSession::keyframeAtExactTime(const document::ParameterRecord& paramet
                     return key.id;
                 }
             }
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                for (const auto& component : curve.components) {
+                    for (const auto& key : component.keyframes) {
+                        if (key.time == time)
+                            return key.id;
+                    }
+                }
+            }
             return std::nullopt;
         },
         *record);
@@ -1424,7 +1477,25 @@ std::size_t CompositionSession::keyframeCount(const document::AnimationCurveId c
     if (record == nullptr) {
         return 0;
     }
-    return std::visit([](const auto& curve) { return curve.keyframes.size(); }, *record);
+    return std::visit(
+        [](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return curve.keyframes.size();
+            } else {
+                const bool grouped =
+                    std::ranges::any_of(curve.components, [](const auto& component) {
+                        return !component.keyframes.empty();
+                    });
+                if (!grouped)
+                    return curve.keyframes.size();
+                std::size_t count = 0;
+                for (const auto& component : curve.components)
+                    count += component.keyframes.size();
+                return count;
+            }
+        },
+        *record);
 }
 
 KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_view role) const {
@@ -1435,6 +1506,74 @@ KeyframeDiamondState CompositionSession::keyframeDiamondStateForParameter(
     const document::ParameterId parameterId) const {
     const auto* current = composition();
     return diamondStateFor(current == nullptr ? nullptr : current->parameters().find(parameterId));
+}
+
+KeyframeDiamondState
+CompositionSession::keyframeDiamondState(const document::ParameterId parameterId,
+                                         const document::AnimationComponent component,
+                                         const core::RationalTime time) const {
+    const auto* current = composition();
+    const auto* parameter = current == nullptr ? nullptr : current->parameters().find(parameterId);
+    if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey))
+        return KeyframeDiamondState::Unsupported;
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source))
+        return KeyframeDiamondState::Constant;
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr || current == nullptr)
+        return KeyframeDiamondState::Unsupported;
+    const auto* values = current->animationCurves().findComponent(source->curveId, component);
+    if (values == nullptr)
+        return KeyframeDiamondState::Unsupported;
+    return std::ranges::any_of(values->keyframes,
+                               [time](const auto& key) { return key.time == time; })
+               ? KeyframeDiamondState::AnimatedWithKey
+               : KeyframeDiamondState::AnimatedWithoutKey;
+}
+
+KeyframeParameterState
+CompositionSession::keyframeParameterState(const document::ParameterId parameterId,
+                                           const core::RationalTime time) const {
+    const auto* current = composition();
+    const auto* parameter = current == nullptr ? nullptr : current->parameters().find(parameterId);
+    if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey))
+        return KeyframeParameterState::Unsupported;
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source))
+        return KeyframeParameterState::None;
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr || current == nullptr)
+        return KeyframeParameterState::Unsupported;
+    const auto* record = current->animationCurves().find(source->curveId);
+    if (record == nullptr)
+        return KeyframeParameterState::Unsupported;
+    return std::visit(
+        [time](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return std::ranges::any_of(curve.keyframes,
+                                           [time](const auto& key) { return key.time == time; })
+                           ? KeyframeParameterState::All
+                           : KeyframeParameterState::None;
+            } else {
+                const bool grouped =
+                    std::ranges::any_of(curve.components, [](const auto& component) {
+                        return !component.keyframes.empty();
+                    });
+                if (!grouped)
+                    return std::ranges::any_of(curve.keyframes,
+                                               [time](const auto& key) { return key.time == time; })
+                               ? KeyframeParameterState::All
+                               : KeyframeParameterState::None;
+                std::size_t keyed = 0;
+                for (const auto& component : curve.components)
+                    if (std::ranges::any_of(component.keyframes,
+                                            [time](const auto& key) { return key.time == time; }))
+                        ++keyed;
+                return keyed == 0                         ? KeyframeParameterState::None
+                       : keyed == curve.components.size() ? KeyframeParameterState::All
+                                                          : KeyframeParameterState::Some;
+            }
+        },
+        *record);
 }
 
 KeyframeDiamondState
@@ -1463,6 +1602,104 @@ bool CompositionSession::toggleKeyframeForParameter(const document::ParameterId 
     const auto* current = composition();
     return toggleKeyframeFor(current == nullptr ? nullptr
                                                 : current->parameters().find(parameterId));
+}
+
+bool CompositionSession::toggleKeyframe(const document::ParameterId parameterId,
+                                        const document::AnimationComponent component,
+                                        const core::RationalTime time) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    const auto* parameter = current == nullptr ? nullptr : current->parameters().find(parameterId);
+    if (parameter == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
+        return false;
+    }
+    if (!document::isAnimatableSchemaKey(parameter->schemaKey)) {
+        reportUnavailable(QStringLiteral("This parameter cannot be animated"));
+        return false;
+    }
+    const auto label = keyframeCommandLabel(parameter->schemaKey);
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const bool supported = std::visit(
+            [](const auto& value) {
+                using Value = std::decay_t<decltype(value)>;
+                return std::is_same_v<Value, document::Vec2d> ||
+                       std::is_same_v<Value, document::Vec3d> ||
+                       std::is_same_v<Value, core::Color4d>;
+            },
+            constant->value);
+        if (!supported) {
+            reportUnavailable(QStringLiteral("The parameter value does not match its schema"));
+            return false;
+        }
+        commands::Transaction transaction(label.addKey.toStdString(), snapshot_.revision());
+        transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameterId,
+                                                                   time, component);
+        return execute(std::move(transaction));
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    if (source == nullptr) {
+        reportUnavailable(
+            QStringLiteral("Disconnect the driven parameter before keying its value"));
+        return false;
+    }
+    const auto* componentCurve =
+        current->animationCurves().findComponent(source->curveId, component);
+    if (componentCurve == nullptr) {
+        reportUnavailable(QStringLiteral("This component is not available on the parameter"));
+        return false;
+    }
+    const auto existing =
+        std::ranges::find(componentCurve->keyframes, time, &document::ScalarKeyframe::time);
+    commands::Transaction transaction(
+        (existing == componentCurve->keyframes.end() ? label.addKey : label.removeKey)
+            .toStdString(),
+        snapshot_.revision());
+    if (existing != componentCurve->keyframes.end()) {
+        transaction.emplace<commands::DeleteKeyframe>(compositionId_, source->curveId, existing->id,
+                                                      component);
+        return execute(std::move(transaction));
+    }
+    const auto sample = sampleParameterValue(*parameter, time);
+    if (!sample.has_value()) {
+        reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
+        return false;
+    }
+    std::optional<double> value;
+    std::visit(
+        [&](const auto& held) {
+            using Value = std::decay_t<decltype(held)>;
+            if constexpr (std::is_same_v<Value, document::Vec2d>) {
+                if (component == document::AnimationComponent::X)
+                    value = held.x;
+                else if (component == document::AnimationComponent::Y)
+                    value = held.y;
+            } else if constexpr (std::is_same_v<Value, document::Vec3d>) {
+                if (component == document::AnimationComponent::X)
+                    value = held.x;
+                else if (component == document::AnimationComponent::Y)
+                    value = held.y;
+                else if (component == document::AnimationComponent::Z)
+                    value = held.z;
+            } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+                if (component == document::AnimationComponent::Red)
+                    value = held.red;
+                else if (component == document::AnimationComponent::Green)
+                    value = held.green;
+                else if (component == document::AnimationComponent::Blue)
+                    value = held.blue;
+                else if (component == document::AnimationComponent::Alpha)
+                    value = held.alpha;
+            }
+        },
+        *sample);
+    if (!value.has_value()) {
+        reportUnavailable(QStringLiteral("This component does not match the parameter value"));
+        return false;
+    }
+    transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
+        compositionId_, parameterId, component, time, *value);
+    return execute(std::move(transaction));
 }
 
 bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* parameter) {
@@ -1567,11 +1804,32 @@ CompositionSession::selectedKeyframeInterpolation() const {
     }
     const auto keyframeId = keySelection->keyframeId;
     return std::visit(
-        [keyframeId](const auto& curve) -> std::optional<document::KeyframeInterpolation> {
+        [keyframeId, component = keySelection->component](
+            const auto& curve) -> std::optional<document::KeyframeInterpolation> {
+            using Curve = std::decay_t<decltype(curve)>;
+            if (component.has_value()) {
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return std::nullopt;
+                } else {
+                    const auto* values = curve.component(*component);
+                    if (values == nullptr)
+                        return std::nullopt;
+                    for (const auto& key : values->keyframes)
+                        if (key.id == keyframeId)
+                            return key.outgoingInterpolation;
+                    return std::nullopt;
+                }
+            }
             for (const auto& key : curve.keyframes) {
                 if (key.id == keyframeId) {
                     return key.outgoingInterpolation;
                 }
+            }
+            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                for (const auto& values : curve.components)
+                    for (const auto& key : values.keyframes)
+                        if (key.id == keyframeId)
+                            return key.outgoingInterpolation;
             }
             return std::nullopt;
         },
@@ -1589,8 +1847,25 @@ bool CompositionSession::selectedKeyframeIsFinal() const {
     }
     const auto keyframeId = keySelection->keyframeId;
     return std::visit(
-        [keyframeId](const auto& curve) {
-            return !curve.keyframes.empty() && curve.keyframes.back().id == keyframeId;
+        [keyframeId, component = keySelection->component](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if (component.has_value()) {
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return false;
+                } else {
+                    const auto* values = curve.component(*component);
+                    return values != nullptr && !values->keyframes.empty() &&
+                           values->keyframes.back().id == keyframeId;
+                }
+            }
+            if (!curve.keyframes.empty() && curve.keyframes.back().id == keyframeId)
+                return true;
+            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return std::ranges::any_of(curve.components, [keyframeId](const auto& values) {
+                    return !values.keyframes.empty() && values.keyframes.back().id == keyframeId;
+                });
+            }
+            return false;
         },
         *record);
 }
@@ -1603,8 +1878,9 @@ bool CompositionSession::setSelectedKeyframeInterpolation(
         return false;
     }
     commands::Transaction transaction("Set Keyframe Interpolation", snapshot_.revision());
-    transaction.emplace<commands::SetKeyframeInterpolation>(
-        compositionId_, keySelection->curveId, keySelection->keyframeId, interpolation);
+    transaction.emplace<commands::SetKeyframeInterpolation>(compositionId_, keySelection->curveId,
+                                                            keySelection->keyframeId, interpolation,
+                                                            keySelection->component);
     return execute(std::move(transaction));
 }
 
