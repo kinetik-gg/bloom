@@ -31,18 +31,15 @@
 namespace bloom::project {
 
 // Coarse stage identifying which checked document-model surface rejected reconstruction. Ordered to
-// match the reconstruction walk: node schema upgrades, per-composition graph assembly,
+// match the reconstruction walk: node version validation, per-composition graph assembly,
 // per-composition store assembly, composition admission, extension admission, whole-project
 // validation, and finally Document construction (the inclusive-watermark check).
 enum class ReconstructionStage : std::uint8_t {
     // Reserved zero value for a default-constructed (never-failed) ReconstructionRejected; never
     // returned by reconstructDocument() itself.
     None,
-    // A decoded node at an older registered schema version could not be upgraded to the current one
-    // because the document's persisted parameter high water leaves no room for the parameters the
-    // newer schema requires. `recordId` names the node. See upgradeDecodedNodeSchemas() in
-    // document_reconstruct.cpp and docs/architecture/project-format.md, "Node Schema Upgrades".
-    NodeSchemaUpgrade,
+    // The node kind/version has no current built-in definition. No upgrade is attempted.
+    UnsupportedNodeVersion,
     // bloom::document::CanonicalGraph::addNode() rejected a decoded node.
     GraphNode,
     // bloom::document::CanonicalGraph::addEdge() rejected a decoded edge.
@@ -88,6 +85,8 @@ struct ReconstructionRejected final {
     ReconstructionStage stage = ReconstructionStage::None;
     document::CompositionId compositionId;
     std::uint64_t recordId = 0;
+    std::string nodeTypeId{};
+    std::uint32_t nodeVersion = 0;
 
     friend bool operator==(const ReconstructionRejected&,
                            const ReconstructionRejected&) noexcept = default;
@@ -142,14 +141,7 @@ class [[nodiscard]] ReconstructDocumentResult final {
 // through and the ordering ReconstructionStage documents. May throw std::bad_alloc; every
 // document-model rejection is reported through the returned result rather than thrown.
 //
-// NODE SCHEMA UPGRADES run first, before anything is installed: a decoded node whose typeId is
-// registered at a NEWER schema version than the file declares is brought forward by injecting the
-// parameters the newer schema added, each at its registered default. The defaults are chosen so an
-// upgraded document evaluates to the pixels the older build produced, so opening an older file is a
-// silent, lossless upgrade rather than a refusal or a visible change. Injected parameters take ids
-// strictly above the document's persisted parameter high water, which is raised to match, keeping
-// the inclusive-watermark rule intact. The upgrade is in-memory only; nothing is written back until
-// the document is saved, at which point it is saved as current truth.
+// Unsupported built-in node versions are rejected before graph construction.
 [[nodiscard]] ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope);
 
 } // namespace bloom::project

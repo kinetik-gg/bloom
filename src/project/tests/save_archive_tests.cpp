@@ -284,7 +284,7 @@ void testComposedGreenChain(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -293,8 +293,10 @@ void testComposedGreenChain(Expectations& expectations) {
                                            kCompositionOutputNodeSchemaVersion};
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
-                                     {{"color", ParameterId::fromRaw(7)}},
-                                     1};
+                                     {{"color", ParameterId::fromRaw(7)},
+                                      {"height", ParameterId::fromRaw(13)},
+                                      {"width", ParameterId::fromRaw(12)}},
+                                     kSolidSourceNodeSchemaVersion};
     // The one non-foundation node type this fixture's manifest requirements must cover -- left
     // structurally unconnected (no edges), exactly like manifest_requirements_tests.cpp's
     // addCustomNode helper: CanonicalGraph::addNode() does not require reachability.
@@ -329,9 +331,15 @@ void testComposedGreenChain(Expectations& expectations) {
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
     expectations.expect(
-        composition.parameters().insert({ParameterId::fromRaw(7),
-                                         std::string(kSolidColorParameterSchemaKey),
-                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+        composition.parameters().insert(
+            {ParameterId::fromRaw(12), std::string(kSolidWidthParameterSchemaKey),
+             ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+            composition.parameters().insert(
+                {ParameterId::fromRaw(13), std::string(kSolidHeightParameterSchemaKey),
+                 ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(7),
+                                             std::string(kSolidColorParameterSchemaKey),
+                                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
             composition.parameters().insert({ParameterId::fromRaw(5),
                                              std::string(kPositionParameterSchemaKey),
                                              ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
@@ -376,7 +384,7 @@ void testComposedGreenChain(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 11,
+                                         .parameter = 13,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,

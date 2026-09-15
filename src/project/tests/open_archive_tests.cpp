@@ -255,7 +255,7 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -264,8 +264,10 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
                                            kCompositionOutputNodeSchemaVersion};
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
-                                     {{"color", ParameterId::fromRaw(7)}},
-                                     1};
+                                     {{"color", ParameterId::fromRaw(7)},
+                                      {"height", ParameterId::fromRaw(13)},
+                                      {"width", ParameterId::fromRaw(12)}},
+                                     kSolidSourceNodeSchemaVersion};
     const NodeRecord customNode{NodeId::fromRaw(5), "vendor.nodes.blur", {}, 1};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) &&
@@ -297,9 +299,15 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
     expectations.expect(
-        composition.parameters().insert({ParameterId::fromRaw(7),
-                                         std::string(kSolidColorParameterSchemaKey),
-                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+        composition.parameters().insert(
+            {ParameterId::fromRaw(12), std::string(kSolidWidthParameterSchemaKey),
+             ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+            composition.parameters().insert(
+                {ParameterId::fromRaw(13), std::string(kSolidHeightParameterSchemaKey),
+                 ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(7),
+                                             std::string(kSolidColorParameterSchemaKey),
+                                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
             composition.parameters().insert({ParameterId::fromRaw(5),
                                              std::string(kPositionParameterSchemaKey),
                                              ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
@@ -344,7 +352,7 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 11,
+                                         .parameter = 13,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -614,6 +622,68 @@ manifestBytesOrAbort(const bloom::document::SchemaVersion documentSchemaVersion)
 // document classifies on the manifest side; a document with an unknown OCIO locator discriminator
 // classifies on the document side. Both are distinct from every Failed outcome.
 // ---------------------------------------------------------------------------------------------
+
+void testUnsupportedNodeVersions(Expectations& expectations) {
+    using namespace bloom;
+    const auto currentBytes = minimalCanonicalDocumentBytesOrAbort();
+    const std::string current(reinterpret_cast<const char*>(currentBytes.data()),
+                              currentBytes.size());
+    for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 9>{
+             {{document::kSolidSourceNodeType, 1},
+              {document::kTextSourceNodeType, 1},
+              {document::kLayerOutputNodeType, 1},
+              {document::kLayerOutputNodeType, 2},
+              {document::kLayerOutputNodeType, 3},
+              {document::kLayerStackNodeType, 1},
+              {document::kTextSourceNodeType, 3},
+              {"bloom.reroute-image", 1},
+              {"bloom.reroute-scalar", 1}}}) {
+        for (const std::uint32_t minor : {6U, 11U, 12U}) {
+            auto text = current;
+            const auto type = text.find(document::kLayerStackNodeType);
+            if (type == std::string::npos)
+                throw std::logic_error("node version fixture type");
+            text.replace(type, document::kLayerStackNodeType.size(), kind);
+            const auto nodeVersion = text.find("\"schemaVersion\": 2", type);
+            if (nodeVersion == std::string::npos)
+                throw std::logic_error("node version fixture version");
+            text.replace(nodeVersion, std::string_view("\"schemaVersion\": 2").size(),
+                         "\"schemaVersion\": " + std::to_string(version));
+            const auto schema = text.find("\"minor\": 11");
+            text.replace(schema, std::string_view("\"minor\": 11").size(),
+                         "\"minor\": " + std::to_string(minor));
+            const auto bytes = project::test::buildConformingArchive(
+                project::test::makeStoredEntry("manifest.json", manifestBytesOrAbort({1, minor})),
+                project::test::makeStoredEntry("document.json", project::test::toBytes(text)));
+            const auto result = openProjectArchive(bytes, {}, makeOperation());
+            const auto* failure =
+                result.failure() ? result.failure()->payloadAs<SaveArchiveDocumentDecodeFailure>()
+                                 : nullptr;
+            expectations.expect(
+                result.outcome() == OpenArchiveOutcome::Failed && failure &&
+                    failure->error == project::DocumentDecodeError::UnsupportedNodeVersion &&
+                    failure->nodeTypeId == kind && failure->nodeVersion == version &&
+                    failure->path.view() == "/project/compositions/0/graph/nodes/0/schemaVersion",
+                "unsupported node version names the exact kind/version at every schema minor");
+        }
+    }
+    for (std::uint32_t minor = 0; minor < 11; ++minor) {
+        auto text = current;
+        const auto schema = text.find("\"minor\": 11");
+        text.replace(schema, std::string_view("\"minor\": 11").size(),
+                     "\"minor\": " + std::to_string(minor));
+        const auto bytes = project::test::buildConformingArchive(
+            project::test::makeStoredEntry("manifest.json", manifestBytesOrAbort({1, minor})),
+            project::test::makeStoredEntry("document.json", project::test::toBytes(text)));
+        const auto result = openProjectArchive(bytes, {}, makeOperation());
+        const auto* failure = result.failure()
+                                  ? result.failure()->payloadAs<SaveArchiveDocumentDecodeFailure>()
+                                  : nullptr;
+        expectations.expect(failure && failure->error ==
+                                           project::DocumentDecodeError::UnsupportedSchemaVersion,
+                            "every schema below 1.11 is rejected even with current node versions");
+    }
+}
 
 void testManifestSidePreservedReadOnly(Expectations& expectations) {
     using bloom::project::test::buildConformingArchive;
@@ -1102,6 +1172,7 @@ int main() try {
     testOpenMinimalRoundTrip(expectations);
     testOpenComposedRoundTrip(expectations);
     testOpenRoundTrippedNewerMinorRoundTrip(expectations);
+    testUnsupportedNodeVersions(expectations);
     testManifestSidePreservedReadOnly(expectations);
     testDocumentSidePreservedReadOnly(expectations);
     testContainerCrcFailure(expectations);

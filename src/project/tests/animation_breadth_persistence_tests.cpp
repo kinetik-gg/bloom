@@ -16,7 +16,6 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/zip_container.hpp>
@@ -105,6 +104,10 @@ Authored authoredProject() {
     const auto solidEdgeId = draft.ids().allocateEdge();
     const auto stackEdgeId = draft.ids().allocateEdge();
     const auto colorParameter = draft.ids().allocateParameter();
+    const auto widthParameter = draft.ids().allocateParameter();
+    const auto heightParameter = draft.ids().allocateParameter();
+    if (!widthParameter || !heightParameter)
+        throw std::runtime_error("dimension ids");
     const auto positionParameter = draft.ids().allocateParameter();
     const auto anchorParameter = draft.ids().allocateParameter();
     const auto scaleParameter = draft.ids().allocateParameter();
@@ -120,8 +123,10 @@ Authored authoredProject() {
     const bool authoredTopology =
         graph.addNode({*solidNodeId,
                        std::string(document::kSolidSourceNodeType),
-                       {{std::string(document::kSolidColorParameterRole), *colorParameter}},
-                       1}) &&
+                       {{std::string(document::kSolidColorParameterRole), *colorParameter},
+                        {std::string(document::kSolidWidthParameterRole), *widthParameter},
+                        {std::string(document::kSolidHeightParameterRole), *heightParameter}},
+                       document::kSolidSourceNodeSchemaVersion}) &&
         graph.addNode({*layerNodeId,
                        std::string(document::kLayerOutputNodeType),
                        {{std::string(document::kPositionParameterRole), *positionParameter},
@@ -130,7 +135,7 @@ Authored authoredProject() {
                         {std::string(document::kRotationParameterRole), *rotationParameter},
                         {std::string(document::kOpacityParameterRole), *opacityParameter},
                         {std::string(document::kBlendModeParameterRole), *blendModeParameter}},
-                       3}) &&
+                       document::kLayerOutputNodeSchemaVersion}) &&
         graph.addLayerOutput(
             {*layerNodeId, *layerId, "Solid 1", std::string(document::kLayerOutputOutputPort)}) &&
         graph.layerStack().append({*slotId, *layerId}) &&
@@ -147,6 +152,12 @@ Authored authoredProject() {
         throw std::runtime_error("fixture topology");
     }
     const bool authoredParameters =
+        composition.parameters().insert(
+            {*widthParameter, std::string(document::kSolidWidthParameterSchemaKey),
+             document::ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+        composition.parameters().insert(
+            {*heightParameter, std::string(document::kSolidHeightParameterSchemaKey),
+             document::ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
         composition.parameters().insert(
             {*colorParameter, std::string(document::kSolidColorParameterSchemaKey),
              document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}) &&
@@ -337,50 +348,14 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
 
 void migrationFromTwelve() {
     std::string documentText;
-    const auto legacy = legacyArchive(documentText);
-    expect(documentText.find("color4") == std::string::npos &&
-               documentText.find("ease-in-out") == std::string::npos,
-           "the 1.2 fixture carries neither 1.3 construct, which is exactly why the step has "
-           "nothing to add");
-
-    auto openedResult = openProjectArchive(legacy, {}, memory());
-    expect(openedResult.outcome() == OpenArchiveOutcome::Opened, "a 1.2 project opens");
-    if (openedResult.outcome() != OpenArchiveOutcome::Opened) {
-        return;
-    }
-    auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
-           "the 1.2 migration ladder lands on the current editable schema");
-
-    // The step is version-only, so the migrated document must be byte-identical to what the current
-    // writer produces for the same content -- nothing appended, nothing inferred.
-    const auto reopened = opened.document->snapshot();
-    const auto current = documentTextOf(archiveOf(reopened, opened.colorSettings));
-    auto expectedFromLegacy = documentText;
-    const auto minor = expectedFromLegacy.find("\"minor\": 2");
-    expect(minor != std::string::npos, "the 1.2 fixture's version is locatable");
-    if (minor == std::string::npos) {
-        return;
-    }
-    expectedFromLegacy.replace(minor, std::string_view("\"minor\": 2").size(), "\"minor\": 11");
-    auto currentWithoutImages = current;
-    removeImageFields(currentWithoutImages);
-    expect(currentWithoutImages == expectedFromLegacy,
-           "and the only difference between the 1.2 file and its migrated 1.3 form is the version "
-           "itself");
-
-    // The step refuses a document that is not its own source version, so the chain cannot be
-    // entered twice or out of order.
-    auto dom = parseStrictJsonDom(test::toBytes(current), {}, memory());
-    expect(static_cast<bool>(dom), "the migrated document re-parses");
-    if (!dom) {
-        return;
-    }
-    std::pmr::vector<char> output;
-    const auto refused = migrateAnimationBreadthV1_2(dom.document()->root(), nullptr, output);
-    expect(!refused && refused.error() == MigrationStepError::TransformFailed,
-           "running the 1.2 -> 1.3 step against an already-1.3 document is refused");
-    expect(refused.path() == "/schemaVersion", "and the refusal names the exact member it checked");
+    const auto archive = legacyArchive(documentText);
+    const auto result = openProjectArchive(archive, {}, memory());
+    const auto* failure = result.failure()
+                              ? result.failure()->payloadAs<SaveArchiveDocumentDecodeFailure>()
+                              : nullptr;
+    expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
+               failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
+           "documents below the canonical 1.11 floor are refused without migration");
 }
 
 // The additive-minor rule, in both directions: a file claiming a minor that PREDATES 1.3 may not
@@ -411,10 +386,10 @@ void minorGating() {
         }
         const auto decoded = decodeDocumentEnvelope(dom.document()->root());
         expect(decoded.outcome() == DocumentDecodeOutcome::Failed &&
-                   decoded.error() == DocumentDecodeError::InvalidAnimationCurveKind,
+                   decoded.error() == DocumentDecodeError::UnsupportedSchemaVersion,
                "a document claiming 1.2 while carrying a colour curve is refused, never decoded as "
                "if the construct were part of 1.2");
-        expect(decoded.path() == "/project/compositions/0/animationCurves/0/kind",
+        expect(decoded.path() == "/schemaVersion",
                "and the refusal names the exact discriminator it could not accept");
     }
 

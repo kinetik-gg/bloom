@@ -311,6 +311,10 @@ class NodeDefinitionRegistry final {
 };
 
 [[nodiscard]] bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry);
+// Unknown module types retain the existing preservation contract. Built-in types must use
+// their current registered version; retired per-kind reroutes have no supported version.
+[[nodiscard]] bool isSupportedNodeVersion(std::string_view typeId, std::uint32_t version);
+
 [[nodiscard]] const NodeDefinitionRegistry& builtInNodeDefinitions();
 
 } // namespace bloom::document

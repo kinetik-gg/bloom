@@ -246,7 +246,7 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -255,8 +255,10 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
                                            kCompositionOutputNodeSchemaVersion};
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
-                                     {{"color", ParameterId::fromRaw(7)}},
-                                     1};
+                                     {{"color", ParameterId::fromRaw(7)},
+                                      {"height", ParameterId::fromRaw(13)},
+                                      {"width", ParameterId::fromRaw(12)}},
+                                     kSolidSourceNodeSchemaVersion};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
@@ -286,9 +288,15 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
     expectations.expect(
-        composition.parameters().insert({ParameterId::fromRaw(7),
-                                         std::string(kSolidColorParameterSchemaKey),
-                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+        composition.parameters().insert(
+            {ParameterId::fromRaw(12), std::string(kSolidWidthParameterSchemaKey),
+             ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+            composition.parameters().insert(
+                {ParameterId::fromRaw(13), std::string(kSolidHeightParameterSchemaKey),
+                 ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(7),
+                                             std::string(kSolidColorParameterSchemaKey),
+                                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
             composition.parameters().insert({ParameterId::fromRaw(5),
                                              std::string(kPositionParameterSchemaKey),
                                              ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
@@ -327,7 +335,7 @@ void testComposedDeterminismRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 11,
+                                         .parameter = 13,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -467,19 +475,19 @@ constexpr std::string_view kMinimalGraphJson =
         R"("frameRate":{"numerator":"24","denominator":"1"}},"parameters":[],"animationCurves":[],)"
         R"("graph":)";
     result += kMinimalGraphJson;
-    result += "}";
+    result += R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0,0,0,1]})";
     return result;
 }
 
 [[nodiscard]] std::string documentJson(const std::string_view idAllocationJson,
                                        const std::string_view extensionsJson) {
     std::string result =
-        R"({"schemaVersion":{"major":1,"minor":0},"project":{"id":"1","name":"Untitled",)"
+        R"({"schemaVersion":{"major":1,"minor":11},"project":{"id":"1","name":"Untitled",)"
         R"("colorSettings":)";
     result += defaultColorSettingsJson();
     result += R"(,"compositions":[)";
     result += defaultCompositionJson();
-    result += R"(]},"idAllocation":)";
+    result += R"(],"assets":[]},"idAllocation":)";
     result += idAllocationJson;
     result += R"(,"extensions":)";
     result += extensionsJson;
@@ -490,7 +498,7 @@ constexpr std::string_view kMinimalGraphJson =
 constexpr std::string_view kDefaultHighestIssued =
     R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0","layerSlot":"0",)"
     R"("parameter":"0","animationCurve":"0","keyframe":"0","driverBinding":"0",)"
-    R"("extensionRecord":"0"}})";
+    R"("extensionRecord":"0","nodeGroup":"0","asset":"0"}})";
 
 void expectDecodeFailure(Expectations& expectations, const std::string& text,
                          const DocumentDecodeError expectedError,
@@ -505,7 +513,7 @@ void testHighestIssuedRejections(Expectations& expectations) {
         expectations,
         documentJson(R"({"highestIssued":{"node":"0","composition":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0"}})",
                      "[]"),
         DocumentDecodeError::MemberOutOfOrder, "/idAllocation/highestIssued/node",
         "highestIssued members out of order report MemberOutOfOrder at the misplaced key");
@@ -514,25 +522,27 @@ void testHighestIssuedRejections(Expectations& expectations) {
         expectations,
         documentJson(R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}})",
                      "[]"),
-        DocumentDecodeError::MissingMember, "/idAllocation/highestIssued/extensionRecord",
+        DocumentDecodeError::MissingMember, "/idAllocation/highestIssued/asset",
         "a highestIssued object missing its trailing member reports MissingMember");
 
     expectDecodeFailure(
         expectations,
         documentJson(R"({"highestIssued":{"composition":"0","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0","extra":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
+                     R"("asset":"0","extra":"0"}})",
                      "[]"),
         DocumentDecodeError::UnknownMember, "/idAllocation/highestIssued/extra",
-        "a highestIssued object with an eleventh member reports UnknownMember");
+        "a highestIssued object with one member past the closed shape reports UnknownMember");
 
     expectDecodeFailure(
         expectations,
         documentJson(R"({"highestIssued":{"composition":"+1","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
+                     R"("asset":"0"}})",
                      "[]"),
         DocumentDecodeError::InvalidAllocatorHighWater, "/idAllocation/highestIssued/composition",
         "a leading-plus highestIssued spelling is rejected as non-canonical");
@@ -541,7 +551,8 @@ void testHighestIssuedRejections(Expectations& expectations) {
         expectations,
         documentJson(R"({"highestIssued":{"composition":"01","node":"0","edge":"0","layer":"0",)"
                      R"("layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-                     R"("driverBinding":"0","extensionRecord":"0"}})",
+                     R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0",)"
+                     R"("asset":"0"}})",
                      "[]"),
         DocumentDecodeError::InvalidAllocatorHighWater, "/idAllocation/highestIssued/composition",
         "a leading-zero highestIssued spelling is rejected as non-canonical");
@@ -725,7 +736,8 @@ void testProjectValidateRejection(Expectations& expectations) {
 
     composition.graph.nodes.front() = {
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
-    NodeRecord layerOutputNode{NodeId::fromRaw(3), std::string(kLayerOutputNodeType), {}, 3};
+    NodeRecord layerOutputNode{
+        NodeId::fromRaw(3), std::string(kLayerOutputNodeType), {}, kLayerOutputNodeSchemaVersion};
     // Swapped on purpose: "position" is bound to the opacity-schema parameter and vice versa.
     layerOutputNode.parameters = {{"opacity", ParameterId::fromRaw(5)},
                                   {"position", ParameterId::fromRaw(3)}};
@@ -763,186 +775,27 @@ void testProjectValidateRejection(Expectations& expectations) {
     }
 }
 
-void testVersionOneLayerOutputUpgradesOnReconstruct(Expectations& expectations) {
-    // A complete, valid version-1 Layer Output branch: exactly what every file written before the
-    // transform breadth slice contains. Reconstruction must bring it forward silently -- no
-    // refusal, no preservation fallback -- by injecting anchor, scale, rotation, and (ADAPTED for
-    // blend modes) blendMode at the identity transform and Normal blending, which is the set of
-    // values that makes the upgraded document evaluate to the version-1 picture.
+void testUnsupportedNodeVersions(Expectations& expectations) {
     using namespace bloom::document;
-    auto envelope = minimalEnvelope();
-    auto& composition = envelope.compositions.front();
-
-    composition.graph.nodes.front() = {
-        NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
-    composition.graph.nodes.push_back(
-        {NodeId::fromRaw(3),
-         std::string(kLayerOutputNodeType),
-         {{"opacity", ParameterId::fromRaw(3)}, {"position", ParameterId::fromRaw(5)}},
-         1});
-    composition.graph.compositionOutput = {NodeId::fromRaw(2),
-                                           std::string(kCompositionOutputOutputPort)};
-    composition.graph.edges.push_back(
-        {EdgeId::fromRaw(2),
-         {NodeId::fromRaw(3), std::string(kLayerOutputOutputPort)},
-         LayerStackInputRef{NodeId::fromRaw(1), LayerSlotId::fromRaw(1),
-                            std::string(kLayerStackContentInputRole)}});
-    composition.graph.layerOutputs.push_back(
-        {NodeId::fromRaw(3), LayerId::fromRaw(1), "Layer", std::string(kLayerOutputOutputPort)});
-    composition.graph.layerStack.entries.push_back({LayerSlotId::fromRaw(1), LayerId::fromRaw(1)});
-    composition.parameters.push_back({ParameterId::fromRaw(3),
-                                      std::string(kOpacityParameterSchemaKey),
-                                      ConstantValueSource{0.5}});
-    composition.parameters.push_back({ParameterId::fromRaw(5),
-                                      std::string(kPositionParameterSchemaKey),
-                                      ConstantValueSource{Vec2d{96.0, -48.0}}});
-    envelope.highWater.node = 3;
-    envelope.highWater.edge = 2;
-    envelope.highWater.layer = 1;
-    envelope.highWater.layerSlot = 1;
-    envelope.highWater.parameter = 5;
-
-    auto reconstructed = bloom::project::reconstructDocument(std::move(envelope));
-    expectations.expect(static_cast<bool>(reconstructed),
-                        "a version-1 Layer Output reconstructs rather than being refused");
-    if (!reconstructed) {
-        return;
+    for (const auto& [kind, version] :
+         std::array<std::pair<std::string_view, std::uint32_t>, 6>{{{kSolidSourceNodeType, 1},
+                                                                    {kTextSourceNodeType, 1},
+                                                                    {kLayerOutputNodeType, 1},
+                                                                    {kLayerOutputNodeType, 2},
+                                                                    {kLayerOutputNodeType, 3},
+                                                                    {kLayerStackNodeType, 1}}}) {
+        auto envelope = minimalEnvelope();
+        auto& node = envelope.compositions.front().graph.nodes.front();
+        node.typeId = kind;
+        node.schemaVersion = version;
+        const auto result = bloom::project::reconstructDocument(envelope);
+        expectations.expect(
+            !result && result.rejection().stage == ReconstructionStage::UnsupportedNodeVersion &&
+                result.rejection().nodeTypeId == kind &&
+                result.rejection().nodeVersion == version &&
+                result.rejection().recordId == node.id.value(),
+            "unsupported node version names kind, version and node without upgrade");
     }
-    const auto snapshot = reconstructed.value()->document->snapshot();
-    const auto* live = snapshot.project().findComposition(CompositionId::fromRaw(1));
-    const auto* node = live == nullptr ? nullptr : live->graph().findNode(NodeId::fromRaw(3));
-    expectations.expect(node != nullptr, "the upgraded Layer Output node survives");
-    if (node == nullptr || live == nullptr) {
-        return;
-    }
-    expectations.expect(node->schemaVersion == 3 && node->parameters.size() == 6,
-                        "the upgraded node declares the current schema version and all six roles");
-    const auto boundId = [node](const std::string_view role) {
-        const auto binding = std::ranges::find(node->parameters, role, &ParameterBinding::role);
-        return binding == node->parameters.end() ? ParameterId{} : binding->parameterId;
-    };
-    // The ids the file already declared are untouched; the four injected ones take the next values
-    // strictly above the persisted parameter high water, in the registered parameter order.
-    expectations.expect(boundId("opacity") == ParameterId::fromRaw(3) &&
-                            boundId("position") == ParameterId::fromRaw(5) &&
-                            boundId("anchor") == ParameterId::fromRaw(6) &&
-                            boundId("scale") == ParameterId::fromRaw(7) &&
-                            boundId("rotation") == ParameterId::fromRaw(8) &&
-                            boundId("blendMode") == ParameterId::fromRaw(9),
-                        "injected parameters take ids strictly above the persisted high water");
-    const auto constant = [live](const ParameterId id) -> const ParameterValue* {
-        const auto* record = live->parameters().find(id);
-        const auto* source =
-            record == nullptr ? nullptr : std::get_if<ConstantValueSource>(&record->source);
-        return source == nullptr ? nullptr : &source->value;
-    };
-    const auto* anchorValue = constant(boundId("anchor"));
-    const auto* scaleValue = constant(boundId("scale"));
-    const auto* rotationValue = constant(boundId("rotation"));
-    const auto* blendModeValue = constant(boundId("blendMode"));
-    expectations.expect(
-        anchorValue != nullptr && *anchorValue == ParameterValue{kDefaultAnchor} &&
-            scaleValue != nullptr && *scaleValue == ParameterValue{kDefaultScale} &&
-            rotationValue != nullptr && *rotationValue == ParameterValue{kDefaultRotationDegrees} &&
-            blendModeValue != nullptr && *blendModeValue == ParameterValue{kDefaultBlendModeValue},
-        "the injected parameters carry the identity transform and Normal blending, "
-        "so the upgraded document renders the version-1 picture");
-    const auto* positionValue = constant(ParameterId::fromRaw(5));
-    const auto* opacityValue = constant(ParameterId::fromRaw(3));
-    expectations.expect(positionValue != nullptr &&
-                            *positionValue == ParameterValue{Vec2d{96.0, -48.0}} &&
-                            opacityValue != nullptr && *opacityValue == ParameterValue{0.5},
-                        "the values the file did declare survive the upgrade unchanged");
-    // The raised high water is what keeps the inclusive-watermark rule true: the next allocation
-    // must come after the injected ids, never re-issue one of them.
-    auto draft = reconstructed.value()->document->draft(snapshot);
-    expectations.expect(draft.ids().allocateParameter() == ParameterId::fromRaw(10),
-                        "the persisted parameter high water rises to cover the injected ids");
-}
-
-// The second upgrade step, added by the blend-mode slice: a version-2 Layer Output already binds
-// the whole transform and needs only a blendMode. The injection rule is per-ROLE rather than
-// per-version step, so this must take exactly one new parameter -- not four -- and must leave every
-// id the file declared untouched.
-void testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(Expectations& expectations) {
-    using namespace bloom::document;
-    auto envelope = minimalEnvelope();
-    auto& composition = envelope.compositions.front();
-
-    composition.graph.nodes.front() = {
-        NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
-    composition.graph.nodes.push_back({NodeId::fromRaw(3),
-                                       std::string(kLayerOutputNodeType),
-                                       {{"anchor", ParameterId::fromRaw(6)},
-                                        {"opacity", ParameterId::fromRaw(3)},
-                                        {"position", ParameterId::fromRaw(5)},
-                                        {"rotation", ParameterId::fromRaw(8)},
-                                        {"scale", ParameterId::fromRaw(7)}},
-                                       2});
-    composition.graph.compositionOutput = {NodeId::fromRaw(2),
-                                           std::string(kCompositionOutputOutputPort)};
-    composition.graph.edges.push_back(
-        {EdgeId::fromRaw(2),
-         {NodeId::fromRaw(3), std::string(kLayerOutputOutputPort)},
-         LayerStackInputRef{NodeId::fromRaw(1), LayerSlotId::fromRaw(1),
-                            std::string(kLayerStackContentInputRole)}});
-    composition.graph.layerOutputs.push_back(
-        {NodeId::fromRaw(3), LayerId::fromRaw(1), "Layer", std::string(kLayerOutputOutputPort)});
-    composition.graph.layerStack.entries.push_back({LayerSlotId::fromRaw(1), LayerId::fromRaw(1)});
-    composition.parameters.push_back({ParameterId::fromRaw(3),
-                                      std::string(kOpacityParameterSchemaKey),
-                                      ConstantValueSource{0.5}});
-    composition.parameters.push_back({ParameterId::fromRaw(5),
-                                      std::string(kPositionParameterSchemaKey),
-                                      ConstantValueSource{Vec2d{96.0, -48.0}}});
-    composition.parameters.push_back({ParameterId::fromRaw(6),
-                                      std::string(kAnchorParameterSchemaKey),
-                                      ConstantValueSource{kDefaultAnchor}});
-    composition.parameters.push_back({ParameterId::fromRaw(7),
-                                      std::string(kScaleParameterSchemaKey),
-                                      ConstantValueSource{kDefaultScale}});
-    composition.parameters.push_back({ParameterId::fromRaw(8),
-                                      std::string(kRotationParameterSchemaKey),
-                                      ConstantValueSource{kDefaultRotationDegrees}});
-    envelope.highWater.node = 3;
-    envelope.highWater.edge = 2;
-    envelope.highWater.layer = 1;
-    envelope.highWater.layerSlot = 1;
-    envelope.highWater.parameter = 8;
-
-    auto reconstructed = bloom::project::reconstructDocument(std::move(envelope));
-    expectations.expect(static_cast<bool>(reconstructed),
-                        "a version-2 Layer Output reconstructs rather than being refused");
-    if (!reconstructed) {
-        return;
-    }
-    const auto snapshot = reconstructed.value()->document->snapshot();
-    const auto* live = snapshot.project().findComposition(CompositionId::fromRaw(1));
-    const auto* node = live == nullptr ? nullptr : live->graph().findNode(NodeId::fromRaw(3));
-    expectations.expect(node != nullptr, "the upgraded Layer Output node survives");
-    if (node == nullptr || live == nullptr) {
-        return;
-    }
-    expectations.expect(node->schemaVersion == 3 && node->parameters.size() == 6,
-                        "a version-2 node gains exactly one binding");
-    const auto binding =
-        std::ranges::find(node->parameters, std::string_view("blendMode"), &ParameterBinding::role);
-    expectations.expect(binding != node->parameters.end() &&
-                            binding->parameterId == ParameterId::fromRaw(9),
-                        "the injected blendMode takes the one id above the persisted high water");
-    if (binding == node->parameters.end()) {
-        return;
-    }
-    const auto* record = live->parameters().find(binding->parameterId);
-    const auto* source =
-        record == nullptr ? nullptr : std::get_if<ConstantValueSource>(&record->source);
-    expectations.expect(record != nullptr && record->schemaKey == kBlendModeParameterSchemaKey &&
-                            source != nullptr &&
-                            source->value == ParameterValue{kDefaultBlendModeValue},
-                        "an old file decodes with Normal blending");
-    auto draft = reconstructed.value()->document->draft(snapshot);
-    expectations.expect(draft.ids().allocateParameter() == ParameterId::fromRaw(10),
-                        "the persisted parameter high water rises to cover the injected id");
 }
 
 void testDocumentConstructRejection(Expectations& expectations) {
@@ -986,8 +839,7 @@ int main() {
         testExtensionRejections(expectations);
         testGraphStoreRejections(expectations);
         testProjectValidateRejection(expectations);
-        testVersionOneLayerOutputUpgradesOnReconstruct(expectations);
-        testVersionTwoLayerOutputGainsOnlyBlendModeOnReconstruct(expectations);
+        testUnsupportedNodeVersions(expectations);
         testDocumentConstructRejection(expectations);
         testWellFormedEnvelopeReconstructs(expectations);
         return expectations.failures() == 0 ? 0 : 1;

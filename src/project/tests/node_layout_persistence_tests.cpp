@@ -1,10 +1,9 @@
-#include "node_layout_legacy_fixture.hpp"
 #include "zip_container_test_support.hpp"
 
 #include <bloom/document/document.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/zip_container.hpp>
@@ -34,31 +33,33 @@ ProjectIoOperationMemory memory(const std::uint64_t budget = 64U << 20U) {
         throw std::runtime_error("memory operation");
     return std::move(*operation);
 }
-std::vector<std::byte> legacyArchive() {
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 0}};
-    const auto size = canonicalManifestSize(manifest);
-    if (!size)
-        throw std::runtime_error("manifest size");
-    std::vector<char> encoded(*size.value());
-    if (!encodeCanonicalManifest(manifest, encoded))
-        throw std::runtime_error("manifest encode");
-    return test::buildConformingArchive(
-        test::makeStoredEntry("manifest.json", test::toBytes({encoded.data(), encoded.size()})),
-        test::makeStoredEntry("document.json", test::toBytes(kNodeLayoutLegacyDocument)));
+std::vector<std::byte> currentArchive() {
+    auto initial = document::makeNewProject("Untitled Project", "Main Composition",
+                                            core::RationalTime::fromInteger(10));
+    const document::Document document(std::move(initial.project));
+    const auto snapshot = document.snapshot();
+    const auto settings =
+        document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes({}));
+    const auto archive = buildVerifiedSaveArchive(
+        {}, {.snapshot = &snapshot, .colorSettings = &settings}, {}, memory());
+    if (!archive)
+        throw std::runtime_error("current layout archive");
+    const auto bytes = archive.archive()->bytes();
+    return {bytes.begin(), bytes.end()};
 }
-void migrationAndReopen() {
-    const auto legacy = legacyArchive();
-    auto result = openProjectArchive(legacy, {}, memory());
-    expect(result.outcome() == OpenArchiveOutcome::Opened, "production open migrates 1.0 layout");
+void layoutAndReopen() {
+    const auto archive = currentArchive();
+    auto result = openProjectArchive(archive, {}, memory());
+    expect(result.outcome() == OpenArchiveOutcome::Opened,
+           "production open accepts current layout");
     if (result.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(result).takeOpened();
     auto snapshot = opened.document->snapshot();
     const auto& composition = snapshot.project().compositions().front();
     expect(composition.nodeLayout() == document::defaultNodeLayout(composition.graph().nodes()),
-           "legacy migration assigns all default records");
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
-           "migration produces current editable schema");
+           "creation assigns all default records");
+    expect(opened.schemaMinor == 11 && !opened.roundTrip, "open preserves current editable schema");
     auto draft = opened.document->draft(snapshot);
     const auto frameTime = core::RationalTime::create(1, 24);
     if (!frameTime)
@@ -109,7 +110,7 @@ void migrationAndReopen() {
            "layout references never allocate semantic IDs");
 }
 void futureLayoutAttachments() {
-    auto baseline = openProjectArchive(legacyArchive(), {}, memory());
+    auto baseline = openProjectArchive(currentArchive(), {}, memory());
     if (baseline.outcome() != OpenArchiveOutcome::Opened)
         throw std::logic_error("layout future baseline");
     auto current = std::move(baseline).takeOpened();
@@ -180,32 +181,10 @@ void futureLayoutAttachments() {
            "unknown position and NodeId-keyed layout members survive reopen and save");
 }
 
-void migrationDeterminismAndBudget() {
-    const auto bytes = test::toBytes(kNodeLayoutLegacyDocument);
-    auto operation = memory();
-    auto parsed = parseStrictJsonDom(bytes, {}, operation);
-    expect(static_cast<bool>(parsed), "legacy fixture parses");
-    if (!parsed)
-        return;
-    std::pmr::vector<char> first;
-    std::pmr::vector<char> second;
-    expect(static_cast<bool>(migrateNodeLayoutV1_0(parsed.document()->root(),
-                                                   first.get_allocator().resource(), first)),
-           "first migration succeeds");
-    expect(static_cast<bool>(migrateNodeLayoutV1_0(parsed.document()->root(),
-                                                   second.get_allocator().resource(), second)),
-           "second migration succeeds");
-    expect(first == second, "migration byte determinism");
-    const auto limited = migrateDocumentDom(parsed.document()->root(), {1, 0}, {1, 1},
-                                            kProductionDocumentMigrationSteps, {}, memory(1));
-    expect(!limited && limited.error() == MigrationError::ResourceExhausted,
-           "migration output is budget charged");
-}
 } // namespace
 int main() {
     try {
-        migrationAndReopen();
-        migrationDeterminismAndBudget();
+        layoutAndReopen();
         futureLayoutAttachments();
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

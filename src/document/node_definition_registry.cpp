@@ -561,6 +561,12 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     return true;
 }
 
+bool isSupportedNodeVersion(const std::string_view typeId, const std::uint32_t version) {
+    const auto& registry = builtInNodeDefinitions();
+    return !typeId.starts_with("bloom.reroute-") &&
+           (!registry.containsType(typeId) || registry.find(typeId, version) != nullptr);
+}
+
 const NodeDefinitionRegistry& builtInNodeDefinitions() {
     struct BuiltIns final {
         NodeDefinitionRegistry registry;

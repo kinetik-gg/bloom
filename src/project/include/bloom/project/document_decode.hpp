@@ -173,6 +173,8 @@ struct DecodedDocumentEnvelope final {
 
 enum class DocumentDecodeError : std::uint8_t {
     None,
+    UnsupportedNodeVersion,
+    UnsupportedSchemaVersion,
     // A member's JSON value kind did not match the schema (e.g. a number where a string was
     // required, or an object where an array was required).
     WrongValueKind,
@@ -379,7 +381,9 @@ class [[nodiscard]] DocumentDecodeResult final {
     [[nodiscard]] static DocumentDecodeResult successWithRoundTrip(DecodedDocumentEnvelope envelope,
                                                                    RoundTripState roundTrip);
     [[nodiscard]] static DocumentDecodeResult failure(DocumentDecodeError error,
-                                                      std::string_view path);
+                                                      std::string_view path,
+                                                      std::string_view nodeTypeId = {},
+                                                      std::uint32_t nodeVersion = 0);
     [[nodiscard]] static DocumentDecodeResult
     preservedReadOnlyRequired(RoundTripPreservationReason reason, std::string_view path);
 
@@ -389,6 +393,8 @@ class [[nodiscard]] DocumentDecodeResult final {
     [[nodiscard]] DocumentDecodeOutcome outcome() const noexcept { return outcome_; }
     [[nodiscard]] DocumentClassification classification() const noexcept { return classification_; }
     [[nodiscard]] DocumentDecodeError error() const noexcept { return error_; }
+    [[nodiscard]] std::string_view nodeTypeId() const noexcept { return nodeTypeId_; }
+    [[nodiscard]] std::uint32_t nodeVersion() const noexcept { return nodeVersion_; }
     [[nodiscard]] RoundTripPreservationReason preservationReason() const noexcept {
         return preservationReason_;
     }
@@ -428,6 +434,8 @@ class [[nodiscard]] DocumentDecodeResult final {
     DocumentDecodeError error_ = DocumentDecodeError::None;
     RoundTripPreservationReason preservationReason_ = RoundTripPreservationReason::None;
     DocumentDecodePathText path_;
+    std::string nodeTypeId_;
+    std::uint32_t nodeVersion_ = 0;
 };
 
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
