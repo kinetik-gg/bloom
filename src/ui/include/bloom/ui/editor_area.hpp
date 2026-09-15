@@ -24,6 +24,9 @@ namespace bloom::ui::kit {
 class KDropdown;
 } // namespace bloom::ui::kit
 
+namespace bloom::ui::kit {
+class KPanelFrame;
+}
 namespace bloom::ui {
 
 class EditorRegistry;
@@ -118,7 +121,6 @@ class EditorArea final : public QFrame {
     void rebuildEditor(int editorIndex);
     int addUnavailableEditor(std::string_view editorId);
     void watchForActivation(QWidget* widget);
-    void layoutCornerMasks();
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
@@ -158,14 +160,8 @@ class EditorArea final : public QFrame {
     // widget (the node editor is the only one today). Lives in headerLayout_, between the panel
     // switcher and the stretch; rebuilt every time the editor changes.
     QWidget* headerMenus_ = nullptr;
-    // The real clip this container needs (task C1, item C5; owner: "cut rounded corners because
-    // the background is not clipped by the panel"): four small overlay widgets, one per corner,
-    // stacked on top of the header/content/footer children and painted last. Each one fills the
-    // little wedge outside the frame's own Radius::Panel curve with Color::Background -- the one
-    // color every rounded panel corner always reveals -- so a header/content/footer's own square
-    // corner can never bleed past the curve, regardless of resize, HiDPI, or what a given editor's
-    // content widget paints. See editor_area.cpp's anonymous-namespace PanelCornerMask.
-    std::array<QWidget*, 4> cornerMasks_{};
+    // The rounded frame, painted last and kept above every child (kit::KPanelFrame).
+    kit::KPanelFrame* frameOverlay_ = nullptr;
     QMenu* contextMenu_ = nullptr;
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;

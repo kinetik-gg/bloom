@@ -231,17 +231,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
         rebuildEditor(editorPicker_->currentIndex());
     }
 
-    // The four corner-mask overlays (task C1, item C5): created last, after every layout-managed
-    // child, so Qt's default stacking order already puts them on top; raise() is only a defensive
-    // guarantee against a future reordering of the constructor above.
-    cornerMasks_ = {new kit::PanelCornerMask(kit::PanelCornerMask::Corner::TopLeft, this),
-                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::TopRight, this),
-                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::BottomLeft, this),
-                    new kit::PanelCornerMask(kit::PanelCornerMask::Corner::BottomRight, this)};
-    for (auto* mask : cornerMasks_) {
-        mask->raise();
-    }
-    layoutCornerMasks();
+    // The rounded frame overlay: created last so it starts on top, and it re-raises itself
+    // whenever a child is added later (the chrome rebuild builds header and footer after this).
+    frameOverlay_ = new kit::KPanelFrame(this);
 
     watchForActivation(this);
     setAreaActive(false);
@@ -281,6 +273,8 @@ void EditorArea::setAreaActive(bool active) {
 
     active_ = active;
     setProperty("active", active);
+    if (frameOverlay_ != nullptr)
+        frameOverlay_->setActive(active);
     style()->unpolish(this);
     style()->polish(this);
     update();
@@ -472,16 +466,8 @@ void EditorArea::rebuildEditor(int editorIndex) {
         }
     }
 
-    // A freshly created/reparented footer is a new child of `this`, stacked above whatever
-    // siblings already existed -- including the corner-mask overlays constructed once, up front.
-    // Re-raising them here (a no-op the very first time, before they exist yet) keeps the
-    // rounded-corner clip on top regardless of how many times the editor picker swaps footers in
-    // and out.
-    for (auto* mask : cornerMasks_) {
-        if (mask != nullptr) {
-            mask->raise();
-        }
-    }
+    if (frameOverlay_ != nullptr)
+        frameOverlay_->raise();
 }
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {
@@ -530,19 +516,7 @@ void EditorArea::watchForActivation(QWidget* widget) {
 
 void EditorArea::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
-    kit::KSurface::clipPanelChildren(*this);
-    layoutCornerMasks();
-}
-
-void EditorArea::layoutCornerMasks() {
-    // Repositions the four kit::PanelCornerMask overlays (task C1, item C5) to this frame's current
-    // four corners -- each is a fixed Radius::Panel square, so only its position ever needs to
-    // change on resize, never its size.
-    const int extent = kit::radiusPx(kit::Radius::Panel, 0);
-    cornerMasks_[0]->move(0, 0);
-    cornerMasks_[1]->move(width() - extent, 0);
-    cornerMasks_[2]->move(0, height() - extent);
-    cornerMasks_[3]->move(width() - extent, height() - extent);
+    // kit::KPanelFrame refits and re-raises itself from the panel's own resize event.
 }
 
 } // namespace bloom::ui
