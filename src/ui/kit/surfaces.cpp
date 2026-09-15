@@ -83,9 +83,10 @@ bool KPanelFrame::eventFilter(QObject* watched, QEvent* event) {
         if (event->type() == QEvent::Resize)
             fit();
         else if (event->type() == QEvent::ChildAdded)
-            // The new child is still being constructed at this point; stack above it once it
-            // is a real widget in the tree.
-            QMetaObject::invokeMethod(this, [this] { raise(); }, Qt::QueuedConnection);
+            // ChildAdded arrives after the child is already in the parent's child list, so
+            // raising this overlay now moves it above the newcomer. A queued functor call was
+            // used first; Qt 6.8's invokeMethod template trips the CI analyzer's leak check.
+            raise();
     }
     return QWidget::eventFilter(watched, event);
 }
