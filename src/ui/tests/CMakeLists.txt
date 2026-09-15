@@ -769,3 +769,12 @@ add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture)
 set_tests_properties(bloom.ui.media-window.dpr1 PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;media;capture" TIMEOUT 60)
+
+add_executable(bloom_color_boundary_test color_boundary_tests.cpp)
+target_link_libraries(bloom_color_boundary_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_color_boundary_test)
+foreach(scale IN ITEMS 1 1.25 1.5 2)
+    bloom_add_test(NAME bloom.ui.color-boundary.dpr${scale}
+        COMMAND bloom_color_boundary_test LABELS ui integration color TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale}")
+endforeach()

@@ -51,6 +51,19 @@ struct Fixture {
     }
 };
 
+void testReferenceColourRequiresConverter(Expectations& expectations) {
+    kit::KColorChip chip;
+    const auto reference =
+        kit::KColor::fromRgba(0.2F, 0.3F, 4.0F, 1.0F, kit::ColorSpace::Reference);
+    chip.setColor(reference);
+    QSignalSpy changed(&chip, &kit::KColorChip::colorChanged);
+    chip.setColor(kit::KColor::fromRgba(0.5F, 0.5F, 0.5F));
+    expectations.expect(chip.color() == reference && changed.empty(),
+                        "pending conversion refuses display edits to a reference chip");
+    expectations.expect(!reference.toQColor().isValid() && reference.toHex(false).isEmpty(),
+                        "reference colours cannot be painted or formatted as display values");
+}
+
 void testChipCarriesItsColor(Expectations& expectations) {
     Fixture fixture;
     auto& chip = *fixture.chip;
@@ -187,6 +200,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     kit::installKinetikTheme(application);
     Expectations expectations;
+    testReferenceColourRequiresConverter(expectations);
     testChipCarriesItsColor(expectations);
     testClickingTheChipOpensAndClosesThePicker(expectations);
     testPickingAColorInThePopupUpdatesTheChip(expectations);
