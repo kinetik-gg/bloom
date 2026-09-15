@@ -256,3 +256,25 @@ use compact resting precision: at most two decimals, no trailing zeros; editing 
 precision. KDiamond draws vector geometry through the painter's device transform, including canvas
 zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
 pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.
+
+
+## Image Assets And Source Cards
+
+Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
+(`image`), or Sequence (`images`). Kind text remains Composition, Image or Sequence [member count].
+A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
+The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
+New Folder, Import, Delete. Folder authoring remains disabled because this slice adds no folder
+model; its button keeps the New Folder label. No media-pipeline placeholder tooltip remains.
+
+File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
+Dragging a media row to Nodes creates an Image source; dropping it on Timeline creates a wired
+Layer. Image Properties exposes asset, Start Frame, Loop Mode, Color Space, Premultiply and
+read-only Dimensions. Controls use the same Kinetik row and control vocabulary as other sources.
+An Image card reserves the `ImageThumbnail` token's 72-pixel body cell for a cached 64-pixel proxy;
+painting does no file access or decoding. Missing/gapped sources show a warning in that cell.
+
+New Composition and the composition Properties section expose a `KColorChip` Background Colour.
+Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
+Checkerboard remain session choices. This viewer background does not alter composition pixels
+or export alpha.

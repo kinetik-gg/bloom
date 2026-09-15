@@ -547,3 +547,24 @@ Primary references:
 - [Color Interop Forum color-space identifiers](https://github.com/AcademySoftwareFoundation/ColorInterop)
 - [Evaluation primitive color and alpha contract](evaluation-primitives.md)
 - [Frame output contract](frame-output.md)
+
+
+## PNG And JPEG Input In v0
+
+Auto and sRGB interpret encoded samples as display-referred sRGB. `CpuInputProcessor` prepares the
+OCIO inverse of Bloom Neutral v1's `srgb_rec709_display` display transform into
+`lin_rec709_scene`. This is an input preparation, not a new colorspace or config revision. PNG16
+samples retain their precision through normalization to float. Straight RGB is converted first,
+then multiplied by alpha for the immutable `Rgba32fImage`. Alpha itself is never color-converted.
+
+Linear and Raw bypass the inverse transform; they use the normalized samples as linear reference
+values and retain the same premultiplied image contract. The Image node's Premultiply option
+means the source samples are straight. Turning it off declares associated input: nonzero alpha
+is removed before conversion and restored afterward; zero-alpha RGB becomes zero. Auto inherits
+the asset color interpretation; explicit per-node sRGB/Linear/Raw overrides it.
+
+The image process key includes source/member content digest, interpretation and the unchanged
+Bloom Neutral config revision. Display/view changes remain display-cache concerns. Evaluator
+semantics advances once, 5 → 6, to identify image input and sequence evaluation. Primitive 5,
+plan 3, animation 2 and Bloom Neutral v1 identities stay fixed. Output identity goldens were
+independently derived using the S5 byte-envelope oracle with those four version values.

@@ -913,3 +913,24 @@ pixels. The composition separately owns optional `WorkArea{start,end}`; `SetWork
 `ClearWorkArea` share normal validation, transaction and persistence boundaries. The range
 scopes preview/cache/transport through `CompositionSession::workArea()` and never changes export
 or the full composition duration. Timeline rows remain projections of stable stack slots.
+
+
+## Image Sources
+
+`bloom.image-source` v1 belongs to Sources and outputs `image`. It has no inputs and five
+non-animated parameters: asset (stable AssetId encoded as String), startFrame (Integer), loopMode
+(Hold/Loop/PingPong), colorSpace (Auto/sRGB/Linear/Raw), and premultiply (Boolean, initially true).
+The snapshot compiler copies the selected asset into `CompiledImageSource`; only sequence
+sources make a plan time-dependent. Missing records remain compilable warning sources.
+
+Frames are selected with `valueGraphFrameIndex` at the composition rate, relative to startFrame.
+The numbered first member anchors offset zero; missing numbers hold the preceding member and
+warn. Hold clamps both ends; Loop and PingPong wrap the sequence span after the start. Missing or
+changed files yield transparent output plus a diagnostic, with bounded decode caching keyed by
+content, selected member and interpretation. The image keeps a content-sized data window and
+author-space bounds, with the composition as display window and the request's proxy resolution.
+
+Dropping an asset onto Nodes creates only the source. Dropping onto Timeline runs `AddImageLayer`:
+source → Layer → a new ordered Merge slot, with the existing composition output retained. The
+same command creates all IDs and connections in one undoable transaction. Removing an asset
+leaves graph references intact so the artist can identify and relink the missing source.
