@@ -268,6 +268,23 @@ zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve
 pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.
 
 
+## Colour Surfaces
+
+Colour controls distinguish `Display` sRGB from stored `Reference` linear sRGB through the
+session's `colorConverter()` accessor. Properties colour rows and node-card chips show the same
+converted colour as the qualified Bloom Neutral viewer. Picker hex text, HSV/HSL fields, spatial
+controls, recent colours and screen samples are display sRGB; editing them commits Reference
+values through the existing session command. A Reference-tagged colour cannot be painted directly
+as a QColor. Opening or closing the picker never changes the document.
+
+Expanded Properties RGBA fields show normalized display numbers for in-range colours. Signed or
+HDR reference RGB switches the whole row to exact reference numbers with a `reference` suffix;
+the chip continues to show the clamped display colour. Entering an RGB number outside [0, 1]
+authors that component in reference space. Editing one field preserves every untouched reference
+channel exactly. Pending or unavailable conversion disables the reference chip and labels numeric
+values as reference. Existing document numbers are preserved; this is a presentation boundary,
+not a data migration. The legacy timeline colour-row adapter remains pending this conversion.
+
 ## Image Assets And Source Cards
 
 Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
