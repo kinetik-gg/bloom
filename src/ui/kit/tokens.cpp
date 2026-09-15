@@ -67,6 +67,7 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     // yellow-green, cyan, violet, gold -- and none of them is Accent (0x0C8CE9) or AccentHover
     // (0x3AA5F0), so a socket can never be mistaken for a selection or a hovered accent surface.
     {Color::SocketImage, 0x2FC8A0U},
+    {Color::SocketAudio, 0x7C5CFFU},
     {Color::SocketColor, 0xF2713CU},
     {Color::SocketScalar, 0x8FD44AU},
     {Color::SocketInteger, 0x4AC8D4U},

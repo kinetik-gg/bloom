@@ -71,18 +71,20 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::DataComposition, "#8b5cf6");
     expectHex(kit::Color::DataImage, "#3aa5f0");
     expectHex(kit::Color::DataAudio, "#7c5cff");
-    // task S1, item 6: the socket/link transport palette. Six separated hues, none of them Accent
+    // task S1, item 6: the socket/link transport palette. Seven separated hues, none of them Accent
     // or AccentHover -- Image had been reading in exactly AccentHover's blue.
     expectHex(kit::Color::SocketImage, "#2fc8a0");
+    expectHex(kit::Color::SocketAudio, "#7c5cff");
     expectHex(kit::Color::SocketColor, "#f2713c");
     expectHex(kit::Color::SocketScalar, "#8fd44a");
     expectHex(kit::Color::SocketInteger, "#4ac8d4");
     expectHex(kit::Color::SocketVector, "#c87af0");
     expectHex(kit::Color::SocketString, "#f0c93c");
 
-    const std::array sockets{kit::Color::SocketImage,  kit::Color::SocketColor,
-                             kit::Color::SocketScalar, kit::Color::SocketInteger,
-                             kit::Color::SocketVector, kit::Color::SocketString};
+    const std::array sockets{kit::Color::SocketImage, kit::Color::SocketAudio,
+                             kit::Color::SocketColor, kit::Color::SocketScalar,
+                             kit::Color::SocketInteger, kit::Color::SocketVector,
+                             kit::Color::SocketString};
     for (std::size_t index = 0; index < sockets.size(); ++index) {
         expectations.expect(kit::color(sockets.at(index)) != kit::color(kit::Color::Accent) &&
                                 kit::color(sockets.at(index)) !=

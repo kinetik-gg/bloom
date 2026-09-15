@@ -5,6 +5,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/media/audio/audio.hpp>
 
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -14,6 +15,7 @@
 #include <QWidget>
 
 #include <optional>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -57,6 +59,8 @@ struct TimelineLayerEntry final {
     bool expanded = false;
     QString group{};
     document::NodeId imageNodeId{};
+    document::NodeId audioNodeId{};
+    std::shared_ptr<const media::audio::WaveformSummary> waveform{};
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,

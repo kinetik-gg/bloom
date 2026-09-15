@@ -261,8 +261,9 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
         imageSource_ = node.typeId == "bloom.image-source";
+        audioSource_ = node.typeId == "bloom.audio-source";
         imageAsset_ = {};
-        if (imageSource_ && session_)
+        if ((imageSource_ || audioSource_) && session_)
             for (const auto& binding : node.parameters)
                 if (binding.role == "asset") {
                     const auto value = session_->constantStringValue(binding.parameterId);
@@ -277,7 +278,7 @@ class NodeItem final : public QGraphicsObject {
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
-        if (imageSource_ && session_)
+        if ((imageSource_ || audioSource_) && session_)
             if (const auto* asset = session_->snapshot().project().findAsset(imageAsset_))
                 title_ = imageAssetDisplayName(*asset);
         eyebrow_ = nodeEyebrow(composition, node);
@@ -1554,7 +1555,9 @@ class NodeItem final : public QGraphicsObject {
                 else
                     outputHeight += socket->rowHeight();
             }
-        const qreal thumbnailHeight = imageSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
+        const qreal thumbnailHeight = imageSource_ || audioSource_
+                                          ? kit::px(kit::Size::ImageThumbnail)
+                                          : 0;
         parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
@@ -1654,6 +1657,7 @@ class NodeItem final : public QGraphicsObject {
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
     bool imageSource_ = false;
+    bool audioSource_ = false;
     bool imageSequence_ = false;
     kit::KLabel* imageDimensions_ = nullptr;
     kit::KLabel* imageRange_ = nullptr;

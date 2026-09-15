@@ -14,6 +14,8 @@ QString imageRangeText(const document::AssetRecord* asset);
 QString imageAssetDisplayName(const document::AssetRecord& asset);
 void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored);
+void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored);
 void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
 class KeyframeDiamond;
@@ -22,6 +24,7 @@ class KColorChip;
 class KDropdown;
 class KSwitch;
 class KRadioGroup;
+class KSlider;
 } // namespace kit
 enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Stepper };
 enum class PropertiesRowVisibility : std::uint8_t { Visible, Hidden };
@@ -48,6 +51,7 @@ class PropertiesRegistryRow final : public QWidget {
     std::array<kit::KValueField*, 4> fields_{};
     kit::KRadioGroup* segments_ = nullptr;
     kit::KDropdown* selector_ = nullptr;
+    kit::KSlider* slider_ = nullptr;
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;
     QLineEdit* text_ = nullptr;

@@ -74,6 +74,7 @@ enum class Color : std::uint8_t {
     // exactly AccentHover's blue and could not be told apart from a hovered accent surface. Six
     // distinct hues, none of them Accent or AccentHover.
     SocketImage,
+    SocketAudio,
     SocketColor,
     SocketScalar,
     SocketInteger,
