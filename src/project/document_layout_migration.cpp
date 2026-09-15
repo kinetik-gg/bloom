@@ -133,11 +133,17 @@ enum class Step {
     ValueGraph,
     LayerTimeline,
     Merges,
-    SafeAreas
+    SafeAreas,
+    Images
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
+    if (step == Step::Images) {
+        return (scope == Scope::Project && value.findMember("assets")) ||
+               (scope == Scope::Composition && value.findMember("backgroundColor")) ||
+               (scope == Scope::HighestIssued && value.findMember("asset"));
+    }
     // A version-only step adds nothing, so there is no member whose presence could prove it already
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
@@ -179,12 +185,14 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::ValueGraph       ? "{\"major\":1,\"minor\":4}"
                            : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
                            : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
-                                                            : "{\"major\":1,\"minor\":8}");
+                           : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
+                                                            : "{\"major\":1,\"minor\":10}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
         } else if (scope == Scope::Root && member.key() == "idAllocation" &&
-                   step == Step::NodeGroups) { // NOLINT(bugprone-branch-clone)
+                   (step == Step::NodeGroups ||
+                    step == Step::Images)) { // NOLINT(bugprone-branch-clone)
             if (!descend(Scope::IdAllocation))
                 return false;
         } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
@@ -220,6 +228,14 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     }
     if (scope == Scope::HighestIssued && step == Step::NodeGroups)
         append(output, ",\"nodeGroup\":\"0\"");
+    if (step == Step::Images) {
+        if (scope == Scope::Project)
+            append(output, ",\"assets\":[]");
+        if (scope == Scope::Composition)
+            append(output, ",\"backgroundColor\":[0,0,0,1]");
+        if (scope == Scope::HighestIssued)
+            append(output, ",\"asset\":\"0\"");
+    }
     append(output, "}");
     return true;
 }
@@ -288,6 +304,12 @@ MigrationStepOutcome migrateMergesV1_5(const JsonValue& root, std::pmr::memory_r
 MigrationStepOutcome migrateViewerSafeAreasV1_7(const JsonValue& root, std::pmr::memory_resource*,
                                                 Buffer& output) {
     if (!sourceVersionIs(root, "7") || !transform(root, Scope::Root, Step::SafeAreas, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateImagesV1_9(const JsonValue& root, std::pmr::memory_resource*,
+                                       Buffer& output) {
+    if (!sourceVersionIs(root, "9") || !transform(root, Scope::Root, Step::Images, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

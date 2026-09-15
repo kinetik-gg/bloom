@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/commands/asset_operations.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>

@@ -1601,6 +1601,15 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
             return false;
     }
+    if (!state.ok(writer.memberName("backgroundColor")) || !state.ok(writer.beginArray()))
+        return false;
+    const auto background = composition.backgroundColor();
+    for (const double channel :
+         {background.red, background.green, background.blue, background.alpha})
+        if (!state.ok(writer.float64Value(channel)))
+            return false;
+    if (!state.ok(writer.endArray()))
+        return false;
     if (!emitRetainedTrailing(state)) {
         return false;
     }
@@ -1919,6 +1928,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     return emitNamedId(state, name, value);
 }
 
+#include "canonical_assets.ipp"
+
 [[nodiscard]] bool emitDocumentRoot(EmitState& state) noexcept {
     using namespace bloom::document;
     auto& writer = state.writer;
@@ -1980,7 +1991,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 return false;
             }
         }
-        if (!state.ok(writer.endArray())) {
+        if (!state.ok(writer.endArray()) || !emitAssets(state)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -2012,7 +2023,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 !emitHighWaterMember(state, "keyframe", water.keyframe) ||
                 !emitHighWaterMember(state, "driverBinding", water.driverBinding) ||
                 !emitHighWaterMember(state, "extensionRecord", water.extensionRecord) ||
-                !emitHighWaterMember(state, "nodeGroup", water.nodeGroup)) {
+                !emitHighWaterMember(state, "nodeGroup", water.nodeGroup) ||
+                !emitHighWaterMember(state, "asset", water.asset)) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {

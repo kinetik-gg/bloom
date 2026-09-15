@@ -15,6 +15,7 @@ target_sources(
         parameter.cpp
         persisted_text.cpp
         project.cpp
+        asset.cpp
         value_node_definitions.cpp
         value_utility_nodes.cpp
     PUBLIC
@@ -35,6 +36,7 @@ target_sources(
             include/bloom/document/parameter.hpp
             include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp
+            include/bloom/document/asset.hpp
             include/bloom/document/schema_version.hpp
             include/bloom/document/validation.hpp
             include/bloom/document/value_nodes.hpp

@@ -138,6 +138,7 @@ struct DecodedComposition final {
     std::vector<document::AnimationCurveRecord> animationCurves;
     DecodedGraph graph;
     document::NodeLayout nodeLayout;
+    core::Color4d backgroundColor{0.0, 0.0, 0.0, 1.0};
     document::NodeGroups nodeGroups;
     document::SafeAreaSettings safeAreas{};
     std::optional<document::WorkArea> workArea{};
@@ -162,6 +163,7 @@ struct DecodedDocumentEnvelope final {
     std::string projectName;
     document::ColorSettings colorSettings;
     std::vector<DecodedComposition> compositions;
+    std::vector<document::AssetRecord> assets;
     document::IdAllocatorHighWater highWater;
     std::vector<document::ExtensionRecord> extensionRecords;
 

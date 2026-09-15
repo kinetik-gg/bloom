@@ -239,6 +239,11 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
 
     document::Project project(envelope.projectId, std::move(envelope.projectName));
 
+    for (auto& asset : envelope.assets) {
+        if (!project.addAsset(std::move(asset)))
+            return ReconstructDocumentResult::failure(
+                projectRejection(ReconstructionStage::ProjectValidate));
+    }
     for (auto& decodedComposition : envelope.compositions) {
         const auto compositionId = decodedComposition.id;
 
@@ -260,6 +265,7 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         composition.nodeLayout() = std::move(decodedComposition.nodeLayout);
         composition.nodeGroups() = std::move(decodedComposition.nodeGroups);
         composition.setSafeAreas(decodedComposition.safeAreas);
+        composition.setBackgroundColor(decodedComposition.backgroundColor);
         composition.setWorkArea(decodedComposition.workArea);
 
         if (!project.addComposition(std::move(composition))) {
