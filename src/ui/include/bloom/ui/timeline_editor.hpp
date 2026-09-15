@@ -55,7 +55,7 @@ struct TimelineLayerEntry final {
     document::ParameterId parameterId{};
     std::string role{};
     bool expanded = false;
-    QString group;
+    QString group{};
     document::NodeId imageNodeId{};
 };
 

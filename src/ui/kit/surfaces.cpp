@@ -1,19 +1,33 @@
 #include <bloom/ui/kit/surfaces.hpp>
+#include <cmath>
 namespace bloom::ui::kit {
 void KDiamond::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const auto tint = animated_ || underMouse()
                           ? color(Color::Keyframe)
                           : withOpacity(color(Color::Muted), kDisabledOpacity);
-    const auto glyph = iconPixmap(IconId::Keyframe, Size::IconSmall, tint, devicePixelRatioF(),
-                                  keyed_ ? IconWeight::Fill : IconWeight::Bold);
-    const auto extent = glyph.deviceIndependentSize();
-    const QPointF origin((width() - extent.width()) / 2, (height() - extent.height()) / 2);
-    painter.drawPixmap(origin, glyph);
+    // Include the scene transform as well as the paint device DPR. Reset to device pixels:
+    // no cached pixmap is resampled when the canvas zoom changes.
+    const auto transform = painter.deviceTransform();
+    const auto center = transform.map(QPointF(width() / 2.0, height() / 2.0));
+    const auto scale = std::hypot(transform.m11(), transform.m12());
+    const auto radius = std::max(1.0, std::round(kKeyDiamondRadius * scale));
+    const auto stroke = std::max(1.0, std::round(kDiamondStroke * scale));
+    painter.resetTransform();
+    painter.scale(1.0 / painter.device()->devicePixelRatioF(),
+                  1.0 / painter.device()->devicePixelRatioF());
+    const QPointF snapped(std::round(center.x()), std::round(center.y()));
+    QPolygonF diamond{snapped + QPointF(0, -radius), snapped + QPointF(radius, 0),
+                      snapped + QPointF(0, radius), snapped + QPointF(-radius, 0)};
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(tint, stroke, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+    painter.setBrush(keyed_ ? QBrush(tint) : Qt::NoBrush);
+    painter.drawPolygon(diamond);
     if (animated_ && !keyed_) {
-        painter.setClipRect(QRectF(origin, QSizeF(extent.width() / 2, extent.height())));
-        painter.drawPixmap(origin, iconPixmap(IconId::Keyframe, Size::IconSmall, tint,
-                                              devicePixelRatioF(), IconWeight::Fill));
+        painter.setClipRect(QRectF(snapped.x() - radius - stroke, snapped.y() - radius - stroke,
+                                   radius + stroke, 2 * (radius + stroke)));
+        painter.setBrush(tint);
+        painter.drawPolygon(diamond);
     }
 }
 KAnchorGrid::KAnchorGrid(QWidget* parent) : QWidget(parent) {

@@ -243,7 +243,7 @@ QSize KDropdown::sizeHint() const {
 }
 
 QSize KDropdown::minimumSizeHint() const { return sizeHint(); }
-void KDropdown::setFixedWidth(int width) {
+void KDropdown::setWidthFloor(int width) {
     QWidget::setFixedWidth(std::max(width, sizeHint().width()));
 }
 

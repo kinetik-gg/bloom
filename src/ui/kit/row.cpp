@@ -80,7 +80,7 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
         if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
             dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
             dropdown->setFont(label->font());
-            dropdown->setFixedWidth(kit::px(kit::Size::PropertiesDropdownWidth));
+            dropdown->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
             dropdown->setFixedHeight(kit::px(kit::Size::Control));
         }
         if (auto* chip = qobject_cast<kit::KColorChip*>(value))
@@ -148,7 +148,10 @@ void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<Q
     }
     row_->addWidget(name ? name : nameCell_, 1);
     for (auto* cell : columns) {
-        cell->setFixedSize(px(Size::DropdownWidth), px(Size::Control));
+        const auto* dropdown = qobject_cast<KDropdown*>(cell);
+        cell->setFixedSize(
+            std::max(px(Size::DropdownWidth), dropdown ? dropdown->minimumSizeHint().width() : 0),
+            px(Size::Control));
         cell->setProperty("rowCell", "column");
         cell->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         row_->addWidget(cell, 0, Qt::AlignVCenter);

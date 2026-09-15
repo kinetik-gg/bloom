@@ -257,6 +257,10 @@ inline constexpr int WorkspaceVersion = 2;
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.
 inline constexpr qreal kCompositionFrameWidth = 1.0;
+inline constexpr qreal kNodeLinkWidth = 1.0;
+inline constexpr int kLinkActiveLightness = 135;
+inline constexpr qreal kDiamondStroke = 1.5;
+inline constexpr double kMenuWindowHeightShare = 0.5;
 inline constexpr qreal kKeyDiamondRadius = 4.5;
 inline constexpr qreal kNodeCanvasHalfExtent = 256.0 * 1024;
 inline constexpr qreal kHairlineWidth = 1.0;

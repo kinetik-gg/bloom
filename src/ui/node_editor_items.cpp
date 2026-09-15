@@ -54,16 +54,45 @@ QString nodeCategoryName(const document::NodeCategory category) {
     return {};
 }
 
-std::span<const document::NodeCategory> nodeCategoryOrder() {
-    // Task UTIL-1: Math joins the list after Values, and Output moves to the END. The order is the
-    // order a graph is built in -- where pixels come from, how they are arranged, what numbers
-    // drive them, the plumbing that carries those numbers, and finally where the picture goes.
-    static constexpr std::array kOrder{
-        document::NodeCategory::Sources,     document::NodeCategory::Layers,
-        document::NodeCategory::Compositing, document::NodeCategory::Values,
-        document::NodeCategory::Math,        document::NodeCategory::Utilities,
-        document::NodeCategory::Output};
-    return kOrder;
+QString nodeCategoryName(const QString& category) { return category; }
+QString nodeCategoryName(const document::NodeDefinition& definition) {
+    const auto& type = definition.key.typeId;
+    if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
+        type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
+        type == document::kFramesToSecondsNodeType ||
+        type == document::kSecondsToTimecodeNodeType ||
+        type == document::kTimecodeToSecondsNodeType)
+        return QStringLiteral("Time");
+    if (type == document::kSeparateHsvNodeType || type == document::kCombineHsvNodeType ||
+        type == document::kHueShiftNodeType || type == document::kLuminanceNodeType ||
+        type == document::kColorMixNodeType)
+        return QStringLiteral("Color");
+    if (definition.category == document::NodeCategory::Values)
+        return QStringLiteral("Values");
+    if (type == document::kBooleanLogicNodeType || type == document::kBooleanNotNodeType ||
+        type == document::kInRangeNodeType || type == document::kCompareNodeType ||
+        type.starts_with("bloom.switch-"))
+        return QStringLiteral("Logic");
+    if (type == document::kVector2MathNodeType || type == document::kVector3MathNodeType ||
+        type == document::kVector2ReduceNodeType || type == document::kVector3ReduceNodeType ||
+        type == document::kRotate2dNodeType || type == document::kPolarToCartesianNodeType ||
+        type == document::kCartesianToPolarNodeType)
+        return QStringLiteral("Vector");
+    if (definition.category == document::NodeCategory::Utilities &&
+        type.find("-to-") != std::string::npos)
+        return QStringLiteral("Convert");
+    if (type.starts_with("bloom.string-"))
+        return QStringLiteral("String");
+    return nodeCategoryName(definition.category);
+}
+std::span<const QString> nodeCategoryOrder() {
+    static const std::array order{
+        QStringLiteral("Sources"), QStringLiteral("Layers"), QStringLiteral("Compositing"),
+        QStringLiteral("Values"),  QStringLiteral("Math"),   QStringLiteral("Convert"),
+        QStringLiteral("String"),  QStringLiteral("Logic"),  QStringLiteral("Time"),
+        QStringLiteral("Color"),   QStringLiteral("Vector"), QStringLiteral("Utilities"),
+        QStringLiteral("Output")};
+    return order;
 }
 
 QString displayTypeName(const std::string_view typeId) {
@@ -163,31 +192,10 @@ QString nodeDisplayName(const document::Composition& composition,
 
 // A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
 // of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
-QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node) {
-    for (const auto& boundary : composition.graph().layerOutputs()) {
-        if (boundary.nodeId != node.id || boundary.name.empty())
-            continue;
-        const auto* parameter =
-            parameterForRole(node, composition, document::kBlendModeParameterRole);
-        const auto* constant = parameter == nullptr
-                                   ? nullptr
-                                   : std::get_if<document::ConstantValueSource>(&parameter->source);
-        const auto* stored =
-            constant == nullptr ? nullptr : std::get_if<std::int64_t>(&constant->value);
-        const auto mode =
-            stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
-        // Task FIX1, item E: the blend mode joins the eyebrow. It is the one layer property with no
-        // visible trace on the card when its widget is a dropdown among six rows, and an artist who
-        // has set a layer to Screen should be able to see that from the card rather than by opening
-        // the row.
-        if (!mode.has_value() || *mode == core::kDefaultBlendMode)
-            return nodeTypeDisplayName(document::kLayerOutputNodeType);
-        return nodeTypeDisplayName(document::kLayerOutputNodeType) + QStringLiteral(" · ") +
-               blendModeDisplayName(*mode);
-    }
+QString nodeEyebrow(const document::Composition&, const document::NodeRecord& node) {
     const auto* definition =
         document::builtInNodeDefinitions().find(node.typeId, node.schemaVersion);
-    return definition ? nodeCategoryName(definition->category) : QString{};
+    return definition ? nodeCategoryName(*definition) : QString{};
 }
 
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
@@ -258,6 +266,7 @@ kit::KValueField* makeCardField(const QString& objectName, const QString& access
     field->setAccessibleName(accessibleName);
     field->setRange(minimum, maximum);
     field->setDecimals(decimals);
+    field->setCompact(true);
     field->setSingleStep(1.0);
     field->setUnit(unit);
     field->resize(field->sizeHint());
@@ -323,27 +332,14 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         painter->drawLine(QPointF(0.0, kCardHeaderHeight),
                           QPointF(bounds.width(), kCardHeaderHeight));
 
+    const auto [titleRect, categoryRect] = titleBandRects();
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
+    painter->setPen(kit::color(kit::Color::Muted));
+    painter->drawText(categoryRect, Qt::AlignRight | Qt::AlignVCenter, eyebrow_);
+    painter->setFont(kit::font(kit::TypeRole::Ui));
     painter->setPen(kit::color(kit::Color::Foreground));
-    QRectF titleRect(kCardPadding, 0.0,
-                     bounds.width() - (kCardPadding + kCardPadding) -
-                         (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0.0),
-                     kCardHeaderHeight);
-    if (!eyebrow_.isEmpty()) {
-        // A layer card is named after its LAYER, so the eyebrow is the line that still says what
-        // kind of node it is. Faint ink above the name, and the name keeps the lower half of the
-        // header.
-        const qreal eyebrowHeight = QFontMetricsF(painter->font()).height();
-        const QRectF eyebrowRect(titleRect.left(), 0.0, titleRect.width(), eyebrowHeight);
-        painter->setPen(kit::color(kit::Color::Faint));
-        painter->drawText(eyebrowRect, Qt::AlignVCenter | Qt::AlignLeft,
-                          QFontMetricsF(painter->font())
-                              .elidedText(eyebrow_, Qt::ElideRight, eyebrowRect.width()));
-        painter->setPen(kit::color(kit::Color::Foreground));
-        titleRect.setTop(eyebrowHeight);
-    }
     painter->drawText(
-        titleRect, Qt::AlignVCenter | Qt::AlignLeft,
+        titleRect, Qt::AlignLeft | Qt::AlignVCenter,
         QFontMetricsF(painter->font()).elidedText(title_, Qt::ElideRight, titleRect.width()));
 
     if (layout_.muted) {
@@ -378,28 +374,6 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                 Qt::ElideRight, static_cast<int>(row.width())));
     }
 
-    // Row labels. The controls themselves are real kit widgets in proxies; only their names are
-    // painted here, in the shared right-aligned label column.
-    painter->setFont(kit::font(kit::TypeRole::UiSmall));
-    qreal y = parameterRowsTop_;
-    const QRectF labelColumn(kCardPadding, 0.0, labelColumnWidth_, rowHeight_);
-    const auto drawLabel = [&](const QString& text, const qreal top) {
-        painter->setPen(kit::color(kit::Color::Muted));
-        painter->drawText(labelColumn.translated(0.0, top), Qt::AlignVCenter | Qt::AlignRight,
-                          text);
-    };
-    for (const auto& row : valueRows_) {
-        drawLabel(row.label, y);
-        y += rowHeight_ + kCardRowGap;
-    }
-    if (colorChip_ != nullptr) {
-        drawLabel(colorRowLabel_, y);
-        y += rowHeight_ + kCardRowGap;
-    }
-    for (const auto& [label, value] : readOnlyRows_) {
-        drawLabel(label, y);
-        y += rowHeight_ + kCardRowGap;
-    }
     selectionOutline();
 }
 
@@ -775,8 +749,8 @@ void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWi
     const QColor base = kit::color(socketColorToken(output_.kind));
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setBrush(Qt::NoBrush);
-    painter->setPen(QPen(emphasized ? kit::hoverFillFor(base) : base,
-                         emphasized ? 2.0 : kit::kHairlineWidth, Qt::SolidLine, Qt::RoundCap));
+    painter->setPen(QPen(emphasized ? base.lighter(kit::kLinkActiveLightness) : base,
+                         kit::kNodeLinkWidth, Qt::SolidLine, Qt::RoundCap));
     painter->drawPath(path());
 }
 void NodeEdgeItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {

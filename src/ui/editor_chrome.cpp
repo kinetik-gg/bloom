@@ -91,7 +91,7 @@ class ChromeRow final : public QWidget {
     int measure() const {
         int needed = 2 * padding_;
         for (const auto& entry : entries_)
-            if (entry.visible)
+            if (entry.visible && !entry.control->property("chromeSuppressed").toBool())
                 needed += preferred(entry.control) + kit::px(kit::Spacing::ChromeGap);
         return std::max(2 * padding_, needed - kit::px(kit::Spacing::ChromeGap));
     }
@@ -106,7 +106,9 @@ class ChromeRow final : public QWidget {
         setProperty("collapsed", collapsed_);
         QList<QWidget*> visible;
         for (auto& entry : entries_) {
-            const bool show = entry.visible && !(collapsed_ && entry.menu);
+            const bool show = entry.visible &&
+                              !entry.control->property("chromeSuppressed").toBool() &&
+                              !(collapsed_ && entry.menu);
             entry.control->setVisible(show);
             if (show)
                 visible.push_back(entry.control);

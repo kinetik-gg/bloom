@@ -101,12 +101,12 @@ the edge behaviour of every row.
 
 | Group | Count | Category | What it is for |
 | --- | --- | --- | --- |
-| [Conversions](#conversions) | 20 | `Utilities` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
-| [Time conversions](#time-conversions) | 4 | `Utilities` | Seconds, frames and non-drop timecode, at the composition's own rate |
-| [String utilities](#string-utilities) | 15 | `Utilities` | Building, measuring, cutting and comparing text |
-| [Math](#math) | 16 | `Math` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
-| [Logic](#logic) | 3 | `Utilities` | Boolean combination and a range predicate |
-| [Readouts](#readouts) | 4 | `Values` | What the composition and the frame are, as numbers |
+| [Conversions](#conversions) | 20 | `Convert` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
+| [Time conversions](#time-conversions) | 4 | `Time` | Seconds, frames and non-drop timecode, at the composition's own rate |
+| [String utilities](#string-utilities) | 15 | `String` | Building, measuring, cutting and comparing text |
+| [Math](#math) | 16 | `Math`, `Vector`, `Color` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
+| [Logic](#logic) | 3 | `Logic` | Boolean combination and a range predicate |
+| [Readouts](#readouts) | 4 | `Time` (frame), `Values` (composition) | What the composition and the frame are, as numbers |
 
 Every node's socket names, its inline selectors and its outputs come from ONE record --
 `document::valueUtilityDescriptors()` -- so the tables below describe the same table the registry,
@@ -304,7 +304,7 @@ Category `Utilities`. A predicate is not arithmetic, so these did not move into 
 
 ## Readouts
 
-Category `Values`, beside the literal sources and `Time`, because a readout is where a value comes
+Categories `Time` for frame readouts and `Values` for composition readouts, because a readout is where a value comes
 FROM. None has an input or a parameter at all: its value belongs to the composition or to the
 evaluation request, not to the document's authored values.
 
@@ -353,3 +353,6 @@ exactly five widenings, each with one answer and no lost information. Every conv
 outside that set: it either loses information (Vector 3 to Vector 2), invents a spelling (anything
 to String), or can fail (anything from String). A refusal the artist can see, followed by a node
 they placed deliberately, is better than a silent coercion whose rule they have to remember.
+
+The current UI category order and normalized family mapping are owned by [UI grammar](../ux/ui-grammar.md).
+This presentation projection leaves the non-persisted document category enum unchanged.

@@ -1,7 +1,10 @@
 #include <QButtonGroup>
+#include <QGridLayout>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -132,6 +135,88 @@ KLineEdit::KLineEdit(const QString& text, QWidget* parent) : QLineEdit(text, par
     setProperty("kitControl", true);
 }
 KSearchField::KSearchField(QWidget* parent) : KLineEdit(parent) {}
-QMenu* makeMenu(QWidget* parent) { return new QMenu(parent); }
-QMenu* makeMenu(const QString& title, QWidget* parent) { return new QMenu(title, parent); }
+namespace {
+class FlowMenu final : public QMenu {
+  public:
+    FlowMenu(const QString& title, QWidget* parent) : QMenu(title, parent) {
+        connect(this, &QMenu::aboutToShow, this, [this] { buildColumns(); });
+        connect(this, &QMenu::aboutToHide, this, [this] { restoreActions(); });
+    }
+
+  protected:
+    void showEvent(QShowEvent* event) override {
+        QMenu::showEvent(event);
+        if (!property("columnFlow").toBool())
+            return;
+        const auto bounds = ownerBounds();
+        move(std::clamp(x(), bounds.left(), std::max(bounds.left(), bounds.right() - width() + 1)),
+             std::clamp(y(), bounds.top(), std::max(bounds.top(), bounds.bottom() - height() + 1)));
+    }
+
+  private:
+    QRect ownerBounds() const {
+        auto* owner = parentWidget();
+        while (owner && qobject_cast<QMenu*>(owner))
+            owner = owner->parentWidget();
+        if (!owner)
+            return geometry();
+        owner = owner->window();
+        return {owner->mapToGlobal(QPoint()), owner->size()};
+    }
+    void restoreActions() {
+        if (columns_) {
+            removeAction(columns_);
+            columns_->deleteLater();
+            columns_ = nullptr;
+        }
+        for (auto* action : originals_)
+            action->setVisible(true);
+        originals_.clear();
+    }
+    void buildColumns() {
+        if (!property("columnFlow").toBool())
+            return;
+        restoreActions();
+        const auto bounds = ownerBounds();
+        const int padding = px(Spacing::ChromePadding);
+        const int cap = static_cast<int>(bounds.height() * kMenuWindowHeightShare);
+        const int rows = std::max(1, (cap - 4 * padding) / px(Size::Control));
+        auto* content = new QWidget;
+        auto* grid = new QGridLayout(content);
+        grid->setContentsMargins(padding, padding, padding, padding);
+        grid->setSpacing(0);
+        for (auto* action : actions()) {
+            if (!action->isVisible() || action->isSeparator())
+                continue;
+            auto* button = new KMenuButton(content);
+            button->setDefaultAction(action);
+            button->setFixedWidth(std::max(px(Size::MenuMinWidth), button->sizeHint().width()));
+            button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            button->setFocusPolicy(Qt::StrongFocus);
+            const int index = static_cast<int>(originals_.size());
+            grid->addWidget(button, index % rows, index / rows);
+            connect(button, &QToolButton::clicked, this, [this] {
+                for (auto* menu = static_cast<QMenu*>(this); menu;
+                     menu = qobject_cast<QMenu*>(menu->parentWidget()))
+                    menu->close();
+            });
+            originals_.push_back(action);
+        }
+        for (auto* action : originals_)
+            action->setVisible(false);
+        // Buttons hold the original actions and retain their enabled state and shortcuts.
+        for (auto* button : content->findChildren<KMenuButton*>())
+            button->show();
+        columns_ = new QWidgetAction(this);
+        columns_->setDefaultWidget(content);
+        addAction(columns_);
+        setProperty("flowColumns", grid->columnCount());
+        setProperty("flowHeightCap", cap);
+    }
+    QList<QAction*> originals_;
+    QWidgetAction* columns_ = nullptr;
+};
+} // namespace
+QMenu* makeMenu(QWidget* parent) { return new FlowMenu({}, parent); }
+QMenu* makeMenu(const QString& title, QWidget* parent) { return new FlowMenu(title, parent); }
 } // namespace bloom::ui::kit

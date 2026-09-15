@@ -1292,7 +1292,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
 
     channelDropdown_->setFixedWidth(kit::px(kit::Size::ViewerChannelWidth));
-    zoomDropdown_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
+    zoomDropdown_->setWidthFloor(kit::px(kit::Size::ViewerZoomWidth));
     resolutionDropdown_->setFixedWidth(kit::px(kit::Size::ViewerResolutionWidth));
     timeReadout_->setFixedWidth(kit::px(kit::Size::ViewerTimecodeWidth));
     ramPreviewButton_->setFixedWidth(kit::px(kit::Size::ViewerModeWidth));

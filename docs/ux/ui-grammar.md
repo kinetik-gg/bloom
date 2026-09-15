@@ -106,7 +106,8 @@ fields without changing time. It uses nominal-rate timecode and exact rational f
 
 ## Node cards
 
-A card uses `NodeTitleBand`, a Title Case derived display name, and a smaller kind eyebrow.
+A card uses one `NodeTitleBand` row: its Title Case derived display name is left-aligned in Ui,
+and its category is right-aligned in muted UiSmall at the same vertical center.
 Artist-authored names remain intact. The body uses `PropertyRow` pitch with real kit value
 fields, dropdowns, line edits, colour chips and read-only labels hosted in scene proxies.
 Parameter sockets sit on the card edge at their corresponding control row; transport-only
@@ -237,3 +238,20 @@ including transport, loop, snap and keyframe toggles. KToolColumn is sticky at t
 edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
 KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
 fixed widths are floors. The chrome builder respects that minimum after assigning density.
+
+Node Add menu and search order is Sources, Layers, Compositing, Values, Math, Convert, String,
+Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;
+the document enum is unchanged and no migration is needed. Utilities contains only reroute and
+Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
+time conversions; composition readouts and literals remain Values. HSV operations belong to Color.
+Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at
+`kMenuWindowHeightShare` (0.5) of the owner window and positioned within that window. Empty-canvas
+double-click opens Add search at the cursor. Footer count is hidden at zero; snap and link style
+are exposed by View, with their legacy footer controls hidden.
+`kNodeLinkWidth` (1) is identical for idle, selected and hovered links; activation applies
+`kLinkActiveLightness` (135 percent) to the socket-kind tint, preserving its hue.
+Node parameter rows are KPropertyRows with a separate fixed diamond column. Their numeric fields
+use compact resting precision: at most two decimals, no trailing zeros; editing retains full
+precision. KDiamond draws vector geometry through the painter's device transform, including canvas
+zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
+pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.

@@ -587,7 +587,7 @@ void TimelineLayerStack::relayoutRows() {
             row->hide();
             if (!property) {
                 property = propertyPool_[slot] = new TimelinePropertyRow(session_, this);
-                property->toggleGroup = [this](document::LayerId layer, QString group) {
+                property->toggleGroup = [this](document::LayerId layer, const QString& group) {
                     emit groupExpansionRequested(layer, group);
                 };
             }

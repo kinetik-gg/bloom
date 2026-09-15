@@ -502,6 +502,13 @@ void NodeGraphicsScene::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
             return;
         }
     }
+    if (event->button() == Qt::LeftButton && items(event->scenePos()).isEmpty()) {
+        cancelGesture();
+        Q_EMIT addSearchRequested(event->scenePos(), event->screenPos(), std::nullopt,
+                                  std::nullopt);
+        event->accept();
+        return;
+    }
     QGraphicsScene::mouseDoubleClickEvent(event);
 }
 
