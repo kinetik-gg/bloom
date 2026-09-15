@@ -150,6 +150,7 @@ enum class Size : int {
     NodeCardMin = 128,
     NodeCardWidth = 240,
     NodeTitleBand = 32,
+    ImageThumbnail = 72,
     NodeSocketDot = 8,
     NodeLinkHandleMin = 32,
     NodeColumnGap = 80,

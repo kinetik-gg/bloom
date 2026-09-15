@@ -251,10 +251,9 @@ void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
 // The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
 // "viewer/background". Black and White are literal, because that is exactly what an artist asks for
 // when checking edges against a known value -- a token would be a different, softer colour and
-// would defeat the purpose of the choice. Solid takes the application's own canvas Background token
-// (see ViewerBackground's own comment on why it cannot be a per-composition colour yet).
+// would defeat the purpose of the choice. Solid reads the authored composition background.
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background) {
+                          const ViewerBackground background, const core::Color4d color) {
     switch (background) {
     case ViewerBackground::Checkerboard:
         drawCheckerboard(painter, bounds);
@@ -268,7 +267,11 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
+    painter.fillRect(bounds,
+                     QColor::fromRgbF(static_cast<float>(std::clamp(color.red, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.green, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.blue, 0.0, 1.0)),
+                                      static_cast<float>(std::clamp(color.alpha, 0.0, 1.0))));
 }
 
 // Approximates Elevation::Popup's token shadow (kit::shadow()) as a stack of expanding,
@@ -1223,8 +1226,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
     backgroundDropdown_->setAccessibleName(tr("Background"));
     backgroundDropdown_->setToolTip(
-        tr("What the viewer paints behind the composition. Solid is the application's canvas "
-           "colour; a composition carries no background colour of its own yet."));
+        tr("What the viewer paints behind the composition. Solid uses its background colour."));
     backgroundDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
     for (const auto* name : kBackgroundNames) {
         backgroundDropdown_->addItem(tr(name));
@@ -1860,14 +1862,18 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
         // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
         // numeric/timecode surfaces, not prose -- kit/tokens.hpp).
-        drawCanvasBackground(painter, frame, background_);
+        drawCanvasBackground(painter, frame, background_,
+                             session_.composition() ? session_.composition()->backgroundColor()
+                                                    : core::Color4d{0.0, 0.0, 0.0, 1.0});
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         return;
     }
 
-    drawCanvasBackground(painter, frame, background_);
+    drawCanvasBackground(painter, frame, background_,
+                         session_.composition() ? session_.composition()->backgroundColor()
+                                                : core::Color4d{0.0, 0.0, 0.0, 1.0});
 
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle displayedFrame = preview.frame;

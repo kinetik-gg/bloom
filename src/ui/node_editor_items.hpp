@@ -258,6 +258,15 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
+        imageSource_ = node.typeId == "bloom.image-source";
+        imageAsset_ = {};
+        if (imageSource_ && session_)
+            for (const auto& binding : node.parameters)
+                if (binding.role == "asset") {
+                    const auto value = session_->constantStringValue(binding.parameterId);
+                    if (value)
+                        imageAsset_ = document::AssetId::fromRaw(value->toULongLong());
+                }
         reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
@@ -1617,15 +1626,17 @@ class NodeItem final : public QGraphicsObject {
                 else
                     outputHeight += socket->rowHeight();
             }
-        parameterRowsTop_ = kCardHeaderHeight + socketHeight;
+        const qreal thumbnailHeight = imageSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
+        parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
-        const qreal height = layout_.collapsed
-                                 ? kCardHeaderHeight
-                                 : kCardHeaderHeight + socketHeight + outputHeight +
-                                       (rowCount > 0.0 ? rowCount * (rowHeight + kCardRowGap) -
-                                                             kCardRowGap + kCardPadding
-                                                       : 0.0);
+        const qreal height =
+            layout_.collapsed
+                ? kCardHeaderHeight
+                : kCardHeaderHeight + socketHeight + outputHeight + thumbnailHeight +
+                      (rowCount > 0.0
+                           ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
+                           : 0.0);
 
         if (!qFuzzyCompare(width, width_) || !qFuzzyCompare(height, height_)) {
             prepareGeometryChange();
@@ -1710,6 +1721,8 @@ class NodeItem final : public QGraphicsObject {
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
+    bool imageSource_ = false;
+    document::AssetId imageAsset_;
     bool primary_ = false;
     bool authoringEnabled_ = false;
     std::vector<SocketItem*> sockets_;

@@ -698,6 +698,9 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Composition duration must be greater than zero");
     }
+    if (!background_.isValid())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid composition background colour");
     const auto format = document::CompositionFormat::create(format_.width(), format_.height(),
                                                             format_.pixelAspect(), frameRate_);
     if (!format) {
@@ -737,6 +740,7 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::DuplicateId,
                                          "Composition could not be added");
     }
+    draft.project().findComposition(*compositionId)->setBackgroundColor(background_);
     return OperationResult::applied({{std::string(kAddCompositionOutput), *compositionId}});
 }
 

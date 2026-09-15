@@ -1,5 +1,5 @@
-#include "../../media/image/tests/generated_jpeg.hpp"
-#include "../image_source.hpp"
+#include "generated_jpeg.hpp"
+#include "image_source.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>

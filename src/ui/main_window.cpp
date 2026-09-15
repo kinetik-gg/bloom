@@ -1,5 +1,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <memory>
@@ -409,6 +410,12 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     openProjectAction_->setShortcutContext(Qt::WindowShortcut);
     connect(openProjectAction_, &QAction::triggered, &projectHost_, &ProjectHost::requestOpen);
 
+    auto* importAction = fileMenu.addAction(tr("&Import…"));
+    importAction->setObjectName(QStringLiteral("importAssetsAction"));
+    connect(importAction, &QAction::triggered, this, [this] {
+        if (auto* assets = compositionSession_.assetController())
+            assets->requestImport(this);
+    });
     saveProjectAction_ = fileMenu.addAction("&Save");
     saveProjectAction_->setObjectName("saveProjectAction");
     saveProjectAction_->setShortcut(QKeySequence::Save);

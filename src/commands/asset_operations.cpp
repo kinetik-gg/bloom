@@ -97,6 +97,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                     admitted.insert(std::filesystem::absolute(member.path).lexically_normal());
                 }
                 asset.contentDigest = hasher.finalize();
+                asset.locator = asset.manifest.members.front().locator;
             } else
                 admitted.insert(std::filesystem::absolute(path).lexically_normal());
             assets_.push_back(std::move(asset));

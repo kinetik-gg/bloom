@@ -3,6 +3,7 @@
 #include <QPainterPathStroker>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
 
@@ -115,6 +116,8 @@ QString displayTypeName(const std::string_view typeId) {
 // source" names the implementation, "Solid" names the thing. Four built-ins are therefore named
 // here. Type ids are untouched -- this is vocabulary, not identity.
 QString nodeTypeDisplayName(const std::string_view typeId) {
+    if (typeId == "bloom.image-source")
+        return QCoreApplication::translate("node_editor", "Image");
     if (typeId == document::kSolidSourceNodeType)
         return QCoreApplication::translate("node_editor", "Solid");
     if (typeId == document::kLayerOutputNodeType)
@@ -296,6 +299,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 
     // SurfaceRaised card + hairline Border, then the Accent inset edge when selected.
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+
     kit::fillRoundedSurface(*painter, bounds, kit::color(kit::Color::SurfaceRaised),
                             kit::color(kit::Color::Border), radiusToken);
     painter->setOpacity(1.0);
@@ -355,8 +359,45 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         return;
     }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+    if (imageSource_) {
+        const QRectF cell(kCardPadding, kCardHeaderHeight + kCardPadding, width_ - 2 * kCardPadding,
+                          kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
+        painter->fillRect(cell, kit::color(kit::Color::Canvas));
+        const auto* controller = session_ ? session_->assetController() : nullptr;
+        const auto thumbnail = controller ? controller->thumbnail(imageAsset_) : QImage{};
+        if (!thumbnail.isNull()) {
+            auto size = QSizeF(thumbnail.size());
+            size.scale(cell.size(), Qt::KeepAspectRatio);
+            painter->drawImage(
+                QRectF(cell.center() - QPointF(size.width() / 2, size.height() / 2), size),
+                thumbnail);
+        } else {
+            const auto glyph = kit::iconPixmap(controller && controller->missing(imageAsset_)
+                                                   ? kit::IconId::Warning
+                                                   : kit::IconId::Image,
+                                               kit::Size::IconSmall, kit::Color::Muted);
+            painter->drawPixmap(cell.center() -
+                                    QPointF(glyph.width() / glyph.devicePixelRatio() / 2,
+                                            glyph.height() / glyph.devicePixelRatio() / 2),
+                                glyph);
+        }
+    }
+
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
+    if (imageSource_ && session_) {
+        const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
+        const auto* controller = session_->assetController();
+        if (!asset || !asset->manifest.gaps.empty() ||
+            (controller && controller->missing(imageAsset_))) {
+            const auto warning =
+                kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn);
+            painter->drawPixmap(
+                QPointF(width_ - kCardPadding - warning.width() / warning.devicePixelRatio(),
+                        kCardHeaderHeight + kCardPadding),
+                warning);
+        }
+    }
     for (const auto* socket : sockets_) {
         if (parameterSocketY_.contains(socket->name))
             continue;

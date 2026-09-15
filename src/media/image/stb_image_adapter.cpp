@@ -55,7 +55,7 @@ void* imageReallocate(void* pointer, std::size_t size) {
 #define STBI_MALLOC(size) imageAllocate(size)
 #define STBI_REALLOC(pointer, size) imageReallocate(pointer, size)
 #define STBI_FREE(pointer) imageFree(pointer)
-#include "../third_party/stb_image/stb_image.h"
+#include "stb_image.h"
 
 namespace bloom::media::detail {
 bool imageInfo(std::span<const std::byte> bytes, ImageInfo& info) {

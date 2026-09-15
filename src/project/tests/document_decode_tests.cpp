@@ -92,7 +92,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":9})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":10})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -154,7 +154,7 @@ constexpr std::string_view kMinimalGraphJson =
     result += frameRateDenominator;
     result += "\"}},\"parameters\":[],\"animationCurves\":[],\"graph\":";
     result += kMinimalGraphJson;
-    result += R"(,"nodeLayout":[],"nodeGroups":[]})";
+    result += R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0.0,0.0,0.0,1.0]})";
     return result;
 }
 
@@ -177,7 +177,7 @@ constexpr std::string_view kMinimalGraphJson =
     result += animationCurvesJson;
     result += R"(,"graph":)";
     result += graphJson;
-    result += R"(,"nodeLayout":[],"nodeGroups":[]})";
+    result += R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0.0,0.0,0.0,1.0]})";
     return result;
 }
 
@@ -196,9 +196,10 @@ constexpr std::string_view kMinimalGraphJson =
     result += colorSettingsJsonText;
     result += ",\"compositions\":[";
     result += compositionsArrayBody;
-    result += R"(]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
-              R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-              R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}},"extensions":[]})";
+    result +=
+        R"(],"assets":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+        R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+        R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0"}},"extensions":[]})";
     return result;
 }
 
@@ -225,7 +226,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":10})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":11})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -251,11 +252,12 @@ documentWithColorSettingsFutureMinor(const std::string_view colorSettingsJsonTex
     result += defaultColorSettingsJson();
     result += R"(,"compositions":[)";
     result += defaultCompositionJson();
-    result += R"(]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
-              R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-              R"("driverBinding":"0","extensionRecord":")";
+    result +=
+        R"(],"assets":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+        R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
+        R"("driverBinding":"0","extensionRecord":")";
     result += extensionRecordHighWater;
-    result += R"(","nodeGroup":"0"}},"extensions":[)";
+    result += R"(","nodeGroup":"0","asset":"0"}},"extensions":[)";
     result += extensionsArrayBody;
     result += "]}";
     return result;
@@ -723,7 +725,8 @@ void testRejectsFormatMemberOrder(Expectations& expectations) {
         R"("format":{"height":1080,"width":1920,"pixelAspect":{"numerator":"1","denominator":"1"},)"
         R"("frameRate":{"numerator":"24","denominator":"1"}},"parameters":[],)"
         R"("animationCurves":[],"graph":)" +
-        std::string(kMinimalGraphJson) + R"(,"nodeLayout":[],"nodeGroups":[]})";
+        std::string(kMinimalGraphJson) +
+        R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0.0,0.0,0.0,1.0]})";
     expectDecodeFailure(expectations, documentWithComposition(composition),
                         DocumentDecodeError::MemberOutOfOrder,
                         "/project/compositions/0/format/height",
@@ -1637,7 +1640,7 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
     const std::string compositionJsonText =
         R"({"id":"1","name":"Comp","duration":{"numerator":"10","denominator":"1"},"format":)" +
         formatJson + R"(,"parameters":[],"animationCurves":[],"graph":)" + graphJson +
-        R"(,"nodeLayout":[],"nodeGroups":[],"zzzCompExtra":true})";
+        R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0.0,0.0,0.0,1.0],"zzzCompExtra":true})";
 
     std::string document = "{\"schemaVersion\":";
     document += schemaVersionJson;
@@ -1646,10 +1649,10 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
     document += R"(,"compositions":[)";
     document += compositionJsonText;
     document +=
-        R"(],"zzzProjectExtra":"hello world"},)"
+        R"(],"assets":[],"zzzProjectExtra":"hello world"},)"
         R"("idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
         R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-        R"("driverBinding":"0","extensionRecord":"1","nodeGroup":"0"}},)"
+        R"("driverBinding":"0","extensionRecord":"1","nodeGroup":"0","asset":"0"}},)"
         R"("extensions":[)";
     document += extensionRecordJson;
     document += R"(],"zzzFutureField":42})";
@@ -1839,14 +1842,15 @@ void testRejectsMajor2WithUnknownMembersEverywhere(Expectations& expectations) {
 void testRejectsUnknownMemberBeforeOrBetweenKnownMembersInFutureMinor(Expectations& expectations) {
     // before every known member of a composition object
     {
-        const std::string composition = R"({"aaa":true,"id":"1","name":"Comp",)"
-                                        R"("duration":{"numerator":"10","denominator":"1"},)"
-                                        R"("format":{"width":1920,"height":1080,)"
-                                        R"("pixelAspect":{"numerator":"1","denominator":"1"},)"
-                                        R"("frameRate":{"numerator":"24","denominator":"1"}},)"
-                                        R"("parameters":[],"animationCurves":[],"graph":)" +
-                                        std::string(kMinimalGraphJson) +
-                                        R"(,"nodeLayout":[],"nodeGroups":[]})";
+        const std::string composition =
+            R"({"aaa":true,"id":"1","name":"Comp",)"
+            R"("duration":{"numerator":"10","denominator":"1"},)"
+            R"("format":{"width":1920,"height":1080,)"
+            R"("pixelAspect":{"numerator":"1","denominator":"1"},)"
+            R"("frameRate":{"numerator":"24","denominator":"1"}},)"
+            R"("parameters":[],"animationCurves":[],"graph":)" +
+            std::string(kMinimalGraphJson) +
+            R"(,"nodeLayout":[],"nodeGroups":[],"backgroundColor":[0.0,0.0,0.0,1.0]})";
         expectDecodeFailure(expectations, documentWithCompositionFutureMinor(composition),
                             DocumentDecodeError::UnknownMember, "/project/compositions/0/aaa",
                             "an unknown member before every known composition member is "
@@ -1863,7 +1867,7 @@ void testRejectsUnknownMemberBeforeOrBetweenKnownMembersInFutureMinor(Expectatio
             R"(,"unknownMid":null,"idAllocation":{"highestIssued":)"
             R"({"composition":"0","node":"0","edge":"0","layer":"0",)"
             R"("layerSlot":"0","parameter":"0","animationCurve":"0",)"
-            R"("keyframe":"0","driverBinding":"0","extensionRecord":"0","nodeGroup":"0"}},)"
+            R"("keyframe":"0","driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0"}},)"
             R"("extensions":[]})";
         expectDecodeFailure(expectations, json, DocumentDecodeError::UnknownMember, "/unknownMid",
                             "an unknown member between two known root members is rejected in a "

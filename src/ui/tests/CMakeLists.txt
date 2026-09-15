@@ -745,3 +745,14 @@ foreach(scale IN ITEMS 1 1.5)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;golden" TIMEOUT 60)
 endforeach()
+
+add_executable(bloom_media_ui_test media_ui_tests.cpp)
+target_include_directories(bloom_media_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_media_ui_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_media_ui_test)
+foreach(scale IN ITEMS 1 1.5 2)
+    add_test(NAME bloom.ui.media.dpr${scale} COMMAND bloom_media_ui_test)
+    set_tests_properties(bloom.ui.media.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;media;integration" TIMEOUT 60)
+endforeach()

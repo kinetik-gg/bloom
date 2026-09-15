@@ -1172,8 +1172,16 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             return fixture.viewer.grab().toImage().pixelColor(
                 fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
         };
-        expectations.expect(corner() == ui::kit::color(ui::kit::Color::Canvas),
-                            "Solid paints the application's own canvas Background token");
+        expectations.expect(corner() == QColor(Qt::black), "Solid defaults to opaque black");
+        commands::Transaction backgroundEdit("Background", fixture.session.snapshot().revision());
+        backgroundEdit.emplace<commands::SetCompositionBackgroundColor>(
+            fixture.session.compositionId(), core::Color4d{0.2, 0.4, 0.6, 1.0});
+        expectations.expect(
+            fixture.session.executeTransaction(std::move(backgroundEdit)).succeeded(),
+            "authored background edit commits");
+        QCoreApplication::processEvents();
+        expectations.expect(corner() == QColor(51, 102, 153),
+                            "Solid paints the authored composition colour");
         background->setCurrentIndex(2); // Black
         QCoreApplication::processEvents();
         expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&

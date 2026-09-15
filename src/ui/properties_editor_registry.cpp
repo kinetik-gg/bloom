@@ -66,6 +66,14 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
                 selectionLayout->insertWidget(selectionLayout->count() - 1, registryPanel_);
             }
+            if (node->typeId == "bloom.image-source") {
+                auto* label = kit::makePropertyRowLabel(tr("Dimensions"), section->body());
+                auto* dimensions = new kit::KLabel(section->body());
+                dimensions->setObjectName("propertiesImageDimensions");
+                auto* row = new kit::KPropertyRow(label, nullptr, {dimensions}, section->body());
+                row->setProperty("rowLabel", tr("Dimensions"));
+                section->bodyLayout()->addWidget(row);
+            }
             int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
@@ -108,6 +116,19 @@ void PropertiesEditor::configureRegistryRows() {
         registryPanel_->setVisible(!registryRows_.empty());
     for (auto* row : registryRows_)
         row->refresh();
+    if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {
+        const document::AssetRecord* asset = nullptr;
+        if (node)
+            for (const auto& binding : node->parameters)
+                if (binding.role == "asset") {
+                    const auto value = session_.constantStringValue(binding.parameterId);
+                    if (value)
+                        asset = session_.snapshot().project().findAsset(
+                            document::AssetId::fromRaw(value->toULongLong()));
+                }
+        dimensions->setText(asset ? tr("%1 × %2").arg(asset->width).arg(asset->height)
+                                  : tr("Unavailable"));
+    }
 }
 void PropertiesEditor::filterRows() {
     const auto query = search_->text();

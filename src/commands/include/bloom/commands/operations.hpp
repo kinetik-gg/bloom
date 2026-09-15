@@ -123,8 +123,10 @@ class SetProjectName final : public Operation {
 class AddComposition final : public Operation {
   public:
     AddComposition(std::string name, document::CompositionFormat format,
-                   document::FrameRate frameRate, core::RationalTime duration)
-        : name_(std::move(name)), format_(format), frameRate_(frameRate), duration_(duration) {}
+                   document::FrameRate frameRate, core::RationalTime duration,
+                   core::Color4d background = {0.0, 0.0, 0.0, 1.0})
+        : name_(std::move(name)), format_(format), frameRate_(frameRate), duration_(duration),
+          background_(background) {}
 
     AddComposition(std::string name, document::CompositionFormat format,
                    core::RationalTime duration)
@@ -138,6 +140,7 @@ class AddComposition final : public Operation {
     document::CompositionFormat format_;
     document::FrameRate frameRate_;
     core::RationalTime duration_;
+    core::Color4d background_;
 };
 
 class DeleteComposition final : public Operation {

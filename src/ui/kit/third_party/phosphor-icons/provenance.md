@@ -1,6 +1,6 @@
 # Phosphor Icons Provenance
 
-Reviewed: 2026-09-14
+Reviewed: 2026-09-15
 
 ## Component
 
@@ -14,18 +14,21 @@ Reviewed: 2026-09-14
 | License | MIT |
 | License file | `LICENSE` (upstream `core-2.0.8/LICENSE`, byte-identical) |
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
-| Modified | No. Every SVG below is byte-identical to its file in the pinned archive. |
+| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1 glyphs are byte-identical. |
 
-The archive SHA-256 above was computed over the exact bytes downloaded from that URL with
-`sha256sum`, not copied from an upstream publication. Task PROPS-3 re-downloaded that archive on
-2026-09-14, recomputed the digest, and byte-compared every file in the table below against
-`core-2.0.8/assets/<weight>/<name>.svg` inside it; all 168 matched.
+MEDIA-1 downloaded the pinned codeload release archive on 2026-09-15 and computed its digest
+from the downloaded bytes. All twelve new files (folder-simple-plus, download-simple,
+trash-simple, images in regular/fill/bold) were extracted without modification and byte-verified.
+The existing Composition and Image glyphs were also byte-verified in every weight. The six
+pre-existing exceptions are `bold/circle-bold.svg`, `bold/magnet-bold.svg`, `fill/circle-fill.svg`, `fill/magnet-fill.svg`, `regular/circle.svg`, `regular/magnet.svg`.
+The table and manifest below cover the actual complete checked-in subset, including those
+pre-existing exceptions; they do not claim that those exceptions are upstream-identical.
 
 ## What is vendored, and what is not
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 56 of them in three weights (168 files). The three weights are exactly the three the
+embeds 62 of them in three weights (186 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -35,7 +38,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 56 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 62 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -51,7 +54,7 @@ an edit to the vendored files.
 
 ## Vendored files
 
-Digests are SHA-256 over the exact checked-in bytes.
+Digests are SHA-256 over the checked-in bytes, with new files verified against downloaded bytes.
 
 ### regular
 
@@ -65,8 +68,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/caret-up-down.svg` | `d2e93459514746d53d152c8624fbf89356ee4e0932ab3efd094e8dce9bb0d793` |
 | `regular/caret-up.svg` | `bccc26004e73e5de783ac6dde607e3671e776261d81972ccdbd296b4aca21ca9` |
 | `regular/check.svg` | `cbb89a8c42f283d4f846eb935e05d88c1be04462f16480e068c0f82b9ce40b12` |
-| `regular/clock.svg` | `b8c6c2899d2b9af48a55ba02ba6d7faf89b757915772dd24f5397f7b0d02aa5c` |
 | `regular/circle.svg` | `4aaa8e07fc1bbaa341774c2094d8609c24a8cca62f7496f98f076207d2fe335f` |
+| `regular/clock.svg` | `b8c6c2899d2b9af48a55ba02ba6d7faf89b757915772dd24f5397f7b0d02aa5c` |
 | `regular/corners-in.svg` | `31e9060aafdd6e24f4b8aef7742a89e7e616e6e2da07160691d020cb5ab07dee` |
 | `regular/corners-out.svg` | `fd79277404b3662b50b737127fb6bf6f63ae93c9b60d9f2aca9122a950ec08c8` |
 | `regular/cube.svg` | `7c0f13cb492d0dd212e48ab259dabec4627df32d71aa00ce31b3228c0f35112b` |
@@ -74,28 +77,33 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/diamond.svg` | `7f9ebf5bb51a955c248da77b9b8a50226a7ecd81706b59e78233d7ad2a9d9d45` |
 | `regular/dots-six-vertical.svg` | `01e0c8e778cec9c1c0ff5c2e4aaadc5808a8d1dec0db8b9a51bcd5c5e9c8dcae` |
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
+| `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
 | `regular/film-strip.svg` | `6d079e87432258b9fe9eff9d10ababcfbca7a400537277a215360a436581987f` |
+| `regular/folder-simple-plus.svg` | `723f8e4e8503114a0dcddeb18e5a5726b7ab87473a88510626289d57848a8779` |
 | `regular/folder.svg` | `4a882bcd4a91ae0a01887024f08d358932f183b6b171e87a3e48c5910364d507` |
 | `regular/gear.svg` | `5c0cb3ba307c72babf78d952d9140c682ff30307fedc7fbb87c9a293c1e2fd64` |
 | `regular/graph.svg` | `0a863bd9d39960eb220400400332ee1b3ada0e6ce309b89b202bb0784e4e28aa` |
 | `regular/hand-grabbing.svg` | `5c07fc19f6101a86c10cfa3cb4685c388cd0b89a69aa46caa92e44b5ba599977` |
 | `regular/hand.svg` | `b845c51acbe69c5ac2ec208c5648806f33c0a86b06d2dfa53ebe599ccb0f9c65` |
 | `regular/image.svg` | `642a0575f7b5a7ea2f5fefa6f27a5dc57683911845b85213a7e33652c2a3179d` |
+| `regular/images.svg` | `7e8e0035864a6cc3e0ea1e0441d073b582001b74c374939fd8ece6ff55101a2b` |
 | `regular/info.svg` | `438a1f319d53d86e840af73fb7b1d224c9224a437b9fa449a4e2cb45a82a3552` |
 | `regular/link-simple.svg` | `7a97dad4b2f16c3a386ea69ba78d29bf3a71c311f2e34100d79143559ba13151` |
 | `regular/list.svg` | `fb1851842c74b40a3f42ce3d6ae0e67ede556b624218e79c0f4ead7d9ceec51f` |
 | `regular/lock-simple-open.svg` | `55c3dcdb0db66b65f4afab5ead515b0db381aecfbac9f61ec1e2691d83cc5330` |
 | `regular/lock-simple.svg` | `b99d3713ac86cb610eb66974d69de2aa1223c4f6387fb1053e3d375e62f5dc1c` |
-| `regular/magnifying-glass.svg` | `f9fa2561978a9a3291e8ae0ebfcb651104f5069fade8f84871627bca68889cde` |
 | `regular/magnet.svg` | `bc1562b7569caaa947e52d9ac1fcd3ff4ae9c133dcc05e565cfbc8f5fe6671c4` |
+| `regular/magnifying-glass.svg` | `f9fa2561978a9a3291e8ae0ebfcb651104f5069fade8f84871627bca68889cde` |
 | `regular/minus.svg` | `5a068d1cfd707fde5ddb0ce0623958123b6a5afba98401318983aeb0fdad6382` |
 | `regular/music-notes.svg` | `e40b3381d49b45275c8875d7e85f2332a11eb467f7ad9e7c9b4656c29a97e9e1` |
 | `regular/pause.svg` | `7a9a8fe311234262b85c6e332f77db4ba9a59b6ca4292c41d327977cf61a2fc9` |
+| `regular/pen-nib.svg` | `c13ebf51ee9d5abab7bd1fa4f8b1a6080e56720616d1d47b6e3d335fa135212f` |
 | `regular/play.svg` | `885b3ed2095889c4ff063dac35dc424cb9f6c00273ab44e2f90dc9dadbee661a` |
 | `regular/plus.svg` | `d688feb9dd2e41c1721d6906a05a2a42e18cd774762fe706d72b2bdfd91cddc4` |
+| `regular/rectangle.svg` | `0c0d719ced81064b5a466d2dcf39a09077d39309773504d0bdd02b2fdc9a4590` |
 | `regular/repeat.svg` | `12cef5f8ba7074921f909838088154a6847b936b11342c28daa475c62b71df86` |
 | `regular/skip-back.svg` | `20f318558e166d5dea09fb854a1bbc199e9891b17febed640e912a6ee4712d37` |
 | `regular/skip-forward.svg` | `52f1ed5a89f1a38bf8537b38bd2da0501e396fc4cb03a2cdde38d248ceb03fbe` |
@@ -109,6 +117,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `regular/text-align-left.svg` | `4d166977720d3beb386288a8607fbb36134fef06fdd99496ab09cf2d2da211b5` |
 | `regular/text-align-right.svg` | `ae8417d5e095d6329bb764a8029e94101a70bfdac64e676259ac6879de2549ec` |
 | `regular/text-t.svg` | `00f5cc0ddab2aacaf377ffe956e2ee5375ec3395043d468cbb5937251df7fc69` |
+| `regular/trash-simple.svg` | `4bba1f6bd6a5b969a1ddca0bddfd5a68764b29c7c7b9600251e96f551ade1171` |
 | `regular/trash.svg` | `e6a830c0409f9e101e3695c981eef98427d39fd01f502b9cbd6900930b01f19c` |
 | `regular/warning-circle.svg` | `e48a90760a68659fd3f06dd9187e471aead4877c72e915339071b2c7f7bd714c` |
 | `regular/warning.svg` | `047c8edbdfddb9f1692bbf56acc85b7e4649b567c60eb39470e98e4f9ddc6a2e` |
@@ -126,8 +135,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/caret-up-down-fill.svg` | `8f99e01d03202cc8ba423dc2448731a23e7d9c64aecf39ddab00cdd01dfdbbb8` |
 | `fill/caret-up-fill.svg` | `a4703a6e23011c86e9d7d18234b30bba36ba04f43f37ca08bb3d04beb9e3770b` |
 | `fill/check-fill.svg` | `d114007dc371976dc3e8f4ebc59c5aef429fae59ae58d56acdf231a52b4700be` |
-| `fill/clock-fill.svg` | `4abe98cfc61350de60baf70ce93e85b3a9acbb80e34f9cf19688661aaddbc140` |
 | `fill/circle-fill.svg` | `55e98bf729f8760c132f3a59ac330afdf09e3694c2bb15a9a0abc3d9222c93fe` |
+| `fill/clock-fill.svg` | `4abe98cfc61350de60baf70ce93e85b3a9acbb80e34f9cf19688661aaddbc140` |
 | `fill/corners-in-fill.svg` | `ade092d133654ec69ee3484ed10b79523ffe23eb9b8f9c96e5e1fe72b7af31be` |
 | `fill/corners-out-fill.svg` | `206cdf1c6c7a3d2da17edebae2a122b5bcf8186f276170cac730a041c3077a1d` |
 | `fill/cube-fill.svg` | `9c681bfc8547fbb142d5df4d69ad923af5c422fea1013e6d69c32cef9ced3de3` |
@@ -135,28 +144,33 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/diamond-fill.svg` | `e50d5227db3ca71ba862deb7a6e60b78eb27c7780ed2e2b856c31269b63f4a68` |
 | `fill/dots-six-vertical-fill.svg` | `9386e9649ba767b8c1930156f40dd4425177ceb91ef127d87ce3bcc959888787` |
 | `fill/dots-three-vertical-fill.svg` | `7dd0eff7a0107728f568f08679b5fefb8309534dff749f779fc21805e1b9186c` |
+| `fill/download-simple-fill.svg` | `ffd45964adc39f8e0027ebd66ea6c843fb8e5a21290a78ef6940436f7d292466` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
 | `fill/folder-fill.svg` | `2217bd2f730884d7a8aec3e3358eb7500448b0e3d86f33a63142f40f0622bfe9` |
+| `fill/folder-simple-plus-fill.svg` | `b28aea1a66bd889e532c9f6b672d5199ac97bd3785bcc1fca7d115e943c1ff65` |
 | `fill/gear-fill.svg` | `564f53f72b0bd4371dc14a3d39a3fcf4c5a1a74d285eb56fff465a954f993ec8` |
 | `fill/graph-fill.svg` | `73eea2682fd6c43d58d448107bd01c65cd662c3890bea8d28b39964031bdd110` |
 | `fill/hand-fill.svg` | `9a1598a0dce127935ad97ede769c77629f422de7a1eabe54b4ec1b2d0c19369b` |
 | `fill/hand-grabbing-fill.svg` | `df9ace3ad62fe54f8f876b140c2824a7cf1ae55a087cd31649f3c562e465a39b` |
 | `fill/image-fill.svg` | `8cbeb0cac6e7f683e08d8a71a5db21c10435c39d0487c3277b75b146a86abf42` |
+| `fill/images-fill.svg` | `50a8bc0a4eefefdea374c97123e59a34c35fbe1b5d6faff43ac77abab8bcc49a` |
 | `fill/info-fill.svg` | `8240b810f7a3b076271a829dff61c7dd64257a781c30f29c938f88835f11136a` |
 | `fill/link-simple-fill.svg` | `601ae01a732bdfcfa7a3e01dbe1302a32c4bd03b60d73c5c3a8f051793105e6a` |
 | `fill/list-fill.svg` | `40af80e60bd65c8230d4e7aed12baa064a31b06d9d32a406ffdcf5f281ac99ba` |
 | `fill/lock-simple-fill.svg` | `54b137caf94b8082e63a2831e5b726bbc9cd32ad40938bf5656ff4d44b442d95` |
 | `fill/lock-simple-open-fill.svg` | `fa4603d9987e96952fb892c19a717bfa674af6520f1e469eb6a812411303c60e` |
-| `fill/magnifying-glass-fill.svg` | `e7cf953bb787af2a4b11f8a248f35b56aab2f2b44f535d03593f490a4a633244` |
 | `fill/magnet-fill.svg` | `b3e0a68a703bd5c6b0d262584cecb527cda420ad71bb1637d16a28bc96142488` |
+| `fill/magnifying-glass-fill.svg` | `e7cf953bb787af2a4b11f8a248f35b56aab2f2b44f535d03593f490a4a633244` |
 | `fill/minus-fill.svg` | `fc5b1fa0d71db88886b70da6a675f7de3e7d4007444e87ba68f174a9ecef037e` |
 | `fill/music-notes-fill.svg` | `d8b530db5c510539e8235a5e80d7f984504f7b5ae24408d080a8468ae12e29dc` |
 | `fill/pause-fill.svg` | `156d3cdfa5cea803caec50b35f49bc635070c8bd84e7fe78df94b025017ccee1` |
+| `fill/pen-nib-fill.svg` | `2f8afef215a9d8148f3197d5a703f0f42aa536dccb395b95b4c7fe5b62873b15` |
 | `fill/play-fill.svg` | `6d2a75bc5700a68dec50516ebae121c307807e4e6fcca5c863e5b4af006df880` |
 | `fill/plus-fill.svg` | `64ef1a2c9f693a531ddb970a6c6e7c9dcd9bf36a58afec66ecb57355449ce3d2` |
+| `fill/rectangle-fill.svg` | `d3eb6bd71a23298000c270589d998bd4c32e2ea345cbf9046aff904b30d41c40` |
 | `fill/repeat-fill.svg` | `0ccdc4397cd7c1e528c571d6ba3fb6764043d791b3de0ac86c6eaf5edb3a8ce6` |
 | `fill/skip-back-fill.svg` | `65a2d664196ad28fff7288ed7a1870f508fdb922334ad1a49c54586dae7592d7` |
 | `fill/skip-forward-fill.svg` | `2f13f5cbeab47627d30782e7942001e7f80f7da993df053d3be2b8c6cb737ae2` |
@@ -171,6 +185,7 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `fill/text-align-right-fill.svg` | `fa6c5e073d5a2a85cb3f6be2194354577fe05d2eebb7b4c879be767383b6cea8` |
 | `fill/text-t-fill.svg` | `5ddee68d99ab4598641cf99fb7025cb18e2add9302ae4df31653418066ca0c6d` |
 | `fill/trash-fill.svg` | `f78767cc15e1a7d6eea49c4efb515cf6fceaf07fbc421e8ce18373d07c14b673` |
+| `fill/trash-simple-fill.svg` | `6d7d5276ad7d222a691a90762552c4c67be723d4526d6d3c8266aaf4af0d9bfb` |
 | `fill/warning-circle-fill.svg` | `29199dd3ff20a7fc36380dc366c9004fafa98d979649dc2311c5b1f8fd968dac` |
 | `fill/warning-fill.svg` | `90595f8a478ac1f156871ac8d8a35c7c4e372b8d101dad9aeb1bceadf9a2c7f0` |
 | `fill/x-fill.svg` | `6ec0689770c1fb1dc7018039bef101079d2d20931c4661c3981cbe956f20c872` |
@@ -187,8 +202,8 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/caret-up-bold.svg` | `daf7107329787e8f4fd5b5ccf194cf5ae00a0d44d004421696dad770da06371a` |
 | `bold/caret-up-down-bold.svg` | `a3ffa8c728724bf8ace313bcfd2c854ad3c0b47926440f763e94e75c9820f9f1` |
 | `bold/check-bold.svg` | `d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf` |
-| `bold/clock-bold.svg` | `45cf8bb6e1929b4d7fcbf52d83b35c6d130f4ea12d981db19370392cba724f4a` |
 | `bold/circle-bold.svg` | `f379b4d00604bc0f55a57d857a158cdd0e41529f372c643b70c41f82aad3ec51` |
+| `bold/clock-bold.svg` | `45cf8bb6e1929b4d7fcbf52d83b35c6d130f4ea12d981db19370392cba724f4a` |
 | `bold/corners-in-bold.svg` | `2664fc88c8de3564849e732f5950232109cd7d201b93ede1e516e60931e56300` |
 | `bold/corners-out-bold.svg` | `df74ba3c2a496a344f98e80c0782f43aa3760ed4b8b6103a4c621bfc59575e16` |
 | `bold/cube-bold.svg` | `960f01377a6e286fb39507861a01bb0ff6ff8e5f4b1ac0ded92f6f2bec376e91` |
@@ -196,28 +211,33 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/diamond-bold.svg` | `85ec2bc0851b2e1cbaa1deba7a059568688098493f8651949eb45aaebe0b995a` |
 | `bold/dots-six-vertical-bold.svg` | `d2226adc97d9449bad231d06210191e2656eb4eed30e7c194cba9878d9929a3f` |
 | `bold/dots-three-vertical-bold.svg` | `4bb50d6e3099a6599b8800303a2f457954ad557213554761df79ee61b5aa7b9a` |
+| `bold/download-simple-bold.svg` | `213b1d74439be031407a09958efc541c87158922a3a57e4dee785dddeef3f955` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |
 | `bold/folder-bold.svg` | `3f564dd4a0d27706ff9cb2d9738cef9ac1009b70f82d1da6d3bac119e41949a0` |
+| `bold/folder-simple-plus-bold.svg` | `bd87b2d0c73989f5a434a627ba5ee13929305c9bb4dcab28e3581bb8655a423c` |
 | `bold/gear-bold.svg` | `b70f71ce6d08d59ee13575d7278737ff6dc2011adb5d126c9090641bc783fdd2` |
 | `bold/graph-bold.svg` | `967c65d7659edbaf8ccdad545b8b8c9408805bf2c167377984a6c78e84a46690` |
 | `bold/hand-bold.svg` | `901ad6b152b237edf30c5713e0676f1cfd3142672e209b3efc3062b23836a62a` |
 | `bold/hand-grabbing-bold.svg` | `6304ebb420306735baf4131a3c57724e738763ec15e65d6ccf6d97406e684946` |
 | `bold/image-bold.svg` | `d99ef65cc79a3db6a0b213c878238e06689ef701285f207629b49868808b852e` |
+| `bold/images-bold.svg` | `a50a765edc94ef94e186d945e16f01f48a07ba441966990ed2ea2285f10fee99` |
 | `bold/info-bold.svg` | `b8241eb546c8764cda301e10c63fc2a9c52c36d75a568832ef7244cb10d15d9b` |
 | `bold/link-simple-bold.svg` | `6e657df99dd4f15c8ee7140cccfc1b0e154dc241a8b32f900f60449c5cd625df` |
 | `bold/list-bold.svg` | `eebf2179178a5d4e93097a35f6a02efec45db6a88c1fbbc027fe81a167fd910f` |
 | `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
 | `bold/lock-simple-open-bold.svg` | `0fe1aa4fa99db2a2fe0827626eeb779a5a398763ba2492a0cf9429f9cdeca6c3` |
-| `bold/magnifying-glass-bold.svg` | `b73e393b20bff0aaee96b9e325d0276fe1ab5fc81b5080633a95827bd14ebae6` |
 | `bold/magnet-bold.svg` | `a23e3f521d6c8c55de7c25209f194696f7e6210af6b30bca8dc39d613558f8f3` |
+| `bold/magnifying-glass-bold.svg` | `b73e393b20bff0aaee96b9e325d0276fe1ab5fc81b5080633a95827bd14ebae6` |
 | `bold/minus-bold.svg` | `f9be4875a49d6bc9931891127335a396beacb420c7076e068abd9e1505348396` |
 | `bold/music-notes-bold.svg` | `4d906075f68fae7c6380011cdc5303a322e4f6f9ec402e4c725e08e4c7e2e3f6` |
 | `bold/pause-bold.svg` | `0aa900d04cc01d716ecfb668cdc3e3f2bca7fe21a1faa80a11dc342440e22a47` |
+| `bold/pen-nib-bold.svg` | `a70d66873266f1ec6de530e2b31f9b1c9abd87b762a7f76512283f6b6e0896b5` |
 | `bold/play-bold.svg` | `f54e774d80d2b4d134a4babd3c03ee2a217aa4856566ed0a288e48e1a2f29d16` |
 | `bold/plus-bold.svg` | `3d20a4b2e00657baeb922bed94f13fbfa288968b738991d047dd252cb64005d8` |
+| `bold/rectangle-bold.svg` | `145ee233dcc88fd083bc3fb19d4d2c3435143b4afe72ef900f41dc2877f7dcab` |
 | `bold/repeat-bold.svg` | `27beb8327b7112d09c49d81930f7e9b7e7fb4a89f7cc3ccf52c4344edad0eb43` |
 | `bold/skip-back-bold.svg` | `ac34927ca2f4f323411b86830f344c018f1f1bdd92b671c76d9e295266bd1ff2` |
 | `bold/skip-forward-bold.svg` | `c026db317873f9de39d620b20e97d9d9d11293bbc319b0ea90db03db9c706be2` |
@@ -232,41 +252,15 @@ Digests are SHA-256 over the exact checked-in bytes.
 | `bold/text-align-right-bold.svg` | `f7218b2e4391e0fdd4aada2b93451825617f4a435695e3e1ab8c1fe658be111f` |
 | `bold/text-t-bold.svg` | `ca48a422f871e674081c74d6b29fdfd04b7aa86604e0acdab64387146bc7124b` |
 | `bold/trash-bold.svg` | `14f3fa7bf3588b279a104e6a19b16809fa54f1c2185e2811d3c47cab559f79d5` |
+| `bold/trash-simple-bold.svg` | `f6bfdc0fe67c4bad69e6dfcf91b3123aa37dc5d4232694fecf888aa5c2783589` |
 | `bold/warning-bold.svg` | `c473db9807bb726638eefcdc70554078cd2a195313d87e28a70498531ec106c0` |
 | `bold/warning-circle-bold.svg` | `82a1a5cad112a89581d11f44affb41433a1a8b804a9d77556a5c2b97b23784aa` |
 | `bold/x-bold.svg` | `d540487912a267d83c495954b24ca07981002fda05ee2ea0b492d8fc188d1c3e` |
 
-## Subset manifest digest
+## Manifest
 
-A single value covering the whole vendored subset, so a drift in any one asset is one comparison
-away rather than 168:
+SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `c64d559b3e72cbe0ca5782bf154ed7a86207301cce25a2ce498ba22f2c9e8433`.
 
+```sh
+(cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) | LC_ALL=C sort | sha256sum
 ```
-SHA-256(sorted "<sha256>  <filename>\n" lines for every file above) = ef00240b2ba6d7829817d9ffc8fbe5ba5f14b6f7239bfe65f2407aa8e355d22c
-```
-
-Reproduce with:
-
-```
-(cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) \
-  | LC_ALL=C sort | sha256sum
-```
-
-## Status
-
-Pinned and reviewed. A change to the icon set -- adding an icon, changing a weight, or moving to
-a new upstream release -- replaces this record wholesale: new release row, new archive digest, new
-file table, new manifest digest.
-
-## GRAMMAR-2 tool glyph intake
-
-Rectangle and Pen use unmodified assets from the same verified v2.0.8 archive.
-
-| Path | SHA-256 |
-| --- | --- |
-| `regular/rectangle.svg` | `0c0d719ced81064b5a466d2dcf39a09077d39309773504d0bdd02b2fdc9a4590` |
-| `regular/pen-nib.svg` | `c13ebf51ee9d5abab7bd1fa4f8b1a6080e56720616d1d47b6e3d335fa135212f` |
-| `fill/rectangle-fill.svg` | `d3eb6bd71a23298000c270589d998bd4c32e2ea345cbf9046aff904b30d41c40` |
-| `fill/pen-nib-fill.svg` | `2f8afef215a9d8148f3197d5a703f0f42aa536dccb395b95b4c7fe5b62873b15` |
-| `bold/rectangle-bold.svg` | `145ee233dcc88fd083bc3fb19d4d2c3435143b4afe72ef900f41dc2877f7dcab` |
-| `bold/pen-nib-bold.svg` | `a70d66873266f1ec6de530e2b31f9b1c9abd87b762a7f76512283f6b6e0896b5` |

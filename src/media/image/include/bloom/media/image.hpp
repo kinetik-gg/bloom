@@ -52,6 +52,11 @@ struct SequenceManifest {
     std::vector<std::int64_t> gaps;
     std::vector<std::string> diagnostics;
 };
+// Worker-only locator resolution: prefer the project-relative file; use the absolute relink
+// hint when that file is unavailable (including an unsaved project's first Save As).
+[[nodiscard]] std::filesystem::path resolveImagePath(std::string_view relativePath,
+                                                     std::string_view relinkHint,
+                                                     const std::filesystem::path& projectDirectory);
 [[nodiscard]] ImageResult<ImageProbe> probeImage(const std::filesystem::path& path,
                                                  const CancelImageWork& cancel = {});
 [[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>

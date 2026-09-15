@@ -7,7 +7,11 @@
 
 int main() {
     namespace doc = bloom::document;
-    doc::Project project(doc::ProjectId::fromRaw(1), "Images");
+    auto seed = doc::makeNewProject("Images", "Main", bloom::core::RationalTime::fromInteger(24));
+    const auto compositionId = seed.initialCompositionId;
+    auto project = std::move(seed.project);
+    const bloom::core::Color4d background{0.2, 0.4, 0.6, 1.0};
+    project.findComposition(compositionId)->setBackgroundColor(background);
     doc::AssetRecord asset;
     asset.id = doc::AssetId::fromRaw(4);
     asset.locator = {"file", "project-relative", "images/test.png", "file:///test.png"};
@@ -58,6 +62,12 @@ int main() {
     if (!reopened || reopened.value()->document->snapshot().project().assets().size() != 1 ||
         reopened.value()->document->snapshot().project().assets()[0] != asset)
         return 14;
+    if (reopened.value()
+            ->document->snapshot()
+            .project()
+            .findComposition(compositionId)
+            ->backgroundColor() != background)
+        return 15;
     asset.manifest.members.push_back({});
     if (asset.validate().ok())
         return 7;

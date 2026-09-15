@@ -580,6 +580,11 @@ void PropertiesEditor::configureDocumentProperties() {
         return;
     }
 
+    const auto background = composition->backgroundColor();
+    const QSignalBlocker blockBackground(documentBackground_);
+    documentBackground_->setColor(
+        {static_cast<float>(background.red), static_cast<float>(background.green),
+         static_cast<float>(background.blue), static_cast<float>(background.alpha)});
     documentName_->setText(QString::fromStdString(composition->name()));
     const auto format = composition->format();
     documentFormat_->setText(formatCompositionFormat(format));

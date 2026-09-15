@@ -17,6 +17,19 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});
     };
+    if (schemaKey == "bloom.image.loop-mode") {
+        add(QObject::tr("Hold"), 0);
+        add(QObject::tr("Loop"), 1);
+        add(QObject::tr("PingPong"), 2);
+        return items;
+    }
+    if (schemaKey == "bloom.image.color-space") {
+        add(QObject::tr("Auto"), 0);
+        add(QObject::tr("sRGB"), 1);
+        add(QObject::tr("Linear"), 2);
+        add(QObject::tr("Raw"), 3);
+        return items;
+    }
     if (schemaKey == document::kBlendModeParameterSchemaKey) {
         for (const auto mode : core::kBlendModes)
             add(blendModeDisplayName(mode), core::blendModeStoredValue(mode));

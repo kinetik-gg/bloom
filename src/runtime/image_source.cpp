@@ -9,40 +9,6 @@
 #include <utility>
 
 namespace bloom::runtime::detail {
-namespace {
-std::filesystem::path pathFor(const document::AssetLocator& locator,
-                              const std::filesystem::path& base) {
-    if (!base.empty())
-        return base /
-               std::filesystem::path(std::u8string(
-                   reinterpret_cast<const char8_t*>(locator.path.data()), locator.path.size()));
-    // Unsaved documents have no project directory. Only then may the absolute relink hint locate
-    // the freshly imported file. Saved projects resolve the durable project-relative locator.
-    auto uri = locator.relinkHint;
-    if (!uri.starts_with("file://"))
-        return {};
-    uri.erase(0, 7);
-    std::string path;
-    for (std::size_t index = 0; index < uri.size(); ++index) {
-        if (uri[index] == '%' && index + 2 < uri.size()) {
-            unsigned value = 0;
-            const auto parsed =
-                std::from_chars(uri.data() + index + 1, uri.data() + index + 3, value, 16);
-            if (parsed.ec != std::errc{} || parsed.ptr != uri.data() + index + 3 || value == 0)
-                return {};
-            path += static_cast<char>(value);
-            index += 2;
-        } else
-            path += uri[index];
-    }
-#if defined(_WIN32)
-    if (path.size() > 2 && path[0] == '/' && path[2] == ':')
-        path.erase(0, 1);
-#endif
-    return std::filesystem::path(
-        std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
-}
-} // namespace
 ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                        document::FrameRate rate, const std::filesystem::path& base,
                                        const CancellationToken& cancel) {
@@ -94,7 +60,7 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
         if (!asset.manifest.gaps.empty())
             selected.warning = "Sequence gaps hold the preceding frame";
     }
-    selected.path = pathFor(*locator, base);
+    selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
         source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
                                : source.colorSpace);

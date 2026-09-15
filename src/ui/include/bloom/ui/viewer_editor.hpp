@@ -69,11 +69,8 @@ enum class ViewerChannel : std::uint8_t {
 // What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
 // "viewer/background"; Solid is the default.
 //
-// Solid is the application's own canvas Background token, NOT a per-composition colour: the
-// document model carries no background colour for a composition today (document::CompositionFormat
-// holds extent, pixel aspect, and frame rate and nothing else), so claiming one here would be an
-// invented value. When the document gains one, Solid is the single place that has to start reading
-// it.
+// Solid reads the selected composition's authored backgroundColor (default opaque black).
+// It is viewer presentation only and never fills process or export alpha.
 enum class ViewerBackground : std::uint8_t {
     Solid,
     Checkerboard,

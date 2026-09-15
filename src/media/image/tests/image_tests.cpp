@@ -1,5 +1,5 @@
-#include "../../../output/tests/png_test_support.hpp"
 #include "generated_jpeg.hpp"
+#include "png_test_support.hpp"
 #include <bloom/media/image.hpp>
 #include <cmath>
 #include <fstream>

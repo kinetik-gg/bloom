@@ -38,6 +38,7 @@ struct Vec2d;
 } // namespace bloom::document
 
 namespace bloom::ui {
+class AssetController;
 
 // A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
 // stores the stable KeyframeId; row index and screen position are presentation details"). curveId
@@ -161,6 +162,9 @@ class CompositionSession final : public QObject {
     Q_OBJECT
 
   public:
+    void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
+    [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
+
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
                        document::CompositionId compositionId, QObject* parent = nullptr);
 
@@ -452,6 +456,8 @@ class CompositionSession final : public QObject {
     void positionInteractionChanged();
 
   private:
+    AssetController* assetController_ = nullptr;
+
     [[nodiscard]] bool execute(commands::Transaction&& transaction);
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
     [[nodiscard]] const document::NodeRecord*

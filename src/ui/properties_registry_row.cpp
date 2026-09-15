@@ -77,9 +77,13 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         segments_->setFixedSize(segments_->sizeHint());
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
-    } else if (!items.empty()) {
+    } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset") {
         selector_ = new kit::KDropdown(controls);
-        selector_->setObjectName("propertiesRegistryEnum");
+        selector_->setObjectName(
+            definition_.schemaKey == "bloom.image.asset"         ? "propertiesImageAsset"
+            : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
+            : definition_.schemaKey == "bloom.image.color-space" ? "propertiesImageColorSpace"
+                                                                 : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Compact);
         for (const auto& [name, stored] : items)
             selector_->addItem(name, QVariant::fromValue(stored));
@@ -89,7 +93,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         integer_ = new kit::KLineEdit(controls);
-        integer_->setObjectName("propertiesRegistryInteger");
+        integer_->setObjectName(definition_.schemaKey == "bloom.image.start-frame"
+                                    ? "propertiesImageStartFrame"
+                                    : "propertiesRegistryInteger");
         integer_->setAccessibleName(label);
         integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
                                kit::px(kit::Size::ControlCompact));
@@ -98,7 +104,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
         toggle_ = new kit::KCheckBox(controls);
-        toggle_->setObjectName("propertiesRegistryBool");
+        toggle_->setObjectName(definition_.schemaKey == "bloom.image.premultiply"
+                                   ? "propertiesImagePremultiply"
+                                   : "propertiesRegistryBool");
         layout->addWidget(toggle_);
         connect(toggle_, &kit::KSwitch::toggled, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::String) {
@@ -277,6 +285,20 @@ void PropertiesRegistryRow::refresh() {
         if (auto* boolean = std::get_if<bool>(&value); boolean && toggle_)
             toggle_->setChecked(*boolean);
         if (auto* text = std::get_if<std::string>(&value)) {
+            if (selector_ && definition_.schemaKey == "bloom.image.asset") {
+                selector_->clearItems();
+                selector_->addItem(tr("Choose Asset"), QString{});
+                for (const auto& asset : session_.snapshot().project().assets()) {
+                    const auto name = asset.kind == document::AssetKind::Sequence
+                                          ? asset.manifest.pattern
+                                          : asset.locator.path;
+                    selector_->addItem(QString::fromStdString(name),
+                                       QString::number(asset.id.value()));
+                }
+                for (int index = 0; index < selector_->count(); ++index)
+                    if (selector_->itemData(index).toString().toStdString() == *text)
+                        selector_->setCurrentIndex(index);
+            }
             if (text_)
                 text_->setText(QString::fromStdString(*text));
             if (multiline_ && !multiline_->hasFocus())
@@ -314,6 +336,8 @@ void PropertiesRegistryRow::commit() {
     document::ParameterValue value = definition_.defaultValue;
     if (segments_)
         value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
+    else if (selector_ && definition_.schemaKey == "bloom.image.asset")
+        value = selector_->itemData(selector_->currentIndex()).toString().toStdString();
     else if (selector_)
         value = selector_->itemData(selector_->currentIndex()).value<std::int64_t>();
     else if (integer_) {

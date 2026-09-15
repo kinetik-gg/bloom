@@ -1,3 +1,4 @@
+#include "asset_drop.hpp"
 #include "node_editor_items.hpp"
 #include <QSignalBlocker>
 #include <bloom/ui/kit/controls.hpp>
@@ -184,6 +185,19 @@ QString toggleToolTip(const int index) {
 [[nodiscard]] kit::Color layerClipColorToken(const CompositionSession& session,
                                              const document::LayerId layerId) {
     const auto* sourceNode = directSourceNode(session, layerId);
+    if (sourceNode && sourceNode->typeId == "bloom.image-source") {
+        for (const auto& binding : sourceNode->parameters)
+            if (binding.role == "asset") {
+                const auto value = session.constantStringValue(binding.parameterId);
+                const auto* asset = value ? session.snapshot().project().findAsset(
+                                                document::AssetId::fromRaw(value->toULongLong()))
+                                          : nullptr;
+                return asset && asset->kind == document::AssetKind::Sequence
+                           ? kit::Color::DataSequence
+                           : kit::Color::DataImage;
+            }
+    }
+
     if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
                       document::kSolidSourceNodeSchemaVersion)) {
         return kit::Color::DataComposition;
@@ -1352,6 +1366,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                                CompositionPreviewController& previewController, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("timelineEditor");
+    installAssetDropTarget(*this, session_);
     setAccessibleName(tr("Layers timeline"));
 
     auto* layout = new QVBoxLayout(this);
