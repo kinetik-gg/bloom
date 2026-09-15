@@ -29,6 +29,7 @@ using runtime::ValueGraphCurves;
 using runtime::ValueGraphDiagnostic;
 using runtime::ValueOutputIndex;
 using runtime::Vec2CurveIndex;
+using runtime::Vec3CurveIndex;
 
 using Scalar = core::primitives::ScalarPrimitive;
 
@@ -90,6 +91,16 @@ using Scalar = core::primitives::ScalarPrimitive;
             return nullptr;
         }
         const auto value = sampleAnimationCurve(curves.vec2[index->value()], time);
+        if (!value || !value.value.has_value()) {
+            return nullptr;
+        }
+        return &sampled.emplace_back(value.value.value());
+    }
+    if (const auto* index = std::get_if<Vec3CurveIndex>(&operand.source)) {
+        if (index->value() >= curves.vec3.size()) {
+            return nullptr;
+        }
+        const auto value = sampleAnimationCurve(curves.vec3[index->value()], time);
         if (!value || !value.value.has_value()) {
             return nullptr;
         }

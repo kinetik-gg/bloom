@@ -43,6 +43,7 @@ using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, st
 struct CompiledCurveTables final {
     std::vector<runtime::CompiledScalarCurve> scalar;
     std::vector<runtime::CompiledVec2Curve> vec2;
+    std::vector<runtime::CompiledVec3Curve> vec3;
     std::vector<runtime::CompiledColor4Curve> color4;
 };
 
@@ -838,6 +839,7 @@ class CompilePass final {
     std::unordered_map<document::NodeId, const runtime::NodeDefinition*> definitions_;
     std::unordered_map<document::AnimationCurveId, runtime::ScalarCurveIndex> scalarCurveIndices_;
     std::unordered_map<document::AnimationCurveId, runtime::Vec2CurveIndex> vec2CurveIndices_;
+    std::unordered_map<document::AnimationCurveId, runtime::Vec3CurveIndex> vec3CurveIndices_;
     std::unordered_map<document::AnimationCurveId, runtime::Color4CurveIndex> color4CurveIndices_;
     std::vector<runtime::CompiledValueOperation> valueOperations_;
     std::map<ValueOutputKey, runtime::ValueOutputIndex> valueOutputs_;

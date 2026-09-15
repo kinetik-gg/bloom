@@ -104,9 +104,24 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
         for (const auto& curve : composition.animationCurves().records()) {
             if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&curve)) {
                 thirdWindow = std::max(thirdWindow, scalar->keyframes.size());
-            } else if (const auto* vector =
+            } else if (const auto* vector2 =
                            std::get_if<bloom::document::Vec2AnimationCurve>(&curve)) {
-                thirdWindow = std::max(thirdWindow, vector->keyframes.size());
+                thirdWindow = std::max(thirdWindow, vector2->keyframes.size());
+                for (const auto& component : vector2->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
+            } else if (const auto* vector3 =
+                           std::get_if<bloom::document::Vec3AnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, vector3->keyframes.size());
+                for (const auto& component : vector3->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
+            } else if (const auto* color =
+                           std::get_if<bloom::document::Color4AnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, color->keyframes.size());
+                for (const auto& component : color->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
             }
         }
     }

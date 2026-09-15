@@ -165,6 +165,51 @@ void testDrivenEditIsExplicitlyRejected() {
             "driven rejection describes the required explicit transition");
 }
 
+void testComponentDiamondsAndSelections() {
+    auto newProject = document::makeNewProject("Component Session", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    ui::CompositionSession session(document, stack, compositionId);
+
+    const auto exactTime = time(2);
+    require(session.keyframeDiamondState(ids.position, document::AnimationComponent::X,
+                                         exactTime) == ui::KeyframeDiamondState::Constant,
+            "a constant vector component reports the constant diamond state");
+    require(session.toggleKeyframe(ids.position, document::AnimationComponent::X, exactTime),
+            "toggling one vector component creates a component-scoped animation");
+    const auto* parameter = session.composition()->parameters().find(ids.position);
+    require(parameter != nullptr, "the component parameter remains addressable");
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
+    require(source != nullptr, "component toggling creates an animation source");
+    const auto* curve = session.composition()->animationCurves().findVec2(source->curveId);
+    require(curve != nullptr && curve->components[0].keyframes.size() == 1 &&
+                curve->components[1].keyframes.empty(),
+            "the first component toggle leaves the sibling component unkeyed");
+    require(session.keyframeParameterState(ids.position, exactTime) ==
+                ui::KeyframeParameterState::Some,
+            "the parameter state distinguishes a partially keyed vector");
+    require(session.keyframeDiamondState(ids.position, document::AnimationComponent::Y,
+                                         exactTime) == ui::KeyframeDiamondState::AnimatedWithoutKey,
+            "the sibling component reports animated-without-key");
+    const auto xKeyId = curve->components[0].keyframes.front().id;
+    session.selectKeyframe(source->curveId, document::AnimationComponent::X, xKeyId);
+    const auto* selected = std::get_if<ui::KeyframeSelection>(&session.selection().primary);
+    require(selected != nullptr && selected->component.has_value() &&
+                *selected->component == document::AnimationComponent::X,
+            "component selection carries its component identity through the session seam");
+
+    require(session.toggleKeyframe(ids.position, document::AnimationComponent::Y, exactTime),
+            "the sibling component can be keyed independently");
+    require(session.keyframeParameterState(ids.position, exactTime) ==
+                ui::KeyframeParameterState::All,
+            "the aggregate parameter state becomes All when every component is keyed");
+    const auto effective = session.effectiveVec2Value(ids.position);
+    require(effective.has_value() && *effective == document::Vec2d{10.0, 20.0},
+            "component animation keeps the unchanged effective vector value");
+}
+
 // --- Task S5, item 0: THE KEYFRAME GESTURE ------------------------------------------------------
 //
 // Before this task nothing in production constructed CreateAnimationForParameter at all: the
@@ -493,6 +538,7 @@ int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     testAnimatedEditsUseExactSessionTime();
     testDrivenEditIsExplicitlyRejected();
+    testComponentDiamondsAndSelections();
     testKeyframeGestureCreatesAndRemovesAnimation();
     testKeyframeGestureReachesEveryAnimatableSchema();
     testSelectedKeyframeInterpolation();

@@ -64,6 +64,13 @@ struct CompiledVec2Parameter final {
     friend bool operator==(const CompiledVec2Parameter&, const CompiledVec2Parameter&) = default;
 };
 
+struct CompiledVec3Parameter final {
+    document::ParameterId id;
+    std::variant<document::Vec3d, Vec3CurveIndex, ValueOutputIndex> source;
+
+    friend bool operator==(const CompiledVec3Parameter&, const CompiledVec3Parameter&) = default;
+};
+
 struct CompiledColorParameter final {
     document::ParameterId id;
     std::variant<core::Color4d, Color4CurveIndex, ValueOutputIndex> source;
@@ -214,6 +221,7 @@ struct CompiledCompositionPlanDefinition final {
     OperationIndex output;
     std::vector<CompiledScalarCurve> scalarCurves{};
     std::vector<CompiledVec2Curve> vec2Curves{};
+    std::vector<CompiledVec3Curve> vec3Curves{};
     std::vector<CompiledColor4Curve> color4Curves{};
     // The value graph (task S7), in topological order: every operation's operands name only earlier
     // outputs, so one linear sweep evaluates the whole of it. `valueOutputCount` is the size of the
@@ -268,6 +276,10 @@ class CompiledCompositionPlan final {
         return vec2Curves_;
     }
     [[nodiscard]] std::span<const CompiledVec2Curve> vec2Curves() const&& = delete;
+    [[nodiscard]] std::span<const CompiledVec3Curve> vec3Curves() const& noexcept {
+        return vec3Curves_;
+    }
+    [[nodiscard]] std::span<const CompiledVec3Curve> vec3Curves() const&& = delete;
     [[nodiscard]] std::span<const CompiledColor4Curve> color4Curves() const& noexcept {
         return color4Curves_;
     }
@@ -304,6 +316,7 @@ class CompiledCompositionPlan final {
     OperationIndex output_;
     std::vector<CompiledScalarCurve> scalarCurves_;
     std::vector<CompiledVec2Curve> vec2Curves_;
+    std::vector<CompiledVec3Curve> vec3Curves_;
     std::vector<CompiledColor4Curve> color4Curves_;
     std::vector<CompiledValueOperation> valueOperations_;
     std::size_t valueOutputCount_ = 0;

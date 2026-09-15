@@ -206,6 +206,48 @@ void testVec2AndExtremeTime(Expectations& expectations) {
                         "Vec2 components share one correctly rounded extreme time factor");
 }
 
+void testIndependentComponentSampling(Expectations& expectations) {
+    runtime::CompiledVec2Curve vector;
+    vector.id = document::AnimationCurveId::fromRaw(40);
+    vector.defaultValue = document::Vec2d{10.0, 20.0};
+    vector.components[0] = {
+        {document::KeyframeId::fromRaw(400), time(0), 0.0,
+         runtime::CompiledKeyframeInterpolation::Linear},
+        {document::KeyframeId::fromRaw(401), time(2), 4.0,
+         runtime::CompiledKeyframeInterpolation::Linear},
+    };
+    vector.components[1] = {
+        {document::KeyframeId::fromRaw(402), time(1), 8.0,
+         runtime::CompiledKeyframeInterpolation::Linear},
+    };
+
+    const auto beforeYKey = runtime::sampleAnimationCurve(vector, time(1, 2));
+    expectations.expect(beforeYKey && beforeYKey.value == document::Vec2d{1.0, 8.0},
+                        "a Vec2 component samples its own pre-range endpoint independently");
+    const auto afterYKey = runtime::sampleAnimationCurve(vector, time(3, 2));
+    expectations.expect(afterYKey && afterYKey.value == document::Vec2d{3.0, 8.0},
+                        "keyed Vec2 components sample their own times and interpolation");
+
+    runtime::CompiledColor4Curve color;
+    color.id = document::AnimationCurveId::fromRaw(41);
+    color.defaultValue = core::Color4d{0.1, 0.2, 0.3, 1.0};
+    color.components[0] = {
+        {document::KeyframeId::fromRaw(410), time(0), 0.0,
+         runtime::CompiledKeyframeInterpolation::Hold},
+        {document::KeyframeId::fromRaw(411), time(1), 1.0,
+         runtime::CompiledKeyframeInterpolation::Linear},
+    };
+    color.components[1] = {
+        {document::KeyframeId::fromRaw(412), time(0), 0.5,
+         runtime::CompiledKeyframeInterpolation::Linear},
+        {document::KeyframeId::fromRaw(413), time(1), 0.75,
+         runtime::CompiledKeyframeInterpolation::Linear},
+    };
+    const auto colorSample = runtime::sampleAnimationCurve(color, time(1, 2));
+    expectations.expect(colorSample && colorSample.value == core::Color4d{0.0, 0.625, 0.3, 1.0},
+                        "colour components preserve per-component Hold, Linear and default paths");
+}
+
 void testValidationAndEnvironment(Expectations& expectations) {
     auto curve = scalarCurve();
     curve.keyframes.back().outgoingInterpolation = runtime::CompiledKeyframeInterpolation::Hold;
@@ -245,6 +287,7 @@ int main() {
                         "animation sampling semantics are explicitly versioned");
     testSampling(expectations);
     testVec2AndExtremeTime(expectations);
+    testIndependentComponentSampling(expectations);
     testEaseInOutAtExactThirds(expectations);
     testColor4Sampling(expectations);
     testValidationAndEnvironment(expectations);

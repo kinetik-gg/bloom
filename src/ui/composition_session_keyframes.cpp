@@ -1,10 +1,12 @@
 #include "timeline_keyframe_time.hpp"
 #include <QThread>
 #include <algorithm>
+#include <array>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
+#include <type_traits>
 
 namespace bloom::ui {
 namespace {
@@ -27,9 +29,22 @@ bool editableParameter(const CompositionSession& session, document::ParameterId 
 void CompositionSession::selectKeyframe(document::AnimationCurveId curve, document::KeyframeId key,
                                         bool extend) {
     auto keys = extend ? selection_.keyframes : std::vector<KeyframeSelection>{};
-    const KeyframeSelection target{curve, key};
+    const KeyframeSelection target{curve, key, std::nullopt};
     if (!keyframeSelectionExists(target)) {
         reportUnavailable(tr("The selected keyframe is no longer available"));
+        return;
+    }
+    std::erase(keys, target);
+    keys.push_back(target);
+    selectKeyframes(keys);
+}
+void CompositionSession::selectKeyframe(document::AnimationCurveId curve,
+                                        document::AnimationComponent component,
+                                        document::KeyframeId key, bool extend) {
+    auto keys = extend ? selection_.keyframes : std::vector<KeyframeSelection>{};
+    const KeyframeSelection target{curve, key, component};
+    if (!keyframeSelectionExists(target)) {
+        reportUnavailable(tr("The selected component keyframe is no longer available"));
         return;
     }
     std::erase(keys, target);
@@ -73,6 +88,22 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
             continue;
         std::visit(
             [&](const auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                if (address.component.has_value()) {
+                    const auto* component = [&]() {
+                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>)
+                            return static_cast<const document::ComponentAnimationCurve*>(nullptr);
+                        else
+                            return curve.component(*address.component);
+                    }();
+                    if (component != nullptr) {
+                        for (const auto& key : component->keyframes)
+                            if (key.id == address.keyframeId)
+                                result.push_back({*parameter, key.time, key.value,
+                                                  key.outgoingInterpolation, address.component});
+                    }
+                    return;
+                }
                 for (const auto& key : curve.keyframes)
                     if (key.id == address.keyframeId)
                         result.push_back(
@@ -119,9 +150,49 @@ bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePast
             continue;
         std::visit(
             [&](const auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                if (paste.component.has_value()) {
+                    if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                        const auto* component = curve.component(*paste.component);
+                        if (component != nullptr) {
+                            for (const auto& key : component->keyframes)
+                                if (key.time == paste.time)
+                                    selection.push_back({curve.id, key.id, paste.component});
+                        }
+                    }
+                    return;
+                }
                 for (const auto& key : curve.keyframes)
                     if (key.time == paste.time)
-                        selection.push_back({curve.id, key.id});
+                        selection.push_back({curve.id, key.id, std::nullopt});
+                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    if (curve.keyframes.empty()) {
+                        for (std::size_t index = 0; index < curve.components.size(); ++index) {
+                            for (const auto& key : curve.components[index].keyframes) {
+                                if (key.time != paste.time)
+                                    continue;
+                                const auto component = [&] {
+                                    if constexpr (std::is_same_v<Curve,
+                                                                 document::Vec2AnimationCurve>)
+                                        return std::array{document::AnimationComponent::X,
+                                                          document::AnimationComponent::Y}[index];
+                                    else if constexpr (std::is_same_v<Curve,
+                                                                      document::Vec3AnimationCurve>)
+                                        return std::array{document::AnimationComponent::X,
+                                                          document::AnimationComponent::Y,
+                                                          document::AnimationComponent::Z}[index];
+                                    else
+                                        return std::array{
+                                            document::AnimationComponent::Red,
+                                            document::AnimationComponent::Green,
+                                            document::AnimationComponent::Blue,
+                                            document::AnimationComponent::Alpha}[index];
+                                }();
+                                selection.push_back({curve.id, key.id, component});
+                            }
+                        }
+                    }
+                }
             },
             *record);
     }
@@ -132,7 +203,7 @@ bool CompositionSession::deleteSelectedKeyframes() {
     std::vector<commands::KeyframeAddress> keys;
     keys.reserve(selection_.keyframes.size());
     for (const auto& key : selection_.keyframes)
-        keys.push_back({key.curveId, key.keyframeId});
+        keys.push_back({key.curveId, key.keyframeId, key.component});
     if (keys.empty())
         return false;
     for (const auto& key : keys) {
@@ -151,7 +222,7 @@ bool CompositionSession::setSelectedKeyframesInterpolation(
     std::vector<commands::KeyframeAddress> keys;
     keys.reserve(selection_.keyframes.size());
     for (const auto& key : selection_.keyframes)
-        keys.push_back({key.curveId, key.keyframeId});
+        keys.push_back({key.curveId, key.keyframeId, key.component});
     if (keys.empty())
         return false;
     for (const auto& key : keys) {

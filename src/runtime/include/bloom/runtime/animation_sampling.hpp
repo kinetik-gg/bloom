@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace bloom::runtime {
 
@@ -34,10 +35,24 @@ template <typename Value> struct AnimationSampleResult final {
 sampleAnimationCurve(const CompiledScalarCurve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept;
 
+[[nodiscard]] AnimationSampleResult<double>
+sampleAnimationComponentCurve(document::AnimationCurveId curveId,
+                              std::span<const CompiledScalarKeyframe> keyframes, double fallback,
+                              core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<double> sampleAnimationComponentCurve(
+    document::AnimationCurveId curveId, std::span<const CompiledScalarKeyframe> keyframes,
+    double fallback, core::RationalTime time, const CancellationToken& cancellation) noexcept;
+
 [[nodiscard]] AnimationSampleResult<document::Vec2d>
 sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time) noexcept;
 [[nodiscard]] AnimationSampleResult<document::Vec2d>
 sampleAnimationCurve(const CompiledVec2Curve& curve, core::RationalTime time,
+                     const CancellationToken& cancellation) noexcept;
+
+[[nodiscard]] AnimationSampleResult<document::Vec3d>
+sampleAnimationCurve(const CompiledVec3Curve& curve, core::RationalTime time) noexcept;
+[[nodiscard]] AnimationSampleResult<document::Vec3d>
+sampleAnimationCurve(const CompiledVec3Curve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept;
 
 [[nodiscard]] AnimationSampleResult<core::Color4d>

@@ -11,11 +11,12 @@ over immutable snapshots with explicitly supplied color settings, strict bounded
 into a Bloom-owned DOM, typed document decode and reconstruction through checked model surfaces,
 newer-minor unknown-member round-trip capture and write overlay, and the constrained ZIP
 container reader and writer, and the document `1.0` → `1.1` node-layout, `1.1` → `1.2` node-group,
-`1.2` → `1.3` animation-breadth, and `1.3` → `1.4` value-graph migrations are implemented.
+`1.2` → `1.3` animation-breadth, `1.3` → `1.4` value-graph, and `1.8` → `1.9` component-keyframe
+migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-13
+Updated: 2026-09-15
 
 ## Purpose And Ownership
 
@@ -37,16 +38,16 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.8`.
+The container version remains `1.0`; the current document schema is `1.9`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. They live at
-`schemas/project/manifest-1.8.schema.json` and `schemas/project/document-1.8.schema.json`, with
-absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.8` and
-`urn:kinetik:bloom:schema:project-document:1.8`. The manifest artifact still requires container
-`1.0`; its document declaration is `1.8`. Every historical artifact from `1.0` through `1.7`, manifest and
+`schemas/project/manifest-1.9.schema.json` and `schemas/project/document-1.9.schema.json`, with
+absolute `$id` values `urn:kinetik:bloom:schema:project-manifest:1.9` and
+`urn:kinetik:bloom:schema:project-document:1.9`. The manifest artifact still requires container
+`1.0`; its document declaration is `1.9`. Every historical artifact from `1.0` through `1.8`, manifest and
 document, remains checked, and each version's checker validates what its own minor adds and then
 reduces the artifact to its predecessor so the older checks run unchanged.
 
@@ -1133,3 +1134,21 @@ safe-area choices are durable across save/reopen. Missing `safeAreas` in a 1.8 d
 same default meaning. Preset selection and custom edits are ordinary undoable composition
 commands. These values affect viewer guide painting only: they never alter render pixels, cached
 frames, exports, or evaluation.
+
+## Component Keyframes In Document 1.9
+
+The `1.8` → `1.9` ladder step changes vector and colour animation records from whole-value keys to
+flat scalar component keys. A `vec2` key names `x` or `y`; a `vec3` key names `x`, `y`, or `z`; a
+`color4` key names `red`, `green`, `blue`, or `alpha`. Every component key retains the legacy key's
+exact rational `time` and `outgoingInterpolation`. Component timelines are independently ordered,
+so a component can be keyed without creating sibling keys. An animated parameter may carry an
+optional typed `source.defaultValue`; an unkeyed component samples that default.
+
+The migration is deterministic DOM-to-DOM. The first component keeps each legacy key's
+`KeyframeId`; generated sibling IDs are allocated from a reserved range above the old
+`idAllocation.highestIssued.keyframe`, and the final high-water value is written before the project
+records. This preserves all old IDs, prevents collisions, and makes repeated migration byte
+deterministic. Since the split copies exact values, times, and interpolation modes, migrated
+`Hold`, `Linear`, and `EaseInOut` samples are bit-identical to the legacy whole-value samples. The
+document and manifest artifacts are `document-1.9.schema.json` and `manifest-1.9.schema.json`; the
+historical `1.8` artifacts remain unchanged.

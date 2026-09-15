@@ -1,11 +1,11 @@
 // The value-graph pass (task S7). A second, independent lowering over the SAME reachable node set,
-// producing runtime::CompiledValueOperation rather than runtime::CompiledOperation. It runs before the
-// image pass and shares none of its address space: an OperationIndex names a step that produces
+// producing runtime::CompiledValueOperation rather than runtime::CompiledOperation. It runs before
+// the image pass and shares none of its address space: an OperationIndex names a step that produces
 // pixels, a ValueOutputIndex names one number.
 //
 // Everything here reuses the patterns the image pass already established -- the same reachable set,
-// the same topological order, the same "resolve an operand, or fail with a scoped diagnostic" shape --
-// so there is one way to lower a node in this file, not two.
+// the same topological order, the same "resolve an operand, or fail with a scoped diagnostic" shape
+// -- so there is one way to lower a node in this file, not two.
 
 // Whether this node belongs to the value pass. The Image Reroute is the one exception: it carries
 // pixels, so it is ELIDED in the image pass (its consumers read its input's operation directly),
@@ -25,15 +25,14 @@
 
 [[nodiscard]] bool isValueNode(const document::NodeId nodeId) const {
     const auto* node = findNode(nodeId);
-    const auto* definition = node == nullptr
-                                 ? nullptr
-                                 : registry_.find(node->typeId, node->schemaVersion);
+    const auto* definition =
+        node == nullptr ? nullptr : registry_.find(node->typeId, node->schemaVersion);
     return definition != nullptr && runtime::isValueLowering(definition->lowering) &&
            !isImageReroute(nodeId);
 }
 
-// The kind a socket on `nodeId` actually carries: the reroute's resolved kind where the node is one,
-// and the registry's declared kind everywhere else.
+// The kind a socket on `nodeId` actually carries: the reroute's resolved kind where the node is
+// one, and the registry's declared kind everywhere else.
 [[nodiscard]] runtime::SocketValueKind socketKindOf(const document::NodeId nodeId,
                                                     const runtime::SocketValueKind declared) const {
     const auto* node = findNode(nodeId);
@@ -43,8 +42,8 @@
     return composition_->graph().rerouteKind(nodeId, registry_).value_or(declared);
 }
 
-// Every driver binding on a reachable node, as the (value node, output port) pair it names. Collected
-// once so reachability, the topological order and operand resolution all read one list.
+// Every driver binding on a reachable node, as the (value node, output port) pair it names.
+// Collected once so reachability, the topological order and operand resolution all read one list.
 struct DriverReference final {
     document::NodeId ownerNodeId;
     document::ParameterId parameterId;
@@ -70,8 +69,8 @@ driverReferences(const document::NodeRecord& node) const {
 }
 
 // A document constant as a lowered value. RationalTime is the one alternative with no lowered form:
-// a rational is how Bloom names an INSTANT, and a value graph carries quantities -- which is also why
-// a Time node's seconds output is a Scalar rather than a rational.
+// a rational is how Bloom names an INSTANT, and a value graph carries quantities -- which is also
+// why a Time node's seconds output is a Scalar rather than a rational.
 [[nodiscard]] static std::optional<runtime::CompiledValue>
 compiledValueFrom(const document::ParameterValue& value) {
     return std::visit(
@@ -115,9 +114,8 @@ outputKindOf(const document::OutputPortRef& output) const {
     if (node != nullptr && document::isRerouteNodeType(node->typeId)) {
         return composition_->graph().rerouteKind(output.nodeId, registry_);
     }
-    const auto* definition = node == nullptr
-                                 ? nullptr
-                                 : registry_.find(node->typeId, node->schemaVersion);
+    const auto* definition =
+        node == nullptr ? nullptr : registry_.find(node->typeId, node->schemaVersion);
     if (definition == nullptr) {
         return std::nullopt;
     }
@@ -151,19 +149,20 @@ resolveValueOutput(const document::OutputPortRef& source,
     const auto index = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
     ++valueOutputCount_;
     valueOperations_.push_back(runtime::CompiledValueOperation{
-        {}, index, 1,
+        {},
+        index,
+        1,
         runtime::CompiledValuePromotion{*promotion,
                                         runtime::CompiledValueOperand{{}, produced->second}}});
     return index;
 }
 
 // One operand of a value node: the value-graph output its parameter is driven by if there is one,
-// otherwise the authored constant behind it. This is the single place the "unlinked means the widget's
-// value, linked means the wire's value" rule is implemented for evaluation, matching the editor's own
-// rule exactly.
-// A curve-backed authored value, as the index of its compiled curve (task FIX1, item G). Answers
-// nothing when the parameter is not on a curve, or when its kind has no curve table -- the caller
-// then falls through to the constant it must be.
+// otherwise the authored constant behind it. This is the single place the "unlinked means the
+// widget's value, linked means the wire's value" rule is implemented for evaluation, matching the
+// editor's own rule exactly. A curve-backed authored value, as the index of its compiled curve
+// (task FIX1, item G). Answers nothing when the parameter is not on a curve, or when its kind has
+// no curve table -- the caller then falls through to the constant it must be.
 [[nodiscard]] std::optional<runtime::CompiledValueOperand>
 curveOperand(const document::ParameterRecord& parameter) const {
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
@@ -176,6 +175,10 @@ curveOperand(const document::ParameterRecord& parameter) const {
     }
     if (const auto vector = vec2CurveIndices_.find(source->curveId);
         vector != vec2CurveIndices_.end()) {
+        return runtime::CompiledValueOperand{parameter.id, vector->second};
+    }
+    if (const auto vector = vec3CurveIndices_.find(source->curveId);
+        vector != vec3CurveIndices_.end()) {
         return runtime::CompiledValueOperand{parameter.id, vector->second};
     }
     if (const auto color = color4CurveIndices_.find(source->curveId);
@@ -195,27 +198,27 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
     }
     const auto* binding = runtime::detail::findParameterBinding(node, port);
     if (binding == nullptr) {
-        // A socket with no parameter behind it is a Reroute's pass-through, and only a Reroute's: it
-        // carries someone else's value, so it IS reached by an ordinary edge.
+        // A socket with no parameter behind it is a Reroute's pass-through, and only a Reroute's:
+        // it carries someone else's value, so it IS reached by an ordinary edge.
         const auto* edge = fixedInputEdge(node.id, port);
         if (edge == nullptr) {
             return std::nullopt;
         }
         const auto resolved =
             resolveValueOutput(edge->source, socketKindOf(node.id, declared->valueKind));
-        return resolved.has_value()
-                   ? std::optional(runtime::CompiledValueOperand{document::ParameterId{}, *resolved})
-                   : std::nullopt;
+        return resolved.has_value() ? std::optional(runtime::CompiledValueOperand{
+                                          document::ParameterId{}, *resolved})
+                                    : std::nullopt;
     }
     const auto* parameter = findParameter(binding->parameterId);
     if (parameter == nullptr) {
         return std::nullopt;
     }
     // An operand socket is LINKED when its parameter carries a driver binding, not when an edge
-    // terminates on it. A parameter and the socket that can fill it are one authored value, so there
-    // is one durable record of where that value comes from -- the parameter's own source -- rather
-    // than an edge and a binding that could disagree. CanonicalGraph::validate() refuses an edge into
-    // a parameter socket for exactly that reason.
+    // terminates on it. A parameter and the socket that can fill it are one authored value, so
+    // there is one durable record of where that value comes from -- the parameter's own source --
+    // rather than an edge and a binding that could disagree. CanonicalGraph::validate() refuses an
+    // edge into a parameter socket for exactly that reason.
     if (const auto driven = driverOutput(*parameter, declared->valueKind)) {
         return runtime::CompiledValueOperand{binding->parameterId, *driven};
     }
@@ -235,21 +238,19 @@ valueOperand(const document::NodeRecord& node, const runtime::NodeDefinition& de
 
 // An inline selector's authored integer, as the closed enumeration it names. A selector is never
 // socket-linkable, so it is always a constant here -- and a stored integer naming no implemented
-// operation was already refused by document validation, which is why failing to map one is a topology
-// failure rather than a fallback.
+// operation was already refused by document validation, which is why failing to map one is a
+// topology failure rather than a fallback.
 template <typename Enumeration, typename Mapper>
-[[nodiscard]] std::optional<Enumeration> selector(const document::NodeRecord& node,
-                                                 const std::string_view role,
-                                                 Mapper&& mapper) const {
-    const auto* stored = parameterConstant<std::int64_t>(
-        runtime::detail::findParameterBinding(node, role));
+[[nodiscard]] std::optional<Enumeration>
+selector(const document::NodeRecord& node, const std::string_view role, Mapper&& mapper) const {
+    const auto* stored =
+        parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, role));
     return stored == nullptr ? std::nullopt : std::forward<Mapper>(mapper)(*stored);
 }
 
 [[nodiscard]] std::optional<bool> booleanSelector(const document::NodeRecord& node,
                                                   const std::string_view role) const {
-    const auto* stored =
-        parameterConstant<bool>(runtime::detail::findParameterBinding(node, role));
+    const auto* stored = parameterConstant<bool>(runtime::detail::findParameterBinding(node, role));
     return stored == nullptr ? std::nullopt : std::optional(*stored);
 }
 
@@ -267,8 +268,8 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             return std::nullopt;
         }
         // Task FIX1, item G: a literal whose value is on a curve lowers to its curve index, and the
-        // evaluator samples it at the frame being rendered -- so a Scalar node keyed 0 to 1 over ten
-        // frames drives a layer's opacity per frame, exactly as a Time node already could.
+        // evaluator samples it at the frame being rendered -- so a Scalar node keyed 0 to 1 over
+        // ten frames drives a layer's opacity per frame, exactly as a Time node already could.
         if (auto curve = curveOperand(*parameter)) {
             return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{*curve}};
         }
@@ -316,8 +317,8 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             runtime::CompiledValueScalarMath{*operation, *clamp, std::move(operands)}};
     }
     case runtime::NodeLoweringKind::ValueVectorMath: {
-        const auto operation =
-            selector<VectorOperation>(node, kOperationParameterRole, vectorOperationFromStoredValue);
+        const auto operation = selector<VectorOperation>(node, kOperationParameterRole,
+                                                         vectorOperationFromStoredValue);
         auto left = operandOf(kFirstOperandPortName);
         auto right = operandOf(kSecondOperandPortName);
         auto factor = operandOf(kScaleFactorPortName);
@@ -331,8 +332,8 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             *operation, components, *std::move(left), *std::move(right), *std::move(factor)}};
     }
     case runtime::NodeLoweringKind::ValueVectorReduce: {
-        const auto reduction =
-            selector<VectorReduction>(node, kOperationParameterRole, vectorReductionFromStoredValue);
+        const auto reduction = selector<VectorReduction>(node, kOperationParameterRole,
+                                                         vectorReductionFromStoredValue);
         auto left = operandOf(kFirstOperandPortName);
         auto right = operandOf(kSecondOperandPortName);
         const auto components = vectorComponentCount(definition.inputs.front().valueKind);
@@ -343,8 +344,8 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             *reduction, components, *std::move(left), *std::move(right)}};
     }
     case runtime::NodeLoweringKind::ValueMapRange: {
-        const auto interpolation = selector<RangeInterpolation>(
-            node, kInterpolationParameterRole, rangeInterpolationFromStoredValue);
+        const auto interpolation = selector<RangeInterpolation>(node, kInterpolationParameterRole,
+                                                                rangeInterpolationFromStoredValue);
         const auto clamp = booleanSelector(node, kClampResultParameterRole);
         auto value = operandOf(kMapRangeValuePortName);
         auto fromMinimum = operandOf(kMapRangeFromMinimumPortName);
@@ -529,8 +530,7 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         }
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
-        if (node == nullptr || definition == definitions_.end() ||
-            !isValueNode(nodeId)) {
+        if (node == nullptr || definition == definitions_.end() || !isValueNode(nodeId)) {
             continue;
         }
         auto kernel = lowerValueKernel(*node, *definition->second);
@@ -552,8 +552,8 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
 }
 
 // A driven parameter's compiled source. The driver names a value node's output, and the parameter's
-// own socket kind is what that output has to reach -- through a promotion if the kinds differ, exactly
-// as an edge into the same socket would.
+// own socket kind is what that output has to reach -- through a promotion if the kinds differ,
+// exactly as an edge into the same socket would.
 [[nodiscard]] std::optional<runtime::ValueOutputIndex>
 driverOutput(const document::ParameterRecord& parameter,
              const runtime::SocketValueKind destinationKind) {
