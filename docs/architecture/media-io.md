@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-08-25
+Updated: 2026-09-15
 
 ## Purpose
 
@@ -210,6 +210,54 @@ Audio decode produces immutable planar or interleaved sample blocks with exact s
 time intervals, sample representation, rate, channel roles, priming/padding state, and provenance.
 Resampling, layout conversion, loudness processing, and monitoring gain are separate operations.
 Bloom does not need DAW-grade mixing to preserve source audio correctly.
+
+## Audio v0 (AUDIO-1)
+
+The engine-only v0 slice implements bounded local preview for WAV and MP3. It is the companion audio
+paragraph to the narrow in-process image exception introduced by MEDIA-1; it does not accept the
+general worker/provider design as complete and it does not add audio to project schema, the graph,
+or the timeline. AUDIO-2 owns those document and UI connections.
+
+### Formats And Limits
+
+- WAV is identified from RIFF/RF64 plus WAVE content and decoded through the pinned `dr_wav` header.
+  PCM and IEEE float WAV encodings supported by that adapter are converted to Bloom-owned planar
+  float32 samples.
+- MP3 is identified from an ID3 tag or MPEG frame sync and decoded through the pinned `minimp3`
+  core and extended headers with float output. No MP3 encoder or broad codec claim is made.
+- `probeAudio(path)` returns the container, sample rate, channel count, frame count, and exact
+  `core::RationalTime` duration. `decodeAudio(path, limits)` returns an `AudioBuffer` with one
+  float32 plane per channel and rejects partial reads.
+- The default file-size cap is 64 MiB and the decoded sample budget is 48,000,000 interleaved
+  samples. Limits are checked before decoder entry and before decoded storage allocation; wrong
+  magic, truncated input, malformed headers, invalid formats, and budget violations return typed
+  errors without publishing a partial buffer.
+- `waveformSummary(buffer, bucketCount)` derives per-bucket minimum and maximum values per channel
+  from the immutable buffer. Waveforms are derived runtime state, never document truth.
+
+The three headers are unmodified, checked-in sources. Each is reached through one Bloom-owned
+translation unit and a private object-library target; third-party warnings are suppressed only in
+that translation unit and strict floating-point flags remain enabled. The public media headers
+expose no decoder or device-library types. The security records beside each license state the
+accepted in-process risk: resource bounds do not provide a process-isolation or memory-corruption
+guarantee, and a future task adapter must check cancellation before and after each bounded call.
+
+### Preview Engine And Synchronization
+
+`AudioEngine` owns a small mix graph of clips containing an `AudioBuffer`, rational start time, level,
+mute state, and solo state. The CPU mixer renders fixed-size interleaved blocks into a preallocated
+single-producer/single-consumer ring. The backend callback only consumes that ring and zero-fills an
+underrun; neither side allocates, locks, decodes, or performs file I/O on the callback path.
+`NullBackend` pulls the same callback contract for deterministic tests. `MiniaudioBackend` adapts
+the contract to the platform playback device without leaking miniaudio types.
+
+While playing, the audio clock is the master clock. `positionNow()` is derived from the number of
+frames actually written by the backend callback, the output rate, the rational play origin, and the
+transport rate; it does not advance from wall-clock guesses. The transport follows this clock, so
+device callback cadence and any underrun remain visible in the authoritative position rather than
+creating a second drifting timeline. `play(at)`, `stop()`, `seek(at)`, and `setRate()` operate on
+the same rational transport state. A future synchronized viewer/timeline transport must consume
+this clock rather than drive audio from its own timer.
 
 ### 5. Proxies, Thumbnails, And Waveforms
 
