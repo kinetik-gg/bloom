@@ -69,8 +69,7 @@ void run() {
     ui::NodeGraphEditor nodes(session);
     nodes.show();
     QMimeData mime;
-    mime.setData(ui::kAssetMimeType, QByteArray::number(session.snapshot().project().id().value()) +
-                                         ':' + QByteArray::number(asset.value()));
+    mime.setData(ui::kAssetMimeType, ui::assetMimePayload(session, asset));
     auto* view = nodes.findChild<QGraphicsView*>();
     require(view && drop(*view->viewport(), mime), "asset drop onto node canvas");
     document::NodeId source;
@@ -89,6 +88,11 @@ void run() {
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
     QWidget timelineTarget;
     ui::installAssetDropTarget(timelineTarget, session);
+    require(!drop(timelineTarget, mime), "stale asset drag is rejected after a revision change");
+    mime.setData(ui::kAssetMimeType, ui::assetMimePayload(session, asset));
+    QMimeData foreign;
+    foreign.setData(ui::kAssetMimeType, "foreign-session:0:1");
+    require(!drop(timelineTarget, foreign), "foreign-session asset drag is rejected");
     require(drop(timelineTarget, mime), "timeline asset drop");
     require(session.composition()->graph().layerOutputs().size() == 1, "drop creates a Layer");
     require(session.snapshot().project().validate().ok(), "drop preserves valid project graph");

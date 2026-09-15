@@ -13,6 +13,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -23,6 +24,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_editor.hpp>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 
@@ -40,13 +42,14 @@ struct WindowFixture {
     runtime::CpuReferenceDisplayPreparer display;
     runtime::QualifiedDisplayProcessorProvider qualified;
     TaskUiBridge bridge{scheduler};
+    std::unique_ptr<AssetController> assets;
     std::unique_ptr<CompositionPreviewController> preview;
     std::unique_ptr<FrameExportController> exporter;
     EditorRegistry registry;
     std::unique_ptr<MainWindow> window;
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
-    WindowFixture() {
+    explicit WindowFixture(const std::function<void(WindowFixture&)>& author = {}) {
         QCoreApplication::setApplicationVersion("0.1.0");
         // Match apps/bloom/main.cpp: the application installs this proxy after the theme.
         QApplication::setStyle(new kit::AltUnderlineProxyStyle());
@@ -58,9 +61,12 @@ struct WindowFixture {
         if (!runtime::registerBuiltInNodeDefinitions(definitions))
             throw std::runtime_error("Node definitions failed");
         definitions.freeze();
-        if (!session.addSolidLayer("Background", {0.035, 0.045, 0.075, 1.0}) ||
-            !session.addTextLayer("Bloom grammar", "Hello, Bloom!", 100.0) ||
-            !session.setSelectedPosition(720.0, 480.0))
+        assets = std::make_unique<AssetController>(session, projectHost, scheduler, bridge);
+        if (author)
+            author(*this);
+        else if (!session.addSolidLayer("Background", {0.035, 0.045, 0.075, 1.0}) ||
+                 !session.addTextLayer("Bloom grammar", "Hello, Bloom!", 100.0) ||
+                 !session.setSelectedPosition(720.0, 480.0))
             throw std::runtime_error("Fixture commands failed");
         // Author the sample graph through the same command as a user arrangement. Production
         // preserves saved positions, including the compact legacy defaults from layer creation.
@@ -117,6 +123,7 @@ struct WindowFixture {
     }
     ~WindowFixture() {
         window.reset();
+        assets->cancel();
         preview->beginShutdown();
         bridge.beginShutdown();
         QElapsedTimer timer;

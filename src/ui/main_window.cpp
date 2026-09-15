@@ -472,6 +472,8 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
 
 void MainWindow::updateFileActions() {
     const bool busy = projectHost_.isBusy();
+    if (auto* import = findChild<QAction*>("importAssetsAction"))
+        import->setEnabled(projectHost_.canSave());
     newProjectAction_->setEnabled(!busy);
     openProjectAction_->setEnabled(!busy);
     saveProjectAction_->setEnabled(!busy && projectHost_.canSave());

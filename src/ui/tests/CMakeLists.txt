@@ -756,3 +756,13 @@ foreach(scale IN ITEMS 1 1.5 2)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;media;integration" TIMEOUT 60)
 endforeach()
+
+add_executable(bloom_media_window_capture media_window_capture.cpp)
+target_link_libraries(bloom_media_window_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_media_window_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_media_window_capture)
+add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture)
+set_tests_properties(bloom.ui.media-window.dpr1 PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;media;capture" TIMEOUT 60)

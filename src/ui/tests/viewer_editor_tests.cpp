@@ -6,6 +6,7 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -869,14 +870,17 @@ void testProxyPaintingAndAutoZoom(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "Full is ready at actual size");
     const auto fullImage = fixture.viewer.grab().toImage();
-    const auto interior = fullImage.pixelColor(130, 150);
-    expectations.expect(interior != fullImage.pixelColor(100, 150),
+    const auto inside = fixture.viewer.canvasRectForTest().center().toPoint() + QPoint(13, 11);
+    const auto outside = fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2);
+    const auto interior = fullImage.pixelColor(inside);
+    expectations.expect(interior.blue() > 100 && interior.red() < 50 &&
+                            interior != fullImage.pixelColor(outside),
                         "the sample lies inside the full composition");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "fixed Quarter is ready");
     const auto proxyImage = fixture.viewer.grab().toImage();
-    expectations.expect(proxyImage.pixelColor(130, 150) == interior,
+    expectations.expect(proxyImage.pixelColor(inside) == interior,
                         "Quarter upscales to the same actual-size composition rectangle");
     const auto proxyView = fixture.controller.state().frame->displayBufferView();
     expectations.expect(proxyView.has_value() && proxyView->displayWindow.extent().width() == 40,

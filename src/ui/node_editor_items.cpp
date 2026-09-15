@@ -97,6 +97,12 @@ std::span<const QString> nodeCategoryOrder() {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "startFrame")
+        return QCoreApplication::translate("node_editor", "Start Frame");
+    if (typeId == "loopMode")
+        return QCoreApplication::translate("node_editor", "Loop Mode");
+    if (typeId == "colorSpace")
+        return QCoreApplication::translate("node_editor", "Color Space");
     QString name = QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size()));
     if (name.startsWith(QStringLiteral("bloom."))) {
         name.remove(0, 6);

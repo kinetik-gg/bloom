@@ -69,8 +69,7 @@ class AssetTree final : public QTreeWidget {
             const auto id = item->data(0, Qt::UserRole + 2).toULongLong();
             if (id) {
                 mime->setData(kAssetMimeType,
-                              QByteArray::number(session_.snapshot().project().id().value()) + ':' +
-                                  QByteArray::number(id));
+                              assetMimePayload(session_, document::AssetId::fromRaw(id)));
                 break;
             }
         }

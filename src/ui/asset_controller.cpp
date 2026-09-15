@@ -1,6 +1,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QUrl>
+#include <QUuid>
 #include <algorithm>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -31,10 +32,12 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
                                  QObject* parent)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge) {
+    dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
+        dragToken_ = QUuid::createUuid().toByteArray();
         cancel();
         base_.reset();
         previews_.clear();
@@ -47,6 +50,7 @@ AssetController::~AssetController() {
     cancel();
     session_.setAssetController(nullptr);
 }
+bool AssetController::acceptsEdits() const { return host_.canSave(); }
 void AssetController::cancel() {
     if (busy_)
         import_.cancel();
@@ -66,6 +70,8 @@ QImage AssetController::thumbnail(document::AssetId id) const {
     return found == previews_.end() ? QImage{} : found->second.image;
 }
 void AssetController::requestImport(QWidget* parent) {
+    if (!host_.canSave())
+        return;
     const auto paths = QFileDialog::getOpenFileNames(
         parent, tr("Import Images"), {}, tr("Images (*.png *.jpg *.jpeg *.PNG *.JPG *.JPEG)"));
     if (!paths.empty())
@@ -73,17 +79,25 @@ void AssetController::requestImport(QWidget* parent) {
 }
 void AssetController::importFiles(const QStringList& paths) { prepare(paths); }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
+    if (!host_.canSave())
+        return;
     const auto path = QFileDialog::getOpenFileName(parent, tr("Relink Image"), {},
                                                    tr("Images (*.png *.jpg *.jpeg)"));
     if (!path.isEmpty())
         prepare({path}, id);
 }
 void AssetController::remove(document::AssetId id) {
+    if (!host_.canSave())
+        return;
     commands::Transaction transaction("Remove Asset", session_.snapshot().revision());
     transaction.emplace<commands::RemoveAsset>(id);
     static_cast<void>(session_.executeTransaction(std::move(transaction)));
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId) {
+    if (!host_.canSave()) {
+        emit diagnostic(tr("Image import requires an idle, editable project"));
+        return;
+    }
     if (busy_ || paths.empty())
         return;
     std::vector<std::filesystem::path> files;
@@ -125,6 +139,14 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     emit activityChanged();
 }
 void AssetController::refresh() {
+    // A preserved-read-only install retires the document behind CompositionSession. Its hidden
+    // projection must not be read until the application rebinds it to decoded content again.
+    if (!host_.liveDocumentAndStack().first) {
+        if (previewPending_)
+            preview_.cancel();
+        previewPending_ = false;
+        return;
+    }
     if (previewPending_)
         preview_.cancel();
     const auto snapshot = session_.snapshot();
@@ -224,7 +246,8 @@ void AssetController::poll() {
             emit activityChanged();
             if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
                 *result->value()) {
-                if (!base_ || base_->project().id() != session_.snapshot().project().id() ||
+                if (!host_.liveDocumentAndStack().first || !base_ ||
+                    base_->project().id() != session_.snapshot().project().id() ||
                     base_->revision() != session_.snapshot().revision()) {
                     emit diagnostic(tr("Project changed during import; import the files again"));
                 } else {

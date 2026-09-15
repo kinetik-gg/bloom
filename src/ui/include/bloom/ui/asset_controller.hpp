@@ -1,4 +1,5 @@
 #pragma once
+#include <QByteArray>
 #include <QImage>
 #include <QObject>
 #include <QStringList>
@@ -28,6 +29,8 @@ class AssetController final : public QObject {
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] std::filesystem::path baseDirectory() const;
     void cancel();
+    [[nodiscard]] bool acceptsEdits() const;
+    [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
   signals:
     void changed();
     void activityChanged();
@@ -52,6 +55,7 @@ class AssetController final : public QObject {
     runtime::TaskHandle<std::shared_ptr<Previews>> preview_;
     std::optional<document::Snapshot> base_;
     Previews previews_;
+    QByteArray dragToken_;
     bool busy_ = false;
     bool previewPending_ = false;
 };

@@ -4,14 +4,27 @@
 #include <QGraphicsView>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 namespace bloom::ui {
-document::AssetId assetFromMime(const QMimeData& mime, const CompositionSession& session) {
-    const auto parts = mime.data(kAssetMimeType).split(':');
-    if (parts.size() != 2 || parts[0].toULongLong() != session.snapshot().project().id().value())
+QByteArray assetMimePayload(const CompositionSession& session, document::AssetId asset) {
+    const auto* controller = session.assetController();
+    if (!controller || !controller->acceptsEdits())
         return {};
-    const auto id = document::AssetId::fromRaw(parts[1].toULongLong());
+    return controller->dragToken() + ':' +
+           QByteArray::number(static_cast<qulonglong>(session.snapshot().revision().value())) +
+           ':' + QByteArray::number(static_cast<qulonglong>(asset.value()));
+}
+document::AssetId assetFromMime(const QMimeData& mime, const CompositionSession& session) {
+    const auto data = mime.data(kAssetMimeType);
+    const auto parts = data.split(':');
+    if (parts.size() != 3)
+        return {};
+    const auto id = document::AssetId::fromRaw(parts[2].toULongLong());
+    const auto expected = assetMimePayload(session, id);
+    if (expected.isEmpty() || data != expected)
+        return {};
     return session.snapshot().project().findAsset(id) ? id : document::AssetId{};
 }
 namespace {
