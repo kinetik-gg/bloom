@@ -77,6 +77,7 @@ struct AudioClip final {
     float level = 1.0F;
     bool muted = false;
     bool solo = false;
+    std::optional<core::RationalTime> endTime{};
 };
 
 class AudioEngine final {
@@ -99,6 +100,8 @@ class AudioEngine final {
     AudioEngine& operator=(AudioEngine&&) = delete;
 
     [[nodiscard]] ClipId addClip(AudioClip clip);
+    void replaceClips(std::vector<AudioClip> clips);
+    void clearClips() noexcept;
     [[nodiscard]] bool removeClip(ClipId id);
     [[nodiscard]] bool updateClip(ClipId id, float level, bool muted, bool solo) noexcept;
 

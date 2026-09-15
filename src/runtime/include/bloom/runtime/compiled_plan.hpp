@@ -159,6 +159,37 @@ struct CompiledImageSource {
     friend bool operator==(const CompiledImageSource&, const CompiledImageSource&) = default;
 };
 
+struct CompiledAudioSource final {
+    document::NodeId sourceNodeId;
+    document::AssetId assetId;
+    std::int64_t startFrame = 0;
+    CompiledScalarParameter level;
+
+    friend bool operator==(const CompiledAudioSource&, const CompiledAudioSource&) = default;
+};
+
+struct CompiledAudioLayer final {
+    document::NodeId layerOutputNodeId;
+    document::LayerId layerId;
+    std::size_t sourceIndex = 0;
+    bool enabled = true;
+    bool solo = false;
+    core::RationalTime inPoint{};
+    core::RationalTime outPoint{};
+
+    friend bool operator==(const CompiledAudioLayer&, const CompiledAudioLayer&) = default;
+};
+
+// Audio is intentionally a sibling of the image operation chain. It carries no device, decoded
+// samples, or filesystem state; the UI/audio boundary resolves the asset identity to a buffer.
+struct CompositionAudioMix final {
+    document::NodeId outputNodeId;
+    std::vector<CompiledAudioSource> sources;
+    std::vector<CompiledAudioLayer> layers;
+
+    friend bool operator==(const CompositionAudioMix&, const CompositionAudioMix&) = default;
+};
+
 struct CompiledText {
     document::NodeId sourceNodeId;
     document::ParameterId contentParameterId;
@@ -277,6 +308,7 @@ struct CompiledCompositionPlanDefinition final {
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
 
     bool bypassOperationCache = false;
+    CompositionAudioMix audioMix{};
 
     friend bool operator==(const CompiledCompositionPlanDefinition&,
                            const CompiledCompositionPlanDefinition&) = default;
@@ -333,6 +365,8 @@ class CompiledCompositionPlan final {
     }
     [[nodiscard]] std::span<const CompiledValueOperation> valueOperations() const&& = delete;
     [[nodiscard]] std::size_t valueOutputCount() const noexcept { return valueOutputCount_; }
+    [[nodiscard]] const CompositionAudioMix& audioMix() const& noexcept { return audioMix_; }
+    [[nodiscard]] const CompositionAudioMix& audioMix() const&& = delete;
     [[nodiscard]] std::uint32_t planSemanticsVersion() const noexcept {
         return planSemanticsVersion_;
     }
@@ -366,6 +400,7 @@ class CompiledCompositionPlan final {
     std::size_t valueOutputCount_ = 0;
     std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
+    CompositionAudioMix audioMix_{};
 };
 
 } // namespace bloom::runtime

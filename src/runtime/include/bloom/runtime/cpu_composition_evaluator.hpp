@@ -10,6 +10,27 @@
 
 namespace bloom::runtime {
 
+// A device-free audio projection of one compiled composition. It carries only the source identity
+// and time-varying controls; decoding and device ownership stay at the media/audio boundary.
+struct AudioClipDescription final {
+    document::NodeId sourceNodeId;
+    document::AssetId assetId;
+    core::RationalTime startTime{};
+    core::RationalTime endTime{};
+    double level = 1.0;
+    bool muted = false;
+    bool solo = false;
+
+    friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
+};
+
+struct AudioMixDescription final {
+    document::NodeId outputNodeId;
+    std::vector<AudioClipDescription> clips;
+
+    friend bool operator==(const AudioMixDescription&, const AudioMixDescription&) = default;
+};
+
 class CpuCompositionEvaluator final {
   public:
     void setAssetBaseDirectory(std::filesystem::path directory) const {
@@ -35,6 +56,14 @@ class CpuCompositionEvaluator final {
                                             EvaluationProgressCallback progress = {},
                                             CpuRowBandExecutor* rowBands = nullptr,
                                             OperationCacheStatistics* statistics = nullptr) const;
+
+    // Resolves the compiled audio graph at `time` without touching pixels, a device, or the
+    // filesystem. Curve-backed and value-graph-backed levels use the same exact evaluators as the
+    // image path. A malformed audio operand returns nullopt instead of silently changing the mix.
+    [[nodiscard]] std::optional<AudioMixDescription>
+    evaluateAudioMix(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                     core::RationalTime time,
+                     const CancellationToken& cancellation = {}) const;
 
   private:
     struct AssetContext {

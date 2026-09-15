@@ -15,7 +15,8 @@ CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefiniti
       valueOperations_(std::move(definition.valueOperations)),
       valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
-      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion) {
+      animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion),
+      audioMix_(std::move(definition.audioMix)) {
     analyzeTimeDependence();
 }
 
@@ -28,7 +29,8 @@ bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPla
            lhs.valueOperations_ == rhs.valueOperations_ &&
            lhs.valueOutputCount_ == rhs.valueOutputCount_ &&
            lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
-           lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_;
+           lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_ &&
+           lhs.audioMix_ == rhs.audioMix_;
 }
 
 CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() const {
@@ -46,7 +48,8 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .valueOutputCount = valueOutputCount_,
             .planSemanticsVersion = planSemanticsVersion_,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_,
-            .bypassOperationCache = bypassOperationCache_};
+            .bypassOperationCache = bypassOperationCache_,
+            .audioMix = audioMix_};
 }
 
 } // namespace bloom::runtime

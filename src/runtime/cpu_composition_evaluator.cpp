@@ -4,6 +4,7 @@
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/text_raster.hpp>
+#include <bloom/core/rational_time.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1357,6 +1358,87 @@ using detail::RowFailure;
 using detail::rowPassFailure;
 using detail::subjectFor;
 using detail::unexpectedAllocationFailure;
+
+namespace {
+
+[[nodiscard]] std::optional<core::RationalTime>
+audioStartTime(const std::int64_t frame, const document::FrameRate rate) noexcept {
+    const auto magnitude = frame < 0
+                               ? static_cast<std::uint64_t>(-(frame + 1)) + std::uint64_t{1}
+                               : static_cast<std::uint64_t>(frame);
+    const auto denominator = static_cast<std::uint64_t>(rate.numerator());
+    constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    if (denominator == 0 || magnitude > (maximum + (frame < 0 ? 1U : 0U)) / rate.denominator())
+        return std::nullopt;
+    const auto product = magnitude * rate.denominator();
+    std::int64_t numerator = 0;
+    if (frame < 0) {
+        numerator = product == maximum + 1U ? std::numeric_limits<std::int64_t>::min()
+                                            : -static_cast<std::int64_t>(product);
+    } else {
+        numerator = static_cast<std::int64_t>(product);
+    }
+    return core::RationalTime::create(numerator, static_cast<std::int64_t>(denominator));
+}
+
+} // namespace
+
+std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
+    const std::shared_ptr<const CompiledCompositionPlan>& plan, const core::RationalTime time,
+    const CancellationToken& cancellation) const {
+    if (!plan || cancellation.isCancellationRequested())
+        return std::nullopt;
+
+    std::optional<ValueGraphEvaluation> valueGraph;
+    const auto needsValueGraph = std::ranges::any_of(plan->audioMix().sources, [](const auto& source) {
+        return std::holds_alternative<ValueOutputIndex>(source.level.source);
+    });
+    if (needsValueGraph) {
+        valueGraph = evaluateValueGraph(
+            plan->valueOperations(), plan->valueOutputCount(), time, plan->format().frameRate(),
+            ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves(),
+                             plan->vec3Curves()});
+        if (cancellation.isCancellationRequested() || !valueGraph->diagnostics.empty())
+            return std::nullopt;
+    }
+
+    AudioMixDescription description{.outputNodeId = plan->audioMix().outputNodeId, .clips = {}};
+    description.clips.reserve(plan->audioMix().layers.size());
+    for (const auto& layer : plan->audioMix().layers) {
+        if (cancellation.isCancellationRequested() ||
+            layer.sourceIndex >= plan->audioMix().sources.size())
+            return std::nullopt;
+        const auto& source = plan->audioMix().sources[layer.sourceIndex];
+        const auto start = audioStartTime(source.startFrame, plan->format().frameRate());
+        if (!start)
+            return std::nullopt;
+        double level = 1.0;
+        if (const auto* constant = std::get_if<double>(&source.level.source)) {
+            level = *constant;
+        } else if (const auto* curve = std::get_if<ScalarCurveIndex>(&source.level.source)) {
+            if (curve->value() >= plan->scalarCurves().size())
+                return std::nullopt;
+            const auto sample = sampleAnimationCurve(plan->scalarCurves()[curve->value()], time);
+            if (!sample || !sample.value.has_value())
+                return std::nullopt;
+            level = *sample.value;
+        } else if (const auto* output = std::get_if<ValueOutputIndex>(&source.level.source)) {
+            if (!valueGraph || output->value() >= valueGraph->outputs.size())
+                return std::nullopt;
+            const auto* resolved = std::get_if<double>(&valueGraph->outputs[output->value()]);
+            if (resolved == nullptr)
+                return std::nullopt;
+            level = *resolved;
+        } else {
+            return std::nullopt;
+        }
+        if (!std::isfinite(level) || level < 0.0 || level > 2.0)
+            return std::nullopt;
+        description.clips.push_back({source.sourceNodeId, source.assetId, *start, layer.outPoint,
+                                     level, !layer.enabled, layer.solo});
+    }
+    return description;
+}
 
 EvaluationResult CpuCompositionEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
