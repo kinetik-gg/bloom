@@ -415,11 +415,13 @@ analysis -- evaluates the frame again rather than being handed a cached one, and
 `PreparedPreviewFrame::hasProcessFrame()` rather than assuming. That is the one thing a cache hit
 cannot answer, and it is stated rather than papered over with a silently null handle.
 
-**Budget.** `playback/ram-preview-memory-bytes` in QSettings, 2 GiB by default; missing, unparseable,
-or zero reads as the default. Least-recently-used entries are evicted until the budget is satisfied,
-and a frame larger than the whole budget is refused rather than allowed to evict everything for
-itself. At about 8 MB a frame the default budget holds roughly 250 frames of a 1920x1080
-composition -- ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the
+**Budget.** `playback/ram-preview-memory-bytes` in QSettings; missing, unparseable, or zero reads
+as the default. The default follows the machine: physical memory less a reserve for the operating
+system, decoders, and other applications (a quarter of physical memory, never less than 4 GiB), and
+never below a 2 GiB floor; a machine whose memory cannot be read gets the floor. Least-recently-used
+entries are evicted until the budget is satisfied, and a frame larger than the whole budget is
+refused rather than allowed to evict everything for itself. At about 8 MB a frame the floor holds
+roughly 250 frames of a 1920x1080 composition -- ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the
 first eviction and keeps the prefix that does.
 
 **Invalidation is the key.** A document edit advances the revision, so every entry of an earlier
