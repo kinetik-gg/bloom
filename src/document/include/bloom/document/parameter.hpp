@@ -7,6 +7,7 @@
 #include <bloom/document/validation.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -183,6 +184,10 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
            schemaKey == kScaleParameterSchemaKey || schemaKey == kVector2ValueParameterSchemaKey;
 }
 
+[[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kVector3ValueParameterSchemaKey;
+}
+
 [[nodiscard]] constexpr bool
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey ||
@@ -197,13 +202,11 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
 // Both author straight RGBA in kSolidColorEncoding, so one curve kind serves both.
 //
-// Task FIX1, item G: the value LIBRARY's own literals join all three sets. A Scalar node, a Vector
-// 2 node and a Colour node hold exactly the kinds these curves already carry, so animating one is
+// Task FIX1, item G: the value LIBRARY's own literals join all four sets. A Scalar node, a Vector
+// 2/3 node and a Colour node hold exactly the kinds these curves carry, so animating one is
 // the same gesture, the same command, and the same sampling the layer parameters already have --
-// and a driven parameter downstream of one reads the sampled value per frame. Vector 3, Integer,
-// Boolean and String stay constant-or-driven: each would need a curve KIND that does not exist (a
-// Vec3 curve, or a Hold-only integer/boolean curve), which is a document-format change with its own
-// schema ladder step rather than a widening of this set.
+// and a driven parameter downstream of one reads the sampled value per frame. Integer, Boolean and
+// String stay constant-or-driven: each would need a separate discrete interpolation contract.
 [[nodiscard]] constexpr bool
 isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kSolidColorParameterSchemaKey ||
@@ -211,8 +214,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return isVec2AnimatableSchemaKey(schemaKey) || isScalarAnimatableSchemaKey(schemaKey) ||
-           isColor4AnimatableSchemaKey(schemaKey);
+    return isVec2AnimatableSchemaKey(schemaKey) || isVec3AnimatableSchemaKey(schemaKey) ||
+           isScalarAnimatableSchemaKey(schemaKey) || isColor4AnimatableSchemaKey(schemaKey);
 }
 
 // Whether a scalar value under this schema is confined to [0, 1]. Opacity is the only one: rotation
@@ -259,6 +262,10 @@ struct ConstantValueSource {
 
 struct AnimationCurveSource {
     AnimationCurveId curveId;
+    // Component curves with no keyframes use this parameter value for their constant component.
+    // It is optional only for source-compatibility with pre-component in-memory callers; current
+    // document records carry it whenever a component-aware curve can need a fallback.
+    std::optional<ParameterValue> defaultValue{};
 
     friend bool operator==(const AnimationCurveSource&, const AnimationCurveSource&) = default;
 };

@@ -284,7 +284,7 @@ buildMinimalArchiveBytesOrAbort(const std::string& projectName = "Untitled Proje
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 8}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 9}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -522,13 +522,13 @@ void testAsyncOpenRoundTrippedNewerMinor(Expectations& expectations) {
     if (!written) {
         return;
     }
-    const std::string anchor = "\"minor\": 8\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 9\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos, "async round trip: anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 8").size(), "\"minor\": 9");
+    text.replace(anchorPos, std::string_view("\"minor\": 9").size(), "\"minor\": 10");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
         expectations.expect(false, "async round trip: baseline ends with the root's closing brace");
         return;
@@ -556,11 +556,11 @@ void testAsyncOpenRoundTrippedNewerMinor(Expectations& expectations) {
         return;
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 9}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 10}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 9};
+                                            .schemaMinor = 10};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built), "async round trip: fixture archive builds");

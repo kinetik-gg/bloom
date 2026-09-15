@@ -7,6 +7,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 
+#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -17,9 +18,12 @@ inline constexpr std::string_view kKeyframeOutput = "keyframe";
 
 class CreateAnimationForParameter final : public Operation {
   public:
-    CreateAnimationForParameter(document::CompositionId compositionId,
-                                document::ParameterId parameterId, core::RationalTime initialTime)
-        : compositionId_(compositionId), parameterId_(parameterId), initialTime_(initialTime) {}
+    CreateAnimationForParameter(
+        document::CompositionId compositionId, document::ParameterId parameterId,
+        core::RationalTime initialTime,
+        std::optional<document::AnimationComponent> component = std::nullopt)
+        : compositionId_(compositionId), parameterId_(parameterId), initialTime_(initialTime),
+          component_(component) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -28,6 +32,7 @@ class CreateAnimationForParameter final : public Operation {
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
     core::RationalTime initialTime_;
+    std::optional<document::AnimationComponent> component_;
 };
 
 class InsertScalarKeyframe final : public Operation {
@@ -68,6 +73,27 @@ class InsertVec2Keyframe final : public Operation {
     document::AnimationCurveId curveId_;
     core::RationalTime time_;
     document::Vec2d value_;
+    document::KeyframeInterpolation outgoingInterpolation_ =
+        document::KeyframeInterpolation::Linear;
+};
+
+class InsertVec3Keyframe final : public Operation {
+  public:
+    InsertVec3Keyframe(document::CompositionId compositionId, document::AnimationCurveId curveId,
+                       core::RationalTime time, document::Vec3d value,
+                       document::KeyframeInterpolation outgoingInterpolation =
+                           document::KeyframeInterpolation::Linear)
+        : compositionId_(compositionId), curveId_(curveId), time_(time), value_(value),
+          outgoingInterpolation_(outgoingInterpolation) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::AnimationCurveId curveId_;
+    core::RationalTime time_;
+    document::Vec3d value_;
     document::KeyframeInterpolation outgoingInterpolation_ =
         document::KeyframeInterpolation::Linear;
 };
@@ -138,6 +164,29 @@ class UpdateVec2Keyframe final : public Operation {
         document::KeyframeInterpolation::Linear;
 };
 
+class UpdateVec3Keyframe final : public Operation {
+  public:
+    UpdateVec3Keyframe(document::CompositionId compositionId, document::AnimationCurveId curveId,
+                       document::KeyframeId keyframeId, core::RationalTime time,
+                       document::Vec3d value,
+                       document::KeyframeInterpolation outgoingInterpolation =
+                           document::KeyframeInterpolation::Linear)
+        : compositionId_(compositionId), curveId_(curveId), keyframeId_(keyframeId), time_(time),
+          value_(value), outgoingInterpolation_(outgoingInterpolation) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::AnimationCurveId curveId_;
+    document::KeyframeId keyframeId_;
+    core::RationalTime time_;
+    document::Vec3d value_;
+    document::KeyframeInterpolation outgoingInterpolation_ =
+        document::KeyframeInterpolation::Linear;
+};
+
 class UpdateColor4Keyframe final : public Operation {
   public:
     UpdateColor4Keyframe(document::CompositionId compositionId, document::AnimationCurveId curveId,
@@ -174,9 +223,10 @@ class SetKeyframeInterpolation final : public Operation {
   public:
     SetKeyframeInterpolation(document::CompositionId compositionId,
                              document::AnimationCurveId curveId, document::KeyframeId keyframeId,
-                             document::KeyframeInterpolation interpolation)
+                             document::KeyframeInterpolation interpolation,
+                             std::optional<document::AnimationComponent> component = std::nullopt)
         : compositionId_(compositionId), curveId_(curveId), keyframeId_(keyframeId),
-          interpolation_(interpolation) {}
+          interpolation_(interpolation), component_(component) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -186,6 +236,7 @@ class SetKeyframeInterpolation final : public Operation {
     document::AnimationCurveId curveId_;
     document::KeyframeId keyframeId_;
     document::KeyframeInterpolation interpolation_ = document::KeyframeInterpolation::Linear;
+    std::optional<document::AnimationComponent> component_;
 };
 
 class SetKeyframeAtTime final : public Operation {
@@ -195,6 +246,9 @@ class SetKeyframeAtTime final : public Operation {
         : compositionId_(compositionId), curveId_(curveId), time_(time), value_(value) {}
     SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
                       core::RationalTime time, document::Vec2d value)
+        : compositionId_(compositionId), curveId_(curveId), time_(time), value_(value) {}
+    SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
+                      core::RationalTime time, document::Vec3d value)
         : compositionId_(compositionId), curveId_(curveId), time_(time), value_(value) {}
     SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
                       core::RationalTime time, core::Color4d value)
@@ -207,7 +261,7 @@ class SetKeyframeAtTime final : public Operation {
     document::CompositionId compositionId_;
     document::AnimationCurveId curveId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
 };
 
 // SetKeyframeAtTime's PARAMETER-keyed sibling (task S5, item 0). It resolves the parameter's own
@@ -233,6 +287,10 @@ class SetKeyframeAtTimeForParameter final : public Operation {
         : compositionId_(compositionId), parameterId_(parameterId), time_(time), value_(value) {}
     SetKeyframeAtTimeForParameter(document::CompositionId compositionId,
                                   document::ParameterId parameterId, core::RationalTime time,
+                                  document::Vec3d value)
+        : compositionId_(compositionId), parameterId_(parameterId), time_(time), value_(value) {}
+    SetKeyframeAtTimeForParameter(document::CompositionId compositionId,
+                                  document::ParameterId parameterId, core::RationalTime time,
                                   core::Color4d value)
         : compositionId_(compositionId), parameterId_(parameterId), time_(time), value_(value) {}
 
@@ -243,14 +301,38 @@ class SetKeyframeAtTimeForParameter final : public Operation {
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
+};
+
+// Component-scoped authoring primitive. The value is scalar because every vector/colour component
+// is deliberately an independent ScalarKeyframe curve in the document model.
+class SetKeyframeAtTimeForParameterComponent final : public Operation {
+  public:
+    SetKeyframeAtTimeForParameterComponent(document::CompositionId compositionId,
+                                           document::ParameterId parameterId,
+                                           document::AnimationComponent component,
+                                           core::RationalTime time, double value)
+        : compositionId_(compositionId), parameterId_(parameterId), component_(component),
+          time_(time), value_(value) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId compositionId_;
+    document::ParameterId parameterId_;
+    document::AnimationComponent component_;
+    core::RationalTime time_;
+    double value_ = 0.0;
 };
 
 class DeleteKeyframe final : public Operation {
   public:
     DeleteKeyframe(document::CompositionId compositionId, document::AnimationCurveId curveId,
-                   document::KeyframeId keyframeId)
-        : compositionId_(compositionId), curveId_(curveId), keyframeId_(keyframeId) {}
+                   document::KeyframeId keyframeId,
+                   std::optional<document::AnimationComponent> component = std::nullopt)
+        : compositionId_(compositionId), curveId_(curveId), keyframeId_(keyframeId),
+          component_(component) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -259,6 +341,7 @@ class DeleteKeyframe final : public Operation {
     document::CompositionId compositionId_;
     document::AnimationCurveId curveId_;
     document::KeyframeId keyframeId_;
+    std::optional<document::AnimationComponent> component_;
 };
 
 class ConvertAnimationToConstant final : public Operation {
@@ -270,6 +353,9 @@ class ConvertAnimationToConstant final : public Operation {
                                document::ParameterId parameterId, document::Vec2d value)
         : compositionId_(compositionId), parameterId_(parameterId), value_(value) {}
     ConvertAnimationToConstant(document::CompositionId compositionId,
+                               document::ParameterId parameterId, document::Vec3d value)
+        : compositionId_(compositionId), parameterId_(parameterId), value_(value) {}
+    ConvertAnimationToConstant(document::CompositionId compositionId,
                                document::ParameterId parameterId, core::Color4d value)
         : compositionId_(compositionId), parameterId_(parameterId), value_(value) {}
 
@@ -279,7 +365,7 @@ class ConvertAnimationToConstant final : public Operation {
   private:
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
-    std::variant<double, document::Vec2d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
 };
 
 // Batch edits stage complete curves before publication, allowing selected keys to exchange times
@@ -287,6 +373,7 @@ class ConvertAnimationToConstant final : public Operation {
 struct KeyframeAddress {
     document::AnimationCurveId curveId;
     document::KeyframeId keyframeId;
+    std::optional<document::AnimationComponent> component{};
     friend bool operator==(const KeyframeAddress&, const KeyframeAddress&) = default;
 };
 struct KeyframeMove {
@@ -296,8 +383,9 @@ struct KeyframeMove {
 struct KeyframePaste {
     document::ParameterId parameterId;
     core::RationalTime time;
-    std::variant<double, document::Vec2d, core::Color4d> value;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value;
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
+    std::optional<document::AnimationComponent> component{};
 };
 class MoveKeyframes final : public Operation {
   public:

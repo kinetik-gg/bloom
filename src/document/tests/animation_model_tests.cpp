@@ -50,6 +50,8 @@ using bloom::document::ValidationResult;
 using bloom::document::Vec2AnimationCurve;
 using bloom::document::Vec2d;
 using bloom::document::Vec2Keyframe;
+using bloom::document::Vec3AnimationCurve;
+using bloom::document::Vec3d;
 
 class ExpectationContext final {
   public:
@@ -565,6 +567,58 @@ void testColorAndScalarSchemaOwnership(ExpectationContext& expectations) {
         "and text size keeps its own exclusive-low, inclusive-high domain");
 }
 
+void testIndependentComponentCurves(ExpectationContext& expectations) {
+    AnimationCurveStore store;
+    const auto curveId = id<AnimationCurveId>(90);
+    const auto inserted = store.insert(Vec3AnimationCurve{
+        curveId,
+        {},
+        std::array{
+            bloom::document::ComponentAnimationCurve{{
+                ScalarKeyframe{id<KeyframeId>(91), RationalTime::fromInteger(0), 1.0},
+            }},
+            bloom::document::ComponentAnimationCurve{{
+                ScalarKeyframe{id<KeyframeId>(92), RationalTime::fromInteger(0), 2.0},
+            }},
+            bloom::document::ComponentAnimationCurve{{
+                ScalarKeyframe{id<KeyframeId>(93), RationalTime::fromInteger(0), 3.0},
+            }},
+        }});
+    expectations.expect(inserted && store.validate().ok(),
+                        "a Vec3 curve accepts one independent scalar key per component");
+    const auto* x = store.findComponent(curveId, bloom::document::AnimationComponent::X);
+    const auto* y = store.findComponent(curveId, bloom::document::AnimationComponent::Y);
+    const auto* z = store.findComponent(curveId, bloom::document::AnimationComponent::Z);
+    expectations.expect(x != nullptr && y != nullptr && z != nullptr &&
+                            x->keyframes.front().value == 1.0 &&
+                            y->keyframes.front().value == 2.0 && z->keyframes.front().value == 3.0,
+                        "component lookup keeps X, Y and Z values separate");
+    expectations.expect(
+        store.insertKeyframe(curveId, bloom::document::AnimationComponent::Y,
+                             ScalarKeyframe{id<KeyframeId>(94), RationalTime::fromInteger(1), 8.0,
+                                            KeyframeInterpolation::EaseInOut}),
+        "a component can add a key without requiring keys on its sibling components");
+    expectations.expect(
+        store.updateKeyframe(curveId, bloom::document::AnimationComponent::Y,
+                             ScalarKeyframe{id<KeyframeId>(92), RationalTime::fromInteger(0), 2.0,
+                                            KeyframeInterpolation::EaseInOut}),
+        "an interior component key can choose its own interpolation");
+    y = store.findComponent(curveId, bloom::document::AnimationComponent::Y);
+    x = store.findComponent(curveId, bloom::document::AnimationComponent::X);
+    expectations.expect(y != nullptr && y->keyframes.size() == 2 &&
+                            y->keyframes.front().outgoingInterpolation ==
+                                KeyframeInterpolation::EaseInOut &&
+                            x != nullptr && x->keyframes.size() == 1,
+                        "component interpolation and cardinality are independent");
+    expectations.expect(
+        store.eraseKeyframe(curveId, bloom::document::AnimationComponent::Y, id<KeyframeId>(92)) &&
+            store.validate().ok(),
+        "removing a component key leaves the other component curves intact");
+    expectations.expect(store.findVec3(curveId)->components[1].keyframes.size() == 1 &&
+                            store.findVec3(curveId)->components[0].keyframes.size() == 1,
+                        "component deletion does not erase the Vec3 curve or sibling keys");
+}
+
 } // namespace
 
 int main() {
@@ -577,6 +631,7 @@ int main() {
         testAnimationAllocatorAndPublication(expectations);
         testColor4CurveAndEasedInterpolation(expectations);
         testColorAndScalarSchemaOwnership(expectations);
+        testIndependentComponentCurves(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

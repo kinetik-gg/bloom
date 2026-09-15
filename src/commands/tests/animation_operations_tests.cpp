@@ -198,6 +198,72 @@ void testColorKeyOperations(TestContext& test) {
                 "converting a colour animation back to a constant erases the curve atomically");
 }
 
+void testComponentKeyOperations(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+
+    Transaction create("Animate colour components", document.snapshot().revision());
+    create.emplace<CreateAnimationForParameter>(kCompositionId, kSolidColorId, time(0, 1));
+    const auto created = stack.execute(std::move(create));
+    const auto curveId = created.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
+    test.expect(created.changed() && curveId.has_value(),
+                "component test creates a colour animation curve");
+    if (!curveId.has_value())
+        return;
+
+    const auto initial = color4Curve(document.snapshot(), *curveId);
+    const auto redInitialId = initial.components[0].keyframes.front().id;
+    const auto greenInitialId = initial.components[1].keyframes.front().id;
+    Transaction setRed("Set red component", document.snapshot().revision());
+    setRed.emplace<SetKeyframeAtTimeForParameterComponent>(
+        kCompositionId, kSolidColorId, document::AnimationComponent::Red, time(1, 1), 0.9);
+    test.expect(stack.execute(std::move(setRed)).changed(),
+                "the exact component command inserts a red key");
+    const auto afterRed = color4Curve(document.snapshot(), *curveId);
+    test.expect(afterRed.components[0].keyframes.size() == 2 &&
+                    afterRed.components[1].keyframes.size() == 1 &&
+                    afterRed.components[1].keyframes.front().id == greenInitialId,
+                "a component key does not create sibling keys");
+
+    Transaction setGreen("Set green component", document.snapshot().revision());
+    setGreen.emplace<SetKeyframeAtTimeForParameterComponent>(
+        kCompositionId, kSolidColorId, document::AnimationComponent::Green, time(1, 1), 0.1);
+    test.expect(stack.execute(std::move(setGreen)).changed(),
+                "the same command independently inserts a green key");
+    const auto redKeyId =
+        color4Curve(document.snapshot(), *curveId).components[0].keyframes.back().id;
+    Transaction easeRed("Ease red interior key", document.snapshot().revision());
+    easeRed.emplace<SetKeyframeInterpolation>(kCompositionId, *curveId, redInitialId,
+                                              document::KeyframeInterpolation::Hold,
+                                              document::AnimationComponent::Red);
+    test.expect(stack.execute(std::move(easeRed)).changed(),
+                "interpolation edits are component-scoped and preserve key identity");
+
+    Transaction moveRed("Move red component", document.snapshot().revision());
+    moveRed.emplace<MoveKeyframes>(
+        kCompositionId, std::vector<KeyframeMove>{
+                            {{*curveId, redKeyId, document::AnimationComponent::Red}, time(2, 1)}});
+    test.expect(stack.execute(std::move(moveRed)).changed(),
+                "component-scoped batch moves change only the selected component");
+    const auto moved = color4Curve(document.snapshot(), *curveId);
+    test.expect(moved.components[0].keyframes.back().id == redKeyId &&
+                    moved.components[0].keyframes.back().time == time(2, 1) &&
+                    moved.components[1].keyframes.back().time == time(1, 1),
+                "moving a red key leaves the green key at its original time");
+
+    Transaction deleteRed("Delete red component", document.snapshot().revision());
+    deleteRed.emplace<DeleteKeyframe>(kCompositionId, *curveId, redKeyId,
+                                      document::AnimationComponent::Red);
+    test.expect(stack.execute(std::move(deleteRed)).changed(),
+                "component-scoped deletion removes only the addressed key");
+    test.expect(color4Curve(document.snapshot(), *curveId).components[0].keyframes.size() == 1 &&
+                    composition(document.snapshot()).parameters().find(kSolidColorId) != nullptr,
+                "deleting a component key does not collapse a curve while siblings remain");
+    test.expect(stack.undo().changed() &&
+                    color4Curve(document.snapshot(), *curveId).components[0].keyframes.size() == 2,
+                "component deletion is one undoable transaction");
+}
+
 // Task S5, item 1: text size joined the scalar-animatable set, and its SCHEMA domain -- not
 // "scalar" -- is what bounds its keys.
 void testTextSizeAnimationRespectsItsSchemaDomain(TestContext& test) {
@@ -726,6 +792,7 @@ int main() {
         bloom::commands::test::testVec2KeyOperations(test);
         bloom::commands::test::testAnimatedToConstantTransitionUndoRedo(test);
         bloom::commands::test::testColorKeyOperations(test);
+        bloom::commands::test::testComponentKeyOperations(test);
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);
     } catch (const std::exception& error) {

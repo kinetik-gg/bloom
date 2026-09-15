@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-14
+Updated: 2026-09-15
 
 ## Purpose And Ownership
 
@@ -19,6 +19,28 @@ and direct-manipulation boundary. It specializes the canonical parameter and com
 
 No layer, node, timeline, Viewer, Properties editor, or add-on gets a private animation store.
 
+## KEY-1 Whole-Component Key Audit
+
+The pre-KEY-1 implementation treats a vector or colour key as one value at one time. The
+whole-value assumptions are deliberately recorded here before the component-curve change:
+
+| Area | Whole-value assumption | Component-curve consequence |
+| --- | --- | --- |
+| Durable model | `Vec2Keyframe` and `Color4Keyframe` store one complete value; `AnimationCurveRecord` has scalar, Vec2, and Color4 alternatives. `Vec3d` is constant-only. | Vector and colour records now contain independently addressable scalar component curves (X/Y, X/Y/Z, or R/G/B/A); the animation source retains a typed default value for components with no keys. |
+| Sampling | `runtime::sampleAnimationCurve()` has one interval factor and mixes both vector channels or all four colour channels together. | Sample each component curve independently, preserving Hold, Linear, and EaseInOut per component; an empty component follows the animation source's default value. |
+| Commands | `SetKeyframeAtTime*`, Insert/Update/Delete/Interpolation operations are typed by whole curve kind. Batch `KeyframeAddress` identifies only `{curveId, keyframeId}` and `KeyframePaste` carries a whole typed value. | Add a component address and component command surface; parameter-level operations remain all-component conveniences, while batches accept component-scoped selections. |
+| Session | `toggleKeyframe*()` and `keyframeDiamondState*()` answer one binary state for a parameter's one curve. `KeyframeSelection` and clipboard data carry only curve/key IDs; effective vector/colour readers sample one whole curve. | Add component toggle/state and all/some/none aggregate state; selections carry their component, and effective readers resolve component curves without changing the public effective-value result types. |
+| Timeline lanes | `TimelineKeyframeRow`, grid projection, hit-testing, drag ghosts, and selection dispatch in `src/ui/timeline_ruler.*` and `src/ui/timeline_keyframe_gestures.cpp` project one lane per parameter curve. Property rows read Vec2 as two fields and one diamond. | KEY-2 owns component lanes and component diamonds. KEY-1 changes only the session seam and leaves widget wiring untouched. |
+| Compiler/evaluator | `CompiledVec2Curve`/`CompiledColor4Curve` tables are indexed once per parameter; snapshot lowering and CPU preflight/sample/resolve paths assume one whole-value curve and one segment identity. | Compile component tables and sample each component, composing the same typed value for consumers while keeping curve identity and semantics versions stable. |
+| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes; schema 1.3 introduced Color4; production migration currently ends at 1.8. | Schema 1.9 writes flat component keys and optional animation defaults. The deterministic 1.8 → 1.9 DOM migration splits each legacy vector/colour key at the same exact time and interpolation, preserving sampling and reserving generated key IDs above the old high water. |
+| Identity goldens | Runtime sampling tests pin the sampling version and vector behaviour; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
+
+The implementation touch points are therefore `src/document/animation.*` and parameter schema
+predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
+compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode plus the
+document migration registry and schemas, and `src/ui/composition_session.*` with its tests. The
+timeline widget files are audit targets only under this task's fence.
+
 ## Durable Type Model
 
 `KeyframeId` is a project-global strong ID with allocator and high-water semantics identical to the
@@ -30,20 +52,24 @@ A composition owns an `AnimationCurveStore` containing records ordered canonical
 
 ```text
 KeyframeInterpolation = Hold | Linear | EaseInOut
-
-ScalarKeyframe = { KeyframeId, RationalTime, Float64,  outgoing interpolation }
-Vec2Keyframe   = { KeyframeId, RationalTime, Vec2d,    outgoing interpolation }
-Color4Keyframe = { KeyframeId, RationalTime, Color4d,  outgoing interpolation }
-
-AnimationCurveRecord = ScalarCurve | Vec2Curve | Color4Curve
+ScalarKeyframe       = { KeyframeId, RationalTime, Float64, outgoing interpolation }
+ComponentCurve       = ordered sequence of ScalarKeyframe
+Vec2Curve            = { X: ComponentCurve, Y: ComponentCurve }
+Vec3Curve            = { X: ComponentCurve, Y: ComponentCurve, Z: ComponentCurve }
+Color4Curve          = { Red: ComponentCurve, Green: ComponentCurve,
+                         Blue: ComponentCurve, Alpha: ComponentCurve }
+AnimationCurveRecord = ScalarCurve | Vec2Curve | Vec3Curve | Color4Curve
+AnimationCurveSource = { curveId, optional typed defaultValue }
 ```
 
-Each curve contains at least one key. Keys are stored in strictly increasing exact rational time;
-two keys at the same normalized time are invalid. Values are finite. The final key's outgoing
-interpolation is always normalized to `Linear` on every mutation, keeping equality, plan identity,
-and persistence canonical. It becomes a Linear segment if a later key is inserted; the final key is
-therefore the one key whose interpolation cannot be chosen, and asking for anything else there is
-refused rather than silently normalized.
+Vector and colour keys are no longer whole values. Each component has its own strictly increasing
+exact-rational timeline, key IDs, and outgoing interpolation; component timelines may be empty,
+but a curve has at least one key overall. Two keys at the same normalized time are invalid within
+one component. Values are finite, and colour alpha remains in `[0, 1]`. The final key of every
+non-empty component is canonical `Linear` on every mutation. A component with no keys samples the
+typed `AnimationCurveSource.defaultValue`, which is the parameter's unkeyed constant component.
+The compatibility whole-value projection remains an in-memory aid for pre-KEY-2 callers and is not
+the durable source of truth.
 
 A `Color4Curve` carries straight/unassociated authoring RGBA, the same encoding a constant solid or
 text color already uses. A color key is valid exactly when `core::Color4d::isValid()` accepts it:
@@ -55,8 +81,9 @@ Curve ownership is deliberately narrow:
 - every animation-curve parameter source resolves to one curve in the same composition
 - the curve value kind matches the parameter schema exactly
 - every curve is referenced by exactly one parameter
-- position, anchor, and scale accept a `Vec2Curve`; rotation, opacity, and text size accept a
-  `ScalarCurve`; solid color and text color accept a `Color4Curve`
+- position, anchor, and scale accept a `Vec2Curve`; Vec3 value parameters accept a `Vec3Curve`;
+  rotation, opacity, and text size accept a `ScalarCurve`; solid color and text color accept a
+  `Color4Curve`
 - text content declares animation unsupported: a String has no interpolation
 - driver sources remain preserved document concepts but are unsupported by this evaluator
 
@@ -79,11 +106,11 @@ comparison only:
 2. At or after the last key, return the last value.
 3. At an exact key time, return that key's stored value bit-for-bit.
 4. For an interior `Hold` segment, return its left key on `[left, right)`.
-5. For an interior `Linear` segment, compute one shared factor
-   `(time - left) / (right - left)` and apply Float64 scalar Mix version 1 to the scalar, to each
-   `Vec2d` component, or to each of the four `Color4d` channels.
-6. For an interior `EaseInOut` segment, transform that same shared factor before mixing, exactly as
-   described below.
+5. For an interior `Linear` segment, compute the exact rational factor
+   `(time - left) / (right - left)` for each component curve and apply Float64 scalar Mix version 1
+   to that component. Different components may therefore be at different key intervals.
+6. For an interior `EaseInOut` segment, transform that component's factor before mixing, exactly as
+   described below. An empty component returns its typed default value.
 
 The interval factor is derived as an exact non-negative rational. Products and differences of valid
 signed 64-bit rational components require at most 256-bit unsigned magnitude. Bloom therefore uses
@@ -187,7 +214,7 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 | `SetKeyframesInterpolation` | Applies Hold, Linear or Ease In-Out to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
 
-All three value kinds (Scalar, Vec2 and Color4) use the same batch paths. A staged collision does
+All four value kinds (Scalar, Vec2, Vec3 and Color4) use the same batch paths. A staged collision does
 not consume durable IDs or publish any other curve in the transaction. Undo/redo restores exact
 sources, IDs, values, times and outgoing modes. No evaluator, sampling, process-identity or
 sampling-version changes are involved.
@@ -254,8 +281,8 @@ active request is cancelled but remains active until terminal; only then may the
 submitted. Scrub end bypasses the trailing delay but does not violate that active-request gate.
 Scheduler coalescing and stale-result rejection remain lower-level backstops.
 
-`CompositionSelection` owns a collection of stable `(AnimationCurveId, KeyframeId)` addresses
-and one primary key with a contextual layer. Shift-click and box selection update that shared
+`CompositionSelection` owns a collection of stable `(AnimationCurveId, KeyframeId, Component?)`
+addresses and one primary key with a contextual layer. Shift-click and box selection update that shared
 collection; vanished keys are pruned after execute/undo/redo and composition changes clear it.
 Rows, pixel positions, expanded-layer state, drag previews and the clipboard are session/UI state.
 They are not serialized project truth. Timeline property fields bind exact parameter IDs and issue

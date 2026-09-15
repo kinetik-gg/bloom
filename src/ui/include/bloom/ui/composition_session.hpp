@@ -51,6 +51,7 @@ namespace bloom::ui {
 struct KeyframeSelection final {
     document::AnimationCurveId curveId;
     document::KeyframeId keyframeId;
+    std::optional<document::AnimationComponent> component{};
 
     friend bool operator==(const KeyframeSelection&, const KeyframeSelection&) = default;
 };
@@ -126,7 +127,7 @@ enum class PositionInteractionRejection : std::uint8_t {
 // One parameter's value, whatever kind it is: the three animatable value kinds a curve can carry
 // and a constant can hold. Named once so sampleParameterValue() and the effective*Value() readers
 // cannot drift apart about what a "parameter value" is in this layer.
-using ParameterSample = std::variant<double, document::Vec2d, core::Color4d>;
+using ParameterSample = std::variant<double, document::Vec2d, document::Vec3d, core::Color4d>;
 
 // What a keyframe diamond shows for one parameter at the session's current time (task S5, item 0;
 // docs/architecture/animation-and-time.md, "The Keyframe Gesture"). The three authored states are
@@ -138,6 +139,13 @@ enum class KeyframeDiamondState : std::uint8_t {
     Constant,
     AnimatedWithoutKey,
     AnimatedWithKey,
+};
+
+enum class KeyframeParameterState : std::uint8_t {
+    Unsupported,
+    None,
+    Some,
+    All,
 };
 
 // Which object a value write authors (task FIX2). Empty means the CURRENT SELECTION -- what the
@@ -181,6 +189,8 @@ class CompositionSession final : public QObject {
     // selectParameter's own not-found handling.
     void selectKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId,
                         bool extend = false);
+    void selectKeyframe(document::AnimationCurveId curveId, document::AnimationComponent component,
+                        document::KeyframeId keyframeId, bool extend = false);
     void selectKeyframes(const std::vector<KeyframeSelection>& keys);
     [[nodiscard]] std::vector<commands::KeyframePaste> selectedKeyframeData() const;
     [[nodiscard]] bool moveKeyframes(std::vector<commands::KeyframeMove> keys,
@@ -276,6 +286,11 @@ class CompositionSession final : public QObject {
     // not necessarily the selected one, and reading it must never move the selection.
     [[nodiscard]] KeyframeDiamondState
     keyframeDiamondStateForParameter(document::ParameterId parameterId) const;
+    [[nodiscard]] KeyframeDiamondState keyframeDiamondState(document::ParameterId parameterId,
+                                                            document::AnimationComponent component,
+                                                            core::RationalTime time) const;
+    [[nodiscard]] KeyframeParameterState keyframeParameterState(document::ParameterId parameterId,
+                                                                core::RationalTime time) const;
     // The AE diamond click, end to end, as exactly ONE undoable transaction per call:
     //   * a constant parameter becomes a curve with one key at the current value and time
     //     (CreateAnimationForParameter + SetKeyframeAtTimeForParameter together -- the second
@@ -294,6 +309,9 @@ class CompositionSession final : public QObject {
     // VALUE fields, which write through the selection-based setSelected*() methods and therefore
     // still select their own node first.
     [[nodiscard]] bool toggleKeyframeForParameter(document::ParameterId parameterId);
+    [[nodiscard]] bool toggleKeyframe(document::ParameterId parameterId,
+                                      document::AnimationComponent component,
+                                      core::RationalTime time);
     // The selected key's outgoing interpolation (task S5, item 2). A no-op false with no
     // transaction when no keyframe is selected or the command layer refuses (notably the final key,
     // whose interpolation is canonical Linear).

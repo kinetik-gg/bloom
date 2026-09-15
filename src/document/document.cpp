@@ -34,21 +34,29 @@ template <typename Visitor>
             if (!visitor(animationCurveId(record))) {
                 return false;
             }
-            const auto visitKeyframes = [&](const auto& curve) {
-                for (const auto& keyframe : curve.keyframes) {
-                    if (!visitor(keyframe.id)) {
-                        return false;
-                    }
-                }
-                return true;
-            };
             if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
-                if (!visitKeyframes(*scalar)) {
-                    return false;
+                for (const auto& keyframe : scalar->keyframes) {
+                    if (!visitor(keyframe.id))
+                        return false;
                 }
-            } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record);
-                       vector != nullptr && !visitKeyframes(*vector)) {
-                return false;
+            } else {
+                const auto visitComponents = [&](const auto& curve) {
+                    for (const auto& component : curve.components)
+                        for (const auto& keyframe : component.keyframes)
+                            if (!visitor(keyframe.id))
+                                return false;
+                    return true;
+                };
+                if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
+                    if (!visitComponents(*vector))
+                        return false;
+                } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
+                    if (!visitComponents(*vector3))
+                        return false;
+                } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+                    if (!visitComponents(*color))
+                        return false;
+                }
             }
         }
         for (const auto& node : composition.graph().nodes()) {

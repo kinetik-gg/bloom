@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -216,12 +217,24 @@ ValidationResult Project::validate() const {
                                              "Animation curve", animationCurveDeclarations, result);
             std::visit(
                 [&](const auto& curve) {
-                    for (const auto& keyframe : curve.keyframes) {
+                    using Curve = std::decay_t<decltype(curve)>;
+                    const auto validateKey = [&](const auto& keyframe, const std::string& keyPath) {
                         validateProjectUniqueDeclaration(keyframe.id, compositionOrdinal,
-                                                         curvePath + ".keyframes[" +
-                                                             std::to_string(keyframe.id.value()) +
-                                                             "].id",
-                                                         "Keyframe", keyframeDeclarations, result);
+                                                         keyPath + ".id", "Keyframe",
+                                                         keyframeDeclarations, result);
+                    };
+                    if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                        for (const auto& keyframe : curve.keyframes)
+                            validateKey(keyframe, curvePath + ".keyframes[" +
+                                                      std::to_string(keyframe.id.value()) + "]");
+                    } else {
+                        for (std::size_t componentIndex = 0;
+                             componentIndex < curve.components.size(); ++componentIndex)
+                            for (const auto& keyframe : curve.components[componentIndex].keyframes)
+                                validateKey(keyframe,
+                                            curvePath + ".components[" +
+                                                std::to_string(componentIndex) + "].keyframes[" +
+                                                std::to_string(keyframe.id.value()) + "]");
                     }
                 },
                 record);

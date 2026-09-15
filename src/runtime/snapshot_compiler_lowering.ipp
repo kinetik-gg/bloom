@@ -128,10 +128,44 @@
                     vec2CurveIndices_.emplace(curve.id,
                                               runtime::Vec2CurveIndex::fromRaw(tables.vec2.size()));
                     tables.vec2.push_back(runtime::compileAnimationCurve(curve));
+                    for (const auto& parameter : composition_->parameters().records()) {
+                        const auto* source =
+                            std::get_if<document::AnimationCurveSource>(&parameter.source);
+                        if (source != nullptr && source->curveId == curve.id &&
+                            source->defaultValue.has_value()) {
+                            if (const auto* value =
+                                    std::get_if<document::Vec2d>(&*source->defaultValue))
+                                tables.vec2.back().defaultValue = *value;
+                        }
+                    }
+                } else if constexpr (std::is_same_v<Curve, document::Vec3AnimationCurve>) {
+                    vec3CurveIndices_.emplace(curve.id,
+                                              runtime::Vec3CurveIndex::fromRaw(tables.vec3.size()));
+                    tables.vec3.push_back(runtime::compileAnimationCurve(curve));
+                    for (const auto& parameter : composition_->parameters().records()) {
+                        const auto* source =
+                            std::get_if<document::AnimationCurveSource>(&parameter.source);
+                        if (source != nullptr && source->curveId == curve.id &&
+                            source->defaultValue.has_value()) {
+                            if (const auto* value =
+                                    std::get_if<document::Vec3d>(&*source->defaultValue))
+                                tables.vec3.back().defaultValue = *value;
+                        }
+                    }
                 } else {
                     color4CurveIndices_.emplace(
                         curve.id, runtime::Color4CurveIndex::fromRaw(tables.color4.size()));
                     tables.color4.push_back(runtime::compileAnimationCurve(curve));
+                    for (const auto& parameter : composition_->parameters().records()) {
+                        const auto* source =
+                            std::get_if<document::AnimationCurveSource>(&parameter.source);
+                        if (source != nullptr && source->curveId == curve.id &&
+                            source->defaultValue.has_value()) {
+                            if (const auto* value =
+                                    std::get_if<core::Color4d>(&*source->defaultValue))
+                                tables.color4.back().defaultValue = *value;
+                        }
+                    }
                 }
             },
             record);
@@ -139,7 +173,8 @@
             return std::nullopt;
         }
     }
-    if (scalarCurveIndices_.size() + vec2CurveIndices_.size() + color4CurveIndices_.size() !=
+    if (scalarCurveIndices_.size() + vec2CurveIndices_.size() + vec3CurveIndices_.size() +
+            color4CurveIndices_.size() !=
         reachableCurveIds.size()) {
         addTopologyFailure({}, "A reachable animation curve could not be lowered.");
         return std::nullopt;
@@ -296,7 +331,8 @@ lower(const std::vector<document::NodeId>& order) {
             request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
             composition_->format(), std::move(operations), output->second,
             std::move(curveTables->scalar), std::move(curveTables->vec2),
-            std::move(curveTables->color4), std::move(valueOperations_), valueOutputCount_,
+            std::move(curveTables->vec3), std::move(curveTables->color4),
+            std::move(valueOperations_), valueOutputCount_,
             runtime::kCompiledCompositionPlanSemanticsVersion,
             runtime::kAnimationSamplingSemanticsVersion, request_.parameterOverride.has_value()});
 }
