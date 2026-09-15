@@ -95,8 +95,16 @@ template <typename Definition>
 
 [[nodiscard]] bool hasImageOutput(const NodeDefinition& definition,
                                   const std::string_view name) noexcept {
-    return definition.outputs.size() == 1 && definition.outputs.front().name == name &&
-           definition.outputs.front().valueKind == SocketValueKind::Image;
+    return std::ranges::count_if(definition.outputs, [&](const auto& output) {
+               return output.name == name && output.valueKind == SocketValueKind::Image;
+           }) == 1;
+}
+
+[[nodiscard]] bool hasOutput(const NodeDefinition& definition, const std::string_view name,
+                             const SocketValueKind kind) noexcept {
+    return std::ranges::count_if(definition.outputs, [&](const auto& output) {
+               return output.name == name && output.valueKind == kind;
+           }) == 1;
 }
 
 [[nodiscard]] bool hasParameter(const NodeDefinition& definition, const std::size_t index,
@@ -147,6 +155,17 @@ template <typename Definition>
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 4, "premultiply", "bloom.image.premultiply",
                             ParameterValueKind::Boolean);
+    case NodeLoweringKind::AudioSource:
+        return hasCanonicalKey(definition, kAudioSourceNodeType, kAudioSourceNodeSchemaVersion) &&
+               definition.outputs.size() == 1 &&
+               hasOutput(definition, kAudioSourceOutputPort, SocketValueKind::Audio) &&
+               definition.inputs.empty() && definition.parameters.size() == 3 &&
+               hasParameter(definition, 0, "asset", "bloom.audio.asset",
+                            ParameterValueKind::String) &&
+               hasParameter(definition, 1, "startFrame", "bloom.audio.start-frame",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 2, "level", kAudioLevelParameterSchemaKey,
+                            ParameterValueKind::Float64, true);
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
         // then color. The font is not a parameter -- this lowering has exactly one face
@@ -200,7 +219,16 @@ template <typename Definition>
                             ParameterValueKind::Float64, true) &&
                hasParameter(definition, 5, kBlendModeParameterRole, kBlendModeParameterSchemaKey,
                             ParameterValueKind::Integer) &&
-               hasParameterSockets(definition, 1) && !definition.layerSlotInput.has_value();
+               ((definition.key.schemaVersion == 3 && definition.inputs.size() == 7 &&
+                 definition.outputs.size() == 1 && hasParameterSockets(definition, 1)) ||
+                (definition.key.schemaVersion == kLayerOutputNodeSchemaVersion &&
+                 definition.inputs.size() == 8 && definition.outputs.size() == 2 &&
+                 definition.inputs[1].name == kLayerOutputAudioInputPort &&
+                 definition.inputs[1].valueKind == SocketValueKind::Audio &&
+                 !definition.inputs[1].required &&
+                 hasOutput(definition, kLayerOutputAudioOutputPort, SocketValueKind::Audio) &&
+                 hasParameterSockets(definition, 2))) &&
+               !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return (hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) ||
                 hasCanonicalKey(definition, kLayerStackNodeType, 1)) &&
@@ -209,13 +237,25 @@ template <typename Definition>
                definition.layerSlotInput.has_value() &&
                definition.layerSlotInput->role == kLayerStackContentInputRole &&
                definition.layerSlotInput->valueKind == SocketValueKind::Image &&
-               definition.layerSlotInput->requiredPerSlot;
+               definition.layerSlotInput->requiredPerSlot &&
+               ((definition.key.schemaVersion == 1 && definition.outputs.size() == 1 &&
+                 !definition.audioLayerSlotInput.has_value()) ||
+                (definition.key.schemaVersion == kLayerStackNodeSchemaVersion &&
+                 definition.outputs.size() == 2 &&
+                 hasOutput(definition, kLayerStackAudioOutputPort, SocketValueKind::Audio) &&
+                 definition.audioLayerSlotInput.has_value() &&
+                 definition.audioLayerSlotInput->role == kLayerStackAudioInputRole &&
+                 definition.audioLayerSlotInput->valueKind == SocketValueKind::Audio &&
+                 definition.audioLayerSlotInput->requiredPerSlot));
     case NodeLoweringKind::CompositionOutput:
         return hasCanonicalKey(definition, kCompositionOutputNodeType,
                                kCompositionOutputNodeSchemaVersion) &&
                definition.cardinality == NodeCardinality::OnePerComposition &&
                hasLeadingImageInput(definition, kCompositionOutputInputPort) &&
-               definition.inputs.size() == 1 &&
+               definition.inputs.size() == 2 &&
+               definition.inputs[1].name == kCompositionOutputAudioInputPort &&
+               definition.inputs[1].valueKind == SocketValueKind::Audio &&
+               !definition.inputs[1].required &&
                // Task FIX1, item H: a SINK. It declares no output port at all, because nothing may
                // connect from the end of the composition -- the compiler never followed such an
                // edge, and a socket that leads nowhere is an invitation to draw a wire that means
@@ -298,26 +338,26 @@ template <typename Definition>
 
 [[nodiscard]] NodeDefinition layerOutputDefinition(const bool localBounds = true) {
     using namespace bloom::document;
+    std::vector<InputPortDefinition> inputs{
+        {std::string(kLayerOutputContentInputPort), SocketValueKind::Image, false}};
+    if (localBounds)
+        inputs.push_back({std::string(kLayerOutputAudioInputPort), SocketValueKind::Audio, false});
+    for (const auto& parameter : std::array<InputPortDefinition, 6>{
+             InputPortDefinition{std::string(kPositionParameterRole), SocketValueKind::Vector2, false},
+             InputPortDefinition{std::string(kAnchorParameterRole), SocketValueKind::Vector2, false},
+             InputPortDefinition{std::string(kScaleParameterRole), SocketValueKind::Vector2, false},
+             InputPortDefinition{std::string(kRotationParameterRole), SocketValueKind::Scalar, false},
+             InputPortDefinition{std::string(kOpacityParameterRole), SocketValueKind::Scalar, false},
+             InputPortDefinition{std::string(kBlendModeParameterRole), SocketValueKind::Integer, false}})
+        inputs.push_back(parameter);
+    std::vector<OutputPortDefinition> outputs{{std::string(kLayerOutputOutputPort),
+                                                SocketValueKind::Image}};
+    if (localBounds)
+        outputs.push_back({std::string(kLayerOutputAudioOutputPort), SocketValueKind::Audio});
     return {{std::string(kLayerOutputNodeType), localBounds ? kLayerOutputNodeSchemaVersion : 3},
             NodeLoweringKind::LayerOutput,
-            // The content image first -- its position is what the dissolve gesture and the mute
-            // bypass read -- then one operand socket per transform parameter, in the registered
-            // authoring order (task S7, item 3). The blend mode's socket is Integer, and Integer
-            // only: there is no meaningful value between Multiply and Screen, so no other kind
-            // promotes into it.
-            // The content image is OPTIONAL (task FIX1, item B): an artist wires a Layer node up by
-            // hand now, so a Layer that has been added but not yet fed is a real, selectable node
-            // that simply draws nothing -- not a composition the compiler refuses to compile. The
-            // port is still the FIRST one, which is what the dissolve gesture, the mute bypass and
-            // the empty-image propagation all read.
-            {{std::string(kLayerOutputContentInputPort), SocketValueKind::Image, false},
-             {std::string(kPositionParameterRole), SocketValueKind::Vector2, false},
-             {std::string(kAnchorParameterRole), SocketValueKind::Vector2, false},
-             {std::string(kScaleParameterRole), SocketValueKind::Vector2, false},
-             {std::string(kRotationParameterRole), SocketValueKind::Scalar, false},
-             {std::string(kOpacityParameterRole), SocketValueKind::Scalar, false},
-             {std::string(kBlendModeParameterRole), SocketValueKind::Integer, false}},
-            {{std::string(kLayerOutputOutputPort), SocketValueKind::Image}},
+            std::move(inputs),
+            std::move(outputs),
             {{std::string(kPositionParameterRole), std::string(kPositionParameterSchemaKey),
               ParameterValueKind::Vec2d, true, true, Vec2d{}},
              {std::string(kAnchorParameterRole), std::string(kAnchorParameterSchemaKey),
@@ -336,27 +376,37 @@ template <typename Definition>
               ParameterValueKind::Integer, true, false, kDefaultBlendModeValue}},
             std::nullopt,
             NodeCardinality::Many,
-            localBounds ? NodeCategory::Layers : NodeCategory::Compatibility};
+            localBounds ? NodeCategory::Layers : NodeCategory::Compatibility,
+            std::nullopt};
 }
 
 [[nodiscard]] NodeDefinition layerStackDefinition(const bool localBounds = true) {
     using namespace bloom::document;
+    std::vector<OutputPortDefinition> outputs{{std::string(kLayerStackOutputPort),
+                                                SocketValueKind::Image}};
+    if (localBounds)
+        outputs.push_back({std::string(kLayerStackAudioOutputPort), SocketValueKind::Audio});
     return {{std::string(kLayerStackNodeType), localBounds ? kLayerStackNodeSchemaVersion : 1},
             NodeLoweringKind::LayerStack,
             {},
-            {{std::string(kLayerStackOutputPort), SocketValueKind::Image}},
+            std::move(outputs),
             {},
             LayerSlotInputDefinition{std::string(kLayerStackContentInputRole),
                                      SocketValueKind::Image, true},
             NodeCardinality::Many,
-            localBounds ? NodeCategory::Compositing : NodeCategory::Compatibility};
+            localBounds ? NodeCategory::Compositing : NodeCategory::Compatibility,
+            localBounds ? std::optional<LayerSlotInputDefinition>{
+                              LayerSlotInputDefinition{std::string(kLayerStackAudioInputRole),
+                                                       SocketValueKind::Audio, true}}
+                        : std::nullopt};
 }
 
 [[nodiscard]] NodeDefinition compositionOutputDefinition() {
     using namespace bloom::document;
     return {{std::string(kCompositionOutputNodeType), kCompositionOutputNodeSchemaVersion},
             NodeLoweringKind::CompositionOutput,
-            {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, true}},
+            {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, true},
+             {std::string(kCompositionOutputAudioInputPort), SocketValueKind::Audio, false}},
             {},
             {},
             std::nullopt,
@@ -382,6 +432,24 @@ template <typename Definition>
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Sources};
+}
+
+[[nodiscard]] NodeDefinition audioDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kAudioSourceNodeType), kAudioSourceNodeSchemaVersion},
+            NodeLoweringKind::AudioSource,
+            {},
+            {{std::string(kAudioSourceOutputPort), SocketValueKind::Audio}},
+            {{"asset", "bloom.audio.asset", ParameterValueKind::String, true, false,
+              std::string{}},
+             {"startFrame", "bloom.audio.start-frame", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"level", std::string(kAudioLevelParameterSchemaKey), ParameterValueKind::Float64,
+              true, true, 1.0}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources,
+            std::nullopt};
 }
 
 [[nodiscard]] NodeDefinition textDefinition(const bool typography = true) {
@@ -504,7 +572,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             compositionOutputDefinition(),
                                             textDefinition(false),
                                             textDefinition(),
-                                            imageDefinition()};
+                                            imageDefinition(),
+                                            audioDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

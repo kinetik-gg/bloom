@@ -99,6 +99,27 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
     }
     return true;
 }
+bool audio(const JsonValue& node, DecodeState& state, const std::string& path,
+           document::AssetRecord& out) {
+    constexpr std::array<std::string_view, 4> keys{"rate", "channels", "frames", "duration"};
+    std::vector<const JsonValue*> fields;
+    if (!matchOrderedMembers(node, keys, false, state, path, fields) ||
+        !number(*fields[0], state, path, out.rate) ||
+        !number(*fields[1], state, path, out.channels))
+        return false;
+    const auto frameText = fields[2]->asString();
+    if (!frameText) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto parsedFrames = parseCanonicalObjectId(*frameText);
+    if (!parsedFrames || *parsedFrames.value() == 0) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    out.frames = *parsedFrames.value();
+    return decodeRationalTimeValue(*fields[3], state, path, out.duration);
+}
 } // namespace
 bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& path,
                   std::vector<document::AssetRecord>& out) {
@@ -119,12 +140,15 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             !locator(*fields[2], state, path, asset.locator) ||
             !digest(*fields[3], state, path, asset.contentDigest))
             return false;
-        if (asset.id.value() <= previous || (kind != "image" && kind != "sequence")) {
+        if (asset.id.value() <= previous ||
+            (kind != "image" && kind != "sequence" && kind != "audio")) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
         previous = asset.id.value();
-        asset.kind = kind == "image" ? document::AssetKind::Image : document::AssetKind::Sequence;
+        asset.kind = kind == "image" ? document::AssetKind::Image
+                                       : kind == "sequence" ? document::AssetKind::Sequence
+                                                             : document::AssetKind::Audio;
         constexpr std::array<std::string_view, 2> interpretationKeys{"colorSpace",
                                                                      "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;
@@ -141,6 +165,13 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         }
         asset.interpretation = {static_cast<document::AssetColorSpace>(space),
                                 static_cast<document::AssetAlphaAssociation>(alpha)};
+        if (asset.kind == document::AssetKind::Audio) {
+            const auto* audioNode = value.findMember("audio");
+            if (audioNode == nullptr || !audio(*audioNode, state, path, asset)) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+        }
         if (!asset.validate().ok()) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;

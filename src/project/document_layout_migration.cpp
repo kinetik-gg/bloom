@@ -134,7 +134,8 @@ enum class Step {
     LayerTimeline,
     Merges,
     SafeAreas,
-    Images
+    Images,
+    Audio
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -147,7 +148,7 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // A version-only step adds nothing, so there is no member whose presence could prove it already
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
-        step == Step::Merges)
+        step == Step::Merges || step == Step::Audio)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -186,7 +187,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
                            : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
                            : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
-                                                            : "{\"major\":1,\"minor\":10}");
+                           : step == Step::Images            ? "{\"major\":1,\"minor\":10}"
+                                                            : "{\"major\":1,\"minor\":11}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -310,6 +312,12 @@ MigrationStepOutcome migrateViewerSafeAreasV1_7(const JsonValue& root, std::pmr:
 MigrationStepOutcome migrateImagesV1_9(const JsonValue& root, std::pmr::memory_resource*,
                                        Buffer& output) {
     if (!sourceVersionIs(root, "9") || !transform(root, Scope::Root, Step::Images, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateAudioV1_10(const JsonValue& root, std::pmr::memory_resource*,
+                                       Buffer& output) {
+    if (!sourceVersionIs(root, "10") || !transform(root, Scope::Root, Step::Audio, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

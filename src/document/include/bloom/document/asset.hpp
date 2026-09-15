@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 #include <cstdint>
@@ -8,7 +9,7 @@
 #include <vector>
 
 namespace bloom::document {
-enum class AssetKind : std::uint8_t { Image, Sequence };
+enum class AssetKind : std::uint8_t { Image, Sequence, Audio };
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 struct AssetInterpretation {
@@ -48,6 +49,10 @@ struct AssetRecord {
     // Source descriptor captured by import, used without filesystem I/O by artist-facing views.
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    std::uint32_t rate = 0;
+    std::uint32_t channels = 0;
+    std::uint64_t frames = 0;
+    core::RationalTime duration{};
     [[nodiscard]] ValidationResult validate() const;
     friend bool operator==(const AssetRecord&, const AssetRecord&) = default;
 };

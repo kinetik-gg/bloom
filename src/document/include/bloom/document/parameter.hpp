@@ -49,6 +49,7 @@ inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opac
 // neither isScalarAnimatableSchemaKey() nor isVec2AnimatableSchemaKey() accepts it and no curve can
 // be created over it.
 inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.blend-mode";
+inline constexpr std::string_view kAudioLevelParameterSchemaKey = "bloom.audio.level";
 
 // ---------------------------------------------------------------------------------------------
 // Value-graph parameter schemas (task S7).
@@ -196,7 +197,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kSolidWidthParameterSchemaKey ||
            schemaKey == kSolidHeightParameterSchemaKey ||
            schemaKey == kTextLineHeightParameterSchemaKey ||
-           schemaKey == kTextLetterSpacingParameterSchemaKey;
+           schemaKey == kTextLetterSpacingParameterSchemaKey ||
+           schemaKey == kAudioLevelParameterSchemaKey;
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
@@ -222,7 +224,7 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // degrees must be free to wind past a full turn in either direction, so the unit domain belongs to
 // the schema rather than to "scalar values" as a class.
 [[nodiscard]] constexpr bool hasUnitDomainSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kOpacityParameterSchemaKey;
+    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kAudioLevelParameterSchemaKey;
 }
 
 // Whether a scalar value under this schema is confined to the text size domain (0, kMaximumText-
@@ -240,6 +242,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
                                                         const double value) noexcept {
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)
         return value >= 1.0;
+    if (schemaKey == kAudioLevelParameterSchemaKey)
+        return value >= 0.0 && value <= 2.0;
     if (schemaKey == kTextLineHeightParameterSchemaKey)
         return value > 0.0;
     if (hasUnitDomainSchemaKey(schemaKey)) {

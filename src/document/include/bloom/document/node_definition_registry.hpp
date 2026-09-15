@@ -20,6 +20,7 @@ struct NodeTypeKey {
 
 enum class SocketValueKind {
     Image,
+    Audio,
     Color,
     Scalar,
     Vector2,
@@ -102,6 +103,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::Scalar:
         return destination == SocketValueKind::Vector2 || destination == SocketValueKind::Vector3;
     case SocketValueKind::Image:
+    case SocketValueKind::Audio:
     case SocketValueKind::Color:
     case SocketValueKind::Vector2:
     case SocketValueKind::String:
@@ -189,6 +191,7 @@ enum class NodeLoweringKind {
     Solid,
     Text,
     ImageSource,
+    AudioSource,
     LayerOutput,
     LayerStack,
     CompositionOutput,
@@ -250,6 +253,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::ImageSource:
+    case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::LayerOutput:
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:
@@ -268,6 +272,10 @@ struct NodeDefinition {
     std::optional<LayerSlotInputDefinition> layerSlotInput;
     NodeCardinality cardinality = NodeCardinality::Many;
     NodeCategory category = NodeCategory::Utilities;
+    // The audio transport for a Layer Stack shares the stable layer slots with the image
+    // transport. It is appended so existing aggregate-initialized extension definitions remain
+    // source-compatible.
+    std::optional<LayerSlotInputDefinition> audioLayerSlotInput{};
 
     friend bool operator==(const NodeDefinition&, const NodeDefinition&) = default;
 };

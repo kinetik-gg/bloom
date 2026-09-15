@@ -21,8 +21,12 @@ ValidationResult AssetRecord::validate() const {
         result.add(ValidationCode::InvalidId, "id", "Asset ID must not be zero");
     if (!validLocator(locator))
         result.add(ValidationCode::InvalidValue, "locator", "Invalid asset locator");
-    if (width == 0 || height == 0 || width > 16384 || height > 16384 ||
-        static_cast<std::uint64_t>(width) * height > 16777216)
+    if (kind == AssetKind::Audio) {
+        if (rate < 8000 || rate > 384000 || channels == 0 || channels > 32 || frames == 0 ||
+            duration <= core::RationalTime{})
+            result.add(ValidationCode::InvalidValue, "audio", "Invalid audio descriptor");
+    } else if (width == 0 || height == 0 || width > 16384 || height > 16384 ||
+               static_cast<std::uint64_t>(width) * height > 16777216)
         result.add(ValidationCode::InvalidValue, "dimensions", "Invalid image dimensions");
     if (interpretation.colorSpace > AssetColorSpace::Raw ||
         interpretation.alphaAssociation > AssetAlphaAssociation::Premultiplied)
@@ -56,6 +60,10 @@ ValidationResult AssetRecord::validate() const {
             gaps != manifest.gaps)
             result.add(ValidationCode::InvalidValue, "manifest.gaps",
                        "Sequence gaps disagree with members");
+    } else if (kind == AssetKind::Audio) {
+        if (!manifest.members.empty() || !manifest.gaps.empty() || !manifest.pattern.empty())
+            result.add(ValidationCode::InvalidValue, "manifest",
+                       "An audio asset has no sequence manifest");
     } else
         result.add(ValidationCode::InvalidValue, "kind", "Invalid asset kind");
     return result;

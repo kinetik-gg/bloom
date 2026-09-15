@@ -25,6 +25,7 @@ inline constexpr std::string_view kLayerStackNodeType = "bloom.layer-stack";
 inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
+inline constexpr std::string_view kAudioSourceNodeType = "bloom.audio-source";
 // Bumped to 2 by the layer transform breadth slice (task S4): a Layer Output now binds anchor,
 // scale, and rotation alongside position and opacity. A version-1 node is not rejected -- Project
 // I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
@@ -35,15 +36,22 @@ inline constexpr std::uint32_t kLayerStackNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kSolidSourceNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kTextSourceNodeSchemaVersion = 2;
 inline constexpr std::uint32_t kCompositionOutputNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kAudioSourceNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kSolidSourceOutputPort = "image";
+inline constexpr std::string_view kAudioSourceOutputPort = "audio";
 inline constexpr std::string_view kTextSourceOutputPort = "image";
 inline constexpr std::string_view kLayerOutputContentInputPort = "image";
 inline constexpr std::string_view kLayerOutputOutputPort = "image";
+inline constexpr std::string_view kLayerOutputAudioInputPort = "audio";
+inline constexpr std::string_view kLayerOutputAudioOutputPort = "audio";
 inline constexpr std::string_view kLayerStackContentInputRole = "content";
 inline constexpr std::string_view kLayerStackOutputPort = "image";
+inline constexpr std::string_view kLayerStackAudioInputRole = "audio";
+inline constexpr std::string_view kLayerStackAudioOutputPort = "audio";
 inline constexpr std::string_view kCompositionOutputInputPort = "image";
 inline constexpr std::string_view kCompositionOutputOutputPort = "image";
+inline constexpr std::string_view kCompositionOutputAudioInputPort = "audio";
 
 inline constexpr std::string_view kSolidColorParameterRole = "color";
 inline constexpr std::string_view kSolidWidthParameterRole = "width";

@@ -16,7 +16,7 @@
     if (!state.ok(writer.memberName("assets")) || !state.ok(writer.beginArray())) return false;
     for (const auto& asset : state.project.assets()) {
         if (!state.ok(writer.beginObject()) || !emitNamedId(state,"id",asset.id.value()) ||
-            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue(asset.kind == bloom::document::AssetKind::Image ? "image" : "sequence")) ||
+            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue(asset.kind == bloom::document::AssetKind::Image ? "image" : asset.kind == bloom::document::AssetKind::Sequence ? "sequence" : "audio")) ||
             !state.ok(writer.memberName("locator")) || !emitAssetLocator(state, asset.locator) ||
             !state.ok(writer.memberName("contentDigest")) || !emitAssetDigest(state, asset.contentDigest) ||
             !state.ok(writer.memberName("interpretation")) || !state.ok(writer.beginObject()) ||
@@ -40,7 +40,17 @@
             const auto text = bloom::project::formatCanonicalInt64(frame);
             if (!state.ok(writer.stringValue(text.view()))) return false;
         }
-        if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()) || !state.ok(writer.endObject())) return false;
+        if (!state.ok(writer.endArray()) || !state.ok(writer.endObject())) return false;
+        if (asset.kind == bloom::document::AssetKind::Audio) {
+            if (!state.ok(writer.memberName("audio")) || !state.ok(writer.beginObject()) ||
+                !state.ok(writer.memberName("rate")) || !state.ok(writer.integerValue(asset.rate)) ||
+                !state.ok(writer.memberName("channels")) || !state.ok(writer.integerValue(asset.channels)) ||
+                !emitNamedId(state, "frames", asset.frames) ||
+                !state.ok(writer.memberName("duration")) ||
+                !emitRational(state, asset.duration.numerator(), asset.duration.denominator()) ||
+                !state.ok(writer.endObject())) return false;
+        }
+        if (!state.ok(writer.endObject())) return false;
     }
     return state.ok(writer.endArray());
 }
