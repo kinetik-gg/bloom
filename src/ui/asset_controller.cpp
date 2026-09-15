@@ -1,0 +1,414 @@
+#include <QDir>
+#include <QFileDialog>
+#include <QUrl>
+#include <QUuid>
+#include <algorithm>
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/media/image.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/project_host.hpp>
+#include <bloom/ui/task_ui_bridge.hpp>
+#include <cmath>
+#include <limits>
+
+namespace bloom::ui {
+namespace {
+std::filesystem::path nativePath(const QString& text) {
+#if defined(_WIN32)
+    return std::filesystem::path(text.toStdWString());
+#else
+    return std::filesystem::path(text.toStdString());
+#endif
+}
+struct ThumbnailSelection {
+    std::filesystem::path path;
+    core::Sha256Digest digest;
+    media::ImageInterpretation interpretation;
+    std::string cacheKey;
+    bool available = false;
+};
+// UI-only frame projection of the Image source contract. Use the public exact frame mapping;
+// runtime implementation headers are deliberately outside this module's boundary.
+ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
+                                   core::RationalTime time, document::FrameRate rate,
+                                   const std::filesystem::path& directory,
+                                   const runtime::CancellationToken& cancel) {
+    ThumbnailSelection selected;
+    if (!source.asset)
+        return selected;
+    const auto& asset = *source.asset;
+    const auto* locator = &asset.locator;
+    selected.digest = asset.contentDigest;
+    std::int64_t memberFrame = 0;
+    if (asset.kind == document::AssetKind::Sequence) {
+        const auto frame = runtime::valueGraphFrameIndex(time, rate);
+        if (!frame || asset.manifest.members.empty())
+            return selected;
+        const auto elapsed =
+            static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
+        if (elapsed < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+            elapsed > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+            return selected;
+        const auto length = asset.manifest.last - asset.manifest.first + 1;
+        auto offset = static_cast<std::int64_t>(elapsed);
+        if (offset < 0)
+            offset = 0;
+        else if (source.loopMode == 1)
+            offset %= length;
+        else if (source.loopMode == 2 && length > 1) {
+            const auto period = 2 * (length - 1);
+            offset %= period;
+            if (offset >= length)
+                offset = period - offset;
+        } else
+            offset = std::min(offset, length - 1);
+        const auto wanted = asset.manifest.first + offset;
+        auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
+                                              &document::AssetSequenceMember::frame);
+        if (found != asset.manifest.members.begin())
+            --found;
+        locator = &found->locator;
+        selected.digest = found->contentDigest;
+        memberFrame = found->frame;
+    }
+    selected.path = media::resolveImagePath(locator->path, locator->relinkHint, directory);
+    selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
+        source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
+                               : source.colorSpace);
+    selected.interpretation.alphaAssociation = source.premultiply
+                                                   ? media::ImageAlphaAssociation::Straight
+                                                   : media::ImageAlphaAssociation::Premultiplied;
+    const auto probe =
+        media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
+    selected.available = probe.value && probe.value->contentDigest == selected.digest;
+    const auto hex = selected.digest.toLowercaseHex();
+    const auto config = color::kBloomNeutralV1ConfigDigest.toLowercaseHex();
+    selected.cacheKey = std::string(hex.begin(), hex.end()) + ":" + std::to_string(memberFrame) +
+                        ":" + std::to_string(static_cast<int>(selected.interpretation.colorSpace)) +
+                        ":" +
+                        std::to_string(static_cast<int>(selected.interpretation.alphaAssociation)) +
+                        ":" + std::string(config.begin(), config.end());
+    return selected;
+}
+unsigned char srgb(float value) {
+    const double linear = static_cast<double>(value);
+    const double encoded =
+        linear <= 0.0031308 ? linear * 12.92 : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
+    return static_cast<unsigned char>(std::lround(std::clamp(encoded, 0.0, 1.0) * 255.0));
+}
+} // namespace
+AssetController::AssetController(CompositionSession& session, ProjectHost& host,
+                                 runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
+                                 QObject* parent)
+    : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge) {
+    dragToken_ = QUuid::createUuid().toByteArray();
+    session_.setAssetController(this);
+    connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
+    connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
+    connect(&session_, &CompositionSession::currentTimeChanged, this, &AssetController::refresh);
+    connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
+        dragToken_ = QUuid::createUuid().toByteArray();
+        cancel();
+        base_.reset();
+        previews_.clear();
+        nodePreviews_.clear();
+        thumbnailCache_.clear();
+        refresh();
+    });
+    connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
+    refresh();
+}
+AssetController::~AssetController() {
+    cancel();
+    session_.setAssetController(nullptr);
+}
+bool AssetController::acceptsEdits() const { return host_.canSave(); }
+void AssetController::cancel() {
+    if (busy_)
+        import_.cancel();
+    if (previewPending_)
+        preview_.cancel();
+}
+std::filesystem::path AssetController::baseDirectory() const {
+    const auto path = host_.displayPath();
+    return path ? path->parent_path() : nativePath(QDir::currentPath());
+}
+bool AssetController::missing(document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found != previews_.end() && found->second.missing;
+}
+QImage AssetController::thumbnail(document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() ? QImage{} : found->second.image;
+}
+QImage AssetController::nodeThumbnail(document::NodeId id) const {
+    const auto found = nodePreviews_.find(id);
+    return found == nodePreviews_.end() ? QImage{} : found->second.image;
+}
+void AssetController::requestImport(QWidget* parent) {
+    if (!host_.canSave())
+        return;
+    const auto paths = QFileDialog::getOpenFileNames(
+        parent, tr("Import Images"), {}, tr("Images (*.png *.jpg *.jpeg *.PNG *.JPG *.JPEG)"));
+    if (!paths.empty())
+        importFiles(paths);
+}
+void AssetController::importFiles(const QStringList& paths) { prepare(paths); }
+void AssetController::relink(document::AssetId id, QWidget* parent) {
+    if (!host_.canSave())
+        return;
+    const auto path = QFileDialog::getOpenFileName(parent, tr("Relink Image"), {},
+                                                   tr("Images (*.png *.jpg *.jpeg)"));
+    if (!path.isEmpty())
+        prepare({path}, id);
+}
+void AssetController::remove(document::AssetId id) {
+    if (!host_.canSave())
+        return;
+    commands::Transaction transaction("Remove Asset", session_.snapshot().revision());
+    transaction.emplace<commands::RemoveAsset>(id);
+    static_cast<void>(session_.executeTransaction(std::move(transaction)));
+}
+void AssetController::prepare(const QStringList& paths, document::AssetId relinkId) {
+    if (!host_.canSave()) {
+        emit diagnostic(tr("Image import requires an idle, editable project"));
+        return;
+    }
+    if (busy_ || paths.empty())
+        return;
+    std::vector<std::filesystem::path> files;
+    for (const auto& path : paths)
+        files.push_back(nativePath(path));
+    const auto directory = baseDirectory();
+    base_ = session_.snapshot();
+    auto submission = scheduler_.submit<OperationHandle>(
+        runtime::TaskRequest(
+            "Import images",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
+        [files = std::move(files), directory, relinkId](runtime::TaskContext& context) {
+            auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
+            auto cancel = [&] { return context.isCancellationRequested(); };
+            auto progress = [&](std::uint64_t done, std::uint64_t total) {
+                context.reportProgress({.phase = "Importing images",
+                                        .subphase = "Probing and scanning",
+                                        .completed = done,
+                                        .total = total});
+            };
+            if (relinkId.isValid())
+                *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
+                                                                  directory, cancel);
+            else
+                *result =
+                    std::make_unique<commands::ImportAssets>(files, directory, cancel, progress);
+            if (context.isCancellationRequested())
+                return runtime::TaskResult<OperationHandle>::cancelled();
+            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result));
+        });
+    if (!submission.accepted()) {
+        emit diagnostic(tr("Image import could not be scheduled"));
+        return;
+    }
+    import_ = std::move(submission.handle);
+    busy_ = true;
+    bridge_.wake();
+    emit activityChanged();
+}
+void AssetController::refresh() {
+    // A preserved-read-only install retires the document behind CompositionSession. Its hidden
+    // projection must not be read until the application rebinds it to decoded content again.
+    if (!host_.liveDocumentAndStack().first) {
+        if (previewPending_)
+            preview_.cancel();
+        previewPending_ = false;
+        return;
+    }
+    nodePreviews_.clear();
+    emit changed();
+    if (previewPending_) {
+        previewDirty_ = true;
+        preview_.cancel();
+        return;
+    }
+    previewDirty_ = false;
+    const auto snapshot = session_.snapshot();
+    const auto directory = baseDirectory();
+    const auto time = session_.currentTime();
+    const auto* composition = session_.composition();
+    const auto rate =
+        composition ? composition->format().frameRate() : document::FrameRate::framesPerSecond24();
+    std::vector<runtime::CompiledImageSource> sources;
+    if (composition)
+        for (const auto& node : composition->graph().nodes()) {
+            if (node.typeId != "bloom.image-source")
+                continue;
+            runtime::CompiledImageSource source;
+            source.sourceNodeId = node.id;
+            for (const auto& binding : node.parameters) {
+                const auto* parameter = composition->parameters().find(binding.parameterId);
+                const auto* constant =
+                    parameter ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                              : nullptr;
+                if (!constant)
+                    continue;
+                if (binding.role == "asset") {
+                    if (const auto* id = std::get_if<std::string>(&constant->value))
+                        if (const auto* asset =
+                                snapshot.project().findAsset(document::AssetId::fromRaw(
+                                    QString::fromStdString(*id).toULongLong())))
+                            source.asset = *asset;
+                } else if (const auto* integer = std::get_if<std::int64_t>(&constant->value)) {
+                    if (binding.role == "startFrame")
+                        source.startFrame = *integer;
+                    if (binding.role == "loopMode")
+                        source.loopMode = *integer;
+                    if (binding.role == "colorSpace")
+                        source.colorSpace = *integer;
+                } else if (binding.role == "premultiply") {
+                    if (const auto* value = std::get_if<bool>(&constant->value))
+                        source.premultiply = *value;
+                }
+            }
+            sources.push_back(std::move(source));
+        }
+    auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
+        runtime::TaskRequest(
+            "Image thumbnails",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
+        [snapshot, directory, time, rate, sources = std::move(sources),
+         cached = thumbnailCache_](runtime::TaskContext& context) mutable {
+            auto results = std::make_shared<Thumbnails>();
+            results->cache = std::move(cached);
+            const auto decode = [&](const runtime::CompiledImageSource& source) {
+                Preview preview;
+                const auto selected =
+                    selectThumbnail(source, time, rate, directory, context.cancellation());
+                preview.key = selected.cacheKey;
+                preview.missing = !selected.available;
+                if (preview.missing)
+                    return preview;
+                const auto found = results->cache.find(preview.key);
+                if (found != results->cache.end()) {
+                    preview.image = found->second;
+                    return preview;
+                }
+                auto decoded = media::decodeImage(
+                    selected.path, selected.interpretation, {},
+                    [&] { return context.isCancellationRequested(); }, {},
+                    media::kMaxImageStorageBytes, selected.digest);
+                preview.missing = !decoded.value.has_value();
+                if (decoded.value.has_value()) {
+                    const auto& image = **decoded.value;
+                    const auto extent = image.descriptor()->dataWindow().extent();
+                    const auto scale =
+                        std::min(1.0, 64.0 / std::max(extent.width(), extent.height()));
+                    const auto width =
+                        std::max(1, static_cast<int>(std::lround(extent.width() * scale)));
+                    const auto height = std::max(
+                        1, static_cast<int>(std::lround(static_cast<double>(extent.height()) *
+                                                        width / extent.width())));
+                    preview.image = QImage(width, std::min(64, height), QImage::Format_RGBA8888);
+                    for (int y = 0; y < preview.image.height(); ++y)
+                        for (int x = 0; x < width; ++x) {
+                            const auto sx = static_cast<std::uint32_t>(x) * extent.width() /
+                                            static_cast<std::uint32_t>(width);
+                            const auto sy = static_cast<std::uint32_t>(y) * extent.height() /
+                                            static_cast<std::uint32_t>(preview.image.height());
+                            const auto pixel =
+                                image.pixels()[static_cast<std::size_t>(sy) * extent.width() + sx];
+                            auto* output =
+                                preview.image.scanLine(y) + static_cast<std::ptrdiff_t>(x) * 4;
+                            const auto alpha = pixel.alpha();
+                            output[0] = srgb(alpha > 0 ? pixel.red() / alpha : 0);
+                            output[1] = srgb(alpha > 0 ? pixel.green() / alpha : 0);
+                            output[2] = srgb(alpha > 0 ? pixel.blue() / alpha : 0);
+                            output[3] = static_cast<unsigned char>(std::lround(alpha * 255.0F));
+                        }
+                }
+                if (!preview.image.isNull()) {
+                    // 512 proxies of at most 64 × 64 RGBA8: bounded to 8 MiB.
+                    if (results->cache.size() >= 512)
+                        results->cache.erase(results->cache.begin());
+                    results->cache.emplace(preview.key, preview.image);
+                }
+                return preview;
+            };
+            std::uint64_t completed = 0;
+            const auto progress = [&] {
+                context.reportProgress(
+                    {.phase = "Image thumbnails",
+                     .subphase = "Decoding proxies",
+                     .completed = ++completed,
+                     .total = snapshot.project().assets().size() + sources.size()});
+            };
+            for (const auto& asset : snapshot.project().assets()) {
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                runtime::CompiledImageSource source;
+                source.asset = asset;
+                source.premultiply = asset.interpretation.alphaAssociation ==
+                                     document::AssetAlphaAssociation::Straight;
+                results->assets.emplace(asset.id, decode(source));
+                progress();
+            }
+            for (const auto& source : sources) {
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
+                results->nodes.emplace(source.sourceNodeId, decode(source));
+                progress();
+            }
+            return runtime::TaskResult<std::shared_ptr<Thumbnails>>::succeeded(std::move(results));
+        });
+    if (submission.accepted()) {
+        preview_ = std::move(submission.handle);
+        previewPending_ = true;
+        bridge_.wake();
+    }
+}
+void AssetController::poll() {
+    if (busy_) {
+        auto result = import_.tryTakeResult();
+        if (result) {
+            busy_ = false;
+            emit activityChanged();
+            if (result->state() == runtime::TaskState::Succeeded && result->value().has_value() &&
+                *result->value()) {
+                if (!host_.liveDocumentAndStack().first || !base_ ||
+                    base_->project().id() != session_.snapshot().project().id() ||
+                    base_->revision() != session_.snapshot().revision()) {
+                    emit diagnostic(tr("Project changed during import; import the files again"));
+                } else {
+                    commands::Transaction transaction("Import Assets", base_->revision());
+                    if (transaction.add(std::move(**result->value())))
+                        static_cast<void>(session_.executeTransaction(std::move(transaction)));
+                }
+            }
+            if (result->state() == runtime::TaskState::Failed)
+                for (const auto& issue : result->diagnostics())
+                    emit diagnostic(QString::fromStdString(issue.summary));
+            base_.reset();
+        }
+    }
+    if (previewPending_) {
+        auto result = preview_.tryTakeResult();
+        if (result) {
+            previewPending_ = false;
+            if (previewDirty_) {
+                refresh();
+                return;
+            }
+            if (result->value().has_value() && *result->value()) {
+                previews_ = std::move((*result->value())->assets);
+                nodePreviews_ = std::move((*result->value())->nodes);
+                thumbnailCache_ = std::move((*result->value())->cache);
+                emit changed();
+            }
+        }
+    }
+}
+} // namespace bloom::ui

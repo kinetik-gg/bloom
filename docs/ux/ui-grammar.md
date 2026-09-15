@@ -266,3 +266,65 @@ use compact resting precision: at most two decimals, no trailing zeros; editing 
 precision. KDiamond draws vector geometry through the painter's device transform, including canvas
 zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
 pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.
+
+
+## Colour Surfaces
+
+Colour controls distinguish `Display` sRGB from stored `Reference` linear sRGB through the
+session's `colorConverter()` accessor. Properties colour rows and node-card chips show the same
+converted colour as the qualified Bloom Neutral viewer. Picker hex text, HSV/HSL fields, spatial
+controls, recent colours and screen samples are display sRGB; editing them commits Reference
+values through the existing session command. A Reference-tagged colour cannot be painted directly
+as a QColor. Opening or closing the picker never changes the document.
+
+Expanded Properties RGBA fields show normalized display numbers for in-range colours. Signed or
+HDR reference RGB switches the whole row to exact reference numbers with a `reference` suffix;
+the chip continues to show the clamped display colour. Entering an RGB number outside [0, 1]
+authors that component in reference space. Editing one field preserves every untouched reference
+channel exactly. Pending or unavailable conversion disables the reference chip and labels numeric
+values as reference. Existing document numbers are preserved; this is a presentation boundary,
+not a data migration. The legacy timeline colour-row adapter remains pending this conversion.
+
+## Image Assets And Source Cards
+
+Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
+(`image`), or Sequence (`images`). Kind text remains Composition, Image or Sequence [member count].
+A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
+The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
+New Folder, Import, Delete. Folder authoring remains disabled because this slice adds no folder
+model; its button keeps the New Folder label. No media-pipeline placeholder tooltip remains.
+
+File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
+Dragging a media row to Nodes creates an Image source; dropping it on Timeline creates a wired
+Layer. Image source cards and Properties use an Asset `KDropdown` listing the project's Image
+and Sequence assets by filename or sequence pattern, with the kind glyph and Image / Sequence [n]
+text. Selection commits the stable asset id through the shared parameter setter. A removed id
+remains selected as **Missing asset**, in muted ink, with the id in its tooltip. An Image source
+card derives its title from the asset name; the title band's category remains **Sources**.
+Existing artist-authored Layer names remain intact.
+
+Loop Mode offers **Hold / Loop / Ping-pong**; Color Space offers **Auto / sRGB / Linear / Raw**.
+The card, generic Properties rows and timeline source twirl-downs read the same UI vocabulary table.
+Start Frame remains an integer and Premultiply a toggle. Dimensions (`1920 × 1080`) and sequence
+Range (`24 frames · 0–23`) are read-only `KLabel` rows on the card and in Properties, read directly
+from the imported asset record. Range uses the actual numbered endpoints and is absent for stills.
+
+An Image card reserves `ImageThumbnail`'s 72-pixel body cell, with a `SurfaceSunken` background,
+for a cached proxy no larger than 64 pixels on either axis. The cell fits that image without
+changing its aspect ratio. Sequence proxies follow session time, Start Frame and Loop Mode using
+the runtime's exact rational frame mapping and the Image source timing contract, including
+holding a preceding member across a sequence gap.
+Asset/parameter/time changes invalidate the displayed proxy; a cancellable worker publishes the
+newest result. The controller caches proxies by content digest, selected frame and interpretation,
+bounded to 512 cache entries. File resolution, hashing, decode and downsampling run on the worker;
+painting only reads a published `QImage`. Missing, unreadable and pending sources show the warning
+glyph in muted ink, never a blank cell. Thumbnail work has task progress and cancellation; shutdown
+cancels without blocking the UI. Relative-brightness probes pin the decoded and missing states.
+Automation names are `nodeImageAsset`, `nodeImageDimensions`, `nodeImageRange`,
+`propertiesImageAsset`, `propertiesImageLoopMode`, `propertiesImageColorSpace`,
+`propertiesImageDimensions`, and `propertiesImageRange`.
+
+New Composition and the composition Properties section expose a `KColorChip` Background Colour.
+Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
+Checkerboard remain session choices. This viewer background does not alter composition pixels
+or export alpha.

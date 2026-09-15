@@ -21,6 +21,23 @@ project-schema, graph, timeline, or UI behavior; AUDIO-2 owns those connections.
 device callback consumes a lock-free bounded queue, and its frame-written count is the audio master
 clock while playing; the synchronized transport follows that clock rather than an independent
 wall-clock timer.
+## Accepted v0 amendment: PNG and JPEG images (2026-09-15)
+
+The narrow v0 image pipeline may parse user PNG/JPEG files in process through the pinned,
+private stb_image adapter. This exception does not accept the proposed broad provider design.
+The maximum dimension is 16384, pixel budget 16777216, file-size cap 64 MiB, parser allocation
+cap 256 MiB, and process-image budget 256 MiB. Scans are bounded to 100000 entries and a
+100000-frame span. Hostile fixtures exercise malformed/truncated files and excessive dimensions.
+These limits bound resources but do not isolate memory corruption. A bounded decoder call is
+not interruptible; cancellation is checked before/after it and within conversion and scans.
+All I/O, hashing, scanning, decode and proxy work executes off the UI thread with diagnostics,
+activity and safe task shutdown. Audio, video, arbitrary codecs, general provider workers,
+metadata colour-profile interpretation and HDR import stay outside this exception.
+
+PNG8/PNG16 and JPEG use display-referred sRGB, inverted through the existing Bloom Neutral
+`srgb_rec709_display` transform. Straight alpha is premultiplied after conversion. Per-node
+Auto/sRGB/Linear/Raw interpretation is explicit. Numbered image sequences hold gaps with a
+warning and use composition-rate Hold/Loop/PingPong playback.
 
 ## Context
 

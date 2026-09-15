@@ -32,6 +32,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEnterEvent>
 #include <QImage>
 #include <QLabel>
@@ -40,6 +41,7 @@
 #include <QPixmap>
 #include <QPointF>
 #include <QSettings>
+#include <QThread>
 #include <QVariant>
 #include <QWidget>
 
@@ -72,6 +74,29 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
+
+void prepareColor(ui::CompositionSession& session) {
+    QElapsedTimer timer;
+    timer.start();
+    while (!session.colorConverter() && timer.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    }
+    QCoreApplication::processEvents();
+}
+
+double displayChannel(const double reference) {
+    return reference <= 0.0031308 ? reference * 12.92
+                                  : 1.055 * std::pow(reference, 1.0 / 2.4) - 0.055;
+}
+bool displayNear(const double shown, const double reference) {
+    return std::abs(shown - displayChannel(reference)) < 3e-5;
+}
+QColor displayColor(const double r, const double g, const double b, const double a = 1) {
+    return QColor::fromRgbF(static_cast<float>(displayChannel(r)),
+                            static_cast<float>(displayChannel(g)),
+                            static_cast<float>(displayChannel(b)), static_cast<float>(a));
+}
 
 [[nodiscard]] bool near(const QColor& left, const QColor& right, const int tolerance) {
     return std::abs(left.red() - right.red()) <= tolerance &&
@@ -172,6 +197,7 @@ void testSelectionShowsGroupedRowsWithValuesAndUnits(Expectations& expectations)
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -205,9 +231,9 @@ void testSelectionShowsGroupedRowsWithValuesAndUnits(Expectations& expectations)
     if (red == nullptr || green == nullptr || blue == nullptr || alpha == nullptr) {
         return;
     }
-    expectations.expect(red->value() == 0.2 && green->value() == 0.3 && blue->value() == 0.4 &&
-                            alpha->value() == 1.0,
-                        "the RGBA cells read the solid's exact constant value");
+    expectations.expect(displayNear(red->value(), 0.2) && displayNear(green->value(), 0.3) &&
+                            displayNear(blue->value(), 0.4) && alpha->value() == 1.0,
+                        "the RGBA cells display the solid's converted reference value");
     expectations.expect(red->unit().isEmpty() && green->unit().isEmpty() &&
                             blue->unit().isEmpty() && alpha->unit().isEmpty(),
                         "RGBA cells carry no unit suffix");
@@ -245,6 +271,7 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
     (void)animateParameter(document, stack, compositionId, ids.opacity);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.resize(properties.sizeHint());
@@ -291,6 +318,7 @@ void testRowNeverPaintsWholeRowHover(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -347,6 +375,7 @@ void testNoSelectionShowsDocumentProperties(Expectations& expectations) {
     commands::CommandStack stack(document);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     ui::PropertiesEditor properties(session);
 
     auto* selectionSection = properties.findChild<QWidget*>("propertiesSelectionSection");
@@ -387,6 +416,7 @@ void testSelectionSwapUpdatesRows(Expectations& expectations) {
     const auto first = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     ui::PropertiesEditor properties(session);
 
     auto* documentSection = properties.findChild<QWidget*>("propertiesDocumentSection");
@@ -424,7 +454,8 @@ void testSelectionSwapUpdatesRows(Expectations& expectations) {
     // actually re-read the new selection rather than keeping stale values across the swap.
     expectations.expect(positionX->value() == 960.0,
                         "the swapped-to layer's own position value replaces the previous row");
-    expectations.expect(red->value() == 0.9 && green->value() == 0.1 && blue->value() == 0.5,
+    expectations.expect(displayNear(red->value(), 0.9) && displayNear(green->value(), 0.1) &&
+                            displayNear(blue->value(), 0.5),
                         "the swapped-to layer's own solid color replaces the previous RGBA cells");
 
     session.clearSelection();
@@ -444,6 +475,7 @@ void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -455,7 +487,7 @@ void testRgbaCellsEditThroughCommandWithUndo(Expectations& expectations) {
 
     red->setValue(0.75);
     const auto edited = session.constantColorValue(ids.color);
-    expectations.expect(edited.has_value() && edited->red == 0.75,
+    expectations.expect(edited.has_value() && std::abs(edited->red - 0.522522) < 3e-5,
                         "editing the Red cell commits through a command and updates the document");
     expectations.expect(edited.has_value() && edited->green == 0.3 && edited->blue == 0.4 &&
                             edited->alpha == 1.0,
@@ -486,6 +518,7 @@ void testTransformRowsEditThroughCommandsWithUndo(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -578,6 +611,7 @@ void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -640,6 +674,7 @@ void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations)
     static_cast<void>(animateParameter(document, stack, compositionId, ids.scale));
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.resize(420, 600);
@@ -689,6 +724,7 @@ void testRgbaCellsNeverClipNegativeOrHdrChannels(Expectations& expectations) {
     commands::CommandStack stack(document);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     constexpr core::Color4d hdrColor{-0.25, 1.5, 0.125, 0.8};
     expectations.expect(session.addSolidLayer(QStringLiteral("HDR"), hdrColor),
                         "a negative/HDR solid can be added for the clipping check");
@@ -729,6 +765,7 @@ void testScrubOnRgbaCellChangesValue(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 
@@ -756,7 +793,7 @@ void testScrubOnRgbaCellChangesValue(Expectations& expectations) {
     expectations.expect(blueField->value() != 0.4,
                         "scrubbing the Blue cell changes its displayed value");
     const auto scrubbed = session.constantColorValue(ids.color);
-    expectations.expect(scrubbed.has_value() && scrubbed->blue == blueField->value(),
+    expectations.expect(scrubbed.has_value() && displayNear(blueField->value(), scrubbed->blue),
                         "the scrub committed through the session into the document value");
 }
 
@@ -771,6 +808,7 @@ void testFocusedHoveredCellBorderIsAccentOnScreen(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.show();
@@ -825,6 +863,7 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
     commands::CommandStack stack(document);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     expectations.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Hello"), 48.0,
                                              core::Color4d{0.25, 0.5, 0.75, 1.0}),
                         "a text layer can be added for the text rows");
@@ -851,7 +890,11 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
                         "a text selection shows the Text Source group and hides the Solid one");
     expectations.expect(content->text() == QStringLiteral("Hello") && size->value() == 48.0,
                         "the rows read the authored content and em size from project truth");
-    expectations.expect(near(color->color().toQColor(), QColor::fromRgbF(0.25F, 0.5F, 0.75F), 2),
+    expectations.expect(near(color->color()
+                                 .converted(ui::kit::ColorSpace::Display, session.colorConverter())
+                                 .value_or(ui::kit::KColor{})
+                                 .toQColor(),
+                             displayColor(0.25, 0.5, 0.75), 2),
                         "and the swatch reads the authored color");
     expectations.expect(content->isEnabled() && size->isEnabled() && color->isEnabled(),
                         "all three are editable, because a command exists for each");
@@ -896,9 +939,12 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
                             session.constantColorValue(colorParameter->id) ==
                                 core::Color4d{0.1, 0.2, 0.3, 0.5},
                         "and reaches project truth with its alpha intact");
-    expectations.expect(
-        near(color->color().toQColor(), QColor::fromRgbF(0.1F, 0.2F, 0.3F, 0.5F), 2),
-        "and the swatch re-reads it after the snapshot change");
+    expectations.expect(near(color->color()
+                                 .converted(ui::kit::ColorSpace::Display, session.colorConverter())
+                                 .value_or(ui::kit::KColor{})
+                                 .toQColor(),
+                             displayColor(0.1, 0.2, 0.3, 0.5), 2),
+                        "and the swatch re-reads it after the snapshot change");
 
     // Undone through the SESSION, not the bare stack: the session owns the snapshot every later
     // command is based on, so undoing behind its back would leave it on a stale revision.
@@ -931,6 +977,7 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.resize(properties.sizeHint());
@@ -1003,6 +1050,7 @@ void testSectionsGroupCollapseAndPersist(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
     properties.resize(properties.sizeHint());
@@ -1073,6 +1121,7 @@ void testObjectSwitchesAuthorTheLayerBoundary(Expectations& expectations) {
     const auto ids = addSolidLayer(document, stack);
 
     ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
     session.selectLayer(ids.layer);
     ui::PropertiesEditor properties(session);
 

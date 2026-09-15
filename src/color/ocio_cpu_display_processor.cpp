@@ -3,7 +3,12 @@
 #include "ocio_internal.hpp"
 #include <bloom/color/display_processor_identity.hpp>
 
+#include <bloom/core/floating_point.hpp>
+
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -80,9 +85,48 @@ buildIdentity(const ResolvedBloomNeutralConfig& resolved) {
 #endif
 }
 
+[[nodiscard]] std::optional<bloom::core::Color4d>
+convertColor(const OCIO::ConstCPUProcessorRcPtr& processor, bloom::core::Color4d value,
+             const bool clampDisplay) noexcept {
+    if (!value.isValid() || !bloom::core::supportsReferenceFloatingPointEnvironment<float>() ||
+        !bloom::core::supportsReferenceFloatingPointEnvironment<double>()) {
+        return std::nullopt;
+    }
+    const std::array channels{value.red, value.green, value.blue};
+    std::array<float, 3> rgb{};
+    for (std::size_t i = 0; i < rgb.size(); ++i) {
+        if (std::abs(channels[i]) > static_cast<double>(std::numeric_limits<float>::max()))
+            return std::nullopt;
+        rgb[i] = static_cast<float>(channels[i]);
+    }
+    try {
+        processor->applyRGB(rgb.data());
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+    for (auto& channel : rgb) {
+        if (!std::isfinite(channel))
+            return std::nullopt;
+        if (clampDisplay)
+            channel = std::clamp(channel, 0.0F, 1.0F);
+    }
+    return bloom::core::Color4d{static_cast<double>(rgb[0]), static_cast<double>(rgb[1]),
+                                static_cast<double>(rgb[2]), value.alpha};
+}
+
 } // namespace
 
 namespace bloom::color {
+
+std::optional<core::Color4d>
+PreparedCpuDisplayProcessorHandle::referenceToDisplay(const core::Color4d value) const noexcept {
+    return convertColor(impl_->cpuProcessor(), value, true);
+}
+
+std::optional<core::Color4d>
+PreparedCpuDisplayProcessorHandle::displayToReference(const core::Color4d value) const noexcept {
+    return convertColor(impl_->inverseProcessor(), value, false);
+}
 
 PreparedCpuDisplayProcessorHandle::PreparedCpuDisplayProcessorHandle(
     std::unique_ptr<Impl> impl, DisplayProcessorIdentityV1 identity,
@@ -100,6 +144,7 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
 
     OCIO::ConstProcessorRcPtr processor;
     OCIO::ConstCPUProcessorRcPtr cpuProcessor;
+    OCIO::ConstCPUProcessorRcPtr inverseProcessor;
     std::string cacheId;
     try {
         // A freshly created Context is passed explicitly rather than relying on
@@ -120,7 +165,13 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
         }
         cacheId = processor->getCacheID();
         cpuProcessor = processor->getDefaultCPUProcessor();
-        if (!cpuProcessor) {
+        const auto inverse = config->getProcessor(
+            emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
+            std::string(resolved.displayName()).c_str(), std::string(resolved.viewName()).c_str(),
+            OCIO::TRANSFORM_DIR_INVERSE);
+        // Authoring must not turn display white into an artificial HDR value through fast pow.
+        inverseProcessor = inverse->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_LOSSLESS);
+        if (!cpuProcessor || !inverseProcessor) {
             return OcioBuildProcessorResult(OcioBuildProcessorError::GetCpuProcessorFailed);
         }
     } catch (const OCIO::Exception&) {
@@ -144,7 +195,8 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
         .qualifiedPrefixDigest = std::nullopt,
     };
 
-    auto impl = std::make_unique<PreparedCpuDisplayProcessorHandle::Impl>(cpuProcessor);
+    auto impl =
+        std::make_unique<PreparedCpuDisplayProcessorHandle::Impl>(cpuProcessor, inverseProcessor);
     PreparedCpuDisplayProcessorHandle handle(std::move(impl), std::move(*identity),
                                              std::move(provenance),
                                              DisplayProcessorLease::inProcess());

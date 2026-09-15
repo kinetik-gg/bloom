@@ -14,6 +14,7 @@
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/ui/kit/color.hpp>
 
 #include <QObject>
 #include <QRectF>
@@ -43,6 +44,7 @@ struct Vec2d;
 } // namespace bloom::document
 
 namespace bloom::ui {
+class AssetController;
 
 // A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
 // stores the stable KeyframeId; row index and screen position are presentation details"). curveId
@@ -189,10 +191,19 @@ enum class KeyframeParameterState : std::uint8_t {
 // branching, or refusal wording.
 using AuthoringTarget = std::optional<document::NodeId>;
 
+struct SessionColorConverterState;
+
 class CompositionSession final : public QObject {
     Q_OBJECT
 
   public:
+    // The closed v1 colour schemas all declare reference linear sRGB. Unknown schemas fail closed.
+    [[nodiscard]] kit::KColorConverter
+    colorConverter(std::string_view schemaKey = document::kSolidColorParameterSchemaKey);
+
+    void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
+    [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
+
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
                        document::CompositionId compositionId, QObject* parent = nullptr);
 
@@ -528,6 +539,8 @@ class CompositionSession final : public QObject {
     void drivenValuesChanged();
 
   private:
+    AssetController* assetController_ = nullptr;
+
     [[nodiscard]] bool execute(commands::Transaction&& transaction);
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
     [[nodiscard]] const document::NodeRecord*
@@ -623,6 +636,7 @@ class CompositionSession final : public QObject {
     // which document/command-stack this session projects after ProjectHost replaces the live
     // ProjectSession content. A reference member cannot be reseated; both are set at construction
     // and by rebind(), and are never null while this object is alive.
+    std::shared_ptr<SessionColorConverterState> colorConverterState_;
     document::Document* document_;
     commands::CommandStack* commandStack_;
     document::Snapshot snapshot_;

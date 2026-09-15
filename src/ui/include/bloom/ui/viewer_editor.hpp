@@ -69,11 +69,8 @@ enum class ViewerChannel : std::uint8_t {
 // What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
 // "viewer/background"; Solid is the default.
 //
-// Solid is the application's own canvas Background token, NOT a per-composition colour: the
-// document model carries no background colour for a composition today (document::CompositionFormat
-// holds extent, pixel aspect, and frame rate and nothing else), so claiming one here would be an
-// invented value. When the document gains one, Solid is the single place that has to start reading
-// it.
+// Solid reads the selected composition's authored backgroundColor (default opaque black).
+// It is viewer presentation only and never fills process or export alpha.
 enum class ViewerBackground : std::uint8_t {
     Solid,
     Checkerboard,
@@ -190,6 +187,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // reaching into private members.
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
+    [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
     // Task VIEW-1's own seams, on the same terms as the four above.
@@ -222,6 +220,8 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // already relocated that strip to an external footer slot (FORMAL AMENDMENT 1), in which case
     // the canvas is full-bleed with no inset at all. There is no other inset either way
     // (decision 1).
+    // The whole content area: right of the tool column, above the footer. The surround fills it.
+    [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
 
     // describe no longer belongs to this widget's own geometry.

@@ -1,4 +1,5 @@
 #include <bloom/ui/composition_commands.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
 
@@ -92,6 +93,11 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
                                                      current->duration().denominator()));
     form->addRow(QObject::tr("Duration (frames)"), fields.duration);
 
+    auto* background = new kit::KColorChip(&dialog);
+    background->setObjectName(QStringLiteral("newCompositionBackgroundColor"));
+    background->setAccessibleName(QObject::tr("Background Colour"));
+    background->setColor({0.0F, 0.0F, 0.0F, 1.0F});
+    form->addRow(QObject::tr("Background Colour"), background);
     fields.error = new kit::KLabel(&dialog);
     fields.error->setObjectName(QStringLiteral("newCompositionErrorLabel"));
     fields.error->setWordWrap(true);
@@ -132,7 +138,11 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
                                       session.snapshot().revision());
     transaction.emplace<commands::AddComposition>(
         fields.name->text().toStdString(), *format, *rate,
-        core::RationalTime::fromInteger(fields.duration->value()));
+        core::RationalTime::fromInteger(fields.duration->value()),
+        core::Color4d{static_cast<double>(background->color().red),
+                      static_cast<double>(background->color().green),
+                      static_cast<double>(background->color().blue),
+                      static_cast<double>(background->color().alpha)});
     const auto result = session.executeTransaction(std::move(transaction));
     return result.succeeded()
                ? result.outputId<document::CompositionId>(commands::kAddCompositionOutput)

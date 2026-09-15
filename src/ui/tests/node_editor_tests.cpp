@@ -24,6 +24,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QGraphicsItem>
 #include <QGraphicsProxyWidget>
 #include <QKeyEvent>
@@ -34,6 +35,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QString>
+#include <QThread>
 #include <QToolButton>
 #include <QWheelEvent>
 
@@ -813,6 +815,12 @@ void testColorIsAReadOnlyChipAndParameterlessNodesStayClean(Expectations& expect
     // honesty rule points the other way -- an enabled chip whose picker result really commits. What
     // stays pinned is that the exact authoring value is still reported in text, because the swatch
     // cannot show an HDR or negative channel.
+    QElapsedTimer preparation;
+    preparation.start();
+    while (!chip->isEnabled() && preparation.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    }
     expectations.expect(chip->isEnabled(), "the chip is editable: a command now sets a color");
     expectations.expect(!chip->isPickerOpen(), "and it opens its picker only when asked");
     expectations.expect(chip->toolTip().contains(QStringLiteral("R 0.62")),

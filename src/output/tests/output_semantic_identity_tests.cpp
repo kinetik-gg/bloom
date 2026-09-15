@@ -66,11 +66,11 @@ using namespace std::chrono_literals;
 // animation slice moved the plan to 2 and sampling to 2; the values below are the oracle's output
 // for that combination (evaluator/primitive 5, plan 2, animation 2), never the implementation's.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "b80e593b1af7c70983d4f1e5bb9bcc69ccb6acde87c5516e1319c321e6ee8a70";
+    "326f8f7866f1efc61eb7de0ee4c4ce74f381854d58d87f0ec6d126766f1849b6";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "505db1d513bb4cd2d74f2d25d8329e68a236d528af01bc8a40a0a2c2c6b6cb96";
+    "963f8a92382056bbe20a1ef98bd84f5e7b64812a55a9461703feffb5699393a6";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "bed6ee60292336daf5126c6f6367bf3abd75fe1873bc76ff6d4f22b34f809041";
+    "a2cd61a295670dfec434f82e540f5a5b5372251155b60b362d71683ccb089c88";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

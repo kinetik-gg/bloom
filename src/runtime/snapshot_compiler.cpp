@@ -8,6 +8,7 @@
 #include <bloom/runtime/curve_compilation.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <functional>

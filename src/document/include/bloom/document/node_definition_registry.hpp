@@ -188,6 +188,7 @@ enum class NodeCardinality : std::uint8_t {
 enum class NodeLoweringKind {
     Solid,
     Text,
+    ImageSource,
     LayerOutput,
     LayerStack,
     CompositionOutput,
@@ -248,6 +249,7 @@ enum class NodeLoweringKind {
         return true;
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Text:
+    case NodeLoweringKind::ImageSource:
     case NodeLoweringKind::LayerOutput:
     case NodeLoweringKind::LayerStack:
     case NodeLoweringKind::CompositionOutput:

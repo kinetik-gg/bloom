@@ -206,6 +206,18 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
     }
+    if (schemaKey == "bloom.image.asset")
+        return std::holds_alternative<std::string>(constant.value);
+    if (schemaKey == "bloom.image.premultiply")
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == "bloom.image.start-frame" || schemaKey == "bloom.image.loop-mode" ||
+        schemaKey == "bloom.image.color-space") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value &&
+               (schemaKey == "bloom.image.start-frame"
+                    ? (*value >= -1000000000 && *value <= 1000000000)
+                    : (*value >= 0 && *value <= (schemaKey == "bloom.image.loop-mode" ? 2 : 3)));
+    }
     if (schemaKey == kTextAlignmentParameterSchemaKey) {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value <= 2;

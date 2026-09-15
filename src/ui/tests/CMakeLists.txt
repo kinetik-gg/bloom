@@ -747,3 +747,34 @@ foreach(scale IN ITEMS 1 1.5)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;golden" TIMEOUT 60)
 endforeach()
+
+add_executable(bloom_media_ui_test media_ui_tests.cpp)
+target_include_directories(bloom_media_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_media_ui_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_media_ui_test)
+foreach(scale IN ITEMS 1 1.5 2)
+    add_test(NAME bloom.ui.media.dpr${scale} COMMAND bloom_media_ui_test)
+    set_tests_properties(bloom.ui.media.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;media;integration" TIMEOUT 60)
+endforeach()
+
+add_executable(bloom_media_window_capture media_window_capture.cpp)
+target_include_directories(bloom_media_window_capture PRIVATE ..)
+target_link_libraries(bloom_media_window_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_media_window_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_media_window_capture)
+add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture)
+set_tests_properties(bloom.ui.media-window.dpr1 PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;media;capture" TIMEOUT 60)
+
+add_executable(bloom_color_boundary_test color_boundary_tests.cpp)
+target_link_libraries(bloom_color_boundary_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_color_boundary_test)
+foreach(scale IN ITEMS 1 1.25 1.5 2)
+    bloom_add_test(NAME bloom.ui.color-boundary.dpr${scale}
+        COMMAND bloom_color_boundary_test LABELS ui integration color TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale}")
+endforeach()

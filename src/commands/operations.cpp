@@ -237,6 +237,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
                                       source.format());
     composition.setWorkArea(source.workArea());
     composition.setSafeAreas(source.safeAreas());
+    composition.setBackgroundColor(source.backgroundColor());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);
@@ -573,6 +574,34 @@ OperationResult AddSolidLayer::apply(document::Draft& draft) const {
          kAddSolidLayerLayerToStackEdgeOutput});
 }
 
+OperationResult AddImageLayer::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    const auto* asset = draft.project().findAsset(asset_);
+    if (!composition || !asset)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Image asset or composition does not exist");
+    const std::string name =
+        asset->kind == document::AssetKind::Sequence
+            ? asset->manifest.pattern
+            : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
+    return addStructuredLayer(
+        draft, *composition, name,
+        {"bloom.image-source",
+         1,
+         "image",
+         {{"asset", "bloom.image.asset", std::to_string(asset_.value()), "assetParameter"},
+          {"startFrame", "bloom.image.start-frame", std::int64_t{0}, "startFrameParameter"},
+          {"loopMode", "bloom.image.loop-mode", std::int64_t{0}, "loopModeParameter"},
+          {"colorSpace", "bloom.image.color-space", std::int64_t{0}, "colorSpaceParameter"},
+          {"premultiply", "bloom.image.premultiply", true, "premultiplyParameter"}}},
+        {static_cast<double>(composition->format().width()) / 2.0,
+         static_cast<double>(composition->format().height()) / 2.0},
+        1.0,
+        {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter", "anchorParameter",
+         "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
+         "imageToLayerEdge", "layerToStackEdge"});
+}
+
 std::string_view AddTextLayer::typeId() const noexcept { return "bloom.layer.add-text"; }
 
 OperationResult AddTextLayer::apply(document::Draft& draft) const {
@@ -669,6 +698,9 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Composition duration must be greater than zero");
     }
+    if (!background_.isValid())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid composition background colour");
     const auto format = document::CompositionFormat::create(format_.width(), format_.height(),
                                                             format_.pixelAspect(), frameRate_);
     if (!format) {
@@ -708,6 +740,7 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::DuplicateId,
                                          "Composition could not be added");
     }
+    draft.project().findComposition(*compositionId)->setBackgroundColor(background_);
     return OperationResult::applied({{std::string(kAddCompositionOutput), *compositionId}});
 }
 

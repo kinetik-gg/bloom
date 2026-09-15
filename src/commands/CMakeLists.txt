@@ -6,6 +6,7 @@ target_sources(
         animation_operations.cpp
         command_stack.cpp
         operations.cpp
+        asset_operations.cpp
         node_operations.cpp
         layer_operations.cpp
         node_duplication.cpp
@@ -21,6 +22,7 @@ target_sources(
             include/bloom/commands/command_stack.hpp
             include/bloom/commands/operation.hpp
             include/bloom/commands/operations.hpp
+            include/bloom/commands/asset_operations.hpp
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/layer_operations.hpp
             include/bloom/commands/result.hpp
@@ -28,7 +30,7 @@ target_sources(
 )
 
 target_compile_features(bloom_commands PUBLIC cxx_std_20)
-target_link_libraries(bloom_commands PUBLIC bloom_document)
+target_link_libraries(bloom_commands PUBLIC bloom_document PRIVATE bloom_media_image)
 bloom_enable_warnings(bloom_commands)
 
 if(BUILD_TESTING)

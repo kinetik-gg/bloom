@@ -71,6 +71,7 @@ target_sources(
     PRIVATE
         ocio_builtin_registry.cpp
         ocio_cpu_display_processor.cpp
+        ocio_cpu_input_processor.cpp
         ocio_cpu_display_frame.cpp
         ocio_internal.hpp
     PUBLIC
@@ -79,6 +80,7 @@ target_sources(
         FILES
             include/bloom/color/ocio_builtin_registry.hpp
             include/bloom/color/ocio_cpu_display_processor.hpp
+            include/bloom/color/ocio_cpu_input_processor.hpp
             include/bloom/color/ocio_cpu_display_frame.hpp
 )
 

@@ -478,6 +478,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             descriptor->kernel, std::move(operands), std::move(selectors)}};
     }
     case runtime::NodeLoweringKind::Solid:
+    case runtime::NodeLoweringKind::ImageSource:
     case runtime::NodeLoweringKind::Text:
     case runtime::NodeLoweringKind::LayerOutput:
     case runtime::NodeLoweringKind::LayerStack:

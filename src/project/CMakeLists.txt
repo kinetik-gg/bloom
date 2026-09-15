@@ -14,6 +14,8 @@ target_sources(
         canonical_json_writer.cpp
         canonical_manifest.cpp
         document_decode.cpp
+        document_decode_assets.cpp
+        canonical_assets.ipp
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_bounds_migration.cpp

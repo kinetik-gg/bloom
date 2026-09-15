@@ -1,3 +1,4 @@
+#include <regex>
 // The value graph on the wire (document 1.4): the vec3 constant kind, the driver parameter source,
 // and the 1.3 -> 1.4 migration that changes nothing but the version. The 1.3 fixture is produced by
 // downgrading a freshly written 1.4 document rather than by pasting a second hand-written document
@@ -231,7 +232,7 @@ void roundTripAndReopen() {
            "a driven parameter is written with the driver discriminator");
     expect(text.find("\"outputPort\": \"value\"") != std::string::npos,
            "and names the output port it reads");
-    expect(text.find("\"minor\": 9") != std::string::npos,
+    expect(text.find("\"minor\": 10") != std::string::npos,
            "both constructs declare the current document schema minor");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
@@ -241,7 +242,7 @@ void roundTripAndReopen() {
         return;
     }
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 9 && !opened.roundTrip,
+    expect(opened.schemaMinor == 10 && !opened.roundTrip,
            "and is read as the current schema minor with nothing unknown to retain");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -279,7 +280,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 9");
+    const auto anchor = std::string_view("\"minor\": 10");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the value-graph fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -289,6 +290,12 @@ void minorGating() {
     const auto decodeClaiming = [&](const std::string_view replacement) {
         auto text = baseline;
         text.replace(minor, anchor.size(), std::string(replacement));
+        if (replacement == "\"minor\": 3") {
+            text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"),
+                                      "");
+            text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
+            text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
+        }
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         if (!dom) {
             throw std::runtime_error("gating parse");
@@ -315,7 +322,7 @@ void minorGating() {
     // gate is "the minor that declares it or later", not "exactly 1.4". That is what makes 1.4's
     // additions additive rather than a one-version island.
     {
-        const auto decoded = decodeClaiming("\"minor\": 10");
+        const auto decoded = decodeClaiming("\"minor\": 11");
         expect(
             decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                 decoded.classification() == DocumentClassification::EditableWithRoundTrip,

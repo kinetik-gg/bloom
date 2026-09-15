@@ -149,3 +149,9 @@ bloom_add_test(
     LABELS runtime unit render color
     TIMEOUT 30
 )
+
+add_executable(bloom_image_source_test ${PROJECT_SOURCE_DIR}/tests/integration/media_image_source_tests.cpp)
+target_include_directories(bloom_image_source_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${PROJECT_SOURCE_DIR}/src/media/image/tests)
+target_link_libraries(bloom_image_source_test PRIVATE bloom_runtime_evaluator bloom_commands)
+bloom_enable_warnings(bloom_image_source_test)
+bloom_add_test(NAME bloom.runtime.image-source COMMAND bloom_image_source_test LABELS unit runtime media)

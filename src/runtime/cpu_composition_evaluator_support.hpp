@@ -78,6 +78,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
     std::visit(Overloaded{
                    [](const CompiledSolid&) {},
                    [](const CompiledText&) {},
+                   [](const CompiledImageSource&) {},
                    [&function](const CompiledLayerOutput& layer) { function(layer.input); },
                    [&function](const CompiledMerge& stack) {
                        for (const auto& entry : stack.entries) {

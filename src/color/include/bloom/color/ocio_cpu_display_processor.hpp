@@ -2,6 +2,7 @@
 
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/sha256.hpp>
 
 #include <cstdint>
@@ -99,6 +100,15 @@ class PreparedCpuDisplayProcessorHandle final {
     [[nodiscard]] const DisplayProcessorExecutionProvenance& provenance() const&& = delete;
     [[nodiscard]] const DisplayProcessorLease& lease() const& noexcept { return lease_; }
     [[nodiscard]] const DisplayProcessorLease& lease() const&& = delete;
+
+    // Straight authoring colours: RGB uses the prepared forward/inverse OCIO transform;
+    // alpha is preserved exactly. Forward output clamps to the display gamut [0, 1].
+    // The inverse retains range (including extended display input). Clipping is not invertible.
+    // Invalid/non-finite or unrepresentable RGB and incompatible FP environments fail closed.
+    [[nodiscard]] std::optional<core::Color4d>
+    referenceToDisplay(core::Color4d value) const noexcept;
+    [[nodiscard]] std::optional<core::Color4d>
+    displayToReference(core::Color4d value) const noexcept;
 
     // Opaque handle consumed only by ocio_cpu_display_frame.cpp within this same library.
     class Impl;

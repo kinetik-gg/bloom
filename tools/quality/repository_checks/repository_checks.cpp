@@ -333,19 +333,46 @@ constexpr auto kKnownModules = std::to_array<std::string_view>(
      "output", "host", "scripting"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
-        {"platform", "core"},      {"document", "core"},     {"commands", "core"},
-        {"commands", "document"},  {"project", "core"},      {"project", "document"},
-        {"project", "platform"},   {"render", "core"},       {"runtime", "core"},
-        {"runtime", "document"},   {"runtime", "render"},    {"media", "core"},
-        {"media", "platform"},     {"media", "render"},      {"media", "runtime"},
-        {"color", "core"},         {"color", "platform"},    {"color", "render"},
-        {"runtime", "color"},      {"output", "color"},      {"output", "core"},
-        {"output", "document"},    {"output", "platform"},   {"output", "render"},
-        {"output", "runtime"},     {"host", "color"},        {"host", "commands"},
-        {"host", "core"},          {"host", "document"},     {"host", "output"},
-        {"host", "platform"},      {"host", "project"},      {"host", "runtime"},
-        {"scripting", "commands"}, {"scripting", "core"},    {"scripting", "document"},
-        {"scripting", "host"},     {"scripting", "runtime"},
+        {"platform", "core"},
+        {"document", "core"},
+        {"commands", "core"},
+        {"commands", "document"},
+        {"project", "core"},
+        {"project", "document"},
+        {"project", "platform"},
+        {"render", "core"},
+        {"runtime", "core"},
+        {"runtime", "document"},
+        {"runtime", "render"},
+        {"media", "core"},
+        {"commands", "media"}, /* Asset preparation runs before command publication. */
+        {"media", "color"},    /* Qualified input conversion belongs to color. */
+        {"media", "platform"},
+        {"media", "render"},
+        {"color", "core"},
+        {"color", "platform"},
+        {"color", "render"},
+        {"runtime", "media"}, /* Image evaluation consumes the bounded media decoder. */
+        {"runtime", "color"},
+        {"output", "color"},
+        {"output", "core"},
+        {"output", "document"},
+        {"output", "platform"},
+        {"output", "render"},
+        {"output", "runtime"},
+        {"host", "color"},
+        {"host", "commands"},
+        {"host", "core"},
+        {"host", "document"},
+        {"host", "output"},
+        {"host", "platform"},
+        {"host", "project"},
+        {"host", "runtime"},
+        {"scripting", "commands"},
+        {"scripting", "core"},
+        {"scripting", "document"},
+        {"scripting", "host"},
+        {"scripting", "runtime"},
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,
@@ -552,6 +579,10 @@ auto scanArchitectureBoundaries(const Path& root, const std::span<const Path> fi
     const auto candidates = sortedFiles(files);
     std::vector<RepositoryFinding> findings;
     for (const auto& relative : candidates) {
+        // Unmodified pinned vendor header: its FAQ's "QUICK NOTES" is not a Qt type. The
+        // Bloom-owned adapter remains fully checked and is the only TU allowed to include it.
+        if (relative == "src/media/third_party/stb_image/stb_image.h")
+            continue;
         const auto suffix = asciiLower(relative.extension().generic_string());
         if (contains(kCppSuffixes, suffix)) {
             appendPublicHeaderPathFinding(relative, findings);

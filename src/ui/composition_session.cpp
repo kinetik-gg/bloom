@@ -12,6 +12,11 @@
 #include <bloom/runtime/curve_compilation.hpp>
 
 #include <QThread>
+#include <QThreadPool>
+#include <QTimer>
+#include <atomic>
+#include <bloom/runtime/qualified_display_processor_provider.hpp>
+#include <mutex>
 
 #include <algorithm>
 #include <cmath>
@@ -22,6 +27,79 @@
 #include <vector>
 
 namespace bloom::ui {
+struct SessionColorConverterState final {
+    std::mutex mutex;
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
+    std::atomic<bool> cancelled{false};
+    bool finished = false;
+};
+
+kit::KColorConverter CompositionSession::colorConverter(const std::string_view schemaKey) {
+    static_assert(document::kSolidColorEncoding == "bloom.reference.linear-srgb");
+    if (schemaKey != document::kSolidColorParameterSchemaKey &&
+        schemaKey != document::kTextColorParameterSchemaKey &&
+        schemaKey != document::kColorValueParameterSchemaKey &&
+        schemaKey != document::kColorOperandParameterSchemaKey)
+        return {};
+    if (!colorConverterState_) {
+        colorConverterState_ = std::make_shared<SessionColorConverterState>();
+        const auto state = colorConverterState_;
+        connect(this, &QObject::destroyed, [state] { state->cancelled.store(true); });
+        // Only the immutable, bounded built-in runs here. No widget/session pointer crosses
+        // into the worker. Destruction cancels publication and never waits on the UI thread.
+        QThreadPool::globalInstance()->start([state] {
+            if (state->cancelled.load())
+                return;
+            const auto result = runtime::buildBloomNeutralQualifiedDisplayProcessor();
+            const std::lock_guard lock(state->mutex);
+            if (!state->cancelled.load()) {
+                state->processor = result.handle();
+                state->finished = true;
+            }
+        });
+        auto* timer = new QTimer(this);
+        timer->setInterval(16);
+        connect(timer, &QTimer::timeout, this, [this, state, timer] {
+            bool finished = false;
+            bool ready = false;
+            {
+                const std::lock_guard lock(state->mutex);
+                finished = state->finished;
+                ready = state->processor != nullptr;
+            }
+            if (!finished)
+                return;
+            timer->stop();
+            timer->deleteLater();
+            if (!ready)
+                reportUnavailable(tr("Colour conversion unavailable"));
+            Q_EMIT snapshotChanged();
+        });
+        timer->start();
+    }
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
+    {
+        const std::lock_guard lock(colorConverterState_->mutex);
+        processor = colorConverterState_->processor;
+    }
+    if (!processor)
+        return {};
+    return [processor](const kit::KColor& input,
+                       const kit::ColorSpace target) -> std::optional<kit::KColor> {
+        const core::Color4d value{static_cast<double>(input.red), static_cast<double>(input.green),
+                                  static_cast<double>(input.blue),
+                                  static_cast<double>(input.alpha)};
+        const auto converted = target == kit::ColorSpace::Display
+                                   ? processor->referenceToDisplay(value)
+                                   : processor->displayToReference(value);
+        if (!converted)
+            return std::nullopt;
+        return kit::KColor::fromRgba(static_cast<float>(converted->red),
+                                     static_cast<float>(converted->green),
+                                     static_cast<float>(converted->blue), input.alpha, target);
+    };
+}
+
 // The ParameterSample alternatives a CURVE can hold. sampleParameterValue() returns only these
 // four, because only these four have a midpoint; the three task DRIVE-1 added to ParameterSample --
 // a String, an Integer, a Boolean -- are values a row shows, never values a keyframe command
