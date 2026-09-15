@@ -134,10 +134,11 @@ void testWavRoundTripAndWaveform(Expectations& expectations) {
     TemporaryFile file{".wav"};
     const auto expected = writeSineWav(file.path());
     const auto probe = bloom::media::audio::probeAudio(file.path());
+    const auto expectedDuration = RationalTime::create(1, 1);
     expectations.expect(probe && probe.value()->container == AudioContainer::Wav &&
                             probe.value()->rate == 48'000 && probe.value()->channels == 2 &&
-                            probe.value()->frames == 48'000 &&
-                            probe.value()->duration == *RationalTime::create(1, 1),
+                            probe.value()->frames == 48'000 && expectedDuration.has_value() &&
+                            probe.value()->duration == *expectedDuration,
                         "generated WAV probe reports exact stereo 48 kHz one-second metadata");
 
     const auto decoded = bloom::media::audio::decodeAudio(file.path());

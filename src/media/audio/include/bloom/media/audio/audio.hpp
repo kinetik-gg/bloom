@@ -32,6 +32,9 @@ enum class AudioErrorCode : std::uint8_t {
     InvalidBucketCount,
     InvalidBuffer,
     AllocationFailure,
+    BackendUnavailable,
+    BackendStartFailed,
+    InvalidState,
 };
 
 struct AudioError final {
