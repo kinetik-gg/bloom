@@ -1,6 +1,6 @@
 #define MINIMP3_FLOAT_OUTPUT
 #define MINIMP3_IMPLEMENTATION
-#include "../third_party/minimp3/minimp3_ex.h"
+#include <minimp3_ex.h>
 
 #include "mp3_backend.hpp"
 

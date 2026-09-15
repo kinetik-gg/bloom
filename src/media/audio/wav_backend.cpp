@@ -1,7 +1,7 @@
 #define DR_WAV_NO_STDIO
 #define DR_WAV_NO_WCHAR
 #define DR_WAV_IMPLEMENTATION
-#include "../third_party/dr_wav/dr_wav.h"
+#include <dr_wav.h>
 
 #include "wav_backend.hpp"
 

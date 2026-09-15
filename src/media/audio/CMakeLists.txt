@@ -3,7 +3,10 @@ find_package(Threads REQUIRED)
 add_library(bloom_media_dr_wav OBJECT wav_backend.cpp wav_backend.hpp)
 target_compile_features(bloom_media_dr_wav PRIVATE cxx_std_20)
 target_link_libraries(bloom_media_dr_wav PRIVATE bloom_core)
-target_include_directories(bloom_media_dr_wav PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(
+    bloom_media_dr_wav
+    PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/dr_wav"
+)
 if(MSVC)
     target_compile_options(bloom_media_dr_wav PRIVATE /w)
 else()
@@ -14,7 +17,10 @@ bloom_enable_strict_floating_point(bloom_media_dr_wav)
 add_library(bloom_media_minimp3 OBJECT mp3_backend.cpp mp3_backend.hpp)
 target_compile_features(bloom_media_minimp3 PRIVATE cxx_std_20)
 target_link_libraries(bloom_media_minimp3 PRIVATE bloom_core)
-target_include_directories(bloom_media_minimp3 PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(
+    bloom_media_minimp3
+    PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/minimp3"
+)
 if(MSVC)
     target_compile_options(bloom_media_minimp3 PRIVATE /w)
 else()
@@ -26,7 +32,11 @@ add_library(bloom_media_miniaudio OBJECT playback/miniaudio_backend.cpp)
 target_compile_features(bloom_media_miniaudio PRIVATE cxx_std_20)
 target_include_directories(
     bloom_media_miniaudio
-    PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/playback/include"
+    PRIVATE
+        include
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/playback/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/miniaudio"
 )
 target_link_libraries(bloom_media_miniaudio PRIVATE bloom_core Threads::Threads ${CMAKE_DL_LIBS})
 if(UNIX AND NOT APPLE)
