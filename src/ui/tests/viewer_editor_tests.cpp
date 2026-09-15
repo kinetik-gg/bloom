@@ -1167,9 +1167,8 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
             return;
         }
-        // A corner of the canvas at 25% zoom: the composition rectangle is a few pixels at the
-        // centre, so the corner is pure surround with none of the frame's own drop shadow reaching
-        // it (drawFrameShadow() spreads by the Popup elevation's blur radius).
+        // A corner of the fit rectangle at 25% zoom: the composition rectangle is a few pixels at
+        // the centre, so the corner is pure surround (the frame casts no shadow any more).
         fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1); // 25%
         QCoreApplication::processEvents();
         const auto corner = [&fixture] {
@@ -1194,6 +1193,17 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         background->setCurrentIndex(3); // White
         QCoreApplication::processEvents();
         expectations.expect(corner() == QColor(Qt::white), "and White is literal white");
+        // The surround fills the WHOLE content area, edge to edge (owner, 2026-09-15): the first
+        // pixel right of the tool column at the very top, and the last pixel above the footer at
+        // the far right, are both surround, not the canvas token behind it.
+        {
+            const QImage image = fixture.viewer.grab().toImage();
+            const QRect content = fixture.viewer.contentRectForTest().toRect();
+            const QColor topLeft = image.pixelColor(content.topLeft() + QPoint(1, 1));
+            const QColor bottomRight = image.pixelColor(content.bottomRight() - QPoint(1, 1));
+            expectations.expect(topLeft == QColor(Qt::white) && bottomRight == QColor(Qt::white),
+                                "the surround reaches every edge of the content area");
+        }
         expectations.expect(QSettings().value("viewer/background").toString() ==
                                 QStringLiteral("White"),
                             "the choice is persisted under viewer/background");
