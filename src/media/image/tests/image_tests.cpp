@@ -81,11 +81,12 @@ int main() {
     check.expect(jpg.value.has_value() &&
                      (*jpg.value)->descriptor()->dataWindow().extent().width() == 2,
                  "generated JPEG decodes");
-    for (const std::string separator : {".", "_", ""}) {
-        const auto prefix = "take" + separator;
-        png(scratch.file(prefix + "0001.png"));
-        png(scratch.file(prefix + "0003.png"));
-        const auto sequence = media::scanSequence(scratch.file(prefix + "0001.png"));
+    // "" with an empty base name is the render-farm form: 0000.png, 0001.png, ... (owner,
+    // 2026-09-15: such a folder imported as individual images).
+    for (const auto* prefix : {"take.", "take_", "take", ""}) {
+        png(scratch.file(std::string(prefix) + "0001.png"));
+        png(scratch.file(std::string(prefix) + "0003.png"));
+        const auto sequence = media::scanSequence(scratch.file(std::string(prefix) + "0001.png"));
         check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
                          sequence.value->gaps == std::vector<std::int64_t>{2} &&
                          sequence.value->padding == 4,

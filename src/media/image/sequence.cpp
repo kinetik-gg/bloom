@@ -19,7 +19,10 @@ std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
     auto begin = stem.size();
     while (begin > 0 && stem[begin - 1] >= '0' && stem[begin - 1] <= '9')
         --begin;
-    if (begin == stem.size() || begin == 0)
+    // A stem that is ALL digits ("0000.png") is a numbered member with an empty prefix -- render
+    // farms emit exactly that -- so only a stem with no trailing digits at all is not numbered
+    // (owner, 2026-09-15: a pure-numeric sequence imported as individual images).
+    if (begin == stem.size())
         return {};
     const auto digits = std::string_view(stem).substr(begin);
     std::int64_t frame = 0;
