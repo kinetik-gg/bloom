@@ -54,8 +54,9 @@ QLabel* makePropertyRowLabel(const QString& text, QWidget* parent) {
 }
 
 KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
-                           std::initializer_list<QWidget*> values, QWidget* parent)
-    : QWidget(parent), label_(label) {
+                           std::initializer_list<QWidget*> values, QWidget* parent,
+                           bool leadingIndicator)
+    : QWidget(parent), label_(label), leadingIndicator_(leadingIndicator) {
     this->setObjectName(QStringLiteral("propertiesRow"));
     this->setProperty("rowLabel", label->toolTip());
     setFixedHeight(px(Size::PropertyRow));
@@ -65,8 +66,13 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     layout->setContentsMargins(px(Spacing::RowPadding), px(Spacing::RowPadding),
                                px(Spacing::RowPadding), px(Spacing::RowPadding));
     layout->setSpacing(kit::px(kit::Spacing::XXS));
-    label->setFixedWidth(px(Size::PropertiesLabelWidth));
+    label->setFixedWidth(
+        px(leadingIndicator_ ? Size::PropertyLabelCompact : Size::PropertiesLabelWidth));
     label->setFixedHeight(px(Size::Control));
+    if (leadingIndicator_ && indicator) {
+        indicator->setFixedWidth(px(Size::ToggleCell));
+        layout->addWidget(indicator, 0, Qt::AlignVCenter);
+    }
     layout->addWidget(label);
     layout->addSpacing(px(Spacing::PropertyGutter));
     bool expanding = false;
@@ -80,13 +86,15 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
         if (auto* chip = qobject_cast<kit::KColorChip*>(value))
             chip->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
                                kit::px(kit::Size::PropertiesSwatchHeight));
-        const bool flexible =
-            qobject_cast<kit::KSlider*>(value) || value->maximumWidth() == QWIDGETSIZE_MAX;
+        const bool flexible = !leadingIndicator_ && (qobject_cast<kit::KSlider*>(value) ||
+                                                     value->maximumWidth() == QWIDGETSIZE_MAX);
         expanding = expanding || flexible;
         layout->addWidget(value, flexible ? 1 : 0, Qt::AlignVCenter);
     }
     if (!expanding)
         layout->addStretch(1);
+    if (leadingIndicator_)
+        return;
     auto* slot = indicator ? indicator : new QWidget(this);
     slot->setFixedWidth(kit::px(kit::Size::PropertiesDiamondColumn));
     auto policy = slot->sizePolicy();
@@ -102,6 +110,10 @@ QSize KPropertyRow::minimumSizeHint() const {
 }
 void KPropertyRow::resizeEvent(QResizeEvent* event) {
     layout()->setSpacing(px(Spacing::XXS));
+    if (leadingIndicator_) {
+        QWidget::resizeEvent(event);
+        return;
+    }
     label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
                                                                : Size::PropertiesLabelWidth));
     QWidget::resizeEvent(event);
@@ -159,10 +171,8 @@ void KRow::setRowState(int index, bool selected) {
 }
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), color(index_ % 2 == 0 ? Color::Surface : Color::SurfaceRaised));
-    if (selected_)
-        painter.fillRect(QRect(0, 0, px(Spacing::XXS), height()), color(Color::Accent));
-    painter.setPen(color(Color::Border));
+    painter.fillRect(rect(), color(selected_ ? Color::SurfaceRaised : Color::Surface));
+    painter.setPen(color(Color::Background));
     painter.drawLine(rect().bottomLeft(), rect().bottomRight());
 }
 } // namespace bloom::ui::kit

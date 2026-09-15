@@ -124,7 +124,7 @@ Every selected card, including the primary selection, uses an Accent outline.
 
 `KDiamond` owns the keyframe indicator's rendering; command dispatch stays in its session
 adapter. `KAnchorGrid` owns the nine-point visual grid, while its Properties adapter resolves
-bounds off the UI thread. `KListSurface` paints the common alternating empty-row backdrop;
+bounds off the UI thread. `KListSurface` paints the common flat empty-row backdrop;
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 
@@ -218,3 +218,16 @@ Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the 
 Toggle and disclosure cells are ToggleCell squares (24); their glyphs are IconControl (20),
 with Regular off, Fill on, muted disabled and a neutral bordered box. Column headings use
 the same glyph size and pitch. KDiamond uses the Bold outline at every DPR.
+
+Timeline lanes use `LanePadding` (12) on both sides of their time axis. `TimelineSeparator` (2)
+is Background between the layer column and lanes, including the header split. All timeline rows
+share TimelineRow pitch and a zero origin; the 28px KPropertyRow is centered within that pitch.
+Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
+Background hairline separator, without alternating fills. The work-area band is BorderHover,
+with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.
+The frame readout is centered over the needle and reserves its label rectangle against ruler
+labels. A fitted timeline hides the navigator row; zoomed navigation uses a muted 6px thumb.
+The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at the right edge.
+Object, Transform, Source groups are collapsible Title Case rows. KPropertyRow's leading-indicator
+layout places the diamond or disclosure in a ToggleCell column, then the compact label and
+bounded controls; vector component labels live inside fields. New name: `timelinePropertyDisclosure`.

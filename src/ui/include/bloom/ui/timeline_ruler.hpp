@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <bloom/document/document.hpp>
 #include <bloom/ui/composition_session.hpp>
 
@@ -38,7 +39,11 @@ struct TimelineAxis final {
     std::uint64_t maxIndex = 0;
     double t0 = 0.0;
     double t1 = 0.0;
+    int inset = 0;
 
+    [[nodiscard]] int pixelSpan() const noexcept {
+        return std::max(1, widthPixels - 1 - 2 * inset);
+    }
     [[nodiscard]] static std::optional<TimelineAxis>
     create(const document::Composition& composition, int widthPixels);
     void zoomToRange(double start, double end) noexcept;
@@ -102,6 +107,7 @@ class TimelineRuler final : public QWidget {
     void updateScrub(int pixelX);
     void endScrub(int pixelX);
     [[nodiscard]] std::optional<TimelineAxis> axisForWidth(int widthPixels) const;
+    [[nodiscard]] QRectF playheadLabelRect() const;
     void zoomToRange(double start, double end);
     void zoomToFit();
     void zoomBy(double factor, qreal anchorX);

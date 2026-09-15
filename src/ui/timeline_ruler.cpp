@@ -729,6 +729,7 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
 
     // Major grid: taller ticks plus a Geist Mono label (decision 3), density-adaptive so labels
     // never collide -- see computeMajorTickLabels()/majorTickStepFrames().
+    const auto currentLabel = playheadLabelRect();
     for (const auto& label : majorLabels) {
         const auto time = frameTimeForIndex(axis->frameRate, axis->duration, label.index);
         if (!time.has_value()) {
@@ -739,12 +740,15 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
         painter.drawLine(QPointF(x, static_cast<qreal>(height()) - kMajorTickHeight),
                          QPointF(x, static_cast<qreal>(height()) - 1.0));
         painter.setPen(kit::color(kit::Color::Muted));
+        if (label.rect.intersects(
+                currentLabel.adjusted(-kMajorLabelGapPixels, 0, kMajorLabelGapPixels, 0)))
+            continue;
         painter.drawText(label.rect, Qt::AlignLeft | Qt::AlignVCenter,
                          formatTimelineFrameLabel(label.index, axis->frameRate, timecodeLabels_));
     }
 
     for (const auto& segment : cachedFrameRects()) {
-        painter.fillRect(segment, kit::color(kit::Color::Ok));
+        painter.fillRect(segment, kit::color(kit::Color::Muted));
     }
 
     // Playhead: the shared 1px Accent stroke, with its single marker and frame readout in this
@@ -760,17 +764,28 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
            << QPointF(playheadX, kPlayheadMarkerHeight);
     painter.drawPolygon(marker);
 
-    const auto frame = axis->frameIndexForPixel(static_cast<int>(std::lround(playheadX)));
+    const auto frame =
+        nearestFrameIndexForTime(axis->frameRate, axis->duration, session_.currentTime())
+            .value_or(0);
     const QString frameLabel = formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_);
-    const QFontMetrics frameMetrics(tickFont());
-    const qreal labelWidth = frameMetrics.horizontalAdvance(frameLabel);
-    const qreal labelX =
-        std::clamp(playheadX + kPlayheadMarkerHalfWidth + kit::px(kit::Spacing::XS), 0.0,
-                   std::max(0.0, width() - labelWidth));
+    painter.fillRect(currentLabel, kit::color(kit::Color::Surface));
     painter.setFont(tickFont());
     painter.setPen(kit::color(kit::Color::Foreground));
-    painter.drawText(QRectF(labelX, 0.0, labelWidth, static_cast<qreal>(height())),
-                     Qt::AlignLeft | Qt::AlignVCenter, frameLabel);
+    painter.drawText(currentLabel, Qt::AlignCenter, frameLabel);
+}
+
+QRectF TimelineRuler::playheadLabelRect() const {
+    const auto axis = axisForWidth(width());
+    if (!axis)
+        return {};
+    const auto frame =
+        nearestFrameIndexForTime(axis->frameRate, axis->duration, session_.currentTime())
+            .value_or(0);
+    const QFontMetrics metrics(tickFont());
+    const qreal extent = metrics.horizontalAdvance(
+        formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_));
+    const qreal x = axis->pixelForTime(session_.currentTime());
+    return {x - extent / 2, 0, extent, static_cast<qreal>(height()) - kMajorTickHeight};
 }
 
 std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
@@ -827,7 +842,9 @@ std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
     }
     const auto labelAreaHeight = static_cast<qreal>(height()) - kMajorTickHeight;
     for (const auto& label : computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_)) {
-        rects.push_back(label.rect);
+        if (!label.rect.intersects(
+                playheadLabelRect().adjusted(-kMajorLabelGapPixels, 0, kMajorLabelGapPixels, 0)))
+            rects.push_back(label.rect);
     }
     return rects;
 }

@@ -11,6 +11,8 @@
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <iostream>
 
@@ -142,6 +144,34 @@ int run(int argc, char** argv) {
         auto* retired = fixture.window->findChild<QWidget*>(name);
         expect(retired && !retired->isVisible(), viewerMenus, "A3 retired controls stay hidden");
     }
+    auto* stack = fixture.window->findChild<TimelineLayerStack*>();
+    auto* lanes = fixture.window->findChild<TimelineLaneRegion*>("timelineLaneRegion");
+    if (!lanes) {
+        for (auto* candidate : fixture.window->findChildren<TimelineLaneRegion*>())
+            if (candidate->parentWidget()->objectName() == "timelineBody")
+                lanes = candidate;
+    }
+    expect(stack && lanes, fixture.window.get(), "D11 timeline halves exist");
+    if (stack && lanes) {
+        for (int row = 0; row < stack->rowCount(); ++row)
+            expect(stack->mapTo(fixture.window.get(), QPoint(0, stack->rowTop(row))).y() ==
+                       lanes->mapTo(fixture.window.get(), QPoint(0, lanes->rowTop(row))).y(),
+                   stack, "D11 rows share exact global Y");
+        expect(lanes->x() - stack->geometry().right() - 1 == kit::px(kit::Size::TimelineSeparator),
+               lanes, "D10 lane divider token");
+    }
+    auto* ruler = fixture.window->findChild<TimelineRuler*>();
+    const auto axis = ruler->axisForWidth(ruler->width());
+    expect(axis && axis->pixelForSeconds(0) == kit::px(kit::Spacing::LanePadding), ruler,
+           "D10 key axis has left breathing room");
+    expect(axis && std::abs(ruler->playheadLabelRect().center().x() -
+                            axis->pixelForTime(fixture.session.currentTime())) < 0.01,
+           ruler, "D12 playhead readout centered on needle");
+    for (const auto& label : ruler->majorTickLabelRectsForTest())
+        expect(!label.intersects(ruler->playheadLabelRect()), ruler,
+               "D12 ruler labels avoid playhead readout");
+    auto* navigatorRow = fixture.window->findChild<QWidget*>("timelineNavigatorRow");
+    expect(!navigatorRow->isVisible(), navigatorRow, "D17 fitted composition hides navigator row");
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
     for (auto* cell : status->findChildren<kit::KLabel*>()) {

@@ -132,6 +132,7 @@ enum class Spacing : int {
     RowPadding = 1,
     PropertyGutter = 8,
     SectionPadding = 8,
+    LanePadding = 12,
     // task F1, item F5: a menu row's own padding, vertical and horizontal. Two more deliberate
     // off-scale steps, named for their purpose exactly as Gutter and PanelHeader are: a menu row
     // is denser vertically and roomier horizontally than the base scale offers, and rounding
@@ -202,7 +203,9 @@ enum class Size : int {
     TimelineNameDefault = 280,
     TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
     TimelineColumn = 100,
-    TimelineWorkArea = 6,
+    TimelineWorkArea = 10,
+    TimelineSeparator = 2,
+    TimelineChromeGutter = 32,
     TimelineWorkAreaHandle = 6,
     TimelineNavigatorThumb = 6,
     ScrollBar = 8,
