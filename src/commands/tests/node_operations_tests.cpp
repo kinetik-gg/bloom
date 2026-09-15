@@ -215,8 +215,6 @@ void testValidityQuery(TestContext& test) {
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
-        if (definition.category == NodeCategory::Compatibility)
-            continue;
         // Task S1, item 5: a OnePerComposition type is refused once the composition already holds
         // one. The fixture's composition carries a Layer Stack from the start, so that one refuses
         // immediately; the composition output is the same rule proved from the other side -- the
@@ -266,8 +264,6 @@ void testAddAndLayout(TestContext& test) {
     // singletons
     // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
-        if (definition.category == NodeCategory::Compatibility)
-            continue;
         const bool singleton = definition.key.typeId == kCompositionOutputNodeType;
         test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
                     "exactly the Layer Stack and the composition output are one per composition: " +

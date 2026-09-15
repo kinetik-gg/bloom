@@ -93,7 +93,7 @@ void testMathSectionMembership(Expectations& expectations) {
     const auto& registry = document::builtInNodeDefinitions();
     const auto categoryOf = [&registry](const std::string_view typeId) {
         const auto* definition = registry.find(typeId, document::kValueNodeSchemaVersion);
-        return definition == nullptr ? document::NodeCategory::Compatibility : definition->category;
+        return definition == nullptr ? document::NodeCategory::Output : definition->category;
     };
     for (const auto typeId :
          {document::kScalarMathNodeType, document::kVector2MathNodeType,

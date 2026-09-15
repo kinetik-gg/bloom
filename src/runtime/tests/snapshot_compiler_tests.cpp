@@ -278,21 +278,10 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
 }
 
 [[nodiscard]] runtime::NodeDefinition customSolidDefinition() {
-    // ADAPTED (task S5): the Solid lowering's shape check now requires the colour parameter's
-    // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, which is true
-    // for a solid colour since task S5 made it animatable -- so this custom definition declares it
-    // too, or the registry refuses the definition outright.
-    // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable operand
-    // socket per parameter role, so the colour parameter's Color socket is declared here too.
-    return {
-        {"example.solid", 17},
-        runtime::NodeLoweringKind::Solid,
-        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
-        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-        {{std::string(document::kSolidColorParameterRole),
-          std::string(document::kSolidColorParameterSchemaKey),
-          runtime::ParameterValueKind::Color4d, true, true}},
-        std::nullopt};
+    auto definition = *document::builtInNodeDefinitions().find(
+        document::kSolidSourceNodeType, document::kSolidSourceNodeSchemaVersion);
+    definition.key = {"example.solid", 17};
+    return definition;
 }
 
 [[nodiscard]] runtime::NodeDefinition bulkUnsupportedDefinition(const std::size_t index) {

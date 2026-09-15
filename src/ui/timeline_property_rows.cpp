@@ -288,9 +288,15 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         const bool solid = record && record->schemaKey == document::kSolidColorParameterSchemaKey;
         const bool text = record && record->schemaKey == document::kTextColorParameterSchemaKey;
         session_.selectLayer(layer);
-        const core::Color4d value{static_cast<double>(color.red), static_cast<double>(color.green),
-                                  static_cast<double>(color.blue),
-                                  static_cast<double>(color.alpha)};
+        if (!record)
+            return;
+        const auto reference =
+            color.converted(kit::ColorSpace::Reference, session_.colorConverter(record->schemaKey));
+        if (!reference)
+            return;
+        const core::Color4d value{
+            static_cast<double>(reference->red), static_cast<double>(reference->green),
+            static_cast<double>(reference->blue), static_cast<double>(reference->alpha)};
         if (solid)
             (void)session_.setSelectedSolidColor(value);
         else if (text)
@@ -428,8 +434,15 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             blending_->show();
         }
         if (color) {
-            color_->setColor({static_cast<float>(color->red), static_cast<float>(color->green),
-                              static_cast<float>(color->blue), static_cast<float>(color->alpha)});
+            const auto converter = session_.colorConverter(record->schemaKey);
+            const auto reference = kit::KColor::fromRgba(
+                static_cast<float>(color->red), static_cast<float>(color->green),
+                static_cast<float>(color->blue), static_cast<float>(color->alpha),
+                kit::ColorSpace::Reference);
+            color_->setColorConverter(converter);
+            color_->setColor(reference);
+            color_->setEnabled(
+                reference.converted(kit::ColorSpace::Display, converter).has_value());
             color_->setToolTip(exactColorText(*color));
             color_->show();
         }

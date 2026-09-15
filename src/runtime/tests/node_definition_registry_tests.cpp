@@ -36,20 +36,10 @@ class Expectations final {
 
 [[nodiscard]] bloom::runtime::NodeDefinition customSolid(const std::uint32_t version = 1) {
     using namespace bloom;
-    return {
-        {"example.solid", version},
-        runtime::NodeLoweringKind::Solid,
-        // ADAPTED (task S7): the Solid lowering's shape check now also requires one linkable
-        // operand socket per parameter role, so a custom Solid declares the colour socket too.
-        {{std::string(document::kSolidColorParameterRole), runtime::SocketValueKind::Color, false}},
-        {{std::string(document::kSolidSourceOutputPort), runtime::SocketValueKind::Image}},
-        // ADAPTED (task S5): the Solid lowering's shape check requires the colour parameter's
-        // supportsAnimation to equal document::isAnimatableSchemaKey() for its schema, and a
-        // solid colour is animatable now -- so a custom Solid must declare it too.
-        {{std::string(document::kSolidColorParameterRole),
-          std::string(document::kSolidColorParameterSchemaKey),
-          runtime::ParameterValueKind::Color4d, true, true}},
-        std::nullopt};
+    auto definition = *document::builtInNodeDefinitions().find(
+        document::kSolidSourceNodeType, document::kSolidSourceNodeSchemaVersion);
+    definition.key = {"example.solid", version};
+    return definition;
 }
 
 [[nodiscard]] bloom::runtime::NodeDefinition unsupportedDefinition(std::string typeId) {
@@ -112,14 +102,23 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     expectations.expect(runtime::registerBuiltInNodeDefinitions(registry),
                         "built-in definitions register as one startup contribution");
-    // ADAPTED (task S7, then FIX1 item I, then UTIL-1): the five structural node types, the seven
-    // compatibility schemas, the value library's first slice, and UTIL-1's twenty conversions, four
+    // ADAPTED (task S7, then FIX1 item I, then UTIL-1): the seven structural node types,
+    // the value library's first slice, and UTIL-1's twenty conversions, four
     // time conversions, fifteen string utilities, nineteen numeric and logic nodes and four
     // readouts. The number is pinned rather than computed so that adding a node type is a
     // deliberate edit here. MEDIA-1 adds one Image source definition and AUDIO-2 adds one Audio
     // source definition.
-    expectations.expect(registry.definitions().size() == 106,
+    expectations.expect(registry.definitions().size() == 102,
                         "startup contribution includes every built-in definition");
+
+    for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{
+             {{document::kSolidSourceNodeType, 1},
+              {document::kTextSourceNodeType, 1},
+              {document::kLayerOutputNodeType, 3},
+              {document::kLayerStackNodeType, 1}}}) {
+        expectations.expect(registry.find(kind, version) == nullptr,
+                            "historical built-in definitions are not registered");
+    }
 
     registry.freeze();
     const auto* solid =
