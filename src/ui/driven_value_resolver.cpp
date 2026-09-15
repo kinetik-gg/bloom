@@ -1,4 +1,4 @@
-#include "properties_driven_values.hpp"
+#include "driven_value_resolver.hpp"
 #include "composition_driver_probe.hpp"
 #include <QTimer>
 #include <algorithm>
@@ -62,12 +62,12 @@ QString valueText(const runtime::CompiledValue& value) {
         value);
 }
 } // namespace
-PropertiesDrivenValues::PropertiesDrivenValues(CompositionSession& session, QObject* parent)
+DrivenValueResolver::DrivenValueResolver(CompositionSession& session, QObject* parent)
     : QObject(parent), session_(session), timer_(new QTimer(this)) {
     timer_->setInterval(16);
     connect(timer_, &QTimer::timeout, this, [this] { poll(); });
 }
-PropertiesDrivenValues::~PropertiesDrivenValues() {
+DrivenValueResolver::~DrivenValueResolver() {
     if (!scheduler_)
         return;
     task_.cancel();
@@ -75,7 +75,7 @@ PropertiesDrivenValues::~PropertiesDrivenValues() {
     retire_->store(true);
     retire_->notify_one();
 }
-void PropertiesDrivenValues::request(std::vector<document::ParameterId> parameters) {
+void DrivenValueResolver::request(std::vector<document::ParameterId> parameters) {
     parameters_ = std::move(parameters);
     ++generation_;
     if (active_)
@@ -83,7 +83,7 @@ void PropertiesDrivenValues::request(std::vector<document::ParameterId> paramete
     else
         start();
 }
-void PropertiesDrivenValues::start() {
+void DrivenValueResolver::start() {
     if (parameters_.empty()) {
         timer_->stop();
         return;
@@ -176,7 +176,7 @@ void PropertiesDrivenValues::start() {
     if (active_)
         timer_->start();
 }
-void PropertiesDrivenValues::poll() {
+void DrivenValueResolver::poll() {
     if (auto result = task_.tryTakeResult()) {
         active_ = false;
         if (activeGeneration_ == generation_) {

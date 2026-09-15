@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <array>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -12,9 +13,7 @@
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
-#include <deque>
 #include <memory>
-#include <set>
 
 namespace bloom::ui {
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel) {
@@ -31,47 +30,21 @@ void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QW
 void PropertiesEditor::configureUpstream() {
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
-    std::vector<std::pair<document::NodeId, int>> nodes;
-    std::set<document::NodeId> visited;
-    std::deque<std::pair<document::NodeId, int>> queue;
-    if (selected && composition) {
-        visited.insert(selected->id);
-        queue.emplace_back(selected->id, 0);
-    }
     // A layer's direct source already has its own section, but its dependencies still count.
     std::optional<document::NodeId> shownSource;
     if (const auto* layer = std::get_if<document::LayerId>(&session_.selection().primary))
         shownSource = session_.directSourceNodeForLayer(*layer);
-    while (!queue.empty()) {
-        const auto [id, depth] = queue.front();
-        queue.pop_front();
-        const auto* node = composition->graph().findNode(id);
-        if (!node)
-            continue;
-        if (depth > 0 && id != shownSource)
-            nodes.emplace_back(id, depth);
-        const auto* definition =
-            document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
-        if (definition && (definition->lowering == document::NodeLoweringKind::LayerStack ||
-                           definition->lowering == document::NodeLoweringKind::CompositionOutput))
-            continue;
-        const auto enqueue = [&](document::NodeId upstream) {
-            if (visited.insert(upstream).second)
-                queue.emplace_back(upstream, depth + 1);
-        };
-        for (const auto& edge : composition->graph().edges()) {
-            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
-            if (input && input->nodeId == id)
-                enqueue(edge.source.nodeId);
-        }
-        for (const auto& binding : node->parameters) {
-            const auto* parameter = composition->parameters().find(binding.parameterId);
-            const auto* driver =
-                parameter ? std::get_if<document::DriverBindingSource>(&parameter->source)
-                          : nullptr;
-            if (driver)
-                enqueue(driver->sourceNodeId);
-        }
+    // Task DRIVE-1: the walk itself is the session's now, because the timeline makes the same walk
+    // from a layer and two surfaces disagreeing about a node's dependencies would be a bug nobody
+    // could see. Properties follows input EDGES as well as driver links -- everything the selected
+    // node depends on, pixels included.
+    std::vector<std::pair<document::NodeId, int>> nodes;
+    if (selected && composition) {
+        const std::array seeds{selected->id};
+        for (const auto& upstream :
+             session_.upstreamNodes(seeds, UpstreamTraversal::DriverLinksAndInputEdges))
+            if (upstream.id != shownSource)
+                nodes.emplace_back(upstream.id, upstream.depth);
     }
     QString signature;
     for (const auto& [id, depth] : nodes) {

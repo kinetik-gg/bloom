@@ -11,11 +11,14 @@ class QTimer;
 namespace bloom::ui {
 class CompositionSession;
 // One cancellable background value-only evaluation, with one newest pending request.
-class PropertiesDrivenValues final : public QObject {
+// Owned by CompositionSession (task DRIVE-1), so ONE evaluation answers every surface that shows
+// a driven parameter -- the Properties row and the timeline row for one parameter cannot show
+// different strings, because there is one string.
+class DrivenValueResolver final : public QObject {
   public:
     using Values = std::map<document::ParameterId, QString>;
-    explicit PropertiesDrivenValues(CompositionSession& session, QObject* parent);
-    ~PropertiesDrivenValues() override;
+    explicit DrivenValueResolver(CompositionSession& session, QObject* parent);
+    ~DrivenValueResolver() override;
     void request(std::vector<document::ParameterId> parameters);
     std::function<void(const Values&)> ready;
 

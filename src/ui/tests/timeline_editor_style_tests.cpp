@@ -1,4 +1,5 @@
 #include "editor_chrome_test_support.hpp"
+#include "timeline_property_rows.hpp"
 
 // Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
 // chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
@@ -13,6 +14,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -24,6 +26,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -53,6 +56,7 @@
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -63,6 +67,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1532,8 +1537,14 @@ void testPropertyRows(Expectations& expectations) {
             continue;
         const auto id = document::ParameterId::fromRaw(row->property("parameterId").toULongLong());
         const auto before = fixture.session.effectiveVec2Value(id);
+        // ADAPTED (task DRIVE-1): the row carries THREE value cells now, because an upstream
+        // group's twirl-down can hold a Vector 3 parameter and a row showing two of its three
+        // components would be showing a value that is not the parameter's. A Vector 2 row still
+        // shows exactly two, which is what this pin has always been about.
         const auto fields = row->findChildren<ui::kit::KValueField*>();
-        expectations.expect(fields.size() == 2 && fields.front()->cellRect().width() >= 40,
+        const auto usable = std::ranges::count_if(
+            fields, [](const ui::kit::KValueField* field) { return field->isVisible(); });
+        expectations.expect(usable == 2 && fields.front()->cellRect().width() >= 40,
                             "one vector row has two usable compact value cells");
         const auto history = fixture.commands.size();
         fields.front()->stepBy(1);
@@ -1559,6 +1570,161 @@ void testPropertyRows(Expectations& expectations) {
                         "legacy names resolve inside the integrated lanes");
     stack->expansionRequested(layer);
     expectations.expect(stack->rowCount() == collapsedCount, "collapse restores layer rows");
+    finishFixture(fixture);
+}
+
+// Task DRIVE-1's timeline pin. A keyed Scalar node drives a Text layer's Size. The twirl-down has
+// to show BOTH halves of that: the Size row, which has no value of its own any more, naming the
+// node it reads from and the value it currently resolves to; and a group for the Scalar node
+// itself, whose Value row carries the diamond and the lane the keys actually live on -- because
+// the key an artist wants to drag is the Scalar's, and before this it was reachable nowhere in the
+// timeline at all.
+void testDrivenParameterRowsAndUpstreamGroups(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Driven rows"));
+    auto& session = fixture.session;
+    expectations.expect(session.addTextLayer("Title", "Bloom"), "the fixture adds its text layer");
+    const auto* sizeParameter = session.parameterForSelection(document::kTextSizeParameterRole);
+    if (sizeParameter == nullptr) {
+        expectations.expect(false, "the text layer exposes its size parameter");
+        return;
+    }
+    const auto textSize = sizeParameter->id;
+
+    commands::Transaction addScalar("Add scalar", session.snapshot().revision());
+    addScalar.emplace<commands::AddNode>(session.compositionId(),
+                                         std::string(document::kScalarValueNodeType),
+                                         document::Vec2d{240.0, 240.0});
+    const auto scalarNode = session.executeNodeTransaction(std::move(addScalar))
+                                .outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!scalarNode.has_value()) {
+        expectations.expect(false, "the fixture adds its Scalar value node");
+        return;
+    }
+    const auto* scalarRecord = session.composition()->graph().findNode(*scalarNode);
+    auto scalarValue = document::ParameterId{};
+    for (const auto& binding : scalarRecord->parameters)
+        if (binding.role == document::kValueParameterRole)
+            scalarValue = binding.parameterId;
+    if (!scalarValue.isValid()) {
+        expectations.expect(false, "the Scalar node exposes its value parameter");
+        return;
+    }
+    expectations.expect(
+        session.pasteKeyframes({{scalarValue, time(1), 24.0}, {scalarValue, time(3), 96.0}},
+                               session.snapshot().revision()),
+        "the Scalar node carries keys of its own");
+    commands::Transaction drive("Drive size", session.snapshot().revision());
+    drive.emplace<commands::SetParameterSource>(
+        session.compositionId(), textSize,
+        document::DriverBindingSource{*scalarNode, std::string(document::kValuePortName)});
+    expectations.expect(session.executeNodeTransaction(std::move(drive)).changed(),
+                        "the text size becomes driven by the Scalar node");
+
+    ui::TimelineEditor editor(session, fixture.controller);
+    editor.resize(1600, 700);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* stack = editor.layerStackForTest();
+    const auto layer = stack->entries().front().layerId;
+    stack->expansionRequested(layer);
+    QCoreApplication::processEvents();
+
+    const auto& entries = stack->entries();
+    const auto groupKey = ui::upstreamGroupKey(*scalarNode);
+    const auto groupRow = std::ranges::find_if(entries, [&](const ui::TimelineLayerEntry& entry) {
+        return entry.rowKind == ui::TimelineLayerEntry::Kind::Group && entry.group == groupKey;
+    });
+    expectations.expect(groupRow != entries.end() && !groupRow->name.isEmpty(),
+                        "the twirl-down gains a group for the value node driving this layer, "
+                        "titled by that node's display name");
+    const auto valueRow = std::ranges::find_if(entries, [&](const ui::TimelineLayerEntry& entry) {
+        return entry.rowKind == ui::TimelineLayerEntry::Kind::Parameter &&
+               entry.parameterId == scalarValue;
+    });
+    expectations.expect(valueRow != entries.end(),
+                        "and the node's own animatable parameter is an ordinary parameter row "
+                        "inside it, which is what gives it a diamond and a key lane");
+
+    // The driven row itself: a name, a link, and a value -- never an empty cell.
+    QWidget* sizeRow = nullptr;
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow"))
+        if (row->isVisible() && row->property("parameterId").toULongLong() == textSize.value())
+            sizeRow = row;
+    if (sizeRow == nullptr) {
+        expectations.expect(false, "the driven size row is realized");
+        finishFixture(fixture);
+        return;
+    }
+    auto* link = sizeRow->findChild<ui::kit::KButton*>("timelinePropertyDriverLink");
+    auto* value = sizeRow->findChild<QLabel*>("timelinePropertyDrivenValue");
+    expectations.expect(link != nullptr && link->isVisible() && !link->text().isEmpty() &&
+                            link->iconId() == ui::kit::IconId::Link,
+                        "the driven Size row names its driver behind the link glyph");
+    expectations.expect(sizeRow->findChildren<ui::kit::KValueField*>().isEmpty() ||
+                            std::ranges::none_of(sizeRow->findChildren<ui::kit::KValueField*>(),
+                                                 [](const ui::kit::KValueField* field) {
+                                                     return field->isVisible();
+                                                 }),
+                        "and shows no editor, because a driven parameter has no authored value to "
+                        "edit here");
+    QElapsedTimer wait;
+    wait.start();
+    while (session.drivenValueText(textSize).isEmpty() && wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    QCoreApplication::processEvents();
+    expectations.expect(value != nullptr && !value->text().isEmpty() &&
+                            value->text() != QObject::tr("Resolving…") &&
+                            value->text() == session.drivenValueText(textSize),
+                        "and resolves to the value the graph produces, read-only -- the same "
+                        "string the Properties row for this parameter shows");
+
+    // The collapsed summary counts the Scalar's keys as this layer's, because they are what moves
+    // it -- the same walk the groups above are built from.
+    stack->expansionRequested(layer);
+    QCoreApplication::processEvents();
+    const auto summary = editor.laneRegionForTest()->keySummaryTimes(0);
+    expectations.expect(summary == std::vector<core::RationalTime>{time(1), time(3)},
+                        "a collapsed layer summarises the upstream keys that drive it");
+    stack->expansionRequested(layer);
+    QCoreApplication::processEvents();
+
+    // And the key is editable where it is shown: dragging it in the lane moves the SCALAR's key.
+    auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
+    const auto axis = panel == nullptr ? std::optional<ui::TimelineAxis>{}
+                                       : editor.rulerForTest()->axisForWidth(panel->width());
+    if (panel == nullptr || !axis.has_value()) {
+        expectations.expect(false, "the parameter lane panel has an axis");
+        finishFixture(fixture);
+        return;
+    }
+    int laneY = -1;
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        if (entries[i].parameterId == scalarValue)
+            laneY = stack->rowTop(static_cast<int>(i)) + ui::kTimelineRowHeight / 2;
+    const auto drag = [&](QEvent::Type type, double seconds) {
+        const QPointF point(axis->pixelForSeconds(seconds), laneY);
+        QMouseEvent event(type, point, panel->mapToGlobal(point),
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(panel, &event);
+    };
+    drag(QEvent::MouseButtonPress, 1);
+    drag(QEvent::MouseButtonRelease, 1);
+    expectations.expect(session.selection().keyframes.size() == 1,
+                        "a key on an upstream row selects from the timeline like any other");
+    const auto history = fixture.commands.size();
+    drag(QEvent::MouseButtonPress, 1);
+    drag(QEvent::MouseMove, 2);
+    drag(QEvent::MouseButtonRelease, 2);
+    const auto moved = session.selectedKeyframeData();
+    expectations.expect(fixture.commands.size() == history + 1 && moved.size() == 1 &&
+                            moved.front().time == time(2) &&
+                            moved.front().parameterId == scalarValue,
+                        "and dragging it moves the SCALAR node's key, one undoable transaction");
     finishFixture(fixture);
 }
 
@@ -1893,6 +2059,7 @@ int main(int argc, char** argv) {
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);
         testPropertyRows(expectations);
+        testDrivenParameterRowsAndUpstreamGroups(expectations);
         testIntegratedKeyGestures(expectations);
         testTimelineHeaderMenus(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);

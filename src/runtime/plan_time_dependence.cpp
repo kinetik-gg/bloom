@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <optional>
 #include <type_traits>
 
 namespace bloom::runtime {
@@ -32,6 +33,13 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             return input->value() >= outputs.size() || outputs[input->value()] != 0;
         return operand.source.index() != 0;
     };
+    // Task DRIVE-1. A parameter whose only source is a driver: a String, an Integer or a Boolean
+    // has no curve alternative, so "does this vary with time" is entirely the question of whether
+    // the value output behind it does.
+    const auto driven = [&](const std::optional<ValueOutputIndex>& output) {
+        return output.has_value() &&
+               (output->value() >= outputs.size() || outputs[output->value()] != 0);
+    };
     const auto input = [&](OperationIndex index) {
         return index.value() >= operationTimeDependent_.size() ||
                operationTimeDependent_[index.value()] != 0;
@@ -46,12 +54,18 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                            (step.height && parameter(*step.height));
                 else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||
+                           driven(step.drivenContent) ||
                            (step.layout && (parameter(step.layout->lineHeight) ||
-                                            parameter(step.layout->letterSpacing)));
+                                            parameter(step.layout->letterSpacing) ||
+                                            driven(step.layout->drivenAlignment)));
+                // A driven blend mode is consumed by the Layer Stack rather than by this step, but
+                // it is a property of the LAYER, so the layer's operation is what varies with time
+                // -- and the stack's own dependence already follows its inputs.
                 else if constexpr (std::is_same_v<Step, CompiledLayerOutput>)
                     return input(step.input) || parameter(step.position) ||
                            parameter(step.anchor) || parameter(step.scale) ||
-                           parameter(step.rotation) || parameter(step.opacity);
+                           parameter(step.rotation) || parameter(step.opacity) ||
+                           driven(step.drivenBlendMode);
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });

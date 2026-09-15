@@ -230,9 +230,19 @@ with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.
 The frame readout is centered over the needle and reserves its label rectangle against ruler
 labels. A fitted timeline hides the navigator row; zoomed navigation uses a muted 6px thumb.
 The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at the right edge.
-Object, Transform, Source groups are collapsible Title Case rows. KPropertyRow's leading-indicator
+Object, Transform, Source groups are collapsible Title Case rows, joined by one group per upstream
+value node driving the layer, titled by that node's display name. KPropertyRow's leading-indicator
 layout places the diamond or disclosure in a ToggleCell column, then the compact label and
-bounded controls; vector component labels live inside fields. New name: `timelinePropertyDisclosure`.
+bounded controls; vector component labels live inside fields, three per row so a Vector 3 shows all
+of its components. New name: `timelinePropertyDisclosure`.
+
+A DRIVEN parameter row never shows an empty cell. It hides every editor it would otherwise carry --
+and its diamond, which has nothing to key -- and shows a Ghost KButton carrying `IconId::Link` and the
+driver node's display name, followed by a Value-role KLabel holding the resolved value read-only.
+Properties and the timeline use the same two elements in the same order and read the same resolved
+string. New names: `timelinePropertyDriven`, `timelinePropertyDriverLink`,
+`timelinePropertyDrivenValue`; the Properties spellings `propertiesDrivenDisplay`,
+`propertiesDriverLink` and `propertiesDrivenValue` are unchanged.
 
 `Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
 including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left

@@ -406,10 +406,15 @@ lowerText(const document::NodeRecord& node) {
     const auto* sizeBinding = findParameterBinding(node, kTextSizeParameterRole);
     const auto* colorBinding = findParameterBinding(node, kTextColorParameterRole);
     const auto* content = parameterConstant<std::string>(contentBinding);
+    // Task DRIVE-1: a driven content parameter holds no constant at all -- its source IS the driver
+    // -- so the constant is absent exactly when the driver is present, and the lowering needs one
+    // of the two rather than both.
+    const auto drivenContent = drivenOutput(contentBinding, runtime::SocketValueKind::String);
     const auto size = compiledScalarParameter(sizeBinding);
     const auto color = compiledColorParameter(colorBinding);
     if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
-        content == nullptr || !size.has_value() || !color.has_value()) {
+        (content == nullptr && !drivenContent.has_value()) || !size.has_value() ||
+        !color.has_value()) {
         addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
         return std::nullopt;
     }
@@ -417,19 +422,25 @@ lowerText(const document::NodeRecord& node) {
     if (node.schemaVersion >= 2) {
         const auto* alignmentBinding = findParameterBinding(node, kTextAlignmentParameterRole);
         const auto* alignment = parameterConstant<std::int64_t>(alignmentBinding);
+        const auto drivenAlignment =
+            drivenOutput(alignmentBinding, runtime::SocketValueKind::Integer);
         const auto lineHeight =
             compiledScalarParameter(findParameterBinding(node, kTextLineHeightParameterRole));
         const auto letterSpacing =
             compiledScalarParameter(findParameterBinding(node, kTextLetterSpacingParameterRole));
-        if (!alignment || !lineHeight || !letterSpacing) {
+        if (alignmentBinding == nullptr || (alignment == nullptr && !drivenAlignment.has_value()) ||
+            !lineHeight || !letterSpacing) {
             addTopologyFailure(node.id, "Text layout could not be lowered.");
             return std::nullopt;
         }
-        layout = runtime::CompiledTextLayout{alignmentBinding->parameterId, *alignment, *lineHeight,
-                                             *letterSpacing};
+        layout = runtime::CompiledTextLayout{alignmentBinding->parameterId,
+                                             alignment == nullptr ? 0 : *alignment, *lineHeight,
+                                             *letterSpacing, drivenAlignment};
     }
-    return runtime::CompiledText{node.id, contentBinding->parameterId, *content, *size, *color,
-                                 layout};
+    return runtime::CompiledText{node.id,  contentBinding->parameterId,
+                                 content == nullptr ? std::string{} : *content,
+                                 *size,    *color,
+                                 layout,   drivenContent};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -453,6 +464,10 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto blendMode = storedBlendMode == nullptr
                                ? std::nullopt
                                : core::blendModeFromStoredValue(*storedBlendMode);
+    // Task DRIVE-1: driven, the mode has no stored constant, so the plan carries the registry
+    // default beside the driver and the evaluator reads the driver. A mode is a jump between two
+    // named modes rather than a value with a midpoint, which is exactly what a driver expresses.
+    const auto drivenBlendMode = drivenOutput(blendModeBinding, runtime::SocketValueKind::Integer);
     const auto position = compiledVec2Parameter(positionBinding);
     const auto anchor = compiledVec2Parameter(anchorBinding);
     const auto scale = compiledVec2Parameter(scaleBinding);
@@ -462,7 +477,7 @@ lowerLayerOutput(const document::NodeRecord& node,
         anchorBinding == nullptr || scaleBinding == nullptr || rotationBinding == nullptr ||
         opacityBinding == nullptr || blendModeBinding == nullptr || !position.has_value() ||
         !anchor.has_value() || !scale.has_value() || !rotation.has_value() ||
-        !opacity.has_value() || !blendMode.has_value()) {
+        !opacity.has_value() || (!blendMode.has_value() && !drivenBlendMode.has_value())) {
         addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
         return std::nullopt;
     }
@@ -475,10 +490,11 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         *rotation,
                                         *opacity,
                                         blendModeBinding->parameterId,
-                                        *blendMode,
+                                        blendMode.value_or(core::kDefaultBlendMode),
                                         boundary->second->inPoint,
                                         boundary->second->endPoint(composition_->duration()),
-                                        node.schemaVersion >= 4};
+                                        node.schemaVersion >= 4,
+                                        drivenBlendMode};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -526,6 +542,17 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         return std::nullopt;
     }
     return runtime::CompiledCompositionOutput{node.id, *input};
+}
+
+// Task DRIVE-1. The value-graph output the parameter behind `binding` is driven by, or nothing.
+// The companion of parameterConstant() for the kinds that have no curve table of their own: a
+// String, an Integer or a Boolean is either the constant the store holds or the value a driver
+// hands it, and this answers the second half of that question for every one of them through the
+// same driverOutput() the typed operands already use.
+[[nodiscard]] std::optional<runtime::ValueOutputIndex>
+drivenOutput(const document::ParameterBinding* binding, const runtime::SocketValueKind kind) {
+    const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+    return parameter == nullptr ? std::nullopt : driverOutput(*parameter, kind);
 }
 
 template <typename Value>

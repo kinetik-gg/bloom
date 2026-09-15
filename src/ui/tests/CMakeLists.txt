@@ -185,6 +185,8 @@ target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui Qt6::Test)
+# Task DRIVE-1's upstream-group pin reads the timeline's own row vocabulary (upstreamGroupKey).
+target_include_directories(bloom_timeline_editor_style_test PRIVATE ..)
 target_link_libraries(bloom_node_editor_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kinetik_baseline_test)

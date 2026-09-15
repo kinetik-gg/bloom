@@ -13,6 +13,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
@@ -129,15 +130,21 @@ struct CompiledSolid {
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
 
-// A lowered text source. Content stays a resolved constant because a String has no interpolation
-// and no command in the surface can put it on a curve; size and colour became typed operands in
-// task S5, when both schemas became animatable. Each carries its own parameter identity so a
-// diagnostic can name the exact parameter that failed, exactly as CompiledSolid does.
+// A lowered text source. Size and colour became typed operands in task S5, when both schemas
+// became animatable. Content still never INTERPOLATES -- a String has no midpoint and no command in
+// the surface can put it on a curve -- but since task DRIVE-1 it can VARY, because a driver binding
+// can hand it a new String every frame; the two are different questions, and only the first is
+// about curves. Each value carries its own parameter identity so a diagnostic can name the exact
+// parameter that failed, exactly as CompiledSolid does.
 struct CompiledTextLayout {
     document::ParameterId alignmentId;
     std::int64_t alignment = 0;
     CompiledScalarParameter lineHeight;
     CompiledScalarParameter letterSpacing;
+    // Task DRIVE-1. The value-graph output this alignment is driven by, when it is driven at all.
+    // See CompiledText::drivenContent for why a kind that cannot interpolate carries its driver
+    // beside its authored value rather than as a third alternative of a typed operand.
+    std::optional<ValueOutputIndex> drivenAlignment{};
     friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
 };
 
@@ -148,6 +155,22 @@ struct CompiledText {
     CompiledScalarParameter size;
     CompiledColorParameter color;
     std::optional<CompiledTextLayout> layout{};
+    // Task DRIVE-1. Present exactly when the content parameter carries a driver binding; `content`
+    // is then the empty authored fallback the parameter store no longer holds a constant for, and
+    // the evaluator reads the String this output produces instead.
+    //
+    // This is an OPTIONAL BESIDE the constant rather than a third alternative of a typed
+    // CompiledStringParameter, and deliberately so. A String, an Integer and a Boolean have no
+    // curve table -- none of the three interpolates -- so a typed operand for them would carry
+    // exactly these two alternatives and nothing more, while changing `content` from a std::string
+    // into one WOULD be "a field's meaning changing" in the sense the semantics-version comment at
+    // the top of this file describes, and would therefore move
+    // kCompiledCompositionPlanSemanticsVersion and with it every process-frame semantic identity
+    // digest (src/output/process_frame_semantic_identity.cpp hashes that number). A new optional
+    // field appearing is the "new alternative" case that same comment names as NOT a semantics
+    // change: an existing plan value still means precisely what it meant, and every pixel and
+    // every digest an existing plan produces is unchanged.
+    std::optional<ValueOutputIndex> drivenContent{};
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
@@ -157,10 +180,12 @@ struct CompiledText {
 // identity so a diagnostic can name the exact parameter that failed. The first five are animatable,
 // so each is either a resolved constant or an index into the plan's curve tables.
 //
-// The blend mode is a resolved constant, like CompiledText's three values and for the same reason:
-// the schema declares it non-animatable and no command in the surface can put it on a curve. It
-// lives HERE, on the layer boundary that owns it, rather than on the stack entry that consumes it
-// -- the stack entry is the ordering of layers, and the mode is a property of the layer.
+// The blend mode is non-animatable -- the schema says so, and there is no meaningful value between
+// Multiply and Screen for a curve to interpolate -- so it has no curve alternative. It can still be
+// DRIVEN (task DRIVE-1): an Integer node handing a layer its mode per frame is a jump between two
+// named modes, which is exactly what a driver expresses and a curve cannot. It lives HERE, on the
+// layer boundary that owns it, rather than on the stack entry that consumes it -- the stack entry
+// is the ordering of layers, and the mode is a property of the layer.
 struct CompiledLayerOutput {
     document::NodeId sourceNodeId;
     document::LayerId layerId;
@@ -178,6 +203,13 @@ struct CompiledLayerOutput {
     std::optional<core::RationalTime> outPoint{};
     // Position places centre(local bounds) + anchor at the authored parent-space point.
     bool localBounds = false;
+    // Task DRIVE-1. The value-graph output the blend mode is driven by, when it is driven. The
+    // Integer it produces is mapped through core::blendModeFromStoredValue(), the same closed
+    // enumeration an authored one goes through, so a driven mode and an authored mode are the same
+    // set of modes. `blendMode` beside it stays the authored constant, or the registry default when
+    // the parameter holds no constant at all because it is driven. See CompiledText::drivenContent
+    // for why the driver sits beside the constant rather than inside a typed operand.
+    std::optional<ValueOutputIndex> drivenBlendMode{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

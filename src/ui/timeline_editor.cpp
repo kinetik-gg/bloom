@@ -1060,9 +1060,19 @@ std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) con
     const auto* composition = session_.composition();
     if (!composition || entry.rowKind != TimelineLayerEntry::Kind::Layer || entry.expanded)
         return {};
+    std::vector<document::NodeId> nodes;
     for (const auto nodeId : {session_.boundaryNodeForLayer(entry.layerId),
-                              session_.directSourceNodeForLayer(entry.layerId)}) {
-        const auto* node = nodeId ? composition->graph().findNode(*nodeId) : nullptr;
+                              session_.directSourceNodeForLayer(entry.layerId)})
+        if (nodeId)
+            nodes.push_back(*nodeId);
+    // Task DRIVE-1: a collapsed layer summarises every key that moves it, and a key on the value
+    // node driving one of its parameters moves it exactly as its own keys do. The same walk the
+    // twirl-down uses to build its upstream groups, so the summary and the expanded rows can never
+    // disagree about which keys belong to this layer.
+    for (const auto& upstream : session_.upstreamNodes(nodes, UpstreamTraversal::DriverLinksOnly))
+        nodes.push_back(upstream.id);
+    for (const auto nodeId : nodes) {
+        const auto* node = composition->graph().findNode(nodeId);
         if (!node)
             continue;
         for (const auto& binding : node->parameters) {
