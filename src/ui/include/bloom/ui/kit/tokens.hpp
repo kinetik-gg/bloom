@@ -126,6 +126,8 @@ enum class Spacing : int {
     // task U8 (issue 131), formal amendment 1, A4: the panel header's own vertical padding.
     // Deliberately off the base-4 scale -- not rounded to XS/S/M or any nearby step.
     PanelHeader = 10,
+    ChromePadding = 3,
+    ChromeGap = 4,
     // task F1, item F5: a menu row's own padding, vertical and horizontal. Two more deliberate
     // off-scale steps, named for their purpose exactly as Gutter and PanelHeader are: a menu row
     // is denser vertically and roomier horizontally than the base scale offers, and rounding

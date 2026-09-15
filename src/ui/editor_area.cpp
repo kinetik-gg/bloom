@@ -119,9 +119,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // reused on all four edges now that the switcher and the header button are no longer sized
     // off the header's own margins); contents are explicitly vertically centered below rather
     // than relying on margin arithmetic to land them in the 48px row (Size::EditorHeader).
-    const auto headerPadding = kit::px(kit::Spacing::PanelHeader);
-    headerLayout->setContentsMargins(headerPadding, 0, headerPadding, 0);
-    headerLayout->setSpacing(kit::px(kit::Spacing::XXS));
+    const auto headerPadding = kit::px(kit::Spacing::ChromePadding);
+    headerLayout->setContentsMargins(headerPadding, headerPadding, headerPadding, headerPadding);
+    headerLayout->setSpacing(kit::px(kit::Spacing::ChromeGap));
     header_->setFixedHeight(kit::px(kit::Size::HeaderRow));
 
     // task U8, issue #131, formal amendment 2, A7/A8: a purpose-built kit switcher, not a
@@ -517,6 +517,7 @@ void EditorArea::watchForActivation(QWidget* widget) {
 
 void EditorArea::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
+    kit::KSurface::clipPanelChildren(*this);
     layoutCornerMasks();
 }
 

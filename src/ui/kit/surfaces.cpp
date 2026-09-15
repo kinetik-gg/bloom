@@ -44,6 +44,12 @@ void KListSurface::paintEvent(QPaintEvent*) {
         painter.drawLine(0, y + pitch - 1, width(), y + pitch - 1);
     }
 }
+void KSurface::clipPanelChildren(QWidget& panel) {
+    QPainterPath clip;
+    const auto radius = radiusPx(Radius::Panel, 0);
+    clip.addRoundedRect(QRectF(panel.rect()), radius, radius);
+    panel.setMask(QRegion(clip.toFillPolygon().toPolygon()));
+}
 KSurface::KSurface(QWidget* parent) : QWidget(parent) {
     setAutoFillBackground(true);
     auto colors = palette();

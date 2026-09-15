@@ -642,7 +642,7 @@ void ViewerEditor::buildHeader() {
     compositionMenu->setObjectName(QStringLiteral("viewerCompositionMenu"));
     compositionMenuButton_->setMenu(compositionMenu);
     compositionMenuButton_->setPopupMode(QToolButton::InstantPopup);
-    bar->addWidget(compositionMenuButton_);
+    compositionMenuButton_->hide();
 
     viewerCompositionNewAction_ = compositionMenu->addAction(tr("New Composition…"));
     viewerCompositionNewAction_->setObjectName(QStringLiteral("viewerNewCompositionAction"));
@@ -835,6 +835,14 @@ void ViewerEditor::buildHeader() {
 
     bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
     bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
+    auto* addMenu = kit::makeMenu(tr("Add"), this);
+    addMenu->setObjectName("viewerAddMenu");
+    connect(addMenu->addAction(tr("Solid")), &QAction::triggered, this,
+            [this] { (void)addDefaultSolidLayer(session_); });
+    connect(addMenu->addAction(tr("Text")), &QAction::triggered, this,
+            [this] { (void)addDefaultTextLayer(session_); });
+    bar->addMenuButton(tr("Add"), addMenu, "viewerAddMenuButton");
+    viewerViewMenu_->addMenu(compositionMenu)->setText(tr("Composition"));
     bar->addStretch();
 
     fullscreenButton_ = new kit::KIconButton(this);
@@ -858,7 +866,7 @@ void ViewerEditor::buildHeader() {
             fullscreenButton_->setChecked(window()->isFullScreen());
         }
     });
-    bar->addWidget(fullscreenButton_);
+    fullscreenButton_->hide();
     headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
     headerMenuWidget_->hide(); // The canvas remains full-bleed until EditorArea hosts chrome.
 

@@ -38,6 +38,11 @@ int run(int argc, char** argv) {
         expect(header && header->height() == kit::px(kit::Size::HeaderRow), panel, "header token");
         if (auto* footer = panel->findChild<QWidget*>("editorFooter"))
             expect(footer->height() == kit::px(kit::Size::FooterRow), footer, "footer token");
+        expect(!panel->mask().isEmpty() && !panel->mask().contains(QPoint(0, 0)), panel,
+               "A1 panel clips child chrome at rounded corners");
+        const auto inset = kit::px(kit::Spacing::ChromePadding);
+        auto* picker = panel->findChild<QWidget*>("editorTypePicker");
+        expect(picker->mapTo(header, QPoint()).y() == inset, picker, "A2 chrome vertical inset");
         for (auto* widget : panel->findChildren<QWidget*>()) {
             if (widget->property("chromeControl").toBool() ||
                 widget->objectName() == "editorTypePicker" ||
@@ -118,6 +123,15 @@ int run(int argc, char** argv) {
                 ++icons;
             }
         }
+    }
+    auto* viewerMenus = fixture.window->findChild<QWidget*>("viewerHeaderMenuBar");
+    expect(!viewerMenus->property("collapsed").toBool(), viewerMenus,
+           "A3 default viewer menus fit");
+    auto* add = fixture.window->findChild<kit::KMenuButton*>("viewerAddMenuButton");
+    expect(add && add->isVisible(), viewerMenus, "A3 Add is a visible menu button");
+    for (const auto* name : {"viewerCompositionMenuButton", "viewerFullscreenButton"}) {
+        auto* retired = fixture.window->findChild<QWidget*>(name);
+        expect(retired && !retired->isVisible(), viewerMenus, "A3 retired controls stay hidden");
     }
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");

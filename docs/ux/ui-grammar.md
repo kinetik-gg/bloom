@@ -37,6 +37,7 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 | `Size::DropdownWidthWide` | 120 | Header selectors |
 | `Size::DropdownWidthExpanded` | 240 | Header selector cap |
 | `Spacing::XXS / XS / S / M / L / XL / XXL` | 2 / 4 / 8 / 12 / 16 / 24 / 32 | Gutters |
+| `Spacing::ChromePadding / ChromeGap` | 3 / 4 | Equal chrome inset on all edges / every item gap; controls have no private side margins |
 | `Spacing::Gutter` | 6 | Panel separation |
 
 Editor literals in fixed extents, QSize, pixel multiplication or geometry arithmetic are
@@ -203,3 +204,8 @@ The metric audit covers the status line, six tools, card/control containment and
 alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
+
+Panel children are clipped by `KSurface::clipPanelChildren` to `Radius::Panel`; corner overlays
+provide the antialiased boundary. Header and footer share ChromePadding. Viewer declares
+View, Select, Add; Composition commands live under View. Only EditorArea exposes maximize.
+New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
