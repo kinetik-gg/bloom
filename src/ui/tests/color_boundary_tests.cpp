@@ -224,7 +224,11 @@ void migrationPin() {
         expect(std::regex_search(json, expression), "legacy fixture field found");
         json = std::regex_replace(json, expression, to);
     };
-    replace(R"("minor"\s*:\s*10)", "\"minor\": 9");
+    // Whatever the current minor is, the fixture is a 1.9 document: the production chain from 1.9
+    // to the current canonical version is what runs, and later minors add only optional fields.
+    // Only the FIRST schemaVersion is the document's; colorSettings carries its own further down.
+    json = std::regex_replace(json, std::regex(R"("minor"\s*:\s*\d+)"), "\"minor\": 9",
+                              std::regex_constants::format_first_only);
     replace(R"(,\s*"assets"\s*:\s*\[\s*\])", "");
     replace(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])", "");
     replace(R"(,\s*"asset"\s*:\s*"0")", "");
@@ -239,9 +243,9 @@ void migrationPin() {
     expect(static_cast<bool>(parsed), "legacy document parses");
     if (!parsed)
         return;
-    const auto migrated =
-        project::migrateDocumentDom(parsed.document()->root(), {1, 9}, {1, 10},
-                                    project::kProductionDocumentMigrationSteps, {}, *operation);
+    const auto migrated = project::migrateDocumentDom(
+        parsed.document()->root(), {1, 9}, project::kCanonicalDocumentSchemaVersionV1,
+        project::kProductionDocumentMigrationSteps, {}, *operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated,
            "real production migration runs");
     if (!migrated.migratedRoot())
