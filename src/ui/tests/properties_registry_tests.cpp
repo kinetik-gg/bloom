@@ -294,7 +294,7 @@ void registryRows() {
                 sourceRow = sourceRow->findChild<QWidget*>("propertiesRow");
             else if (sourceRow->objectName() != "propertiesRow")
                 continue;
-            if (sourceRow)
+            if (sourceRow && !sourceRow->property("rowLabel").toString().isEmpty())
                 solidLabels.push_back(sourceRow->property("rowLabel").toString());
         }
     }

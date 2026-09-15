@@ -53,8 +53,11 @@ class ChromeRow final : public QWidget {
             }
             if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
                 dropdown->setControlSize(kit::KDropdown::ControlSize::Default);
-            if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
-                dropdown->setMinimumWidth(dropdown->minimumSizeHint().width());
+            if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control)) {
+                const auto minimum = dropdown->minimumSizeHint().width();
+                dropdown->setMaximumWidth(std::max(minimum, dropdown->maximumWidth()));
+                dropdown->setMinimumWidth(minimum);
+            }
             entry.control->setFixedHeight(kit::px(kit::Size::Control));
             entry.control->setProperty("chromeControl", true);
             entry.control->setVisible(entry.visible);
@@ -86,7 +89,7 @@ class ChromeRow final : public QWidget {
   private:
     int preferred(QWidget* control) const {
         return std::clamp(control->sizeHint().width(), control->minimumWidth(),
-                          control->maximumWidth());
+                          std::max(control->minimumWidth(), control->maximumWidth()));
     }
     int measure() const {
         int needed = 2 * padding_;
@@ -119,7 +122,7 @@ class ChromeRow final : public QWidget {
                 visible.push_back(overflow_);
         }
         int remaining =
-            width() - 2 * padding_ -
+            width() - padding_ - padding_ -
             std::max(0, static_cast<int>(visible.size()) - 1) * kit::px(kit::Spacing::ChromeGap);
         int total = 0;
         for (auto* control : visible)
@@ -200,6 +203,7 @@ QWidget* EditorArea::buildSplitChrome(QWidget* left, QWidget* right, int split, 
     leadingLayout->setContentsMargins(0, 0, 0, 0);
     leadingLayout->addWidget(left);
     layout->addWidget(leading);
+    layout->addSpacing(kit::px(kit::Size::TimelineSeparator));
     layout->addWidget(right, 1);
     return row;
 }

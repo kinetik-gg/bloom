@@ -100,19 +100,17 @@ void testLayoutSelectionAndSockets() {
                "all socket palette mappings use the socket roles");
     expect(f.edit<commands::SetNodeMuted>(b, true).changed(), "mute fixture");
     auto* field = f.scene()->nodeFieldForTest(b, QStringLiteral("nodePositionXEditor"));
-    expect(field && field->graphicsProxyWidget()->isVisible() &&
-               field->graphicsProxyWidget()->opacity() == 0.5,
+    expect(field && field->isVisible() && field->window()->graphicsProxyWidget()->opacity() == 0.5,
            "unlinked fields remain in-node, and muted body widgets have 50 percent opacity");
     expect(f.edit<commands::ConnectPorts>(document::OutputPortRef{a, "image"},
                                           document::NodeInputRef{b, "image"})
                .changed(),
            "linked Image input fixture");
-    expect(field->graphicsProxyWidget()->isVisible(),
+    expect(field->isVisible(),
            "linked Image input cannot hide or drive unrelated parameter controls");
     expect(f.edit<commands::SetNodeCollapsed>(b, true).changed() &&
                f.card(b)->cardRect().height() == node_editor::kCardHeaderHeight &&
-               !field->graphicsProxyWidget()->isVisible() &&
-               f.socket(b, true)->pos().y() < node_editor::kCardHeaderHeight,
+               !field->isVisible() && f.socket(b, true)->pos().y() < node_editor::kCardHeaderHeight,
            "collapsed node is header-only with visible header-edge sockets and hidden fields");
     // ADAPTED (task S7, item 3): the render rule is real now, so it is pinned against the
     // PRODUCTION Solid card rather than a detached fixture schema -- and what hides the control is
@@ -128,7 +126,7 @@ void testLayoutSelectionAndSockets() {
     node_editor::NodeItem rowCard(rowNode.id, &f.session);
     rowCard.refresh(rowNode, projectionComposition, {{0, 0}, 200, false, false}, registry);
     auto* rowWidget = rowCard.fieldWidget(QStringLiteral("nodeColorChip"));
-    expect(rowWidget && rowWidget->graphicsProxyWidget()->isVisible(),
+    expect(rowWidget && rowWidget->isVisible(),
            "unlinked parameter-role socket keeps its kit control");
     const auto colorBinding = std::ranges::find(
         rowNode.parameters, document::kSolidColorParameterRole, &document::ParameterBinding::role);
@@ -150,7 +148,7 @@ void testLayoutSelectionAndSockets() {
                document::DriverBindingSource{valueNodeId, std::string(document::kValuePortName)}),
            "render-rule fixture driver binding");
     rowCard.refresh(rowNode, projectionComposition, {{0, 0}, 200, false, false}, registry);
-    expect(rowWidget && !rowWidget->graphicsProxyWidget()->isVisible() && rowCard.hasInputSocket(),
+    expect(rowWidget && !rowWidget->isVisible() && rowCard.hasInputSocket(),
            "a driven parameter role hides its kit control while retaining the real socket");
     const auto snapshot = f.session.snapshot();
     const auto color = document::makeBloomNeutralColorSettingsV1(
@@ -283,10 +281,11 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
     auto* footer = f.editor.footerWidgetForTest();
     expect(footer != nullptr, "the footer widget exists");
     if (footer != nullptr) {
-        expect(footer->findChild<QWidget*>(QStringLiteral("nodeZoomDropdown")) != nullptr &&
-                   footer->findChild<QWidget*>(QStringLiteral("nodeSnapSwitch")) != nullptr &&
-                   footer->findChild<QWidget*>(QStringLiteral("nodeLinkStyleDropdown")) != nullptr,
-               "the footer carries the zoom dropdown, snap switch, and link style dropdown");
+        expect(
+            footer->findChild<QWidget*>(QStringLiteral("nodeZoomDropdown")) != nullptr &&
+                f.editor.findChild<QWidget*>(QStringLiteral("nodeSnapSwitch"))->isHidden() &&
+                f.editor.findChild<QWidget*>(QStringLiteral("nodeLinkStyleDropdown"))->isHidden(),
+            "the footer shows zoom and hides the legacy snap and link style controls");
         auto* readout = footer->findChild<QLabel*>(QStringLiteral("nodeSelectionReadout"));
         expect(readout != nullptr, "the footer carries the selection readout");
         if (readout != nullptr) {

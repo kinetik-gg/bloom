@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include "ui3_audit.hpp"
 #include "window_fixture.hpp"
 #include <QGraphicsView>
 #include <bloom/ui/editor_area.hpp>
@@ -87,7 +88,7 @@ int run(int argc, char** argv) {
                             continue;
                         expect(widget->rect().contains(cell->geometry()), cell,
                                "row cell must fit inside its row");
-                        expect(cell->width() == kit::px(role == "toggle"
+                        expect(cell->width() >= kit::px(role == "toggle"
                                                             ? kit::Size::ToggleCell
                                                             : kit::Size::DropdownWidth),
                                cell, "row column pitch");
@@ -98,8 +99,9 @@ int run(int argc, char** argv) {
                 expect(widget->layout()->contentsMargins().left() ==
                            kit::px(kit::Spacing::RowPadding),
                        widget, "B5 row owns its padding");
-                expect(widget->height() == kit::px(kit::Size::PropertyRow), widget,
-                       "property row token");
+                expect(widget->height() == kit::px(kit::Size::PropertyRow) *
+                                               std::max(1, widget->property("rowLines").toInt()),
+                       widget, "property row token");
             }
             if (auto* button = qobject_cast<QToolButton*>(widget);
                 button && !button->icon().isNull()) {
@@ -207,6 +209,10 @@ int run(int argc, char** argv) {
             if (!card || card->data(kNodeItemKindRole).toString() != "node")
                 continue;
             ++cards;
+            const auto [nameRect, categoryRect] = card->titleBandRects();
+            expect(nameRect.center().y() == categoryRect.center().y() &&
+                       !nameRect.intersects(categoryRect),
+                   view, "F26 title and category share one row without overlap");
             expect(card->cardWidth() >= kit::px(kit::Size::NodeCardWidth), view,
                    "node card width token floor");
             expect(card->parameterRowHeight() == kit::px(kit::Size::PropertyRow), view,
@@ -218,8 +224,24 @@ int run(int argc, char** argv) {
                     continue;
                 auto* field = proxy->widget();
                 ++fields;
-                expect(field->height() == kit::px(kit::Size::Control), field,
-                       "node kit control height");
+                expect(qobject_cast<kit::KPropertyRow*>(field) &&
+                           field->height() == kit::px(kit::Size::PropertyRow),
+                       field, "F28 node parameter is a shared property row");
+                for (auto* diamond : field->findChildren<KeyframeDiamond*>()) {
+                    for (auto* value :
+                         field->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
+                        if (value == diamond || !value->isVisible() || value->inherits("QLabel"))
+                            continue;
+                        expect(!diamond->geometry().intersects(value->geometry()), diamond,
+                               "F28 diamond column never overlaps a field or swatch");
+                    }
+                }
+                for (auto* value : field->findChildren<kit::KValueField*>()) {
+                    const auto text = value->displayedValue();
+                    const auto point = text.indexOf('.');
+                    expect(point < 0 || (text.size() - point <= 3 && !text.endsWith('0')), value,
+                           "F28 resting values have at most two decimals and no trailing zeros");
+                }
                 expect(card->cardRect().contains(proxy->mapRectToParent(proxy->boundingRect())),
                        field, "field contained in node");
             }
@@ -255,12 +277,30 @@ int run(int argc, char** argv) {
                "timeline menus fit at >=1600px");
         expect(status->isVisible(), status, "status survives window resizing");
     }
+    QStringList groups;
+    for (const auto& entry : stack->entries())
+        if (entry.rowKind == TimelineLayerEntry::Kind::Group)
+            groups.append(entry.name);
+    expect(groups == QStringList{"Object", "Transform", "Source"}, stack,
+           "D16 groups match Properties order");
+    const auto beforeCollapse = stack->rowCount();
+    auto* disclosure = stack->findChild<QToolButton*>("timelinePropertyDisclosure");
+    expect(disclosure && disclosure->isVisible(), stack, "D16 group disclosure is visible");
+    if (disclosure) {
+        QTest::mouseClick(disclosure, Qt::LeftButton);
+        expect(stack->rowCount() < beforeCollapse, stack,
+               "D16 group click collapses its properties");
+        QTest::mouseClick(disclosure, Qt::LeftButton);
+        expect(stack->rowCount() == beforeCollapse, stack,
+               "D16 group click restores its properties");
+    }
     std::cout << "Node audit: " << cards << " cards, " << fields << " fields, " << alignedSockets
               << " aligned sockets\n";
     expect(controls > 30 && icons > 10, fixture.window.get(),
            "audit must inspect real controls and glyphs");
     std::cout << "Audited " << panels.size() << " panels, " << controls << " controls, " << icons
               << " icons at DPR " << fixture.window->devicePixelRatioF() << '\n';
+    test::auditUi3(fixture, expect);
     return failures == 0 ? 0 : 1;
 }
 

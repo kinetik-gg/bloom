@@ -110,7 +110,18 @@ QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, 
     expand->setAccessibleName(QObject::tr("Show RGBA components"));
     auto* row =
         addRow(rows, parent, makeRowLabel(QObject::tr("Color"), parent), diamond, {chip, expand});
-    auto* details = makeCellGroup(groupName, fields, parent);
+    auto* details = new QWidget(parent);
+    details->setObjectName(groupName);
+    auto* grid = new QGridLayout(details);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(kit::px(kit::Spacing::XXS));
+    int channel = 0;
+    for (auto* field : fields) {
+        grid->addWidget(field, channel / 2, channel % 2);
+        ++channel;
+    }
+    details->setMaximumWidth(kit::px(kit::Size::PropertiesFieldWidth) * 2 +
+                             kit::px(kit::Spacing::XXS));
     details->setProperty("disclosureFor", QObject::tr("Color"));
     details->setProperty("expanded", false);
     // Four channels share the full card width below the swatch.
@@ -127,6 +138,7 @@ QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, 
                          });
     }
     auto* detailRow = addRow(rows, parent, makeRowLabel({}, parent), nullptr, details);
+    qobject_cast<kit::KPropertyRow*>(detailRow)->setLineCount(2);
     detailRow->hide();
     details->hide();
     QObject::connect(expand, &kit::KButton::toggled, details,

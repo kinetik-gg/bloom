@@ -227,7 +227,7 @@ enum class Size : int {
     // resort. See kit::KValueField::minimumSizeHint().
     ValueCellMin = 72,
     PropertiesLabelWidth = 96,
-    PropertiesLabelMinWidth = 72,
+    PropertiesLabelMinWidth = 64,
     PropertiesRowPitch = 28,
     PropertiesDiamondColumn = 20,
     PropertiesFieldWidth = 72,

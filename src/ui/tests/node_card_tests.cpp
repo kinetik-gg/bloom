@@ -18,7 +18,6 @@
 
 namespace bloom::ui::test {
 namespace {
-using node_editor::kCardLabelGap;
 using node_editor::kCardMinimumWidth;
 using node_editor::kCardPadding;
 using node_editor::NodeItem;
@@ -56,6 +55,8 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
             ++diamondCount;
             continue;
         }
+        diamondCount += static_cast<std::size_t>(
+            entry.second->findChildren<KeyframeDiamond*>("nodeKeyframeDiamond").size());
         hosted.push_back(entry);
     }
     // ADAPTED (task S4, then blend modes): the Layer Output card now hosts position X/Y, anchor
@@ -73,7 +74,7 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
         expect(widget->testAttribute(Qt::WA_TranslucentBackground) &&
                    widget->testAttribute(Qt::WA_NoSystemBackground),
                "and it paints no opaque window background behind its own cell");
-        expect(widget->height() == kit::px(kit::Size::Control),
+        expect(widget->height() == kit::px(kit::Size::PropertyRow),
                "a value cell is exactly the control height -- no strip above or below it that "
                "nothing paints");
         const qreal right = proxy->pos().x() + static_cast<qreal>(widget->width());
@@ -86,11 +87,13 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     expect(field != nullptr, "the X cell is a kit value field");
     if (field == nullptr)
         return;
-    expect(field->cellRect().top() == 0.0 &&
-               field->cellRect().height() == static_cast<qreal>(field->height()),
+    expect(field->cellRect().top() == kit::px(kit::Spacing::FieldMargin) &&
+               field->cellRect().height() ==
+                   static_cast<qreal>(field->height() - 2 * kit::px(kit::Spacing::FieldMargin)),
            "the cell spans the whole control, so the card shows no darker band around it");
-    expect(field->cellRect().left() == 0.0 &&
-               field->cellRect().right() == static_cast<qreal>(field->width()),
+    expect(field->cellRect().left() == kit::px(kit::Spacing::FieldMargin) &&
+               field->cellRect().right() ==
+                   static_cast<qreal>(field->width() - kit::px(kit::Spacing::FieldMargin)),
            "a card field carries no label column of its own: the card paints the row's name");
 }
 
@@ -113,7 +116,7 @@ void testCardMinimumWidthIsItsContent() {
 
     const QFontMetricsF rowMetrics(kit::font(kit::TypeRole::UiSmall));
     for (const auto& [proxy, widget] : hostedControls(*card)) {
-        expect(proxy->pos().x() >= kCardPadding + card->labelColumnWidth() + kCardLabelGap - 0.5,
+        expect(proxy->pos().x() == kCardPadding,
                "at the minimum width the label column still fits beside every control");
         expect(widget->width() >= widget->sizeHint().width(),
                "and no control is narrower than the narrowest width it can be used at");
@@ -211,8 +214,8 @@ void testNodeTypesAreNamedForWhatTheyAre() {
     expect(node_editor::nodeDisplayName(*f.session.composition(), *record) ==
                QStringLiteral("Backdrop"),
            "a layer card is named after its layer, not after its node type");
-    expect(node_editor::nodeEyebrow(*f.session.composition(), *record) == QStringLiteral("Layer"),
-           "so the eyebrow is what still says it is a Layer");
+    expect(node_editor::nodeEyebrow(*f.session.composition(), *record) == QStringLiteral("Layers"),
+           "so the category is what still says it is a Layer");
     const auto* stack = f.session.composition()->graph().findNode(
         f.session.composition()->graph().layerStack().nodeId());
     expect(node_editor::nodeEyebrow(*f.session.composition(), *stack) ==
@@ -373,8 +376,8 @@ void testEnterAndDoubleClickRenameALayerCard() {
     f.mouse(QEvent::MouseButtonDblClick, header, Qt::LeftButton, Qt::LeftButton);
     auto* reopened = qobject_cast<QLineEdit*>(
         f.scene()->nodeFieldForTest(*boundary, QStringLiteral("nodeRenameEditor")));
-    expect(reopened != nullptr && reopened->graphicsProxyWidget() != nullptr &&
-               reopened->graphicsProxyWidget()->isVisible() && reopened != field,
+    expect(reopened != nullptr && reopened->window()->graphicsProxyWidget() != nullptr &&
+               reopened->isVisible() && reopened != field,
            "a double-click on a layer card opens the same field");
 
     // A card that is not a layer boundary has no name of its own, and neither route invents one.

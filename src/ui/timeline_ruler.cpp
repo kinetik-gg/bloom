@@ -278,7 +278,7 @@ class TimelineKeyframeRow final : public QWidget {
         painter.setRenderHint(QPainter::Antialiasing, true);
         // One step up the surface ladder from the ruler's own Surface (decision 1's "row striping
         // via surface ladder" carried down into the lane rows, which sit directly beneath it).
-        painter.fillRect(rect(), kit::color(kit::surfaceStep(kit::Color::Surface, 1)));
+        painter.fillRect(rect(), kit::color(kit::Color::Surface));
         kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
         painter.drawLine(QPointF(0.0, height() - 0.5), QPointF(width(), height() - 0.5));
 

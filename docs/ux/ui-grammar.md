@@ -47,7 +47,8 @@ an owned semantic token, never a local pixel constant.
 ## Rasterization and type
 
 Glyphs are SVG rasterizations at integer physical pixel extents for the current DPR, tested
-at 1, 1.25, 1.5 and 2. Do not scale an existing pixmap or paint a glyph by hand.
+at 1, 1.25, 1.5 and 2. Do not scale an existing pixmap or paint a glyph by hand. KDiamond is the explicit vector
+primitive exception described below; it resolves geometry through the device transform.
 Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
 `TypeRole` is the only font API. The interface family is pinned, bundled Inter
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
@@ -161,7 +162,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `ViewerZoomWidth` | 64 | Fit/zoom dropdown |
 | `ViewerResolutionWidth` | 96 | Resolution dropdown |
 | `NodeCardWidth / NodeCardMin` | 240 / 128 | Normal card floor / legacy minimum vocabulary |
-| `NodeTitleBand` | 32 | Node title and eyebrow |
+| `NodeTitleBand` | 32 | Node name and category on one row |
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Unplaced-node grid |

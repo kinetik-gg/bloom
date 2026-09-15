@@ -102,6 +102,11 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     slot->setSizePolicy(policy);
     layout->addWidget(slot, 0, Qt::AlignVCenter);
 }
+void KPropertyRow::setLineCount(int lines) {
+    const auto count = std::max(1, lines);
+    setProperty("rowLines", count);
+    setFixedHeight(px(Size::PropertyRow) * count);
+}
 QSize KPropertyRow::minimumSizeHint() const {
     auto size = QWidget::minimumSizeHint();
     size.setWidth(size.width() - label_->width() + px(Size::PropertiesLabelMinWidth) -
@@ -171,6 +176,11 @@ void KRow::setRowState(int index, bool selected) {
     index_ = index;
     selected_ = selected;
     update();
+}
+void KRow::resizeEvent(QResizeEvent* event) {
+    const auto vertical = height() == px(Size::Control) ? 0 : px(Spacing::RowPadding);
+    row_->setContentsMargins(px(Spacing::RowPadding), vertical, px(Spacing::RowPadding), vertical);
+    QWidget::resizeEvent(event);
 }
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);

@@ -11,6 +11,7 @@ class KPropertyRow final : public QWidget {
     KPropertyRow(QLabel* label, QWidget* indicator, std::initializer_list<QWidget*> values,
                  QWidget* parent = nullptr, bool leadingIndicator = false);
     QSize minimumSizeHint() const override;
+    void setLineCount(int lines);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -32,6 +33,7 @@ class KRow : public QWidget {
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     QHBoxLayout* row_;

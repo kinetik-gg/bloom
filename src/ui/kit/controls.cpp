@@ -29,27 +29,35 @@ KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     setAutoRaise(true);
     setProperty("kitControl", true);
 }
-void KIconButton::paintEvent(QPaintEvent* event) {
-    if (!isChecked()) {
-        QToolButton::paintEvent(event);
-        return;
-    }
+void KIconButton::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    fillRoundedSurface(painter, rect(), color(isDown() ? Color::AccentPressed : Color::Accent), {},
-                       Radius::Small);
-    auto glyph = icon().pixmap(iconSize(), devicePixelRatioF(), QIcon::Normal, QIcon::On);
-    QPainter ink(&glyph);
-    ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
-    ink.fillRect(glyph.rect(), isEnabled() ? color(Color::OnAccent)
-                                           : withOpacity(color(Color::OnAccent), kDisabledOpacity));
-    ink.end();
+    const bool heading = parentWidget() && parentWidget()->property("headerRow").toBool();
+    if (!heading)
+        fillRoundedSurface(painter, rect(),
+                           color(isChecked() ? (isDown() ? Color::AccentPressed : Color::Accent)
+                                             : Color::ControlSurface),
+                           color(borderForInteraction(isEnabled(), hasFocus(), underMouse())),
+                           Radius::Small);
+    auto glyph = icon().pixmap(iconSize(), devicePixelRatioF(),
+                               isEnabled() ? QIcon::Normal : QIcon::Disabled,
+                               isChecked() ? QIcon::On : QIcon::Off);
+    if (isChecked() && !glyph.isNull()) {
+        QPainter ink(&glyph);
+        ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        ink.fillRect(glyph.rect(), isEnabled()
+                                       ? color(Color::OnAccent)
+                                       : withOpacity(color(Color::OnAccent), kDisabledOpacity));
+    }
     const auto extent = glyph.deviceIndependentSize();
-    painter.drawPixmap(QPointF((width() - extent.width()) / 2, (height() - extent.height()) / 2),
+    const auto dpr = devicePixelRatioF();
+    painter.drawPixmap(QPointF(std::round((width() - extent.width()) * dpr / 2) / dpr,
+                               std::round((height() - extent.height()) * dpr / 2) / dpr),
                        glyph);
-    painter.setPen(color(Color::OnAccent));
+    painter.setPen(color(isChecked() ? Color::OnAccent : Color::Muted));
     if (icon().isNull())
         painter.drawText(rect(), Qt::AlignCenter, text());
 }
+
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
     setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));

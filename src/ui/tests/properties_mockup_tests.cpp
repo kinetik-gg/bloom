@@ -123,7 +123,8 @@ void run() {
     expect(xIn(positionX, panel) < xIn(positionLink, panel) &&
                xIn(positionLink, panel) < xIn(positionY, panel),
            "link is between X and Y fields");
-    expect(positionX->cellRect().left() == 0 && positionX->labelRect().left() > 0,
+    expect(positionX->cellRect().left() == ui::kit::px(ui::kit::Spacing::FieldMargin) &&
+               positionX->labelRect().left() > 0,
            "axis prefix is inside the field");
     expect(positionX->width() >= 64 && positionX->width() <= 72 && opacity->width() >= 64 &&
                opacity->width() <= 72,
@@ -222,7 +223,8 @@ void run() {
     expect(channels.size() == 4, "RGBA disclosure retains four cells");
     if (channels.size() == 4)
         for (auto* field : channels)
-            expect(field->y() == channels.front()->y(), "RGBA channels share one line");
+            expect(field->width() >= ui::kit::px(ui::kit::Size::PropertiesColorMinWidth),
+                   "RGBA cells remain readable in the two-row control column");
     for (const int width : {300, 360}) {
         area.resize(width, 800);
         settle();
@@ -230,7 +232,9 @@ void run() {
         expect(area.width() == width && scroll->widget()->width() <= scroll->viewport()->width(),
                "compact panel holds the minimum width");
         auto* label = xRow->findChild<QLabel*>("propertiesRowLabel");
-        expect(label->width() == (width == 300 ? 72 : 96), "label column uses responsive tokens");
+        expect(label->width() == (width == 300 ? ui::kit::px(ui::kit::Size::PropertiesLabelMinWidth)
+                                               : ui::kit::px(ui::kit::Size::PropertiesLabelWidth)),
+               "label column uses responsive tokens");
     }
     if (expand)
         expand->setChecked(false);

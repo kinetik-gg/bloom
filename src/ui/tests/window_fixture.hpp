@@ -22,6 +22,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/timeline_editor.hpp>
 #include <memory>
 #include <stdexcept>
 
@@ -91,6 +92,15 @@ struct WindowFixture {
         if (preview->state().activity != PreviewActivity::Ready)
             throw std::runtime_error("Fixture preview did not become ready");
         QTest::qWait(100);
+        auto* stack = window->findChild<TimelineLayerStack*>();
+        for (const auto& layer : session.composition()->graph().layerOutputs()) {
+            if (layer.name == "Background") {
+                session.selectLayer(layer.layerId);
+                Q_EMIT stack->expansionRequested(layer.layerId);
+                break;
+            }
+        }
+        QTest::qWait(50);
         clearInteraction();
     }
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)

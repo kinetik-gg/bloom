@@ -43,14 +43,14 @@ void TimelineWorkAreaStrip::paintEvent(QPaintEvent*) {
     const int barHeight = kit::px(kit::Size::TimelineWorkAreaHandle) / 2;
     const int handle = kit::px(kit::Size::TimelineWorkAreaHandle);
     painter.fillRect(
-        QRectF(left, (height() - barHeight) / 2, std::max<qreal>(0.0, right - left), barHeight),
+        QRectF(left, (height() - barHeight) / 2.0, std::max<qreal>(0.0, right - left), barHeight),
         kit::color(kit::Color::BorderHover));
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
     painter.setBrush(kit::color(kit::Color::Accent));
-    painter.drawRoundedRect(QRectF(left - handle / 2, 0, handle, height()), handle / 2, handle / 2);
-    painter.drawRoundedRect(QRectF(right - handle / 2, 0, handle, height()), handle / 2,
-                            handle / 2);
+    const auto radius = kit::radiusPx(kit::Radius::Full, handle);
+    painter.drawRoundedRect(QRectF(left - radius, 0, handle, height()), radius, radius);
+    painter.drawRoundedRect(QRectF(right - radius, 0, handle, height()), radius, radius);
 }
 void TimelineWorkAreaStrip::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton)

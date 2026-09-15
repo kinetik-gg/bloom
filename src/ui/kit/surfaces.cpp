@@ -6,28 +6,28 @@ void KDiamond::paintEvent(QPaintEvent*) {
     const auto tint = animated_ || underMouse()
                           ? color(Color::Keyframe)
                           : withOpacity(color(Color::Muted), kDisabledOpacity);
-    // Include the scene transform as well as the paint device DPR. Reset to device pixels:
-    // no cached pixmap is resampled when the canvas zoom changes.
+    // Include the scene transform as well as the paint device DPR. Resolve vertices and stroke in
+    // device pixels: no cached pixmap is resampled when the canvas zoom changes.
     const auto transform = painter.deviceTransform();
     const auto center = transform.map(QPointF(width() / 2.0, height() / 2.0));
     const auto scale = std::hypot(transform.m11(), transform.m12());
     const auto radius = std::max(1.0, std::round(kKeyDiamondRadius * scale));
     const auto stroke = std::max(1.0, std::round(kDiamondStroke * scale));
-    painter.resetTransform();
-    painter.scale(1.0 / painter.device()->devicePixelRatioF(),
-                  1.0 / painter.device()->devicePixelRatioF());
     const QPointF snapped(std::round(center.x()), std::round(center.y()));
     QPolygonF diamond{snapped + QPointF(0, -radius), snapped + QPointF(radius, 0),
                       snapped + QPointF(0, radius), snapped + QPointF(-radius, 0)};
+    const auto inverse = transform.inverted();
+    const auto localDiamond = inverse.map(diamond);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(tint, stroke, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+    painter.setPen(QPen(tint, stroke / scale, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
     painter.setBrush(keyed_ ? QBrush(tint) : Qt::NoBrush);
-    painter.drawPolygon(diamond);
+    painter.drawPolygon(localDiamond);
     if (animated_ && !keyed_) {
-        painter.setClipRect(QRectF(snapped.x() - radius - stroke, snapped.y() - radius - stroke,
-                                   radius + stroke, 2 * (radius + stroke)));
+        painter.setClipRect(
+            inverse.mapRect(QRectF(snapped.x() - radius - stroke, snapped.y() - radius - stroke,
+                                   radius + stroke, 2 * (radius + stroke))));
         painter.setBrush(tint);
-        painter.drawPolygon(diamond);
+        painter.drawPolygon(localDiamond);
     }
 }
 KAnchorGrid::KAnchorGrid(QWidget* parent) : QWidget(parent) {

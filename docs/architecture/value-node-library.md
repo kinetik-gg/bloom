@@ -119,16 +119,15 @@ the compiler and the evaluator read.
   versions, and no golden pixel or output digest shifted.
 - **No persistence step.** A new node type is not a stored-shape change. `NodeCategory` is not
   persisted either, so moving the arithmetic into `Math` needed no migration.
-- **One UI change, and only one.** The Add search popup and the Add Node menu gained a **Math**
-  section header, and the section order became Sources, Layers, Compositing, Values, Math,
-  Utilities, Output. Node cards render every new node through the registry-driven generic path that
+- **UI classification.** The Add search popup and Add Node menu expose Math after Values.
+  The complete current order is defined in [UI grammar](../ux/ui-grammar.md). Node cards render every new node through the registry-driven generic path that
   already existed (`nodeOperandSelector`, `nodeOperandEditor`, `nodeOperandToggle`,
   `nodeOperandTextEditor`, `nodeOperandColorChip`); NO new `objectName` was introduced and none was
   renamed.
 
 ## Conversions
 
-Category `Utilities`. Every row's inputs are listed in socket order; a **selector** is inline and
+Category `Convert` (timecode/frame conversions are `Time`). Every row's inputs are listed in socket order; a **selector** is inline and
 carries no socket.
 
 | Node | Inputs | Outputs | Notes |
@@ -156,7 +155,7 @@ carries no socket.
 
 ## Time Conversions
 
-Category `Utilities`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
+Category `Time`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
 `frame` output is computed from, so the two can never disagree about which frame an instant falls
 in.
 
@@ -196,7 +195,7 @@ refused rather than read as non-drop.
 
 ## String Utilities
 
-Category `Utilities`.
+Category `String`.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
@@ -245,7 +244,7 @@ answer with the SAME shape the safe parse contract defines -- a value, a `valid`
 
 ## Math
 
-Category `Math`. The section holds the ARITHMETIC and nothing else: the existing Math, Vector Math,
+Categories `Math`, `Vector` and `Color` follow the UI grammar projection. The original arithmetic library includes: the existing Math, Vector Math,
 Vector Measure, Map Range, Clamp, Mix, Mix Color, Compare and Random nodes moved into it from
 `Utilities`, and every numeric node below was added to it. Switch, Separate/Combine, Reroute, the
 conversions and the logic stayed in `Utilities`, because a predicate and a wire are not arithmetic.
@@ -294,7 +293,7 @@ of each would be two nodes an artist has to choose between for one operation.
 
 ## Logic
 
-Category `Utilities`. A predicate is not arithmetic, so these did not move into `Math`.
+Category `Logic`, alongside Boolean, Compare and Switch.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |

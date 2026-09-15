@@ -33,8 +33,8 @@ namespace {
 // The scene point at a hosted control's own local point. A gesture aims at the CELL, exactly where
 // an artist aims, rather than at a card-relative guess that a relayout could invalidate.
 [[nodiscard]] QPointF scenePointIn(const QWidget* widget, const QPointF local) {
-    const auto* proxy = widget == nullptr ? nullptr : widget->graphicsProxyWidget();
-    return proxy == nullptr ? QPointF{} : proxy->mapToScene(local);
+    const auto* proxy = widget == nullptr ? nullptr : widget->window()->graphicsProxyWidget();
+    return proxy == nullptr ? QPointF{} : proxy->mapToScene(widget->mapTo(widget->window(), local));
 }
 
 [[nodiscard]] QPointF controlCenter(const QWidget* widget) {
@@ -86,9 +86,10 @@ void key(App& app, const Qt::Key code) {
     }
     for (const auto* child : card->childItems()) {
         const auto* proxy = qgraphicsitem_cast<const QGraphicsProxyWidget*>(child);
-        if (proxy != nullptr && proxy->widget() != nullptr &&
-            proxy->widget()->objectName() == name) {
-            found.push_back(proxy->widget());
+        if (proxy != nullptr && proxy->widget() != nullptr) {
+            if (proxy->widget()->objectName() == name)
+                found.push_back(proxy->widget());
+            found.append(proxy->widget()->findChildren<QWidget*>(name));
         }
     }
     return found;
@@ -367,6 +368,10 @@ void typedNumberReaches(App& app, const document::NodeId node, const QString& ob
 
 void textCardRows(App& app) {
     expect(addDefaultTextLayer(app.session), "a text layer exists to edit");
+    // Reactivate after earlier popup gestures: offscreen has no window manager to restore it.
+    app.editor.activateWindow();
+    QCoreApplication::processEvents();
+    app.editor.graphView()->setFocus();
     QCoreApplication::processEvents();
     const auto textNode = app.nodeOfType(document::kTextSourceNodeType);
     expect(textNode.has_value(), "the text layer built a Text card");

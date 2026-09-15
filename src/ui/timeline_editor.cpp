@@ -1108,7 +1108,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const bool selected = entry.imageNodeId.isValid()
                                   ? session_.selectedNodes().contains(entry.imageNodeId)
                                   : isLayerSelected(session_, entry.layerId);
-        if (selected) {
+        if (selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             paintSelectedRowFill(painter, top, width());
         }
         paintRowSeparator(painter, top, width());

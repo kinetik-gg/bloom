@@ -141,7 +141,7 @@ void testDraggingTheFrameMovesEveryMember() {
 void testMembershipFollowsWhereACardIsDropped() {
     Fixture f;
     const auto a = f.add(document::kSolidSourceNodeType, {100, 100});
-    const auto b = f.add(document::kSolidSourceNodeType, {100, 320});
+    const auto b = f.add(document::kSolidSourceNodeType, {100, 520});
     const auto outside = f.add(document::kSolidSourceNodeType, {700, 100});
     f.session.selectNodes({a, b}, a);
     f.key(Qt::Key_G, Qt::ControlModifier);
