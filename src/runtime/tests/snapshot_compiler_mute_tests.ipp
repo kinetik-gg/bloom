@@ -74,24 +74,8 @@ void testMuteKindsAndPixels(Expectations& expectations) {
     // still prunes it entirely. The diagnostic-scoping proof moves to the "test.bypass" schema
     // below, which is still an Unsupported lowering.
     auto text = muteProject();
+    retypeFirstSourceToText(text, "Sample text", 8.0, core::Color4d{1.0, 1.0, 1.0, 1.0});
     auto* composition = text.findComposition(kCompositionId);
-    auto* node = composition->graph().findNode(kFirstSolidNode);
-    node->typeId = std::string(document::kTextSourceNodeType);
-    node->schemaVersion = 1;
-    node->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
-                        {std::string(document::kTextSizeParameterRole), kTextSize},
-                        {std::string(document::kTextColorParameterRole), kTextColor}};
-    require(composition->parameters().erase(kFirstColor) &&
-                composition->parameters().insert(
-                    {kFirstColor, std::string(document::kTextParameterSchemaKey),
-                     document::ConstantValueSource{std::string("Legacy text")}}) &&
-                composition->parameters().insert(
-                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
-                     document::ConstantValueSource{8.0}}) &&
-                composition->parameters().insert(
-                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
-                     document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}),
-            "text source");
     const auto drawn = compile(text, registry);
     expectations.expect(drawn.status == runtime::SnapshotCompileStatus::Compiled &&
                             drawn.diagnostics.empty(),

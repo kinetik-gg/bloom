@@ -527,7 +527,7 @@ lowerSolid(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Solid dimensions could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledSolid{node.id, *color, width, height};
+    return runtime::CompiledSolid{node.id, *color, *width, *height};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -571,7 +571,7 @@ lowerText(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
         return std::nullopt;
     }
-    std::optional<runtime::CompiledTextLayout> layout;
+    runtime::CompiledTextLayout layout;
     {
         const auto* alignmentBinding = findParameterBinding(node, kTextAlignmentParameterRole);
         const auto* alignment = parameterConstant<std::int64_t>(alignmentBinding);
@@ -649,7 +649,6 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         blendMode.value_or(core::kDefaultBlendMode),
                                         boundary->second->inPoint,
                                         boundary->second->endPoint(composition_->duration()),
-                                        true,
                                         drivenBlendMode};
 }
 
@@ -693,7 +692,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         }
         entries.push_back({entry.slotId, entry.layerId, source->second});
     }
-    return runtime::CompiledMerge{node.id, std::move(entries), true};
+    return runtime::CompiledMerge{node.id, std::move(entries)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation> lowerCompositionOutput(

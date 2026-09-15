@@ -176,7 +176,13 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
              const document::Vec2d position = {2.0, 1.0}, const double opacity = 1.0,
              const document::CompositionFormat compositionFormat = format()) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeA, {kColorA, color}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, color},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000),
+         static_cast<double>(compositionFormat.width())},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001),
+         static_cast<double>(compositionFormat.height())}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
@@ -193,12 +199,18 @@ oneSolidPlan(const core::Color4d color = {1.0, 0.0, 0.0, 1.0},
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 twoSolidPlan(const bool redOnTop = true) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, core::Color4d{1.0, 0.0, 0.0, 0.5}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000), 4.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001), 2.0}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, {}));
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeB, {kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeB,
+        {kColorB, core::Color4d{0.0, 0.0, 1.0, 1.0}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeB.value() * 100 + 1000), 4.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeB.value() * 100 + 1001), 2.0}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {}));
     const runtime::CompiledMergeInput red{kSlotA, kLayerA, runtime::OperationIndex::fromRaw(1)};
@@ -222,9 +234,11 @@ twoSolidPlan(const bool redOnTop = true) {
 // bytes land and what they composite to.
 constexpr std::string_view kFullBlock = "\xe2\x96\x88";
 constexpr double kFullBlockSize = 12.0;
-constexpr std::int64_t kFullBlockOriginX = -1;
-constexpr std::int64_t kFullBlockOriginY = -1;
-constexpr std::int64_t kFullBlockFullCoverageWidth = 9;
+// The glyph box is centred on the layer's authored position, so its fractional edge columns and
+// rows fall outside the fully covered interior that starts here.
+constexpr std::int64_t kFullBlockFullCoverageOriginX = 4;
+constexpr std::int64_t kFullBlockFullCoverageOriginY = 4;
+constexpr std::int64_t kFullBlockFullCoverageWidth = 8;
 constexpr std::int64_t kFullBlockFullCoverageHeight = 13;
 
 // A single text layer centered so its Layer Output translation is exactly zero, which keeps the
@@ -237,8 +251,15 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
             const document::Vec2d position = {8.0, 10.0},
             const document::CompositionFormat compositionFormat = format(16, 20)) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledText{
-        kTextNode, kTextContent, content, {kTextSize, size}, {kTextColor, color}});
+    operations.emplace_back(runtime::CompiledText{kTextNode,
+                                                  kTextContent,
+                                                  content,
+                                                  {kTextSize, size},
+                                                  {kTextColor, color},
+                                                  {{document::ParameterId::fromRaw(901)},
+                                                   0,
+                                                   {document::ParameterId::fromRaw(902), 1.0},
+                                                   {document::ParameterId::fromRaw(903), 0.0}}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = position, .opacity = opacity}));
@@ -261,12 +282,18 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMode) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000), 4.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001), 2.0}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, {.blendMode = topMode}));
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeB, {kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeB,
+        {kColorB, core::Color4d{0.25, 0.5, 0.75, 1.0}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeB.value() * 100 + 1000), 4.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeB.value() * 100 + 1001), 2.0}});
     operations.emplace_back(layerOutput(kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2),
                                         kLayerParametersB, {.blendMode = bottomMode}));
     operations.emplace_back(
@@ -597,8 +624,11 @@ void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
 squareTransformPlan(const LayerTransformValues values) {
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, core::Color4d{1.0, 1.0, 1.0, 1.0}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000), 4.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001), 4.0}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA, values));
     operations.emplace_back(runtime::CompiledMerge{
@@ -640,8 +670,10 @@ void testLayerTransformShapesTheFrame(Expectations& expectations) {
                                                  0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F};
     constexpr std::array<float, 16> kHorizontalBar{0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
                                                    1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
-    constexpr std::array<float, 16> kLeftBar{1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F,
-                                             1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F};
+    // Position pins centre(local bounds) + anchor, so an anchor at the layer's left edge holds
+    // that edge at the composition centre and the narrowed layer falls to its right.
+    constexpr std::array<float, 16> kAnchoredBar{0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F,
+                                                 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F};
     constexpr std::array<float, 16> kEmpty{};
 
     // Half scale on one axis only: the layer narrows about its own centre to columns 1 and 2.
@@ -665,7 +697,7 @@ void testLayerTransformShapesTheFrame(Expectations& expectations) {
                                                .anchor = document::Vec2d{-1.5, 0.0},
                                                .scale = document::Vec2d{0.5, 1.0}});
     const auto anchoredMask = alphaMask(evaluator.evaluate(anchored, requestFor(*anchored), {}));
-    expectations.expect(anchoredMask.has_value() && *anchoredMask == kLeftBar,
+    expectations.expect(anchoredMask.has_value() && *anchoredMask == kAnchoredBar,
                         "the anchor, not the centre, is the point scale and rotation hold still");
 
     // A zero scale factor collapses the layer to no area: the Layer Output publishes no image at
@@ -705,8 +737,8 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
                                                  0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F};
     constexpr std::array<float, 16> kHorizontalBar{0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
                                                    1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
-    constexpr std::array<float, 16> kLeftBar{1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F,
-                                             1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F};
+    constexpr std::array<float, 16> kAnchoredBar{0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F,
+                                                 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F};
 
     // One plan per animated parameter, each curve running from the value that leaves the frame full
     // to the value that shapes it, so the frame at the first key, the midpoint, and the last key
@@ -769,8 +801,9 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
             *rotationMiddle != kVerticalBar && *rotationMiddle != kHorizontalBar,
         "an animated rotation is sampled per request and turns the layer over time");
 
-    // Anchor: the centre at t = 0 to the left edge at t = 1, with a constant one-axis narrowing, so
-    // the bar slides from the middle to the left edge without the layer itself moving.
+    // Anchor: the centre at t = 0 to the layer's left edge at t = 1, with a constant one-axis
+    // narrowing. Position pins centre(local bounds) + anchor, so the bar slides off the middle as
+    // the pivot travels, without the authored position itself moving.
     auto anchorDefinition =
         squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}})
             ->copyDefinition();
@@ -790,9 +823,9 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
     const auto anchorMiddle = maskAt(anchorPlan, 1, 2);
     const auto anchorEnd = maskAt(anchorPlan, 1, 1);
     expectations.expect(anchorStart.has_value() && *anchorStart == kVerticalBar &&
-                            anchorEnd.has_value() && *anchorEnd == kLeftBar &&
+                            anchorEnd.has_value() && *anchorEnd == kAnchoredBar &&
                             anchorMiddle.has_value() && *anchorMiddle != kVerticalBar &&
-                            *anchorMiddle != kLeftBar,
+                            *anchorMiddle != kAnchoredBar,
                         "an animated anchor is sampled per request and slides the pivot over time");
 
     // A rotation key is NOT confined to the unit interval the way an opacity key is: 360 degrees is
@@ -1237,9 +1270,11 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                             near(proxyEdgePixel->alpha(), 0.5F),
                         "absolute authoring displacement is scaled independently for a proxy");
 
-    // 4x2 RGBA32F is 128 bytes. This plan peaks at two resident process images (256 bytes).
-    const auto below = evaluator.evaluate(plan, requestFor(*plan, 255), {});
-    const auto exact = evaluator.evaluate(plan, requestFor(*plan, 256), {});
+    // A 4x2 layer's image is its transformed bounds grown by one pixel on every side for the
+    // bilinear support -- 6x4 RGBA32F, 384 bytes. This plan peaks at the layer image and the stack
+    // image it composites into, two resident 6x4 images (768 bytes).
+    const auto below = evaluator.evaluate(plan, requestFor(*plan, 767), {});
+    const auto exact = evaluator.evaluate(plan, requestFor(*plan, 768), {});
     expectations.expect(below.status() == runtime::EvaluationStatus::Failed &&
                             !below.diagnostics().empty() &&
                             below.diagnostics().front().code ==
@@ -1249,8 +1284,8 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                         "exact live-image peak budget succeeds");
 
     const auto twoLayers = twoSolidPlan();
-    const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 383), {});
-    const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 384), {});
+    const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1151), {});
+    const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1152), {});
     expectations.expect(twoBelow.status() == runtime::EvaluationStatus::Failed &&
                             twoExact.status() == runtime::EvaluationStatus::Evaluated,
                         "peak simulation accounts for both live layers while stacking");
@@ -1501,8 +1536,11 @@ void testRepeatability(Expectations& expectations) {
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> bandedPlan() {
     const auto bandedFormat = format(160, 120);
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(
-        runtime::CompiledSolid{kSolidNodeA, {kColorA, core::Color4d{0.2, 0.35, 0.6, 1.0}}});
+    operations.emplace_back(runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, core::Color4d{0.2, 0.35, 0.6, 1.0}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000), 160.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001), 120.0}});
     operations.emplace_back(layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0),
                                         kLayerParametersA,
                                         {.position = {80.0, 60.0}, .opacity = 1.0}));
@@ -1510,7 +1548,11 @@ void testRepeatability(Expectations& expectations) {
                                                   kTextContent,
                                                   std::string("Bloom RAM preview"),
                                                   {kTextSize, 24.0},
-                                                  {kTextColor, core::Color4d{1.0, 0.9, 0.8, 1.0}}});
+                                                  {kTextColor, core::Color4d{1.0, 0.9, 0.8, 1.0}},
+                                                  {{document::ParameterId::fromRaw(901)},
+                                                   0,
+                                                   {document::ParameterId::fromRaw(902), 1.0},
+                                                   {document::ParameterId::fromRaw(903), 0.0}}});
     operations.emplace_back(layerOutput(
         kLayerNodeB, kLayerB, runtime::OperationIndex::fromRaw(2), kLayerParametersB,
         {.position = {80.0, 60.0}, .scale = {0.8, 0.8}, .rotation = 15.0, .opacity = 0.75}));
@@ -1878,11 +1920,8 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
     std::int64_t interiorChecked = 0;
     for (std::int64_t row = 0; row < kFullBlockFullCoverageHeight; ++row) {
         for (std::int64_t column = 0; column < kFullBlockFullCoverageWidth; ++column) {
-            // Bitmap (1 + column, 1 + row) is inside the full-coverage interior; the text origin is
-            // the frame's own data-window origin, so the frame pixel is that plus the bitmap
-            // origin.
-            const auto x = kFullBlockOriginX + 1 + column;
-            const auto y = kFullBlockOriginY + 1 + row;
+            const auto x = kFullBlockFullCoverageOriginX + column;
+            const auto y = kFullBlockFullCoverageOriginY + row;
             const auto* composed = pixel(result, x, y, storage);
             if (composed == nullptr || *composed != *expected.value()) {
                 interiorExact = false;
@@ -1913,7 +1952,10 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
     // opacity halves every premultiplied component of the covered pixels.
     const auto fadedPlan = oneTextPlan(color, std::string(kFullBlock), kFullBlockSize, 0.5);
     const auto faded = evaluator.evaluate(fadedPlan, requestFor(*fadedPlan), {});
-    const auto* fadedPixel = faded.frame() == nullptr ? nullptr : pixel(faded, 2, 2, storage);
+    const auto* fadedPixel =
+        faded.frame() == nullptr
+            ? nullptr
+            : pixel(faded, kFullBlockFullCoverageOriginX, kFullBlockFullCoverageOriginY, storage);
     expectations.expect(fadedPixel != nullptr &&
                             near(fadedPixel->alpha(), expected.value()->alpha() * 0.5F) &&
                             near(fadedPixel->red(), expected.value()->red() * 0.5F),

@@ -62,6 +62,15 @@ constexpr auto kSecondRotation = document::ParameterId::fromRaw(43);
 // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode binding.
 constexpr auto kFirstBlendMode = document::ParameterId::fromRaw(44);
 constexpr auto kSecondBlendMode = document::ParameterId::fromRaw(45);
+// Above every id the fixtures below allocate by hand or in bulk, so a Solid's required dimensions
+// and a Text's required layout operands can never collide with one of them.
+constexpr auto kFirstWidth = document::ParameterId::fromRaw(200);
+constexpr auto kFirstHeight = document::ParameterId::fromRaw(201);
+constexpr auto kSecondWidth = document::ParameterId::fromRaw(202);
+constexpr auto kSecondHeight = document::ParameterId::fromRaw(203);
+constexpr auto kTextAlignment = document::ParameterId::fromRaw(204);
+constexpr auto kTextLineHeight = document::ParameterId::fromRaw(205);
+constexpr auto kTextLetterSpacing = document::ParameterId::fromRaw(206);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -123,8 +132,10 @@ struct ProjectOptions final {
     std::vector<NodeRecord> nodes{
         {kFirstSolidNode,
          std::string(kSolidSourceNodeType),
-         {{std::string(kSolidColorParameterRole), kFirstColor}},
-         1},
+         {{std::string(kSolidColorParameterRole), kFirstColor},
+          {std::string(kSolidWidthParameterRole), kFirstWidth},
+          {std::string(kSolidHeightParameterRole), kFirstHeight}},
+         kSolidSourceNodeSchemaVersion},
         {kFirstLayerNode,
          std::string(kLayerOutputNodeType),
          {{std::string(kPositionParameterRole), kFirstPosition},
@@ -133,7 +144,7 @@ struct ProjectOptions final {
           {std::string(kRotationParameterRole), kFirstRotation},
           {std::string(kOpacityParameterRole), kFirstOpacity},
           {std::string(kBlendModeParameterRole), kFirstBlendMode}},
-         3},
+         kLayerOutputNodeSchemaVersion},
         {kStackNode, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion},
         {kOutputNode,
          std::string(kCompositionOutputNodeType),
@@ -143,8 +154,10 @@ struct ProjectOptions final {
     if (options.secondLayer) {
         nodes.push_back({kSecondSolidNode,
                          std::string(kSolidSourceNodeType),
-                         {{std::string(kSolidColorParameterRole), kSecondColor}},
-                         1});
+                         {{std::string(kSolidColorParameterRole), kSecondColor},
+                          {std::string(kSolidWidthParameterRole), kSecondWidth},
+                          {std::string(kSolidHeightParameterRole), kSecondHeight}},
+                         kSolidSourceNodeSchemaVersion});
         nodes.push_back({kSecondLayerNode,
                          std::string(kLayerOutputNodeType),
                          {{std::string(kPositionParameterRole), kSecondPosition},
@@ -153,7 +166,7 @@ struct ProjectOptions final {
                           {std::string(kRotationParameterRole), kSecondRotation},
                           {std::string(kOpacityParameterRole), kSecondOpacity},
                           {std::string(kBlendModeParameterRole), kSecondBlendMode}},
-                         3});
+                         kLayerOutputNodeSchemaVersion});
     }
     if (options.reverseInsertion) {
         std::ranges::reverse(nodes);
@@ -212,6 +225,18 @@ struct ProjectOptions final {
         composition.parameters().insert({kFirstColor, std::string(kSolidColorParameterSchemaKey),
                                          ConstantValueSource{core::Color4d{1.5, 0.25, 0.5, 0.75}}}),
         "first color must be accepted");
+    const auto insertSolidDimensions = [&composition](const ParameterId width,
+                                                      const ParameterId height) {
+        require(composition.parameters().insert(
+                    {width, std::string(kSolidWidthParameterSchemaKey),
+                     ConstantValueSource{static_cast<double>(composition.format().width())}}),
+                "solid width must be accepted");
+        require(composition.parameters().insert(
+                    {height, std::string(kSolidHeightParameterSchemaKey),
+                     ConstantValueSource{static_cast<double>(composition.format().height())}}),
+                "solid height must be accepted");
+    };
+    insertSolidDimensions(kFirstWidth, kFirstHeight);
     require(
         composition.parameters().insert({kFirstPosition, std::string(kPositionParameterSchemaKey),
                                          ConstantValueSource{Vec2d{120.0, 80.0}}}),
@@ -254,6 +279,7 @@ struct ProjectOptions final {
                                                  std::string(kOpacityParameterSchemaKey),
                                                  ConstantValueSource{0.6}}),
                 "second opacity must be accepted");
+        insertSolidDimensions(kSecondWidth, kSecondHeight);
         insertIdentityTransform(kSecondAnchor, kSecondScale, kSecondRotation, kSecondBlendMode);
     }
 
@@ -291,6 +317,42 @@ void populateRegistry(runtime::NodeDefinitionRegistry& registry) {
             {{"image", runtime::SocketValueKind::Image}},
             {},
             std::nullopt};
+}
+
+// Retypes the fixture's first source node into a CURRENT Text source. Text v2 requires alignment,
+// line height and letter spacing, and carries none of the Solid dimensions the node was built with.
+void retypeFirstSourceToText(document::Project& project, const std::string& content,
+                             const double size, const core::Color4d color) {
+    using namespace document;
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "text fixture composition must exist");
+    auto* node = composition->graph().findNode(kFirstSolidNode);
+    require(node != nullptr, "text fixture source node must exist");
+    node->typeId = std::string(kTextSourceNodeType);
+    node->schemaVersion = kTextSourceNodeSchemaVersion;
+    node->parameters = {{std::string(kTextParameterRole), kFirstColor},
+                        {std::string(kTextSizeParameterRole), kTextSize},
+                        {std::string(kTextColorParameterRole), kTextColor},
+                        {std::string(kTextAlignmentParameterRole), kTextAlignment},
+                        {std::string(kTextLineHeightParameterRole), kTextLineHeight},
+                        {std::string(kTextLetterSpacingParameterRole), kTextLetterSpacing}};
+    auto& parameters = composition->parameters();
+    require(parameters.erase(kFirstColor) && parameters.erase(kFirstWidth) &&
+                parameters.erase(kFirstHeight) &&
+                parameters.insert({kFirstColor, std::string(kTextParameterSchemaKey),
+                                   ConstantValueSource{content}}) &&
+                parameters.insert({kTextSize, std::string(kTextSizeParameterSchemaKey),
+                                   ConstantValueSource{size}}) &&
+                parameters.insert({kTextColor, std::string(kTextColorParameterSchemaKey),
+                                   ConstantValueSource{color}}) &&
+                parameters.insert({kTextAlignment, std::string(kTextAlignmentParameterSchemaKey),
+                                   ConstantValueSource{std::int64_t{0}}}) &&
+                parameters.insert({kTextLineHeight, std::string(kTextLineHeightParameterSchemaKey),
+                                   ConstantValueSource{1.0}}) &&
+                parameters.insert({kTextLetterSpacing,
+                                   std::string(kTextLetterSpacingParameterSchemaKey),
+                                   ConstantValueSource{0.0}}),
+            "text fixture parameters must be accepted");
 }
 
 // Task S7: a driver binding names a value node's output, so a driven fixture needs a value node to
@@ -578,7 +640,9 @@ void testNestedMergeCompilation(Expectations& expectations) {
     auto& graph = project.findComposition(kCompositionId)->graph();
     const auto nested = NodeId::fromRaw(900);
     const auto slot = LayerSlotId::fromRaw(900);
-    require(graph.addNode({nested, std::string(kLayerStackNodeType), {}, 1}), "nested Merge node");
+    require(
+        graph.addNode({nested, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion}),
+        "nested Merge node");
     require(graph.merge(nested)->append({slot, {}}), "plain image slot");
     require(graph.addEdge({EdgeId::fromRaw(900),
                            {kFirstSolidNode, "image"},
@@ -816,26 +880,9 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
     // case used to require. UnsupportedNode itself stays covered by
     // unsupportedColorDefinition()'s own case above.
     auto text = makeProject(singleLayerOptions());
-    auto* textComposition = text.findComposition(kCompositionId);
-    auto* textNode = textComposition->graph().findNode(kFirstSolidNode);
-    textNode->typeId = std::string(document::kTextSourceNodeType);
-    textNode->schemaVersion = 1;
-    textNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
-                            {std::string(document::kTextSizeParameterRole), kTextSize},
-                            {std::string(document::kTextColorParameterRole), kTextColor}};
     const auto textColorValue = core::Color4d{0.25, 0.5, 0.75, 1.0};
-    require(textComposition->parameters().erase(kFirstColor) &&
-                textComposition->parameters().insert(
-                    {kFirstColor, std::string(document::kTextParameterSchemaKey),
-                     document::ConstantValueSource{std::string("Title")}}) &&
-                textComposition->parameters().insert(
-                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
-                     document::ConstantValueSource{48.0}}) &&
-                textComposition->parameters().insert(
-                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
-                     document::ConstantValueSource{textColorValue}}) &&
-                text.validate().ok(),
-            "recognized Text fixture must remain valid");
+    retypeFirstSourceToText(text, "Title", 48.0, textColorValue);
+    require(text.validate().ok(), "recognized Text fixture must remain valid");
     const auto textResult = compile(std::move(text), registry);
     expectations.expect(textResult.status == runtime::SnapshotCompileStatus::Compiled &&
                             textResult.plan && textResult.diagnostics.empty(),
@@ -979,6 +1026,12 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                                              "animation evaluation format must be valid");
     animatedComposition->setFormat(animatedFormat);
     auto* parameters = &animatedComposition->parameters();
+    require(parameters->setSource(kFirstWidth, document::ConstantValueSource{static_cast<double>(
+                                                   animatedFormat.width())}) &&
+                parameters->setSource(
+                    kFirstHeight,
+                    document::ConstantValueSource{static_cast<double>(animatedFormat.height())}),
+            "animation fixture solid must fill its re-declared format");
     constexpr auto curveId = document::AnimationCurveId::fromRaw(100);
     constexpr auto positionCurveId = document::AnimationCurveId::fromRaw(103);
     require(animatedComposition->animationCurves().insert(document::ScalarAnimationCurve{
@@ -1108,26 +1161,7 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
     // node. The layer's source node is retyped to a Text source first, so the parameter the driver
     // lands on is a real content parameter rather than a colour that happens to take a String.
     auto drivenContent = makeProject(singleLayerOptions());
-    auto* contentComposition = drivenContent.findComposition(kCompositionId);
-    require(contentComposition != nullptr, "driven-content fixture composition must exist");
-    auto* contentNode = contentComposition->graph().findNode(kFirstSolidNode);
-    require(contentNode != nullptr, "driven-content fixture source node must exist");
-    contentNode->typeId = std::string(document::kTextSourceNodeType);
-    contentNode->schemaVersion = 1;
-    contentNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
-                               {std::string(document::kTextSizeParameterRole), kTextSize},
-                               {std::string(document::kTextColorParameterRole), kTextColor}};
-    require(contentComposition->parameters().erase(kFirstColor) &&
-                contentComposition->parameters().insert(
-                    {kFirstColor, std::string(document::kTextParameterSchemaKey),
-                     document::ConstantValueSource{std::string("Title")}}) &&
-                contentComposition->parameters().insert(
-                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
-                     document::ConstantValueSource{48.0}}) &&
-                contentComposition->parameters().insert(
-                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
-                     document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}),
-            "driven-content fixture text parameters must be accepted");
+    retypeFirstSourceToText(drivenContent, "Title", 48.0, core::Color4d{1.0, 1.0, 1.0, 1.0});
     attachValueDriver(drivenContent, document::NodeId::fromRaw(14),
                       document::ParameterId::fromRaw(46), document::kStringValueNodeType,
                       document::kStringValueParameterSchemaKey, std::string("Driven"), kFirstColor);

@@ -20,13 +20,11 @@ void localSolid(runtime::CompiledCompositionPlanDefinition& definition, const st
 }
 void testContentBounds(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
-    const auto legacy = oneSolidPlan();
-    auto defaults = legacy->copyDefinition();
+    const auto baseline = oneSolidPlan();
+    auto defaults = baseline->copyDefinition();
     localSolid(defaults, 0, 4, 2, 90);
-    std::get<runtime::CompiledLayerOutput>(defaults.operations[1]).localBounds = true;
-    std::get<runtime::CompiledMerge>(defaults.operations[2]).localBounds = true;
     const auto current = publishPlan(defaults);
-    const auto before = evaluator.evaluate(legacy, requestFor(*legacy), {});
+    const auto before = evaluator.evaluate(baseline, requestFor(*baseline), {});
     const auto after = evaluator.evaluate(current, requestFor(*current), {});
     expectations.expect(before.frame() && after.frame() &&
                             boundsPixelDigest(*before.frame()) == boundsPixelDigest(*after.frame()),
@@ -70,14 +68,12 @@ void testContentBounds(Expectations& expectations) {
     localSolid(nested, 2, 4, 2, 92);
     auto& a = std::get<runtime::CompiledLayerOutput>(nested.operations[1]);
     auto& b = std::get<runtime::CompiledLayerOutput>(nested.operations[3]);
-    a.localBounds = b.localBounds = true;
     a.position.source = document::Vec2d{2, 1};
     b.position.source = document::Vec2d{7, 5};
-    std::get<runtime::CompiledMerge>(nested.operations[4]).localBounds = true;
-    nested.operations.insert(nested.operations.begin() + 5,
-                             runtime::CompiledMerge{document::NodeId::fromRaw(100),
-                                                    {{{}, {}, runtime::OperationIndex::fromRaw(4)}},
-                                                    true});
+    nested.operations.insert(
+        nested.operations.begin() + 5,
+        runtime::CompiledMerge{document::NodeId::fromRaw(100),
+                               {{{}, {}, runtime::OperationIndex::fromRaw(4)}}});
     std::get<runtime::CompiledCompositionOutput>(nested.operations[6]).input =
         runtime::OperationIndex::fromRaw(5);
     nested.output = runtime::OperationIndex::fromRaw(6);
@@ -94,12 +90,8 @@ void testContentBoundsEdgeCases(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     auto animated = oneSolidPlan()->copyDefinition();
     localSolid(animated, 0, 4, 2, 90);
-    std::get<runtime::CompiledLayerOutput>(animated.operations[1]).localBounds = true;
-    std::get<runtime::CompiledMerge>(animated.operations[2]).localBounds = true;
     auto& solid = std::get<runtime::CompiledSolid>(animated.operations[0]);
-    if (!solid.width)
-        throw std::runtime_error("width operand");
-    solid.width->source = runtime::ScalarCurveIndex::fromRaw(0);
+    solid.width.source = runtime::ScalarCurveIndex::fromRaw(0);
     animated.scalarCurves.push_back(
         {kOpacityCurve,
          {{document::KeyframeId::fromRaw(60), core::RationalTime::fromInteger(0), 4.0,
@@ -126,8 +118,6 @@ void testContentBoundsEdgeCases(Expectations& expectations) {
                                                 0,
                                                 {document::ParameterId::fromRaw(91), 1.0},
                                                 {document::ParameterId::fromRaw(92), 0.0}};
-    std::get<runtime::CompiledLayerOutput>(text.operations[1]).localBounds = true;
-    std::get<runtime::CompiledMerge>(text.operations[2]).localBounds = true;
     const auto textPlan = publishPlan(text);
     const auto textFrame = evaluator.evaluate(textPlan, requestFor(*textPlan), {});
     expectations.expect(
@@ -141,8 +131,8 @@ void testContentBoundsEdgeCases(Expectations& expectations) {
     const auto oversized = publishPlan(invalid);
     expectations.expect(!evaluator.evaluate(oversized, requestFor(*oversized), {}).frame(),
                         "oversized local content is refused before allocation");
-    std::get<runtime::CompiledSolid>(invalid.operations[0]).height.reset();
+    std::get<runtime::CompiledSolid>(invalid.operations[0]).height.id = {};
     const auto incomplete = publishPlan(invalid);
     expectations.expect(!evaluator.evaluate(incomplete, requestFor(*incomplete), {}).frame(),
-                        "hostile plans cannot specify only one solid dimension");
+                        "hostile plans cannot omit a required dimension identity");
 }

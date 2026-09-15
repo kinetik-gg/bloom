@@ -318,10 +318,8 @@ enum class ScalarDomain : std::uint8_t {
         Overloaded{
             [&plan, index, &failure](const CompiledSolid& solid) {
                 return hasValidColorCurveReference(solid.color, plan, index, failure) &&
-                       (!solid.width ||
-                        hasValidScalarCurveReference(*solid.width, plan, index, failure)) &&
-                       (!solid.height ||
-                        hasValidScalarCurveReference(*solid.height, plan, index, failure));
+                       hasValidScalarCurveReference(solid.width, plan, index, failure) &&
+                       hasValidScalarCurveReference(solid.height, plan, index, failure);
             },
             [](const CompiledImageSource& image) {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
@@ -330,10 +328,10 @@ enum class ScalarDomain : std::uint8_t {
             [&plan, index, &failure](const CompiledText& text) {
                 return hasValidScalarCurveReference(text.size, plan, index, failure) &&
                        hasValidColorCurveReference(text.color, plan, index, failure) &&
-                       (!text.layout || (hasValidScalarCurveReference(text.layout->lineHeight, plan,
-                                                                      index, failure) &&
-                                         hasValidScalarCurveReference(text.layout->letterSpacing,
-                                                                      plan, index, failure)));
+                       (hasValidScalarCurveReference(text.layout.lineHeight, plan, index,
+                                                     failure) &&
+                        hasValidScalarCurveReference(text.layout.letterSpacing, plan, index,
+                                                     failure));
             },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
                 const auto sourcesAnImage = [&plan, index, &layer] {
@@ -952,29 +950,20 @@ template <typename Value>
         std::visit(
             Overloaded{
                 [&](const CompiledSolid& solid) {
-                    if (solid.width.has_value() != solid.height.has_value()) {
-                        parameterFailure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                                      "Solid dimensions must be present together",
-                                                      {}, operationSubject);
-                        return;
-                    }
                     static_cast<void>(registerColor(solid.color, "color", operationSubject));
-                    if (solid.width)
-                        static_cast<void>(registerScalar(
-                            *solid.width, "width", ScalarDomain::Dimension, operationSubject));
-                    if (solid.height)
-                        static_cast<void>(registerScalar(
-                            *solid.height, "height", ScalarDomain::Dimension, operationSubject));
+                    static_cast<void>(registerScalar(solid.width, "width", ScalarDomain::Dimension,
+                                                     operationSubject));
+                    static_cast<void>(registerScalar(solid.height, "height",
+                                                     ScalarDomain::Dimension, operationSubject));
                 },
                 [&](const CompiledText& text) {
-                    if (text.layout) {
-                        static_cast<void>(
-                            registerParameter(text.layout->alignmentId, operationSubject) &&
-                            registerScalar(text.layout->lineHeight, "line-height",
-                                           ScalarDomain::Positive, operationSubject) &&
-                            registerScalar(text.layout->letterSpacing, "letter-spacing",
-                                           ScalarDomain::Unbounded, operationSubject));
-                    }
+                    static_cast<void>(
+                        registerParameter(text.layout.alignmentId, operationSubject) &&
+                        registerScalar(text.layout.lineHeight, "line-height",
+                                       ScalarDomain::Positive, operationSubject) &&
+                        registerScalar(text.layout.letterSpacing, "letter-spacing",
+                                       ScalarDomain::Unbounded, operationSubject));
+
                     // Every check is re-run here rather than trusted from compilation: the
                     // evaluator validates the plan it is handed, because a plan can also
                     // arrive from a retained frame or a test fixture rather than straight
@@ -1547,25 +1536,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         using Step = std::decay_t<decltype(step)>;
                         if constexpr (std::is_same_v<Step, CompiledSolid>) {
                             parameter(step.color);
-                            if (step.width)
-                                parameter(*step.width);
-                            if (step.height)
-                                parameter(*step.height);
+                            parameter(step.width);
+                            parameter(step.height);
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
                             authored(step.contentParameterId, step.content, step.drivenContent);
-                            key.add(step.layout.has_value());
-                            if (step.layout) {
-                                authored(step.layout->alignmentId, step.layout->alignment,
-                                         step.layout->drivenAlignment);
-                                parameter(step.layout->lineHeight);
-                                parameter(step.layout->letterSpacing);
-                            }
+
+                            authored(step.layout.alignmentId, step.layout.alignment,
+                                     step.layout.drivenAlignment);
+                            parameter(step.layout.lineHeight);
+                            parameter(step.layout.letterSpacing);
+
                             parameter(step.size);
                             parameter(step.color);
                         } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
-                            key.add(step.localBounds);
+
                             parameter(step.position);
                             parameter(step.anchor);
                             parameter(step.scale);
@@ -1577,7 +1563,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(request.time >= step.inPoint &&
                                     (!step.outPoint || request.time < *step.outPoint));
                         } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
-                            key.add(step.localBounds);
+
                             key.add(step.entries.size());
                             for (const auto& entry : step.entries)
                                 key.add(entry.layerId.isValid());
@@ -1636,11 +1622,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 static_cast<double>(descriptor.dataWindow().extent().height());
                             double authorWidth = plan->format().width();
                             double authorHeight = plan->format().height();
-                            if (solid.width && solid.height) {
+
+                            {
                                 const auto width =
-                                    detail::resolveParameter(*solid.width, *plan, resolved);
+                                    detail::resolveParameter(solid.width, *plan, resolved);
                                 const auto height =
-                                    detail::resolveParameter(*solid.height, *plan, resolved);
+                                    detail::resolveParameter(solid.height, *plan, resolved);
                                 if (!width || !height || width->value < 1.0 ||
                                     height->value < 1.0) {
                                     operationFailure = diagnostic(
@@ -1650,7 +1637,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 // Preserve the exact device extent of composition-sized sources:
                                 // width * (proxyWidth / width) can round above the integer and
-                                // otherwise allocate an extra column, changing legacy pivots.
+                                // otherwise allocate an extra column, changing local bounds.
                                 authorWidth = width->value;
                                 authorHeight = height->value;
                                 if (authorWidth != plan->format().width())
@@ -1681,6 +1668,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 descriptor = *local.value();
                             }
+
                             bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
                                                                           resolved.horizontalScale,
                                                                           resolved.verticalScale);
@@ -1838,26 +1826,26 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Text size is not rasterizable");
                                 return;
                             }
-                            render::TextLayoutOptions layout{.multiline = false};
-                            if (text.layout) {
-                                const auto lineHeight = detail::resolveParameter(
-                                    text.layout->lineHeight, *plan, resolved);
-                                const auto letterSpacing = detail::resolveParameter(
-                                    text.layout->letterSpacing, *plan, resolved);
-                                const auto alignment = detail::resolveParameter(
-                                    text.layout->alignmentId, text.layout->alignment,
-                                    text.layout->drivenAlignment, resolved);
-                                if (!lineHeight || !letterSpacing || !alignment ||
-                                    alignment->value < 0 || alignment->value > 2) {
-                                    operationFailure =
-                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                                   "Text layout is invalid", {}, operationSubject);
-                                    return;
-                                }
-                                layout = {static_cast<render::TextAlignment>(alignment->value),
-                                          lineHeight->value,
-                                          letterSpacing->value * resolved.horizontalScale, true};
+                            render::TextLayoutOptions layout;
+
+                            const auto lineHeight =
+                                detail::resolveParameter(text.layout.lineHeight, *plan, resolved);
+                            const auto letterSpacing = detail::resolveParameter(
+                                text.layout.letterSpacing, *plan, resolved);
+                            const auto alignment = detail::resolveParameter(
+                                text.layout.alignmentId, text.layout.alignment,
+                                text.layout.drivenAlignment, resolved);
+                            if (!lineHeight || !letterSpacing || !alignment ||
+                                alignment->value < 0 || alignment->value > 2) {
+                                operationFailure =
+                                    diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                               "Text layout is invalid", {}, operationSubject);
+                                return;
                             }
+                            layout = {static_cast<render::TextAlignment>(alignment->value),
+                                      lineHeight->value,
+                                      letterSpacing->value * resolved.horizontalScale, true};
+
                             auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
                                 content->value, *rasterParameters.value(), remainingPixelBudget(),
                                 layout);
@@ -1870,7 +1858,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             auto descriptor = resolved.imageDescriptor;
-                            if (text.layout) {
+
+                            {
                                 if (!coverage.value()->hasCoverage())
                                     return;
                                 const auto window = render::ImageWindow::create(
@@ -1887,6 +1876,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 descriptor = *local.value();
                             }
+
                             bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
                                                                           resolved.horizontalScale,
                                                                           resolved.verticalScale);
@@ -1973,19 +1963,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Layer parameter could not be resolved", {}, operationSubject);
                                 return;
                             }
-                            // Position is authored in composition coordinates and means "put the
-                            // layer centre here", so the displacement the transform needs is
-                            // position minus that centre. The proxy factor is applied inside
-                            // render::LayerTransform, with the same expression the pre-proxy-aware
-                            // code used, which is what keeps a translate-only layer bit-identical
-                            // to the previous primitive.
-                            const auto fullCenterX =
-                                static_cast<double>(plan->format().width()) / 2.0;
-                            const auto fullCenterY =
-                                static_cast<double>(plan->format().height()) / 2.0;
                             render::LayerTransform::Authored authored{
-                                .translationX = position->value.x - fullCenterX,
-                                .translationY = position->value.y - fullCenterY,
+                                .translationX = 0.0,
+                                .translationY = 0.0,
                                 .anchorX = anchor->value.x,
                                 .anchorY = anchor->value.y,
                                 .scaleX = scale->value.x,
@@ -1993,18 +1973,6 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 .rotationDegrees = rotation->value,
                                 .opacity = opacity->value,
                             };
-                            // Checked here as well as inside the transform so the diagnostic can
-                            // name the position parameter: a finite position can still scale past
-                            // the representable range on a large proxy.
-                            if (!std::isfinite(authored.translationX * resolved.horizontalScale) ||
-                                !std::isfinite(authored.translationY * resolved.verticalScale)) {
-                                operationFailure = diagnostic(
-                                    EvaluationDiagnosticCode::InvalidParameter,
-                                    "Layer position produces a non-finite translation", {},
-                                    detail::parameterSubject(operationSubject, *position,
-                                                             "position"));
-                                return;
-                            }
                             if (!slots[layer.input.value()])
                                 return;
                             auto sourceView = slots[layer.input.value()]->view();
@@ -2026,19 +1994,29 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             geometry.local = bounds[layer.input.value()].output;
                             if (geometry.local.empty())
                                 return;
-                            if (layer.localBounds) {
-                                const auto centre = geometry.local.centre();
-                                const auto window = sourceDescriptor->dataWindow();
-                                const auto bufferCentre =
-                                    detail::boundsForWindow(window, resolved.horizontalScale,
-                                                            resolved.verticalScale)
-                                        .centre();
-                                authored.translationX =
-                                    position->value.x - centre.x - anchor->value.x;
-                                authored.translationY =
-                                    position->value.y - centre.y - anchor->value.y;
-                                authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
-                                authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
+
+                            const auto centre = geometry.local.centre();
+                            const auto window = sourceDescriptor->dataWindow();
+                            const auto bufferCentre =
+                                detail::boundsForWindow(window, resolved.horizontalScale,
+                                                        resolved.verticalScale)
+                                    .centre();
+                            authored.translationX = position->value.x - centre.x - anchor->value.x;
+                            authored.translationY = position->value.y - centre.y - anchor->value.y;
+                            authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
+                            authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
+
+                            // Checked here as well as inside the transform so the diagnostic can
+                            // name the position parameter: a finite position can still scale past
+                            // the representable range on a large proxy.
+                            if (!std::isfinite(authored.translationX * resolved.horizontalScale) ||
+                                !std::isfinite(authored.translationY * resolved.verticalScale)) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InvalidParameter,
+                                    "Layer position produces a non-finite translation", {},
+                                    detail::parameterSubject(operationSubject, *position,
+                                                             "position"));
+                                return;
                             }
                             // A scale factor of exactly zero collapses the layer to no area at all.
                             // That is an authorable value -- a scale curve starting from nothing --
@@ -2062,8 +2040,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             // Local content remains available outside the composition so a parent
-                            // transform can bring it back. Compatibility layers retain frame
-                            // clipping.
+                            // transform can bring it back.
                             const auto sourceWindow = sourceDescriptor->dataWindow();
                             const auto map = [&](const document::Vec2d point) {
                                 const auto mapped = transform.value()->forwardMap(
@@ -2085,40 +2062,32 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 geometry.output.right = std::max(geometry.output.right, point.x);
                                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
                             }
-                            const auto centre = layer.localBounds
-                                                    ? geometry.local.centre()
-                                                    : detail::boundsForWindow(
-                                                          sourceWindow, resolved.horizontalScale,
-                                                          resolved.verticalScale)
-                                                          .centre();
                             geometry.anchor =
                                 map({centre.x + anchor->value.x, centre.y + anchor->value.y});
-                            if (layer.localBounds) {
-                                constexpr double limit = 16777214.0;
-                                const double right = sourceWindow.extent().width();
-                                const double bottom = sourceWindow.extent().height();
-                                const std::array support{
-                                    transform.value()->forwardMap(-1.0, -1.0),
-                                    transform.value()->forwardMap(right, -1.0),
-                                    transform.value()->forwardMap(right, bottom),
-                                    transform.value()->forwardMap(-1.0, bottom)};
-                                for (const auto point : support) {
-                                    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-                                        std::abs(point.x) > limit || std::abs(point.y) > limit) {
-                                        operationFailure =
-                                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                                       "Transformed content exceeds the supported "
-                                                       "coordinate range",
-                                                       {}, operationSubject);
-                                        return;
-                                    }
+
+                            constexpr double limit = 16777214.0;
+                            const double right = sourceWindow.extent().width();
+                            const double bottom = sourceWindow.extent().height();
+                            const std::array support{transform.value()->forwardMap(-1.0, -1.0),
+                                                     transform.value()->forwardMap(right, -1.0),
+                                                     transform.value()->forwardMap(right, bottom),
+                                                     transform.value()->forwardMap(-1.0, bottom)};
+                            for (const auto point : support) {
+                                if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+                                    std::abs(point.x) > limit || std::abs(point.y) > limit) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                   "Transformed content exceeds the supported "
+                                                   "coordinate range",
+                                                   {}, operationSubject);
+                                    return;
                                 }
                             }
-                            const auto compositionWindow = resolved.imageDescriptor.dataWindow();
+
                             const auto workingWindow = render::ImageWindow::create(
                                 -16777216, -16777216, 33554432, 33554432);
-                            const auto layerWindow = transform.value()->supportBounds(
-                                layer.localBounds ? *workingWindow.value() : compositionWindow);
+                            const auto layerWindow =
+                                transform.value()->supportBounds(*workingWindow.value());
                             if (!layerWindow.has_value()) {
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,
@@ -2202,7 +2171,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             bounds[index].output = bounds[index].local;
                             auto descriptor = resolved.imageDescriptor;
-                            if (stack.localBounds && !storage.empty()) {
+                            if (!storage.empty()) {
                                 const auto window = render::ImageWindow::create(
                                     static_cast<std::int64_t>(storage.left),
                                     static_cast<std::int64_t>(storage.top),

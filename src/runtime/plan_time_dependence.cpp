@@ -50,16 +50,15 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             [&](const auto& step) {
                 using Step = std::decay_t<decltype(step)>;
                 if constexpr (std::is_same_v<Step, CompiledSolid>)
-                    return parameter(step.color) || (step.width && parameter(*step.width)) ||
-                           (step.height && parameter(*step.height));
+                    return parameter(step.color) || parameter(step.width) || parameter(step.height);
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
                 else if constexpr (std::is_same_v<Step, CompiledText>)
                     return parameter(step.color) || parameter(step.size) ||
                            driven(step.drivenContent) ||
-                           (step.layout && (parameter(step.layout->lineHeight) ||
-                                            parameter(step.layout->letterSpacing) ||
-                                            driven(step.layout->drivenAlignment)));
+                           (parameter(step.layout.lineHeight) ||
+                            parameter(step.layout.letterSpacing) ||
+                            driven(step.layout.drivenAlignment));
                 // A driven blend mode is consumed by the Layer Stack rather than by this step, but
                 // it is a property of the LAYER, so the layer's operation is what varies with time
                 // -- and the stack's own dependence already follows its inputs.

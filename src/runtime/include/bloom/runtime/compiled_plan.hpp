@@ -125,8 +125,8 @@ struct EvaluatedOperationBounds final {
 struct CompiledSolid {
     document::NodeId sourceNodeId;
     CompiledColorParameter color;
-    std::optional<CompiledScalarParameter> width{};
-    std::optional<CompiledScalarParameter> height{};
+    CompiledScalarParameter width;
+    CompiledScalarParameter height;
 
     friend bool operator==(const CompiledSolid&, const CompiledSolid&) = default;
 };
@@ -196,7 +196,7 @@ struct CompiledText {
     std::string content;
     CompiledScalarParameter size;
     CompiledColorParameter color;
-    std::optional<CompiledTextLayout> layout{};
+    CompiledTextLayout layout;
     // Task DRIVE-1. Present exactly when the content parameter carries a driver binding; `content`
     // is then the empty authored fallback the parameter store no longer holds a constant for, and
     // the evaluator reads the String this output produces instead.
@@ -241,10 +241,9 @@ struct CompiledLayerOutput {
     core::BlendMode blendMode = core::kDefaultBlendMode;
 
     core::RationalTime inPoint{};
-    // Absent means full duration; old/default plans retain identical behavior.
+    // Absent means full composition duration.
     std::optional<core::RationalTime> outPoint{};
     // Position places centre(local bounds) + anchor at the authored parent-space point.
-    bool localBounds = false;
     // Task DRIVE-1. The value-graph output the blend mode is driven by, when it is driven. The
     // Integer it produces is mapped through core::blendModeFromStoredValue(), the same closed
     // enumeration an authored one goes through, so a driven mode and an authored mode are the same
@@ -267,7 +266,6 @@ struct CompiledMergeInput {
 struct CompiledMerge {
     document::NodeId sourceNodeId;
     std::vector<CompiledMergeInput> entries;
-    bool localBounds = false;
 
     friend bool operator==(const CompiledMerge&, const CompiledMerge&) = default;
 };
